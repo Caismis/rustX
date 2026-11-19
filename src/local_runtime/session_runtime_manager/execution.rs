@@ -8,20 +8,25 @@
 //! generation, socket bind, bootstrap write — happens exactly once on a
 //! spawned blocking task after the slot is claimed. A published endpoint is
 //! never replaced, a closed claim is never recovered, and endpoint teardown
-//! never runs under a registry or residency mutex.
+//! never runs under a registry or residency mutex. Each published endpoint
+//! can admit exactly one Client connection — stored once, never replaced —
+//! and dispatch bounded range reads over it; at most one synchronous
+//! exchange runs at a time and a concurrent dispatch is refused as busy,
+//! never queued.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::num::NonZeroU64;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use rustx_execution_protocol::{
-    Capability, ClientInstanceId, EnvironmentId, Generation, is_normalized_absolute_path,
+    Capability, ClientInstanceId, EnvironmentId, Generation, Reject, is_normalized_absolute_path,
 };
-use rustx_execution_server::{Binding, Reservation};
+use rustx_execution_server::{Binding, LocalConnection, RangeRead, Reservation};
 
 use super::super::session::SessionId;
 use super::{RuntimeManagerError, SessionRuntimeManager, error};
@@ -30,10 +35,15 @@ use super::{RuntimeManagerError, SessionRuntimeManager, error};
 ///
 /// Owned by the trusted native composer: the App Server protocol has no
 /// path to the listener, the bundle, or the credential inside it. Nothing
-/// accepts a connection or spawns a Client by itself — the composer that
-/// holds the endpoint decides both.
+/// spawns a Client or connects by itself — the composer hands each
+/// accepted stream through [`admit_local_stream`](Self::admit_local_stream)
+/// and dispatches through [`read_range`](Self::read_range).
 pub struct LocalExecutionEndpoint {
     binding: Binding,
+    /// The one admitted Client connection — at most one, never replaced.
+    /// There is no recovery path (#577), so the first `Live` peer owns the
+    /// slot for the binding's whole life.
+    connection: Mutex<Option<LocalConnection>>,
     listener: UnixListener,
     bootstrap: PathBuf,
     _private: tempfile::TempDir,
@@ -78,6 +88,7 @@ impl LocalExecutionEndpoint {
             Binding::reserve_local(reservation, &root.join("s"), &root.join("b"))?;
         Ok(Self {
             binding,
+            connection: Mutex::new(None),
             listener,
             bootstrap: root.join("b"),
             _private: private,
@@ -97,13 +108,131 @@ impl LocalExecutionEndpoint {
         &self.listener
     }
 
-    /// The single arbitration point for Hellos and typed exchanges. The
-    /// typed gate is the only read path; raw reservation or credential
-    /// material is never exposed.
-    #[must_use]
-    pub fn binding(&self) -> &Binding {
+    /// Admits the Client on one accepted local stream through this
+    /// endpoint's binding.
+    ///
+    /// The full handshake runs here — Hello read, credential and identity
+    /// arbitration, admission delivery — exactly as
+    /// `Binding::accept_local` performs it, without holding the
+    /// connection slot: the binding's own mutex is the arbiter. On
+    /// success the live connection is stored once and never replaced: a
+    /// later Hello is refused by the binding itself
+    /// (`AlreadyConnected`/`RecoveryRequired`), never by swapping the
+    /// slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns the transport error when the handshake cannot complete. An
+    /// authenticated-but-refused Hello is not an I/O error: the reject is
+    /// delivered on the wire and returned as `Ok(Err(Reject))`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the connection mutex is poisoned.
+    pub fn admit_local_stream(&self, stream: UnixStream) -> io::Result<Result<(), Reject>> {
+        match self.binding.accept_local(stream)? {
+            Ok(connection) => {
+                let mut slot = self.connection.lock().expect("endpoint connection");
+                assert!(
+                    slot.replace(connection).is_none(),
+                    "a binding admits at most one live connection"
+                );
+                Ok(Ok(()))
+            }
+            Err(reject) => Ok(Err(reject)),
+        }
+    }
+
+    /// One bounded, revision-checked range read through the admitted
+    /// Client — the first dispatch path on the endpoint.
+    ///
+    /// At most one synchronous exchange runs per connection: a concurrent
+    /// caller gets `WouldBlock` — a bounded busy signal, never an
+    /// unbounded wait queue. Without an admitted Client the call is
+    /// `NotConnected`. `path` must name a file inside the Session's
+    /// reserved workspace lexically: a relative path carries normal
+    /// components only, an absolute path must strip the exact reserved
+    /// workspace prefix — `..`, `.`, the workspace root itself, an empty
+    /// path, and control or NUL bytes are all refused before anything is
+    /// sent. The workspace is never canonicalized or statted; the gate
+    /// that actually authorizes the send is the binding's live-connection
+    /// check inside [`LocalConnection::read_range`], evaluated at dispatch
+    /// time rather than by snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::WouldBlock`] while another exchange holds
+    /// the connection, [`io::ErrorKind::NotConnected`] before a Client is
+    /// admitted, [`io::ErrorKind::PermissionDenied`] for a path outside
+    /// the Session's workspace or a revoked/detached binding, and the
+    /// typed exchange's own errors for an untruthful or failed read.
+    pub fn read_range(
+        &self,
+        path: &Path,
+        offset: u64,
+        max_bytes: u32,
+        expected_revision: Option<&str>,
+    ) -> io::Result<RangeRead> {
+        let mut guard = match self.connection.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "execution connection is busy",
+                ));
+            }
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        let Some(connection) = guard.as_mut() else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "no client is admitted",
+            ));
+        };
+        let relative = workspace_relative(&connection.admission().workspace, path)?;
+        connection.read_range(&relative, offset, max_bytes, expected_revision)
+    }
+
+    /// The single arbitration point the endpoint itself arbitrates
+    /// through — module-internal: callers dispatch through the typed
+    /// methods, never around them.
+    fn binding(&self) -> &Binding {
         &self.binding
     }
+}
+
+/// Resolves `path` to a workspace-relative file target, purely lexically:
+/// the workspace is the exact prefix the binding reserved, never
+/// canonicalized or statted. A relative path must be normal components
+/// only; an absolute path must strip the reserved workspace exactly —
+/// `..` or `.` anywhere (including after the prefix), the workspace
+/// root itself, an empty path, and any control or NUL byte are refused.
+fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
+    let denied = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "path is outside the Session workspace",
+        )
+    };
+    let relative = if path.is_absolute() {
+        path.strip_prefix(workspace).map_err(|_| denied())?
+    } else {
+        path
+    };
+    let mut has_file = false;
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            return Err(denied());
+        };
+        if part.as_bytes().iter().any(u8::is_ascii_control) {
+            return Err(denied());
+        }
+        has_file = true;
+    }
+    if !has_file {
+        return Err(denied());
+    }
+    Ok(relative.to_path_buf())
 }
 
 impl std::fmt::Debug for LocalExecutionEndpoint {
@@ -235,6 +364,26 @@ impl SessionExecutionRegistry {
         Ok(Claim::Create(slot))
     }
 
+    /// The Session's published endpoint, or an explicit absence: a lookup
+    /// never creates, prepares, or replaces — no credential, socket, or
+    /// bootstrap material is allocated for an unclaimed Session. A
+    /// `Preparing` or fenced claim is absent for dispatch purposes.
+    fn endpoint(
+        &self,
+        session: &SessionId,
+    ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        let slots = self.0.lock().expect("execution registry mutex");
+        let Some(slot) = slots.get(session) else {
+            return Err(error("Session has no execution endpoint"));
+        };
+        let phase = slot.phase.lock().expect("execution slot phase");
+        match &*phase {
+            Phase::Published(endpoint) => Ok(endpoint.clone()),
+            Phase::Preparing => Err(error("execution binding preparation in progress")),
+            Phase::Closed(_) => Err(error("execution binding is closed; recovery is required")),
+        }
+    }
+
     /// Fences the Session's existing claim. An absent Session gains no
     /// state: fencing never creates a slot.
     pub(super) fn fence(&self, session: &SessionId) {
@@ -336,14 +485,56 @@ impl SessionRuntimeManager {
             }
         }
     }
+
+    /// Returns the Session's already-published local execution endpoint
+    /// for the trusted native dispatch path — a lookup, never a claim.
+    ///
+    /// Nothing is prepared, allocated, or bound for a Session without a
+    /// published endpoint: the registry answers absence explicitly, never
+    /// a global default. The residency admission gate still applies — a
+    /// draining manager or a Session under retirement reports no
+    /// endpoint. The lookup itself is not authorization: every dispatch
+    /// on the returned endpoint is gated by the binding's live-connection
+    /// check at send time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeManagerError::Draining`] while the manager drains
+    /// and [`RuntimeManagerError::TransitionFailed`] for a retiring
+    /// Session or when no published endpoint exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the residency mutex is poisoned.
+    pub fn execution_endpoint(
+        &self,
+        session: &SessionId,
+    ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            if registry.draining {
+                return Err(RuntimeManagerError::Draining);
+            }
+            if registry.retiring_sessions.contains(session) {
+                return Err(error("Session retirement has fenced runtime admission"));
+            }
+            // The residency guard releases before the registry lookup;
+            // no mutex is held while the slot's phase is read.
+        }
+        self.execution.endpoint(session)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Read;
 
+    use base64::Engine as _;
     use rustx_execution_protocol::transport::{read_record, write_record};
-    use rustx_execution_protocol::{Bootstrap, Hello, HelloReply, PROTOCOL_VERSION};
+    use rustx_execution_protocol::{
+        Bootstrap, ClientReply, ClientRequest, DecimalU64, Hello, HelloReply, PROTOCOL_VERSION,
+        RegularFileStamp,
+    };
     use rustx_execution_server::BindingPhase;
 
     use crate::credentials::CredentialSnapshot;
@@ -568,12 +759,41 @@ mod tests {
         (root, manager, sessions)
     }
 
-    #[tokio::test]
-    async fn revocation_denies_the_live_connection_and_draining_rejects_new_claims() {
-        let (_root, manager, sessions) = fixture(2).await;
-        let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
-        let published = bundle(&endpoint);
-        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+    /// A scripted peer: returns its socket after answering exactly one
+    /// range request with a checked reply.
+    fn answer_range(mut client: UnixStream, expected: &Path) -> UnixStream {
+        let request: ClientRequest = read_record(&mut client).unwrap();
+        let ClientRequest::ReadRange {
+            relative_path,
+            offset,
+            ..
+        } = request
+        else {
+            panic!("expected a range request");
+        };
+        assert_eq!(relative_path, expected);
+        write_record(
+            &mut client,
+            &ClientReply::Range {
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
+                offset,
+                next_offset: None,
+                metadata: RegularFileStamp {
+                    size: DecimalU64::new(2),
+                    revision: "a".repeat(64),
+                    identity: String::from("1:1"),
+                    modified_at_ms: None,
+                },
+            },
+        )
+        .unwrap();
+        client
+    }
+
+    /// Admits a scripted peer through the endpoint's typed path: a valid
+    /// Hello from the published bundle, then the admission reply.
+    fn admit(endpoint: &LocalExecutionEndpoint, client: &mut UnixStream) {
+        let published = bundle(endpoint);
         let hello = Hello {
             version: PROTOCOL_VERSION,
             session: published.session.clone(),
@@ -581,29 +801,140 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
-            capabilities: BTreeSet::from([Capability::Connection]),
+            capabilities: BTreeSet::from([Capability::Connection, Capability::ReadRange]),
             credential: published.credential.clone(),
         };
         let (accepted, _) = endpoint.listener().accept().unwrap();
-        write_record(&mut client, &hello).unwrap();
-        let mut connection = endpoint.binding().accept_local(accepted).unwrap().unwrap();
+        write_record(client, &hello).unwrap();
         assert!(matches!(
-            read_record::<HelloReply>(&mut client).unwrap(),
+            endpoint.admit_local_stream(accepted).unwrap(),
+            Ok(())
+        ));
+        assert!(matches!(
+            read_record::<HelloReply>(client).unwrap(),
             HelloReply::Ok(_)
         ));
-        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
-        manager.execution.fence(&sessions[0]);
-        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
-        // The typed gate denies before the wire: the client socket carries
-        // only the earlier admission reply, nothing new.
-        let error = connection.ping().unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// Asserts the peer socket holds no further bytes.
+    fn wire_is_quiet(client: &mut UnixStream) {
         client.set_nonblocking(true).unwrap();
         let mut byte = [0u8; 1];
         assert_eq!(
             client.read(&mut byte).unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
+        client.set_nonblocking(false).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_endpoint_dispatches_one_bounded_read_for_its_own_session() {
+        let (_root, manager, sessions) = fixture(2).await;
+
+        // A lookup never creates: unknown and unreserved Sessions get an
+        // explicit absence and no registry state is allocated.
+        let unknown = SessionId::generate();
+        assert!(manager.execution_endpoint(&unknown).is_err());
+        assert!(manager.execution_endpoint(&sessions[0]).is_err());
+        assert!(manager.execution_endpoint(&sessions[1]).is_err());
+        assert!(
+            manager
+                .execution
+                .0
+                .lock()
+                .expect("execution registry mutex")
+                .is_empty(),
+            "a lookup allocates nothing"
+        );
+
+        let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
+        assert!(Arc::ptr_eq(
+            &manager.execution_endpoint(&sessions[0]).unwrap(),
+            &endpoint
+        ));
+        let published = bundle(&endpoint);
+        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+        admit(&endpoint, &mut client);
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
+
+        // Session B shares the exact lexical workspace but has no admitted
+        // Client: dispatch is NotConnected, never a substitute.
+        let endpoint_b = manager.reserve_local_execution(&sessions[1]).await.unwrap();
+        assert_eq!(
+            endpoint_b
+                .read_range(Path::new("blob"), 0, 64, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+
+        // Session A dispatches: the scripted peer answers a checked reply.
+        let answer = std::thread::spawn(move || answer_range(client, Path::new("blob")));
+        let range = endpoint.read_range(Path::new("blob"), 0, 64, None).unwrap();
+        assert_eq!(range.bytes, b"ab");
+        assert_eq!(range.metadata.size.get(), 2);
+        assert_eq!(range.metadata.revision, "a".repeat(64));
+        let client = answer.join().unwrap();
+
+        // One exchange at a time: a held connection refuses a concurrent
+        // dispatch instead of queueing behind it.
+        {
+            let _held = endpoint.connection.lock().expect("endpoint connection");
+            assert_eq!(
+                endpoint
+                    .read_range(Path::new("blob"), 0, 64, None)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
+        }
+
+        // A caller's absolute path inside the workspace strips the exact
+        // reserved prefix before dispatch.
+        let answer = std::thread::spawn(move || answer_range(client, Path::new("blob")));
+        let range = endpoint
+            .read_range(&published.workspace.join("blob"), 0, 64, None)
+            .unwrap();
+        assert_eq!(range.bytes, b"ab");
+        let mut client = answer.join().unwrap();
+
+        // Foreign and traversal paths are refused before any request byte
+        // is written.
+        for path in [
+            PathBuf::from("/etc/hostname"),
+            PathBuf::from("../escape"),
+            published.workspace.join("../escape"),
+            published.workspace.join("a/../../x"),
+            published.workspace.clone(),
+            PathBuf::new(),
+            PathBuf::from("a\0b"),
+        ] {
+            assert_eq!(
+                endpoint.read_range(&path, 0, 64, None).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied,
+                "{path:?}"
+            );
+        }
+        wire_is_quiet(&mut client);
+    }
+
+    #[tokio::test]
+    async fn revocation_denies_the_live_connection_and_draining_rejects_new_claims() {
+        let (_root, manager, sessions) = fixture(2).await;
+        let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
+        let published = bundle(&endpoint);
+        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+        admit(&endpoint, &mut client);
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
+        manager.execution.fence(&sessions[0]);
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
+        // The typed gate denies before the wire: the client socket carries
+        // only the earlier admission reply, nothing new.
+        let error = endpoint
+            .read_range(Path::new("file"), 0, 64, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        wire_is_quiet(&mut client);
         // Draining permanently closes claims for Sessions that were never
         // bound — the permanent gate, not endpoint status, refuses them.
         manager.begin_draining();

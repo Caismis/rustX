@@ -8571,4 +8571,9 @@ local Execution Protocol over Unix sockets:
   most one endpoint per Session (a concurrent claimant fails explicitly), and
   returns the identical endpoint to every later claim. Deletion and drain
   fence the claim and revoke the binding; a closed claim is never recovered,
-  and endpoint teardown never runs under a registry or residency mutex.
+  and endpoint teardown never runs under a registry or residency mutex. An
+  endpoint admits at most one Client connection — stored once, never
+  replaced — and serializes each synchronous typed exchange: a concurrent
+  dispatch is refused as busy rather than queued, and only the binding's
+  live-connection gate, evaluated at send time, authorizes bytes on the
+  wire.

@@ -508,12 +508,18 @@ envelope.
   `SessionRuntimeManager::reserve_local_execution` claims one
   process-owned `LocalExecutionEndpoint` per Session (binding, listener,
   and owner-only bootstrap in a private directory) for the trusted
-  composer. No product data path uses it — the boundary is read-only so
-  far, the single physical operation is the bounded revision-checked
-  range read, and the existing App Server keeps serving workspace reads
-  through its own local filesystem path (`src/package_io.rs` and the
-  environment file readers, now delegating to `rustx-confined-fs`). No
-  Client is spawned and no dispatch happens yet.
+  composer. The endpoint now carries the first dispatch path: the
+  composer hands an accepted Client stream through
+  `admit_local_stream`, and `read_range` performs one bounded
+  synchronous exchange at a time — a concurrent dispatch is refused as
+  `WouldBlock` busy rather than queued, a workspace check rejects
+  paths outside the Session's reserved workspace lexically, and the
+  binding's live-connection gate authorizes every send at dispatch
+  time. Nothing spawns a Client yet — a composition caller that wants
+  bytes must launch and admit one itself. The App Server's fs/readFile
+  wiring is still pending: product reads keep flowing through
+  `src/package_io.rs` and the environment file readers (delegating to
+  `rustx-confined-fs`) until a later change actually rewires them.
 
 ## Test ownership (T01–T73) and optional O-SUM
 

@@ -11,7 +11,7 @@ use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use base64::Engine as _;
@@ -85,7 +85,32 @@ pub struct Binding {
     /// SHA-256 of the issued credential. The credential itself is never
     /// stored on the Server.
     verifier: [u8; 32],
-    inner: Mutex<Inner>,
+    inner: Arc<ConnectionOwner>,
+}
+
+/// The shared arbitration state behind one [`Binding`]: the phase and
+/// live connection linearize under one mutex, reached identically
+/// through the binding and through any [`LocalConnection`] it already
+/// handed out — a `LocalConnection` owns a share, it does not borrow.
+struct ConnectionOwner(Mutex<Inner>);
+
+impl ConnectionOwner {
+    fn inner(&self) -> MutexGuard<'_, Inner> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Ends the live connection identified by `connection`.
+    ///
+    /// Only the currently live connection can detach the binding: a stale
+    /// or foreign disconnect — for example the late EOF of a connection an
+    /// admitted reconnect already replaced — is ignored.
+    fn disconnect(&self, connection: &ConnectionId) {
+        let mut inner = self.inner();
+        if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(connection) {
+            inner.phase = BindingPhase::Detached;
+            inner.connection = None;
+        }
+    }
 }
 
 struct Inner {
@@ -119,10 +144,10 @@ impl Binding {
         let binding = Self {
             reservation,
             verifier,
-            inner: Mutex::new(Inner {
+            inner: Arc::new(ConnectionOwner(Mutex::new(Inner {
                 phase: BindingPhase::Reserved,
                 connection: None,
-            }),
+            }))),
         };
         Ok((binding, credential))
     }
@@ -232,11 +257,7 @@ impl Binding {
     /// or foreign disconnect — for example the late EOF of a connection an
     /// admitted reconnect already replaced — is ignored.
     pub fn disconnect(&self, connection: &ConnectionId) {
-        let mut inner = self.inner();
-        if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(connection) {
-            inner.phase = BindingPhase::Detached;
-            inner.connection = None;
-        }
+        self.inner.disconnect(connection);
     }
 
     /// Revokes the binding immediately and terminally.
@@ -321,10 +342,7 @@ impl Binding {
     /// Returns the transport or socket error when the record cannot be
     /// read or written. An authenticated-but-refused Hello is not an I/O
     /// error: it returns `Ok(Err(Reject))`.
-    pub fn accept_local(
-        &self,
-        stream: UnixStream,
-    ) -> io::Result<Result<LocalConnection<'_>, Reject>> {
+    pub fn accept_local(&self, stream: UnixStream) -> io::Result<Result<LocalConnection, Reject>> {
         self.accept_local_deadline(stream, Instant::now() + LOCAL_HANDSHAKE_TIMEOUT)
     }
 
@@ -335,7 +353,7 @@ impl Binding {
         &self,
         mut stream: UnixStream,
         deadline: Instant,
-    ) -> io::Result<Result<LocalConnection<'_>, Reject>> {
+    ) -> io::Result<Result<LocalConnection, Reject>> {
         // The handshake wrapper itself normalizes the stream to
         // nonblocking mode, whatever flag an accept inherited.
         let mut handshake = Handshake::new(&mut stream, deadline)?;
@@ -346,7 +364,7 @@ impl Binding {
             Ok(admission) => {
                 self.deliver(&mut handshake, &connection, &admission)?;
                 Ok(Ok(LocalConnection {
-                    binding: self,
+                    owner: self.inner.clone(),
                     stream,
                     usable: true,
                     capabilities,
@@ -384,7 +402,7 @@ impl Binding {
     }
 
     fn inner(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        self.inner.inner()
     }
 }
 
@@ -395,8 +413,8 @@ impl Binding {
 /// operation. There is no raw message path. A transport, protocol, or
 /// unexpected-reply failure retires the stream: it is never reused while a
 /// reply could still be outstanding, and later calls fail closed.
-pub struct LocalConnection<'b> {
-    binding: &'b Binding,
+pub struct LocalConnection {
+    owner: Arc<ConnectionOwner>,
     stream: UnixStream,
     usable: bool,
     capabilities: BTreeSet<Capability>,
@@ -420,7 +438,7 @@ pub struct RangeRead {
     pub metadata: RegularFileStamp,
 }
 
-impl LocalConnection<'_> {
+impl LocalConnection {
     /// The admission the peer was sent.
     #[must_use]
     pub fn admission(&self) -> &Admission {
@@ -444,7 +462,7 @@ impl LocalConnection<'_> {
                 "connection retired after a protocol or transport failure",
             ));
         }
-        let inner = self.binding.inner();
+        let inner = self.owner.inner();
         if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(&self.connection)
         {
             Ok(())
@@ -462,7 +480,7 @@ impl LocalConnection<'_> {
     /// connection is torn down and never used again.
     fn retire(&mut self, error: io::Error) -> io::Error {
         self.usable = false;
-        self.binding.disconnect(&self.connection);
+        self.owner.disconnect(&self.connection);
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
         error
     }
@@ -648,9 +666,9 @@ fn read_error(kind: ReadError) -> io::Error {
     io::Error::new(error_kind, message)
 }
 
-impl Drop for LocalConnection<'_> {
+impl Drop for LocalConnection {
     fn drop(&mut self) {
-        self.binding.disconnect(&self.connection);
+        self.owner.disconnect(&self.connection);
     }
 }
 
@@ -1121,7 +1139,7 @@ mod tests {
     /// One fully admitted live connection over a real socket pair: the
     /// Hello is written by the peer, `accept_local` completes, and the
     /// peer end comes back for scripted replies.
-    fn live<'b>(binding: &'b Binding, hello: &Hello) -> (LocalConnection<'b>, UnixStream) {
+    fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
         let (mut peer, stream) = UnixStream::pair().unwrap();
         write_record(&mut peer, hello).unwrap();
         let connection = binding.accept_local(stream).unwrap().unwrap();

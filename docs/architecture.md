@@ -7778,12 +7778,16 @@ current layer status.
   live-instance recovery work in #577.
 - `SessionRuntimeManager` claims one local endpoint per Session through
   `session_runtime_manager/execution.rs`: a trusted-composer-only
-  `LocalExecutionEndpoint` (binding, listener, and an owner-only bootstrap in
-  a private directory) admitted under the catalog visibility cut and the
-  residency mutex together, prepared exactly once on a blocking task, and
-  fenced on Session delete and process drain. The claim is not reachable
-  through the App Server protocol, nothing spawns or polls a Client yet, and
-  no product operation dispatches through it.
+  `LocalExecutionEndpoint` (binding, listener, an owner-only bootstrap in a
+  private directory, and the one admitted connection it may ever hold)
+  admitted under the catalog visibility cut and the residency mutex
+  together, prepared exactly once on a blocking task, and fenced on
+  Session delete and process drain. The endpoint's typed surface —
+  `admit_local_stream` and one serialized `read_range` exchange (busy
+  refusal, lexical workspace gate, binding live-check at send time) — is
+  the Session's live dispatch owner. The claim is not reachable through
+  the App Server protocol and nothing spawns a Client yet; the App
+  Server's fs/readFile rewiring to it is still pending.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
   Its production workspace dependencies are the protocol and
