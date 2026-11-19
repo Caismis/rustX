@@ -1300,8 +1300,11 @@ jobs:
       - documentation-contracts
       - rust-contracts
       - rust-boundaries
+      - rust-platform-core
+      - rust-platform-boundaries
       - tui
       - app-server-protocol
+      - desktop-macos
       - browser-prepare
       - web-client
       - browser-shard
