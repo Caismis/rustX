@@ -1,5 +1,5 @@
 import { formatArguments } from '../../src/app/resources/mcp/form-values';
-import {openResourceModule,newSubagent} from './shell-actions';
+import {editMcpConnection,openResourceModule,newSubagent} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
@@ -54,7 +54,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     const installedMcp = settings.getByRole('group', { name: 'Installed', exact: true });
     const globalMcpFile = join(fixture.directory, 'home/rustx/.agents/mcp.toml');
     const workspaceMcpFile = join(fixture.workspaceA, '.agents/mcp.toml');
-    await globalMcp.getByRole('button',{name:'MCP local-fixture',exact:true}).click();
+    await editMcpConnection(globalMcp, 'local-fixture');
     // Opening a Global card from a Workspace keeps the Global authoring target.
     await expect(settings.getByRole('form', { name: 'Edit MCP server', exact: true }).getByText('Global', { exact: true })).toBeVisible();
     await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('python3');
@@ -79,7 +79,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     expect(readFileSync(workspaceMcpFile, 'utf8')).toContain('unused-workspace-command');
     expect(readFileSync(globalMcpFile, 'utf8')).toContain('global-fixture-command');
     expect(readFileSync(globalMcpFile, 'utf8')).not.toContain('unused-workspace-command');
-    await installedMcp.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
+    await editMcpConnection(installedMcp, 'local-fixture');
     await settings.getByLabel('Command', { exact: true }).fill('preserved-draft');
     // The reviewed draft must be submitted before the external edit. An edit
     // before clicking can instead invalidate a publication-owned read and

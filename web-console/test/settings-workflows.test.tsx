@@ -13,7 +13,7 @@ import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
 import {
-  chooseOption, confirmAction, openMcpContractEditor, openResourceRow, openSettingsPage, settingsReady, SettingsSurface,
+  chooseOption, confirmAction, selectMcpDetailTab, openResourceRow, openSettingsPage, settingsReady, SettingsSurface,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
@@ -330,8 +330,10 @@ async function mcpDetail(s: Subject) {
   await openResourceModule('mcp');
   await openResourceRow('search');
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'search-server-2' } });
+  selectMcpDetailTab('Permissions');
   const selection = screen.getByRole('form', { name: 'Tools: search' });
   await chooseOption('Selection', 'All', within(selection));
+  selectMcpDetailTab('Connection');
 }
 
 it('S2-06 an uncertain definition save never submits the root selection on its behalf', async () => {
@@ -345,12 +347,13 @@ it('S2-06 an uncertain definition save never submits the root selection on its b
   await screen.findByText(/The save result is unknown/);
   // The selection is still only a draft of its own: no automatic follow-up
   // write, no aggregate success and no replay of the uncertain definition.
+  selectMcpDetailTab('Permissions');
   const selection = within(screen.getByRole('form', { name: 'Tools: search' }));
-  await waitFor(() => expect((selection.getByRole('button', { name: 'Save Tools: search' }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect((selection.getByRole('button', { name: 'Save tool availability' }) as HTMLButtonElement).disabled).toBe(false));
   expect(writes(s)).toHaveLength(1);
   expect(screen.queryByText(/Tools: search saved/)).toBeNull();
   // Granting access is its own explicit mutation with its own outcome.
-  fireEvent.click(selection.getByRole('button', { name: 'Save Tools: search' }));
+  fireEvent.click(selection.getByRole('button', { name: 'Save tool availability' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
   expect(writes(s).filter(op => op.params.mutation.kind === 'mcp')).toHaveLength(1);
@@ -366,8 +369,10 @@ it('S2-06 a rejected definition and a saved selection are reported as two outcom
   await screen.findByText(/native rejected the MCP definition/);
   // The rejected definition keeps its draft.
   expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
-  fireEvent.click(screen.getByRole('button', { name: 'Save Tools: search' }));
+  selectMcpDetailTab('Permissions');
+  fireEvent.click(screen.getByRole('button', { name: 'Save tool availability' }));
   await waitForSettingsSave();
+  selectMcpDetailTab('Connection');
   // The selection's success is not the definition's: the definition is still
   // unsaved, still holds its draft and can still be submitted on its own.
   expect(screen.queryByText(/MCP search saved/)).toBeNull();
@@ -452,13 +457,15 @@ async function openWorkspaceDefinition(name: string, module: 'mcp' | 'subagents'
   const ownGroup = screen.queryByRole('group', { name: module === 'mcp' ? 'Installed' : 'Custom subagents' });
   const owned = ownGroup && within(ownGroup).queryByRole('listitem', { name });
   if (owned) {
-    fireEvent.click(within(owned).getByRole('button', { name: module === 'mcp' ? `MCP ${name}` : name }));
+    if (module === 'mcp') {
+      fireEvent.click(within(owned).getByRole('button', { name: `Actions for ${name}` }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    } else fireEvent.click(within(owned).getByRole('button', { name }));
   } else {
     const global = await screen.findByRole('group', { name: 'Available from Global' });
     fireEvent.click(within(global).getByRole('button', { name: `Actions for ${name}` }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Override in Workspace' }));
   }
-  if (module === 'mcp') openMcpContractEditor();
 }
 
 it('S2-07 an inherited MCP definition is inspected read-only; only Override begins a Workspace draft, and Save writes it once', async () => {
@@ -501,7 +508,9 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   expect(field('Command').value).toBe('search-workspace');
   expect(definitionState('Edit MCP server')).toBe('overriding');
   // Root availability is a second, independent draft.
+  selectMcpDetailTab('Permissions');
   await chooseOption('Selection', 'All', within(screen.getByRole('form', { name: 'Tools: search' })));
+  selectMcpDetailTab('Connection');
 
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
@@ -517,13 +526,15 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   expect(definitionState('Edit MCP server')).toBe('authored');
   // The definition save did not submit the root selection on its behalf.
   expect(writes(s)).toHaveLength(1);
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Save Tools: search' }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Tools: search' }));
+  selectMcpDetailTab('Permissions');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save tool availability' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save tool availability' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
 
   // Removing the Workspace override is inheritance, not deletion: exactly one
   // Workspace removal, and the User definition is inspected again.
+  selectMcpDetailTab('Connection');
   await waitFor(() => expect((screen.getByRole('button', { name: 'Use global default MCP search' }) as HTMLButtonElement).disabled).toBe(false));
   expect(screen.getByRole('button', { name: 'Use global default MCP search' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('override-removal');
   await confirmAction('Use global default MCP search');
@@ -608,7 +619,6 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   await openResourceModule('mcp');
   fireEvent.click(screen.getByRole('button', { name: '＋ New MCP server' }));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'fresh' } });
-  openMcpContractEditor();
   // Creation is its own explicit gesture: writable at once, no override action.
   expect(definitionState('New MCP server')).toBe('new');
   expect(disabled(field('Command'))).toBe(false);
@@ -1016,6 +1026,7 @@ it('S2-12 no global state framework, router, second design system or form devtoo
 it('S2-12 React Aria and TanStack Form stay bounded to their declared interaction owners', () => {
   expect(importers('react-aria-components')).toEqual([
     'src/app/resources/ResourceSurface.tsx',
+    'src/app/resources/mcp/McpServerDetail.tsx',
     'src/app/scheduler/TimingEditor.tsx',
     'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/models/ProviderIcon.tsx',

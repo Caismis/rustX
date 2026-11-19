@@ -10,7 +10,7 @@ import type {SourceScope,SourceSettings} from '../../protocol/app-server/v80';
 afterEach(cleanup);
 const noop=()=>{};
 const mcpDetail=(source:SourceSettings,scope:SourceScope,name:string)=><>
- <McpEditor source={source} scope={scope} revision="cfg-1" focus={{kind:'mcp',name}} onEditorDraftChange={noop} scopeControl={<span>{scope}</span>} close={noop}/>
+ <McpEditor source={source} scope={scope} focus={{kind:'mcp',name}} onEditorDraftChange={noop} scopeControl={<span>{scope}</span>} close={noop}/>
  <AvailabilityDetail source={source} scope={scope} revision="cfg-1" family="mcp" name={name}/>
 </>;
 it('MCP authoring is independent of root permissions and keeps its pinned source revision',async()=>{

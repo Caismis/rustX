@@ -122,6 +122,50 @@ if (variant.get('scenario') === 'mcp-scope') {
   source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
   source.prospective_resources={...effective.resources,definitions:[{family:'mcp',name:'exa',valid:true,location:{scope:'user',path:source.user_mcp.path}}]};
 }
+if (variant.get('scenario') === 'mcp-details') {
+  source.user_mcp.authored = {
+    notes: { definition: { command: 'notes-fixture' }, retained_env: [], retained_headers: [] },
+    empty: { definition: { command: 'empty-fixture' }, retained_env: [], retained_headers: [] },
+    retry: { definition: { command: 'retry-fixture' }, retained_env: [], retained_headers: [] },
+  };
+  source.user.authored!.agent = { tools: { sources: { notes: ['previous_tool'] } } };
+  const tools = [
+    { name: 'read_note', description: 'Read the selected note.' },
+    { name: 'search_notes_with_a_deliberately_long_tool_identity_to_check_narrow_cards', description: 'Find notes that match a text query.' },
+  ].map(tool => ({ ...tool, input_schema: { type: 'object' }, result: { type: 'text' as const } }));
+  let retryRequests = 0;
+  server.handlers.set('workflow/toolCatalog', request => {
+    if (request.method !== 'workflow/toolCatalog' || !request.params.source || request.params.expected_scope !== 'user') throw new Error('Expected the selected Global server');
+    const id = request.params.source;
+    const failed = id === 'retry' && retryRequests++ === 0;
+    return { type: 'workflow_tool_catalog', catalog: { sources: [{
+      source_id: id, kind: 'mcp', scope: 'user', state: failed ? 'list_failed' : 'listed', tools: failed || id === 'empty' ? [] : tools,
+    }] } };
+  });
+  if (variant.has('hold-tools')) server.held.add('workflow/toolCatalog');
+  (window as unknown as { rustxReleaseTools: () => void }).rustxReleaseTools = () => {
+    server.held.delete('workflow/toolCatalog');
+    for (const { request, socket } of server.requests) {
+      if (request.method === 'workflow/toolCatalog') server.reply(request, socket);
+    }
+  };
+  server.handlers.set('configuration/sourceWrite', request => {
+    if (request.method !== 'configuration/sourceWrite') throw new Error('Expected a source write');
+    const mutation = request.params.mutation;
+    if (mutation.kind === 'config' && mutation.mutation.unit === 'source_tools') {
+      const { id, authored } = mutation.mutation;
+      const selections = source.user.authored!.agent!.tools!.sources!;
+      if (authored == null) delete selections[id];
+      else selections[id] = authored;
+      source.user.revision += '+';
+    } else if (mutation.kind === 'mcp' && mutation.authored) {
+      const { definition, retained_env = [], retained_headers = [] } = mutation.authored;
+      source.user_mcp.authored![mutation.id] = { definition, retained_env, retained_headers };
+      source.user_mcp.revision += '+';
+    } else throw new Error('Unexpected source write');
+    return { type: 'sources_written', revision: sourceReceipt(source, mutation).revision, configuration_revision: null };
+  });
+}
 // A held write stays in flight — the User request unanswered, the Workspace
 // host call unresolved — until the test releases it. Only then does native
 // commit it: the removal is applied, the revision advances and the projection

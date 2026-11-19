@@ -16,7 +16,8 @@ import type { SettingsTarget } from '../../settings/projection';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { extensionEntries } from '../shared/inventory';
 import css from './Subagents.module.css';
-import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
+import { AgentToolFields, ManagedToolSelections } from './AgentToolFields';
+import type { LoadMcpTools } from '../types';
 import { AgentSkillFields } from './AgentSkillFields';
 
 export type AgentDraft = NamedAgentProfileDocument & { name?: string };

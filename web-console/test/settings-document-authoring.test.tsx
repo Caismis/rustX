@@ -1,6 +1,5 @@
 import {showSettings,openResourceModule,newSubagent} from './settings-harness';
 // @vitest-environment jsdom
-import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v80';
@@ -105,7 +104,6 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '＋ New MCP server' }));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'probe' } });
-  openMcpContractEditor();
   const mcp = within(screen.getByRole('form', { name: 'New MCP server' }));
   fireEvent.change(mcp.getByLabelText('Command'), { target: { value: 'probe-server' } });
   fireEvent.click(mcp.getByRole('button', { name: 'Save' }));

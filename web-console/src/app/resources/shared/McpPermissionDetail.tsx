@@ -1,10 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
-import type { McpWrite, ResourcePermissionSet, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
+import type { McpWrite, ResourcePermissionSet, SourceScope, SourceSettings, WorkflowToolChoice } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { UnitForm } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
 import { ConfigUnavailable } from '../../settings/forms/ConfigUnavailable';
 import { ResourcePermissionFields, blankResourcePermissions } from '../../settings/forms/ResourcePermissionFields';
+import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
 import { AvailabilityDetail } from './AvailabilityDetail';
 
 function permissionsCleared(permissions: ResourcePermissionSet | null | undefined): boolean {
@@ -25,11 +26,13 @@ export function McpPermissionDetail({
   scope,
   revision,
   name,
+  tools,
 }: {
   source: SourceSettings;
   scope: SourceScope;
   revision?: string;
   name: string;
+  tools?: readonly WorkflowToolChoice[];
 }) {
   const tx = useTranslation();
   const mcp = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
@@ -43,32 +46,38 @@ export function McpPermissionDetail({
   return (
     <section aria-label={tx('resources:mcp.permissions')}>
       {revision !== undefined && (
-        <AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={name} />
+        <AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={name}
+          tools={tools} heading={tx('resources:mcp.availability')} saveLabel={tx('resources:mcp.save-availability')} />
       )}
-      <UnitForm<McpWrite>
-        title={tx('resources:mcp.permissions')}
-        authored={authored}
-        blank={blank}
-        revision={mcp.revision}
-        draftKey={JSON.stringify(['mcp-permissions', name])}
-        removable={false}
-        mutation={value => ({ kind: 'mcp', id: name, authored: value })}
-      >
-        {(value, change) => (
-          <ResourcePermissionFields
-            value={value.definition.permissions}
-            change={(permissions: ResourcePermissionSet | null) =>
-              change({
-                ...value,
-                definition: {
-                  ...value.definition,
-                  permissions: permissionsCleared(permissions) ? undefined : permissions ?? undefined,
-                },
-              })
-            }
-          />
-        )}
-      </UnitForm>
+      <section aria-label={tx('resources:mcp.approval-rules')}>
+        <h4>{tx('resources:mcp.approval-rules')}</h4>
+        <p className={settingsCss.hint}>{tx('resources:mcp.approval-rules-help')}</p>
+        <UnitForm<McpWrite>
+          title={tx('resources:mcp.permissions')}
+          authored={authored}
+          blank={blank}
+          revision={mcp.revision}
+          draftKey={JSON.stringify(['mcp-permissions', name])}
+          removable={false}
+          saveLabel={tx('resources:mcp.save-rules')}
+          mutation={value => ({ kind: 'mcp', id: name, authored: value })}
+        >
+          {(value, change) => (
+            <ResourcePermissionFields
+              value={value.definition.permissions}
+              change={(permissions: ResourcePermissionSet | null) =>
+                change({
+                  ...value,
+                  definition: {
+                    ...value.definition,
+                    permissions: permissionsCleared(permissions) ? undefined : permissions ?? undefined,
+                  },
+                })
+              }
+            />
+          )}
+        </UnitForm>
+      </section>
     </section>
   );
 }

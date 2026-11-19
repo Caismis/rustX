@@ -28,9 +28,8 @@ import { ResourceAvailability } from './shared/ResourceAvailability';
 import { ResourceBrowser } from './shared/ResourceBrowser';
 import type { SkillDisplayWriter } from './skills/SkillDisplayDialog';
 import { AgentEditor, type AgentDraft } from './subagents/AgentEditor';
-import type { LoadMcpTools } from './subagents/AgentToolFields';
 import { SubagentList } from './subagents/SubagentList';
-import type { McpEditorDraft, McpFocus, ResourceModule } from './types';
+import type { LoadMcpTools, McpEditorDraft, McpFocus, ResourceModule } from './types';
 import css from './ResourceSurface.module.css';
 
 interface Props {
@@ -161,6 +160,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   };
   const mcpDraftKey = mcpFocus ? JSON.stringify([owner, editorTarget.kind === 'workspace' ? lifetime : 'user', editorSource?.target, mcpFocus.name ?? null]) : undefined;
   const editorConfig = configAuthoring(editorSource, editorTarget.kind);
+  const mcpSource = editorTarget.kind === 'user' ? editorSource?.user_mcp : editorSource?.workspace_mcp;
   const refresh = () => {
     actor.send({ type: 'REFRESH' });
     if (module === 'skills') setSkillCatalogRefresh(value => value + 1);
@@ -234,7 +234,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       ? <McpPage source={shown} scope={owner} revision={revision} onFocus={next => focusMcp(next, owner)}
         query={query} view={view} group={group} probeStates={inherited ? undefined : probes.states}
         testConnection={probes.testConnection} probeAvailable={!inherited && probes.available}
-        onOverride={canOverride ? name => focusMcp({ kind: 'mcp', name }, 'workspace') : undefined} canOverride={canOverride}
+        onOverride={canOverride ? name => focusMcp({ kind: 'mcp', name, mode: 'connection' }, 'workspace') : undefined} canOverride={canOverride}
         onTransfer={transfer} transferDisabled={transferDisabled} workspaceAvailability={workspaceAvailability} />
       : <SubagentList source={shown} scope={owner} revision={revision} query={query} view={view} group={group}
         onOpen={name => openAgent(name, owner)} onOverride={canOverride ? name => openAgent(name, 'workspace') : undefined}
@@ -260,6 +260,10 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
           <fieldset className={css.editor} disabled={!editorEditable}>
             <McpDetail source={editorSource} scope={editorTarget.kind} revision={editorConfig.state === 'structured' ? editorConfig.revision : undefined}
               focus={mcpFocus} onClose={() => focusMcp(undefined)} scopeControl={<span>{editorScopeLabel}</span>}
+              loadMcpTools={loadMcpTools}
+              listingAuthority={JSON.stringify([lifetime, transport.generation, mcpSource?.revision])}
+              listingAvailable={visible && editorEditable && !!mcpFocus.name
+                && !!mcpSource?.authored && Object.hasOwn(mcpSource.authored, mcpFocus.name)}
               editorDraft={mcpDraftKey ? mcpDrafts.current.get(mcpDraftKey)?.draft : undefined}
               onEditorDraftChange={draft => {
                 if (!mcpDraftKey) return;

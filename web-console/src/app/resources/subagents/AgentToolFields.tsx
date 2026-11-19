@@ -1,5 +1,6 @@
+import type { LoadMcpTools } from '../types';
 import { useEffect, useId, useState } from 'react';
-import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice, WorkflowToolSource } from '../../../../../protocol/app-server/v80';
+import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Switch } from '../../../presentation/primitives/Switch';
@@ -10,7 +11,6 @@ import css from './Subagents.module.css';
 
 type Tools = NonNullable<NamedAgentProfileDocument['tools']>;
 type Grants = Pick<NamedAgentProfileDocument, 'tools'>;
-export type LoadMcpTools = (scope: SourceScope, server: string, owner: SourceScope, owns: () => boolean) => Promise<WorkflowToolSource | undefined>;
 
 export function AgentToolFields({ source, scope, value, change, loadMcpTools }: {
   source: SourceSettings; scope: SourceScope; value: Grants; change: (grants: Partial<Grants>) => void;

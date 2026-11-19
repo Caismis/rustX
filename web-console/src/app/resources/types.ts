@@ -1,7 +1,8 @@
-import type { McpWrite } from '../../../../protocol/app-server/v80';
+import type { McpWrite, SourceScope, WorkflowToolSource } from '../../../../protocol/app-server/v80';
 
 export type ResourceModule = 'subagents' | 'mcp' | 'skills';
-export interface McpFocus { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' }
+export interface McpFocus { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' | 'connection' }
+export type LoadMcpTools = (scope: SourceScope, server: string, owner: SourceScope, owns: () => boolean) => Promise<WorkflowToolSource | undefined>;
 export type McpFieldBuffers = Partial<Record<'args' | 'env' | 'headers', string>>;
 export interface McpEditorDraft {
   name: string;

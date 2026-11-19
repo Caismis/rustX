@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
@@ -6,27 +6,26 @@ import { Button } from '../../../presentation/primitives/Button';
 import { DefinitionNotice, UnitOutcomeNotice, useUnitEditing } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
 import type { McpEditorDraft, McpFieldBuffers, McpFocus } from '../types';
-import { McpPermissionDetail } from '../shared/McpPermissionDetail';
-import { Advanced,ConfirmAction } from '../../settings/primitives/aria';
+import { ConfirmAction } from '../../settings/primitives/aria';
 import { McpFormFields } from './McpFormFields';
 import { formatMcpJson, parseMcpJson } from './json';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import css from './McpPage.module.css';
 
 interface EditorProps {
-  source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus; scopeControl: ReactNode; close: () => void;
+  source: SourceSettings; scope: SourceScope; focus: McpFocus; scopeControl: ReactNode; close: () => void;
   editorDraft?: McpEditorDraft; onEditorDraftChange: (draft?: McpEditorDraft) => void;
+  backRef?: Ref<() => void>;
 }
 
 export function McpEditor(props: EditorProps) {
-  const { source, scope, revision, focus, close } = props;
+  const { source, scope, close, backRef } = props;
   const tx = useTranslation();
-  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></>;
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
-  if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
+  if (document.state !== 'structured') return <>{!backRef && <Button onClick={close}>{tx('settings:catalog.mcp')}</Button>}<p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
   return <Editor {...props} document={document}/>;
 }
-function Editor({ source, scope, revision, focus, scopeControl, close, editorDraft, onEditorDraftChange, document }: EditorProps & {
+function Editor({ scope, focus, scopeControl, close, editorDraft, onEditorDraftChange, document, backRef }: EditorProps & {
   document: Extract<ReturnType<typeof documentAuthoring<NonNullable<SourceSettings['user_mcp']['authored']>>>, {state:'structured'}>;
 }) {
   const tx = useTranslation();
@@ -44,7 +43,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
     blank: {definition:{type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}, mutation: value => ({kind:'mcp',id:name,authored:value}) });
   const pendingSave = useRef(false), card = useRef<HTMLFormElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => { if (!backRef) heading.current?.focus({ preventScroll: true }); }, [backRef]);
   const [invalidFields, setInvalidFields] = useState<McpFieldBuffers>(editorDraft?.invalidFields ?? {});
   const validity = useCallback((field: keyof McpFieldBuffers, invalidText?: string) => setInvalidFields(current => {
     if (current[field] === invalidText) return current;
@@ -167,12 +166,14 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   };
   const cancel = () => { discard(); close(); };
   const back = () => {
+    if (blocked) return;
     const retain = jsonEdit || pendingImport || !validFields || !focus.name && (name || unit.intent);
     onEditorDraftChange(retain ? { name, mode, json: jsonEdit, pendingImport, invalidFields: validFields ? undefined : invalidFields } : undefined);
     close();
   };
+  useImperativeHandle(backRef, () => back);
   return <>
-    <div className={css.back}><Button size="sm" variant="ghost" disabled={blocked} onClick={back}>{tx('settings:mcp.back')}</Button></div>
+    {!backRef && <div className={css.back}><Button size="sm" variant="ghost" disabled={blocked} onClick={back}>{tx('settings:mcp.back')}</Button></div>}
     <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
       <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
     <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => {event.preventDefault();save();}}>
@@ -207,6 +208,5 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
         </div>
       </div>
     </form>
-    {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
   </>;
 }

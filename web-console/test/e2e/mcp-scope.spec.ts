@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {openResourceModule,openSettingsPage} from './shell-actions';
+import {editMcpConnection,openResourceModule,openSettingsPage} from './shell-actions';
 import {captureEvidence} from './screenshot';
 const fixture=`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}/test/fixtures/settings.html?scenario=mcp-scope`;
 test('MCP keeps its resource scope separate from Settings and opens global definitions for editing',async({page})=>{
@@ -20,7 +20,7 @@ test('MCP keeps its resource scope separate from Settings and opens global defin
  await expect(page.getByRole('heading',{name:'User Settings',exact:true})).toBeVisible();
  await openResourceModule(page,'mcp');
  await expect(mcp.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');
- await inherited.getByRole('button',{name:'MCP exa',exact:true}).click();
+ await editMcpConnection(inherited, 'exa');
  await expect(mcp.getByLabel('URL',{exact:true})).toBeEnabled();
  await expect(mcp.getByLabel('URL',{exact:true})).toHaveValue('https://mcp.exa.ai/mcp');
  await expect(mcp.getByRole('button',{name:'Override',exact:true})).toHaveCount(0);
@@ -32,12 +32,12 @@ test('MCP module shares compact typography and fits a narrow page',async({page})
  await page.goto(fixture);await openSettingsPage(page,'General');
  await page.getByRole('button',{name:'Dark',exact:true}).click();
  const mcp=await openResourceModule(page,'mcp','Global');
- await mcp.getByRole('button',{name:'MCP exa',exact:true}).click();
- await expect(mcp.locator('h3')).toHaveCSS('font-size','24px');
+ await editMcpConnection(mcp, 'exa');
+ await expect(mcp.getByRole('heading', { name: 'Edit MCP server', exact: true })).toHaveCSS('font-size','24px');
  await expect(mcp.getByRole('button',{name:'Form',exact:true})).toHaveAttribute('aria-pressed','true');
  await mcp.getByRole('button',{name:'JSON',exact:true}).click();
  await page.setViewportSize({width:390,height:850});
- await expect(mcp.locator('h3')).toHaveCSS('font-size','20px');
+ await expect(mcp.getByRole('heading', { name: 'Edit MCP server', exact: true })).toHaveCSS('font-size','20px');
  await captureEvidence(mcp,'mcp-editor-narrow');
  const bounds=await mcp.evaluate(el=>({client:el.clientWidth,scroll:el.scrollWidth}));
  expect(bounds.scroll).toBeLessThanOrEqual(bounds.client);

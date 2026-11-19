@@ -1,4 +1,4 @@
-import {openResourceModule, settledSave } from './shell-actions';
+import {editMcpConnection, openResourceModule, settledSave } from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
@@ -111,7 +111,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
     }
     surface=await openResourceModule(page,'mcp','Workspace A');
     for (const transport of ['http', 'stdio'] as const) {
-      await surface.getByRole('button', { name: `MCP implicit-${transport}`, exact: true }).click();
+      await editMcpConnection(surface, `implicit-${transport}`);
       await expect(surface).not.toContainText('fixture-header-secret');
       await expect(surface).not.toContainText('fixture-env-secret');
       await surface.getByRole('button', { name: 'JSON', exact: true }).click();

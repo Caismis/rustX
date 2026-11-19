@@ -229,3 +229,8 @@ export async function newSubagent(surface: Locator, name: string) {
   await form.getByLabel('Name', { exact: true }).fill(name);
   return form;
 }
+
+export async function editMcpConnection(surface: Locator, name: string) {
+  await surface.getByRole('button', { name: `Actions for ${name}`, exact: true }).click();
+  await surface.page().getByRole('menuitem', { name: 'Edit', exact: true }).click();
+}

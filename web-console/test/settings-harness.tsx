@@ -174,17 +174,19 @@ export async function openResourceModule(module:ResourceModule) {
  * navigation in a test is the same interaction a user performs. */
 export async function openResourceRow(name: string) {
   const card = screen.queryByRole('listitem', { name });
+  if (resourceModule === 'mcp' && card) {
+    fireEvent.click(within(card).getByRole('button', { name: `Actions for ${name}` }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    return;
+  }
   fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
   const modelDialog = screen.queryByRole('dialog', { name: /^Model / });
   if (modelDialog) fireEvent.click(within(modelDialog).getByRole('button', { name: 'Advanced configuration', expanded: false }));
-  if (resourceModule==='mcp') openMcpContractEditor(name);
 }
 
-/** Open the independent permission units alongside the server definition. */
-export function openMcpContractEditor(name?: string) {
-  void name;
-  const permissions=screen.queryByRole('button',{name:'Permissions',expanded:false});
-  if(permissions)fireEvent.click(permissions);
+/** Select one pane of the open server. Drafts belong to their native unit. */
+export function selectMcpDetailTab(name: 'Connection' | 'Permissions') {
+  fireEvent.click(screen.getByRole('tab', { name }));
 }
 
 /** Wait until the open Settings surface holds a current authoritative

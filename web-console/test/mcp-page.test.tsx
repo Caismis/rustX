@@ -1,4 +1,4 @@
-import {openResourceModule} from './settings-harness';
+import {openResourceModule, openResourceRow} from './settings-harness';
 import { changeJson, readJson } from './json-editor-helpers';
 // @vitest-environment jsdom
 import {afterEach,expect,it} from 'vitest';
@@ -19,7 +19,7 @@ it('MCP has its own navigation and saves a new HTTP server before returning to t
  fireEvent.change(screen.getByLabelText('URL'),{target:{value:'https://mcp.example.com/mcp'}});
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'exa'});
- fireEvent.click(screen.getByRole('button',{name:'MCP exa'}));
+ await openResourceRow('exa');
  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://mcp.example.com/mcp');
  expect(writes(s)[0]).toMatchObject({target:{kind:'user'},expected_revision:'mcp-1',mutation:{kind:'mcp',id:'exa',authored:{definition:{type:'http',url:'https://mcp.example.com/mcp'}}}});
  await openSettingsPage('Extensions');
@@ -142,8 +142,8 @@ it('retained raw JSON cannot overwrite a newly observed MCP source revision', as
  fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'initial' } });
  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
  await screen.findByRole('listitem', { name: 'docs' });
- const openServer = () => fireEvent.click(screen.getByRole('button', { name: 'MCP docs' }));
- openServer();
+ const openServer = () => openResourceRow('docs');
+ await openServer();
  fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
  const draft = '{"docs":{"command":"stale-draft"}}';
  changeJson(await screen.findByLabelText('Complete configuration'), draft);
@@ -153,7 +153,7 @@ it('retained raw JSON cannot overwrite a newly observed MCP source revision', as
  s.source.user_mcp.authored!.docs.retained_env = ['NEW_TOKEN'];
  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
  await screen.findByText('stdio · external-command');
- openServer();
+ await openServer();
  const json = await screen.findByLabelText('Complete configuration');
  expect(readJson(json)).toBe(draft);
  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
@@ -248,7 +248,7 @@ it('a shadowed User definition stays editable at its exact source and retained h
  s.source.prospective_resources={...s.effective.resources,definitions:[{family:'mcp',name:'docs',valid:true,location:{scope:'workspace',path:'/workspace/.agents/mcp.toml',shadowed:s.source.user_mcp.path}}]};
  render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)}/>);
  await settingsReady();await openResourceModule('mcp');
- fireEvent.click(screen.getByRole('button',{name:'MCP docs'}));
+ await openResourceRow('docs');
  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://user.invalid');
  expect(screen.queryByRole('textbox',{name:'Authorization'})).toBeNull();
  expect(screen.queryByLabelText('Authorization')).toBeNull();

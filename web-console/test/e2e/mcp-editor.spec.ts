@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openResourceModule } from './shell-actions';
+import { editMcpConnection, openResourceModule } from './shell-actions';
 
 test('MCP Back retains invalid JSON and Discard resets the JSON and form together', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html?scenario=mcp`);
@@ -8,14 +8,13 @@ test('MCP Back retains invalid JSON and Discard resets the JSON and form togethe
   await surface.getByLabel('Name', { exact: true }).fill('draft-mcp');
   await surface.getByLabel('Command', { exact: true }).fill('initial');
   await surface.getByRole('button', { name: 'Save', exact: true }).click();
-  const server = surface.getByRole('button', { name: 'MCP draft-mcp', exact: true });
-  await server.click();
+  await editMcpConnection(surface, 'draft-mcp');
   await surface.getByLabel('Command', { exact: true }).fill('form-draft');
   await surface.getByRole('button', { name: 'JSON', exact: true }).click();
   const json = surface.getByLabel('Complete configuration', { exact: true });
   await json.fill('{unfinished');
   await surface.getByRole('button', { name: '← MCP servers', exact: true }).click();
-  await server.click();
+  await editMcpConnection(surface, 'draft-mcp');
   await expect(json).toHaveText('{unfinished', { useInnerText: true });
   await expect(surface.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await surface.getByRole('button', { name: 'Discard', exact: true }).click();
@@ -27,7 +26,7 @@ test('MCP Back retains invalid JSON and Discard resets the JSON and form togethe
   await surface.getByText('Environment references (optional)', { exact: true }).click();
   await references.fill('{unfinished');
   await surface.getByRole('button', { name: '← MCP servers', exact: true }).click();
-  await server.click();
+  await editMcpConnection(surface, 'draft-mcp');
   await surface.getByText('Environment references (optional)', { exact: true }).click();
   await expect(references).toHaveText('{unfinished', { useInnerText: true });
   await expect(surface.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
@@ -86,7 +85,7 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await expect(references).toHaveText('{\n  "TOKEN": "$TOKEN"\n}',{useInnerText:true});
   await form.getByRole('button',{name:'Save',exact:true}).click();
   await expect(page.getByRole('listitem',{name:'browser-compact'})).toBeVisible();
-  await page.getByRole('button',{name:'MCP browser-compact',exact:true}).click();
+  await editMcpConnection(page.getByRole('region', { name: 'MCP servers', exact: true }), 'browser-compact');
   await expect(page.getByRole('form',{name:'Edit MCP server',exact:true}).getByText('Global',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'JSON',exact:true}).click();
   const json=page.getByLabel('Complete configuration',{exact:true});

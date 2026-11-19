@@ -12,6 +12,16 @@
 
 @keyframes mcp-spin { to { transform:rotate(360deg); } }
 .back { align-self:flex-start; margin-inline-start:-8px; }
+.serverHeading { display:flex; flex-wrap:wrap; align-items:center; gap:10px; min-width:0; }
+.serverHeading h3 { min-width:0; }
+.serverHeading .scope { margin-inline-start:auto; }
+.serverPanel { display:grid; gap:14px; min-width:0; padding-top:16px; }
+.serverPanel[data-inert] { display:none; }
+.toolFeedback { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.toolCards { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap:10px; margin:0; padding:0; list-style:none; }
+.toolCard { display:grid; align-content:start; gap:5px; padding:12px 14px; border:.5px solid var(--dsw-alias-border-l2); border-radius:var(--dsw-radius-lg); background:var(--dsw-alias-bg-module-platform); overflow-wrap:anywhere; min-width:0; }
+.toolCard strong { font-size:13px; line-height:20px; font-weight:500; }
+.page .toolCard p { margin:0; font-size:12px; line-height:18px; color:var(--dsw-alias-label-secondary); }
 .editorHeader { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
 .editorHeader h3 { margin:0 0 4px; }
 .page .editorHeader p { margin:0; font-size:13px; line-height:20px; color:var(--dsw-alias-label-secondary); }

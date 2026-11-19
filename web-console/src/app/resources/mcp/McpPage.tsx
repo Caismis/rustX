@@ -12,10 +12,11 @@ import { documentAuthoring } from '../../settings/projection';
 import { extensionEntries } from '../shared/inventory';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
 import { ResourceCard, ResourceGroup } from '../shared/ResourceCards';
-import type { McpEditorDraft, McpFocus } from '../types';
+import type { LoadMcpTools, McpEditorDraft, McpFocus } from '../types';
 import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
+import { McpServerDetail } from './McpServerDetail';
 import css from './McpPage.module.css';
 
 export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: (focus: McpFocus) => void }) {
@@ -32,17 +33,22 @@ export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: 
   </div>;
 }
 
-export function McpDetail({ source, scope, revision, focus, editorDraft, onEditorDraftChange, scopeControl, onClose }: {
+export function McpDetail({ source, scope, revision, focus, editorDraft, onEditorDraftChange, scopeControl, onClose, loadMcpTools, listingAuthority, listingAvailable }: {
   source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus;
   editorDraft?: McpEditorDraft; onEditorDraftChange: (draft?: McpEditorDraft) => void;
   scopeControl: ReactNode; onClose: () => void;
+  loadMcpTools: LoadMcpTools; listingAuthority: string; listingAvailable: boolean;
 }) {
   const tx = useTranslation();
   const entry = extensionEntries(source, scope, 'mcp', 'owned').find(entry => entry.name === focus.name);
   return <section className={css.page} data-mcp-page="" aria-label={focus.name ? tx('settings:extension-detail.mcp-value',{p0:focus.name}) : tx('settings:mcp.new')}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
-    <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
-      editorDraft={editorDraft} onEditorDraftChange={onEditorDraftChange} scopeControl={scopeControl} close={onClose} />
+    {focus.name ? <McpServerDetail key={`${scope}:${focus.name}`} source={source} scope={scope} revision={revision}
+      focus={{ ...focus, name: focus.name }} editorDraft={editorDraft} onEditorDraftChange={onEditorDraftChange}
+      scopeLabel={scopeControl} onClose={onClose} loadMcpTools={loadMcpTools}
+      listingAuthority={listingAuthority} listingAvailable={listingAvailable} />
+      : <McpEditor key={focus.mode} source={source} scope={scope} focus={focus}
+        editorDraft={editorDraft} onEditorDraftChange={onEditorDraftChange} scopeControl={scopeControl} close={onClose} />}
   </section>;
 }
 
@@ -74,7 +80,7 @@ export function McpPage({ source, scope, revision, onFocus, query, view, group, 
         ...(canOverride?.(entry.name) ? [{ id: 'override', label: tx('resources:card.override'), icon: <IconEditOutline16 /> }] : []),
         ...(onTransfer ? transferActions(tx, scope, !!transferDisabled || document.state !== 'structured' || !Object.hasOwn(document.document, entry.name)) : [])]}
       onSelect={action => {
-        if (action === 'edit') onFocus({ kind: 'mcp', name: entry.name });
+        if (action === 'edit') onFocus({ kind: 'mcp', name: entry.name, mode: 'connection' });
         else if (action === 'override') onOverride?.(entry.name);
         else if (document.state === 'structured') onTransfer?.(scope, entry.name, document.revision, action === 'copy-scope' ? 'copy' : 'move');
       }} />}

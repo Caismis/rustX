@@ -4,7 +4,6 @@ import {changeJson} from './json-editor-helpers';
 import {openResourceModule} from './settings-harness';
 import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
-import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
@@ -488,7 +487,6 @@ it('S1-14 a confirmed MCP environment-reference save drops the submitted payload
   await openResourceModule('mcp');
   fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
-  openMcpContractEditor();
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'search-server' } });
   fireEvent.click(screen.getByText('Environment references (optional)'));
   const editor=await screen.findByRole('textbox',{name:'Environment variables (JSON)'});

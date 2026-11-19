@@ -1,4 +1,4 @@
-import {openResourceModule} from './shell-actions';
+import {editMcpConnection,openResourceModule} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectionAction, connectRemote, openSettingsPage, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
@@ -94,7 +94,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     expect(readFileSync(join(fixture.directory, 'home/rustx/.agents/mcp.toml'), 'utf8')).toContain('inert-fixture');
     await reconnect();
     await openMcp();
-    await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
+    await editMcpConnection(mcp, 'loss-fixture');
     await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('inert-fixture');
     expect(writes()).toHaveLength(3);
     wire.loseNext('configuration/reconcile');
@@ -106,14 +106,14 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     expect(writes()).toHaveLength(3);
     // A User draft remains User-owned across Session focus changes.
     await openMcp();
-    await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
+    await editMcpConnection(mcp, 'loss-fixture');
     await mcp.getByLabel('Command', { exact: true }).fill('unsaved-draft');
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     await openMcp();
-    await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
+    await editMcpConnection(mcp, 'loss-fixture');
     await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('unsaved-draft');
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/250000|loss-fixture|unsaved-draft/);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }

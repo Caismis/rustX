@@ -6624,7 +6624,7 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/resources/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "a6eefe529af77062bf6ef3103957fa2827aaa814cdf8ce239fca0f46cb3485da",
+      "local_sha256": "dab41584767d96b56885d346d790bfd187a5c37ea4f20dcca2e55284f65fff5a",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Issue #499: wrap native connecting/catalog-hint provenance in the existing MCP list row; upstream baseline unchanged. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Centered editor with Harness setting-row spacing and persistent form actions.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
@@ -8407,6 +8407,7 @@
         "../../settings/primitives/aria",
         "../../settings/projection",
         "../shared/inventory",
+        "../types",
         "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
@@ -8451,7 +8452,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c7d0db12b1373cd5de72eefa93b2ec3acc848b6b071af92b9767832876d6b127"
+      "local_sha256": "1a4e1ac21762bb2eb2cf3806602c5c015506e4bf6b48fa0594c2e89080964d7a"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -8461,10 +8462,15 @@
       "retained_dependencies": [
         "../../../../../protocol/app-server/v80",
         "../../../locale/react",
+        "../../../presentation/settings/SettingsContent.module.css",
         "../../settings/capability",
         "../../settings/forms/ConfigUnavailable",
         "../../settings/forms/bridge",
-        "../../settings/forms/controls"
+        "../../settings/forms/controls",
+        "../../settings/primitives/aria",
+        "../subagents/ScopedChoices",
+        "../subagents/Subagents.module.css",
+        "react"
       ],
       "excluded_dependencies": [
         "Cordis and dynamic plugin runtime",
@@ -8505,7 +8511,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3e6808b81ff47fad6fb1a04e816f1b8574a01ea491c7fa973a62e6768c1bc92f"
+      "local_sha256": "9ce0e5c0501727aa521beb22322e4d5fe637f008c3df834a59b8940b7009e081"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -8515,6 +8521,7 @@
       "retained_dependencies": [
         "../../../../../protocol/app-server/v80",
         "../../../locale/react",
+        "../../../presentation/settings/SettingsContent.module.css",
         "../../settings/forms/ConfigUnavailable",
         "../../settings/forms/ResourcePermissionFields",
         "../../settings/forms/bridge",
@@ -8535,7 +8542,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "513c289fa9ebeac504b596c64d50a0b23ee58b68309719fecb6cf24f43a0848d"
+      "local_sha256": "8e450c5a52dd670372e146d3f5ecdfb7e995f601e9b017828a769183510bfafb"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",

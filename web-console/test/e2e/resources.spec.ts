@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {PNG} from 'pngjs';
 import {startDogfood} from './dogfood-server';
 import {routeWorkspaceHost} from './workspace-host';
-import {connectRemote,newSubagent,openResourceModule,openSettingsPage,returnHome} from './shell-actions';
+import {connectRemote,editMcpConnection,newSubagent,openResourceModule,openSettingsPage,returnHome} from './shell-actions';
 import {captureEvidence} from './screenshot';
 import {wireProbe} from './wire-probe';
 
@@ -558,7 +558,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await checkCatalogView(mcp, inheritedServer);
   await captureEvidence(mcp,`workspace-mcp-${width}`);
   const localDefinition = readFileSync(join(workspaceRoot, 'mcp.toml'), 'utf8');
-  await inheritedServer.getByRole('button',{name:'MCP global-server',exact:true}).click();
+  await editMcpConnection(inheritedServer, 'global-server');
   const command = mcp.getByLabel('Command', { exact: true });
   await expect(command).toBeEnabled();
   await expect(command).toHaveValue('python3');
