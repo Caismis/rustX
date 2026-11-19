@@ -31,6 +31,7 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
       {!!(tools.builtin?.length || sourceSelections.size) && <Button size="sm"
         onClick={() => change({ tools: { builtin: [], sources: {} } })}>{tx('resources:subagents.clear-tools')}</Button>}
     </div>
+    <p className={css.panelHint}>{tx('resources:subagents.tools-help')}</p>
     <div className={css.nativeTools}>
       <CheckboxList label={tx('settings:extension-detail.native-tools')} values={nativeTools}
         selected={tools.builtin ?? []} change={builtin => change({ tools: { ...tools, builtin } })} />

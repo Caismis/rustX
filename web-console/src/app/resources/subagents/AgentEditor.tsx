@@ -1,10 +1,12 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import type { NamedAgentProfileDocument, SourceSettings } from '../../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
+import catalog from '../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../presentation/primitives/Button';
-import { IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
+import { IconAgentPresetOutline16, IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
 import { Switch } from '../../../presentation/primitives/Switch';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import { DefinitionNotice, UnitOutcomeNotice, UnitReset, useUnitEditing } from '../../settings/forms/bridge';
@@ -58,6 +60,9 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const validationId = useId();
   const promptId = useId();
   const sections = useId();
+  const [section, setSection] = useState<'profile' | 'capabilities' | 'advanced'>('profile');
+  const [openedCapabilities, setOpenedCapabilities] = useState(false);
+  const [openedAdvanced, setOpenedAdvanced] = useState(false);
   const invalid = creating && !/^[a-z][a-z0-9_-]{0,63}$/.test(identity);
   const duplicate = creating && !!identity && (
     source.agents.some(agent => agent.name === identity) ||
@@ -84,8 +89,11 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
       <span aria-current="page">{name ?? title}</span>
     </nav>
     <header className={css.heading}>
-      <h1 ref={heading} tabIndex={-1}>{title}</h1>
-      <p>{tx(creating ? 'resources:subagents.create-help' : 'resources:subagents.edit-help')}</p>
+      <span className={`${catalog.fileTile} ${css.editorIcon}`}><IconAgentPresetOutline16 /></span>
+      <div>
+        <h1 ref={heading} tabIndex={-1}>{title}</h1>
+        <p>{tx(creating ? 'resources:subagents.create-help' : 'resources:subagents.edit-help')}</p>
+      </div>
     </header>
     <UnitReset.Provider value={unit.resets}>
       <form ref={form} tabIndex={-1} aria-label={formName} aria-busy={busy} className={`${settings.settings} ${css.form}`}
@@ -99,75 +107,101 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
         <fieldset className={css.body} disabled={!editable || busy}>
           {(unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit}/>}
           <SettingsNotice text={current?.source.diagnostic ?? undefined} />
-          <fieldset className={css.fields} disabled={!unit.writable}>
-            <section className={css.section} aria-labelledby={`${sections}-profile`}>
-              <div className={css.sectionHead}>
-                <h2 id={`${sections}-profile`}>{tx('resources:subagents.profile')}</h2>
-                <div className={css.scope}>
-                  <span>{tx('settings:catalog.scope')}</span>
-                  {creating && onScopeChange ? <SettingsScopeMenu target={target} host={host} userLabel={tx('resources:scope.global')}
-                    onSelect={next => { unit.discard(); onScopeChange(next, value); }} />
-                    : <span className={css.scopeValue}>{unit.definition === 'inherited' || target.kind === 'user' ? tx('resources:scope.global') : target.displayName}</span>}
+          <div className={css.scope}>
+            <span>{tx('settings:catalog.scope')}</span>
+            {creating && onScopeChange ? <SettingsScopeMenu target={target} host={host} userLabel={tx('resources:scope.global')}
+              onSelect={next => { unit.discard(); onScopeChange(next, value); }} />
+              : <span className={css.scopeValue}>{unit.definition === 'inherited' || target.kind === 'user' ? tx('resources:scope.global') : target.displayName}</span>}
+          </div>
+          <Tabs selectedKey={section} keyboardActivation="manual" onSelectionChange={key => {
+            const next = key as typeof section;
+            if (next === 'capabilities') setOpenedCapabilities(true);
+            if (next === 'advanced') setOpenedAdvanced(true);
+            setSection(next);
+          }}>
+            <TabList className={`${catalog.tabs} ${css.editorTabs}`} aria-label={tx('resources:subagents.editor-tabs')}>
+              <Tab id="profile" className={catalog.tab}>{tx('resources:subagents.profile')}</Tab>
+              <Tab id="capabilities" className={catalog.tab}>{tx('resources:subagents.capabilities')}</Tab>
+              <Tab id="advanced" className={catalog.tab}>{tx('resources:subagents.advanced')}</Tab>
+            </TabList>
+            <TabPanel id="profile" className={css.editorPanel} shouldForceMount>
+              <fieldset className={css.section} disabled={!unit.writable}>
+                <div className={css.identity}>
+                  <div>
+                    <label>{tx('resources:subagents.name')}
+                      <input value={name ?? value.name ?? ''} readOnly={!creating} maxLength={64} spellCheck={false}
+                        aria-invalid={nameError ? true : undefined} aria-describedby={nameError ? validationId : undefined}
+                        onChange={event => update({ name: event.target.value })} />
+                    </label>
+                    {nameError && <span id={validationId} className={css.validation}>{nameError}</span>}
+                  </div>
+                  <Choice label={tx('settings:models-page.model')} value={model?.model ?? ''}
+                    options={[['', tx('resources:subagents.inherit-model')], ...modelChoices.map(id => [id, id] as const)]}
+                    onChange={id => {
+                      const { profile: _profile, ...rest } = model ?? {};
+                      update({ model: id ? { ...rest, model: id } : null });
+                    }} />
+                  {model?.model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={model.profile} profiles={profiles[model.model] ?? []}
+                    onChange={profile => {
+                      const { profile: _profile, ...rest } = model;
+                      update({ model: profile ? { ...rest, profile } : rest });
+                    }} />}
                 </div>
-              </div>
-              <div className={css.identity}>
-                <div>
-                  <label>{tx('resources:subagents.name')}
-                    <input value={name ?? value.name ?? ''} readOnly={!creating} maxLength={64} spellCheck={false}
-                      aria-invalid={nameError ? true : undefined} aria-describedby={nameError ? validationId : undefined}
-                      onChange={event => update({ name: event.target.value })} />
+                <div className={css.prompt}>
+                  <label>{tx('settings:extension-detail.description')}
+                    <input value={value.description ?? ''} aria-describedby={`${sections}-description-help`}
+                      onChange={event => update({ description: event.target.value })} />
                   </label>
-                  {nameError && <span id={validationId} className={css.validation}>{nameError}</span>}
+                  <p id={`${sections}-description-help`}>{tx('resources:subagents.description-help')}</p>
                 </div>
-                <Choice label={tx('settings:models-page.model')} value={model?.model ?? ''}
-                  options={[['', tx('resources:subagents.inherit-model')], ...modelChoices.map(id => [id, id] as const)]}
-                  onChange={id => {
-                    const { profile: _profile, ...rest } = model ?? {};
-                    update({ model: id ? { ...rest, model: id } : null });
-                  }} />
-                {model?.model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={model.profile} profiles={profiles[model.model] ?? []}
-                  onChange={profile => {
-                    const { profile: _profile, ...rest } = model;
-                    update({ model: profile ? { ...rest, profile } : rest });
-                  }} />}
-              </div>
-              <label>{tx('settings:extension-detail.description')}
-                <input value={value.description ?? ''} onChange={event => update({ description: event.target.value })} />
-              </label>
-              <div className={css.prompt}>
-                <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
-                <textarea id={promptId} rows={4} value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
-              </div>
-              <div className={css.settingRow}>
-                <span>{tx('resources:subagents.inject-guidance')}</span>
-                <Switch label={tx('resources:subagents.inject-guidance')} checked={guidance.inherit ?? true}
-                  onChange={inherit => update({ agents_md: { ...guidance, inherit } })} />
-              </div>
-            </section>
-            <AgentToolFields source={source} scope={resourceScope}
-              value={value} change={update} loadMcpTools={discover && unit.writable ? loadMcpTools : undefined} />
-            <section className={css.section} aria-labelledby={`${sections}-advanced`}>
-              <h2 id={`${sections}-advanced`}>{tx('settings:agent-page.advanced-options')}</h2>
-              <AgentSkillFields client={client} source={source} scope={resourceScope} active={discover}
-                value={value.skills ?? []} change={skills => update({ skills })} />
-              {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
-              <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
-              <label className={css.timeout}>{tx('settings:extension-detail.child-timeout-ms')}
-                <input type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
-              </label>
-              <fieldset className={css.featureGroup}>
-                <legend>{tx('settings:extension-detail.extensions-default-off')}</legend>
-                {(['todo', 'agent_status'] as const).map(id => {
-                  const label = tx(`resources:subagents.feature-${id}`);
-                  return <div className={css.settingRow} key={id}>
-                    <span>{label}</span>
-                    <Switch label={label} checked={value.plugins?.[id]?.enabled ?? false}
-                      onChange={enabled => update({ plugins: { ...value.plugins, [id]: { ...value.plugins?.[id], enabled } } })} />
-                  </div>;
-                })}
+                <div className={css.prompt}>
+                  <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
+                  <textarea id={promptId} rows={6} aria-describedby={`${sections}-prompt-help`}
+                    value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
+                  <p id={`${sections}-prompt-help`}>{tx('resources:subagents.prompt-help')}</p>
+                </div>
+                <div className={css.settingRow}>
+                  <span>{tx('resources:subagents.inject-guidance')}</span>
+                  <Switch label={tx('resources:subagents.inject-guidance')} checked={guidance.inherit ?? true}
+                    onChange={inherit => update({ agents_md: { ...guidance, inherit } })} />
+                </div>
               </fieldset>
-            </section>
-          </fieldset>
+            </TabPanel>
+            <TabPanel id="capabilities" className={css.editorPanel} shouldForceMount>
+              {openedCapabilities && <fieldset disabled={!unit.writable}>
+                <AgentToolFields source={source} scope={resourceScope}
+                  value={value} change={update} loadMcpTools={discover && unit.writable ? loadMcpTools : undefined} />
+                <div className={css.section}>
+                  <AgentSkillFields client={client} source={source} scope={resourceScope} active={discover}
+                    value={value.skills ?? []} change={skills => update({ skills })} />
+                </div>
+                {Object.keys(value.tools?.sources ?? {}).some(id => id.startsWith('python:')) && <div className={css.section}>
+                  <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
+                </div>}
+              </fieldset>}
+            </TabPanel>
+            <TabPanel id="advanced" className={css.editorPanel} shouldForceMount>
+              {openedAdvanced && <fieldset className={css.section} disabled={!unit.writable} onInvalid={() => setSection('advanced')}>
+                <h2>{tx('settings:agent-page.advanced-options')}</h2>
+                <p className={css.panelHint}>{tx('resources:subagents.advanced-help')}</p>
+                {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
+                <label className={css.timeout}>{tx('settings:extension-detail.child-timeout-ms')}
+                  <input type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
+                </label>
+                <fieldset className={css.featureGroup}>
+                  <legend>{tx('settings:extension-detail.extensions-default-off')}</legend>
+                  {(['todo', 'agent_status'] as const).map(id => {
+                    const label = tx(`resources:subagents.feature-${id}`);
+                    return <div className={css.settingRow} key={id}>
+                      <span>{label}</span>
+                      <Switch label={label} checked={value.plugins?.[id]?.enabled ?? false}
+                        onChange={enabled => update({ plugins: { ...value.plugins, [id]: { ...value.plugins?.[id], enabled } } })} />
+                    </div>;
+                  })}
+                </fieldset>
+              </fieldset>}
+            </TabPanel>
+          </Tabs>
         </fieldset>
         <UnitOutcomeNotice title={formName} outcome={unit.outcome} />
         <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}/>

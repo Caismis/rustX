@@ -96,9 +96,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     settings=await openResourceModule(page,'subagents','Workspace A');
     await newSubagent(settings,'reviewer');
     await settings.getByLabel('Description', { exact: true }).fill('Independent review profile');
+    await settings.getByLabel('System prompt', { exact: true }).fill('Review the requested change and report concrete findings.');
+    await settings.getByRole('tab', { name: 'Advanced', exact: true }).click();
     await expect(settings.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
     await expect(settings.getByRole('switch', { name: 'Todo', exact: true })).not.toBeChecked();
-    await settings.getByLabel('System prompt', { exact: true }).fill('Review the requested change and report concrete findings.');
+    await settings.getByRole('tab', { name: 'Tools & skills', exact: true }).click();
     await settings.getByLabel('read', { exact: true }).check();
     await settings.getByRole('button', { name: 'Save New subagent', exact: true }).click();
     await settings.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();

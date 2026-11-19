@@ -48,6 +48,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       else {
         surface=await openResourceModule(page,'subagents','Workspace A');
         await surface.getByRole('button', { name: 'optional', exact: true }).click();
+        await surface.getByRole('tab', { name: 'Advanced', exact: true }).click();
         await expect(surface.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
       }
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
@@ -70,8 +71,10 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
         continue;
       }
       await choose(form, 'Auxiliary model', 'summary-b');
+      await form.getByRole('tab', { name: 'Profile', exact: true }).click();
       await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
       await expect(form.getByLabel('System prompt', { exact: true })).toHaveValue('');
+      await form.getByRole('tab', { name: 'Tools & skills', exact: true }).click();
       await form.getByLabel('read', { exact: true }).check();
       await save();
       const sourceFile = join(fixture.workspaceA, '.agents/agents/optional.toml');
@@ -83,6 +86,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
       const reopen = async () => {
         await surface.getByRole('button', { name: 'optional', exact: true }).click();
+        await form.getByRole('tab', { name: 'Advanced', exact: true }).click();
         await expect(form.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
       };
       await reopen();

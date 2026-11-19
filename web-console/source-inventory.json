@@ -8395,6 +8395,7 @@
         "../../../../../protocol/app-server/v80",
         "../../../client/app-server",
         "../../../locale/react",
+        "../../../presentation/catalog/Catalog.module.css",
         "../../../presentation/primitives/Button",
         "../../../presentation/primitives/Switch",
         "../../../presentation/primitives/icons",
@@ -8411,7 +8412,8 @@
         "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
-        "react"
+        "react",
+        "react-aria-components"
       ],
       "excluded_dependencies": [
         "Cordis and dynamic plugin runtime",
@@ -8452,7 +8454,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1a4e1ac21762bb2eb2cf3806602c5c015506e4bf6b48fa0594c2e89080964d7a"
+      "local_sha256": "cf9ba7fbae9af0924bf98bec31cec492c231345357f9d96f1ae8005a5fdfd3e3"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import clsx from 'clsx';
 import type { SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
@@ -18,18 +19,20 @@ export function SubagentList({ source, scope, revision, query, view, group, onOp
   source: SourceSettings; scope: SourceScope; revision?: string; query: string; view: CatalogView; onOpen: (name: string) => void;
 }) {
   const tx = useTranslation();
-  const profiles = new Map(source.agents.map(agent => [`${agent.scope}:${agent.name}`, agent.source.authored]));
+  const documents = new Map(source.agents.map(agent => [`${agent.scope}:${agent.name}`, agent.source]));
   const needle = query.trim().toLocaleLowerCase();
-  const entries = extensionEntries(source, scope, 'agent', 'owned').map(entry => ({
-    ...entry,
-    profile: profiles.get(`${entry.owner}:${entry.name}`),
-  })).filter(({ name, profile }) => `${name} ${profile?.description ?? ''} ${profile?.model?.model ?? ''}`.toLocaleLowerCase().includes(needle));
-  const model = (entry: typeof entries[number]) => entry.profile?.model?.model ?? tx('resources:subagents.inherit-model');
+  const entries = extensionEntries(source, scope, 'agent', 'owned').map(entry => {
+    const document = documents.get(`${entry.owner}:${entry.name}`);
+    return { ...entry, document, profile: document?.authored };
+  }).filter(({ name, profile }) => `${name} ${profile?.description ?? ''} ${profile?.model?.model ?? ''}`.toLocaleLowerCase().includes(needle));
+  const model = (entry: typeof entries[number]) => entry.valid === false ? '—' : entry.profile?.model?.model ?? tx('resources:subagents.inherit-model');
+  const description = (entry: typeof entries[number]) => entry.valid === false ? tx('resources:subagents.invalid-definition')
+    : entry.profile?.description?.trim() || tx('resources:subagents.no-description');
   const availability = (entry: typeof entries[number]) => workspaceAvailability?.(entry.name, entry.valid) ?? (revision && <ResourceAvailability family="agent" source={source}
     scope={scope} name={entry.name} valid={entry.valid} revision={revision} />);
 
   const menu = (entry: typeof entries[number]) => {
-    const authored = source.agents.find(agent => agent.scope === scope && agent.name === entry.name)?.source;
+    const authored = entry.document;
     return <CardMenu label={tx('resources:card.actions', { p0: entry.name })}
       items={[{ id: 'edit', label: tx('resources:card.edit'), icon: <IconEditOutline16 /> },
         ...(canOverride?.(entry.name) ? [{ id: 'override', label: tx('resources:card.override'), icon: <IconEditOutline16 /> }] : []),
@@ -44,8 +47,8 @@ export function SubagentList({ source, scope, revision, query, view, group, onOp
   const title = group ?? tx('resources:subagents.own-group');
   return <section className={css.group} role="group" aria-label={title}>
     <h2>{title} <span>{entries.length}</span></h2>
-    {!entries.length ? <p className={catalog.state}>{tx('resources:empty')}</p> : view === 'cards' ? <ul className={catalog.cards} role="list">
-      {entries.map(entry => <li key={entry.name} aria-label={entry.name} className={catalog.card}>
+    {!entries.length ? <p className={catalog.state}>{tx('resources:empty')}</p> : view === 'cards' ? <ul className={clsx(catalog.cards, css.agentCards)} role="list">
+      {entries.map(entry => <li key={entry.name} aria-label={entry.name} className={clsx(catalog.card, css.agentCard, entry.valid === false && catalog.invalidCard)}>
         <div className={catalog.cardHead}>
           <button type="button" className={catalog.cardOpen} aria-label={entry.name} onClick={() => onOpen(entry.name)}>
             <span className={catalog.fileTile}><IconAgentPresetOutline16 /></span>
@@ -57,7 +60,7 @@ export function SubagentList({ source, scope, revision, query, view, group, onOp
           <div className={catalog.enable}>{availability(entry)}</div>
           {menu(entry)}
         </div>
-        {entry.profile?.description && <p className={catalog.cardDescription}>{entry.profile.description}</p>}
+        <p className={clsx(catalog.cardDescription, css.agentDescription)} data-invalid={entry.valid === false || undefined}>{description(entry)}</p>
       </li>)}
     </ul> : <table className={`${catalog.table} ${css.table}`}>
       <thead><tr>
@@ -72,9 +75,9 @@ export function SubagentList({ source, scope, revision, query, view, group, onOp
           <button type="button" className={`${catalog.rowOpen} ${css.rowOpen}`} onClick={() => onOpen(entry.name)}>
             <IconAgentPresetOutline16 /><span>{entry.name}</span>
           </button>
-          {entry.profile?.description && <span className={css.narrowDescription}>{entry.profile.description}</span>}
+          <span className={css.narrowDescription} data-invalid={entry.valid === false || undefined}>{description(entry)}</span>
         </td>
-        <td className={catalog.optionalColumn}>{entry.profile?.description}</td>
+        <td className={catalog.optionalColumn} data-invalid={entry.valid === false || undefined}>{description(entry)}</td>
         <td>{model(entry)}</td>
         <td>{availability(entry)}</td><td>{menu(entry)}</td>
       </tr>)}</tbody>

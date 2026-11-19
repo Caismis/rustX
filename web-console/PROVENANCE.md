@@ -17,6 +17,17 @@ no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
 
+## Subagent authoring layout
+
+Compared PI-Desktop `7ce62ea03` (`AgentSubagentsPage.tsx` and
+`SubagentEditorSheet.tsx`), ZCode `29628c9a` (`SubagentsSection.tsx`), and Claude
+Code's subagent documentation. The catalog separates activation from editing;
+the editor distinguishes a description used for delegation from instructions
+used at runtime. RustX groups profile, tools and skills, and advanced options
+into tabs while keeping its existing configuration scopes and single native
+write. Tool and skill discovery starts on opening their tab. No reference
+code or assets were copied.
+
 ## MCP tool approvals and the A2UI Playground theme
 
 MCP detail follows the distinction in VS Code's tool and approval settings and

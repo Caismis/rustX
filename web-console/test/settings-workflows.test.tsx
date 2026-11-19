@@ -1027,6 +1027,7 @@ it('S2-12 React Aria and TanStack Form stay bounded to their declared interactio
   expect(importers('react-aria-components')).toEqual([
     'src/app/resources/ResourceSurface.tsx',
     'src/app/resources/mcp/McpServerDetail.tsx',
+    'src/app/resources/subagents/AgentEditor.tsx',
     'src/app/scheduler/TimingEditor.tsx',
     'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/models/ProviderIcon.tsx',
