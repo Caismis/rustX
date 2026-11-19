@@ -96,8 +96,8 @@ tower = { version = "0.5", default-features = false }
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 # Reuse the validator's resource resolver when compiling invocation envelopes.
 referencing = "=0.60.2"
-# The native-search substrate behind Glob and Grep. These are implementation
-# dependencies of the shared traversal and of the Grep engine only: no `rg`
+# Glob/Grep pattern validation compiled Server-side for model-facing
+# diagnostics; the physical engines live on the Execution Client. No `rg`
 # executable is ever spawned, and none of their defaults are part of the
 # model-facing tool contract.
 globset = "0.4.19"
@@ -105,7 +105,6 @@ ignore = "0.4.33"
 # POSIX/bash AST for Issue #544 Bash read-only admission (ZCode semantic port).
 brush-parser = "0.4.0"
 grep-regex = "0.1.14"
-grep-searcher = "0.1.17"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource", "term"] }
 rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
 libc = "0.2"

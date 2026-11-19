@@ -20,8 +20,9 @@ use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
     ClientRequest, ConnectionId, DecimalU64, EntryStamp, EnvironmentId, FileStamp, Generation,
     Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
-    MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES,
-    MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError, Reject, SessionId,
+    MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_RAW_CHUNK_BYTES,
+    MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES,
+    PROTOCOL_VERSION, PageEntry, ReadError, Reject, SearchSpec, SessionId,
     is_normalized_absolute_path,
     transport::{DeadlineStream, PAGE_REQUEST_TIMEOUT, encode_record, read_record, write_record},
 };
@@ -535,6 +536,27 @@ pub struct DocumentPage {
     pub shown_lines: u32,
     /// Why the page ended.
     pub end: LineEnd,
+}
+
+/// A verified bounded-search reply from the Client.
+///
+/// `body` is the selected record text — newline-joined records only,
+/// never notices — and `matches` the primary record count. The reply's
+/// own bounds and accounting were checked against the request before
+/// this value exists; record display bytes are never parsed back for
+/// authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchResult {
+    /// The selected records, at most `MAX_TEXT_BYTES` joined bytes.
+    pub body: String,
+    /// The selected primary record count.
+    pub matches: u64,
+    /// At least one match was excluded past the requested bound.
+    pub hit_limit: bool,
+    /// The joined-body byte budget stopped the selection.
+    pub byte_limit: bool,
+    /// At least one record preview was shortened — grep only.
+    pub short_lines: bool,
 }
 
 impl LocalConnection {
@@ -1372,6 +1394,176 @@ impl LocalConnection {
         })
     }
 
+    /// One bounded workspace search: the shared file-universe traversal
+    /// rooted at `relative_root` — the workspace root itself when empty —
+    /// narrowed by `spec` into one selected-records page.
+    ///
+    /// The peer must have advertised [`Capability::BoundedSearch`] at
+    /// admission or the call is [`io::ErrorKind::Unsupported`] and no
+    /// request is sent. The reply is trusted only after validation: the
+    /// body must fit [`MAX_TEXT_BYTES`], the match count must stay within
+    /// the requested bound and agree with the body's emptiness, a glob
+    /// page can never claim shortened lines, and `hit_limit` is a proof —
+    /// it requires `matches` to equal the request's bound exactly. A
+    /// violation retires the stream — it is never reused with a reply
+    /// accounting that cannot be trusted. Display bytes — record text
+    /// that may contain any byte a Unix name carries — are never parsed
+    /// back into accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// search capability, [`io::ErrorKind::InvalidInput`] for an
+    /// out-of-range spec, the [`ReadError`] the Client reported mapped
+    /// onto an I/O error kind, or [`io::ErrorKind::InvalidData`] for a
+    /// malformed or untruthful reply.
+    pub fn search(&mut self, relative_root: &Path, spec: &SearchSpec) -> io::Result<SearchResult> {
+        self.search_admitted(
+            relative_root,
+            spec,
+            Instant::now() + PAGE_REQUEST_TIMEOUT,
+            || Ok(()),
+            || (),
+        )
+    }
+
+    /// `search` against a caller-armed absolute deadline and acceptance
+    /// gate, under the same contract as
+    /// [`read_lines_admitted`](Self::read_lines_admitted): one wire
+    /// budget, an admission refusal that returns before any request byte
+    /// without retiring, and a `sent` observation between the written
+    /// frame and the reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same kinds as [`search`](Self::search), plus the
+    /// `admit` error verbatim and [`io::ErrorKind::TimedOut`] when the
+    /// deadline lapses mid-exchange — which retires the connection.
+    pub fn search_admitted(
+        &mut self,
+        relative_root: &Path,
+        spec: &SearchSpec,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<SearchResult> {
+        if !self.capabilities.contains(&Capability::BoundedSearch) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no search capability",
+            ));
+        }
+        let limit = match spec {
+            SearchSpec::Glob { pattern, limit } => {
+                if pattern.len() > MAX_SEARCH_PATTERN_BYTES || limit.get() == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid search request",
+                    ));
+                }
+                *limit
+            }
+            SearchSpec::Grep {
+                pattern,
+                glob,
+                context,
+                limit,
+                ..
+            } => {
+                if pattern.len() > MAX_SEARCH_PATTERN_BYTES
+                    || glob
+                        .as_ref()
+                        .is_some_and(|glob| glob.len() > MAX_SEARCH_PATTERN_BYTES)
+                    || *context > MAX_SEARCH_CONTEXT_LINES
+                    || limit.get() == 0
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid search request",
+                    ));
+                }
+                *limit
+            }
+        };
+        let reply = self.exchange_admitted(
+            &ClientRequest::Search {
+                relative_root: relative_root.to_path_buf(),
+                spec: spec.clone(),
+            },
+            Some(deadline),
+            admit,
+            sent,
+        )?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        let context = match spec {
+            SearchSpec::Glob { .. } => 0,
+            SearchSpec::Grep { context, .. } => *context,
+        };
+        self.validate_search(
+            matches!(spec, SearchSpec::Glob { .. }),
+            context,
+            limit,
+            &reply,
+        )
+    }
+
+    /// Verifies a `SearchPage` reply against the request's bound before
+    /// trusting it. Any deviation means the peer cannot account for its
+    /// answers honestly, so the connection is retired.
+    ///
+    /// The one honest zero-match body: a Grep with before-context can
+    /// fill the 50 KiB projection on context rows alone — the matching
+    /// line's own record never fits — so `matches == 0` may pair with a
+    /// nonempty body only when `context > 0` *and* `byte_limit` explains
+    /// the cut; an empty body under `byte_limit` is the same overflow
+    /// landing before the first record. Glob has no context rows: a
+    /// nonempty body without a match is impossible there. Every other
+    /// combination — an over-cap body, a count past the requested limit
+    /// or past the body's own byte length, `short_lines` on Glob,
+    /// `hit_limit` without a proven full limit, or the mutually
+    /// exclusive `hit_limit && byte_limit` — retires the connection.
+    fn validate_search(
+        &mut self,
+        glob: bool,
+        context: u32,
+        limit: DecimalU64,
+        reply: &ClientReply,
+    ) -> io::Result<SearchResult> {
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::SearchPage {
+            body,
+            matches,
+            hit_limit,
+            byte_limit,
+            short_lines,
+        } = reply
+        else {
+            return Err(self.retire(violation("unexpected reply to search")));
+        };
+        let matches = matches.get();
+        let zero_match_context_overflow = !glob && context > 0 && *byte_limit;
+        if body.len() > MAX_TEXT_BYTES
+            || matches > limit.get()
+            || matches > body.len() as u64
+            || (matches > 0 && body.is_empty())
+            || (!body.is_empty() && matches == 0 && !zero_match_context_overflow)
+            || (glob && *short_lines)
+            || (*hit_limit && matches != limit.get())
+            || (*hit_limit && *byte_limit)
+        {
+            return Err(self.retire(violation("search reply accounting is impossible")));
+        }
+        Ok(SearchResult {
+            body: body.clone(),
+            matches,
+            hit_limit: *hit_limit,
+            byte_limit: *byte_limit,
+            short_lines: *short_lines,
+        })
+    }
+
     /// The conditional write: `relative_path` under the binding workspace
     /// becomes exactly `bytes` when `expected_revision` still names the
     /// current file — or the target did not exist for `None`.
@@ -1696,6 +1888,8 @@ impl PhysicalError {
             ReadError::DocumentTooLarge => "document exceeds the source bound",
             ReadError::DocumentDecodeFailed => "document decode failed",
             ReadError::NoTextLayer => "document has no extractable text layer",
+            ReadError::SearchBudgetExceeded => "search exceeded a bounded budget",
+            ReadError::SearchNeedsDirectory => "search root is not a directory",
             ReadError::Unavailable => "physical operation unavailable",
         }
     }
@@ -1714,7 +1908,6 @@ impl std::error::Error for PhysicalError {}
 /// downcastable inside the error.
 fn read_error(kind: ReadError) -> io::Error {
     let error_kind = match kind {
-        ReadError::Invalid => io::ErrorKind::InvalidInput,
         ReadError::Denied => io::ErrorKind::PermissionDenied,
         ReadError::NotFound => io::ErrorKind::NotFound,
         ReadError::Conflict => io::ErrorKind::AlreadyExists,
@@ -1723,6 +1916,8 @@ fn read_error(kind: ReadError) -> io::Error {
         }
         ReadError::UnsupportedDocument => io::ErrorKind::Unsupported,
         ReadError::DocumentTooLarge => io::ErrorKind::FileTooLarge,
+        ReadError::SearchBudgetExceeded => io::ErrorKind::QuotaExceeded,
+        ReadError::Invalid | ReadError::SearchNeedsDirectory => io::ErrorKind::InvalidInput,
         ReadError::Unavailable => io::ErrorKind::Other,
     };
     io::Error::new(error_kind, PhysicalError(kind))
@@ -2154,8 +2349,11 @@ mod tests {
     fn extra_advertised_capabilities_do_not_relax_requirements() {
         let (binding, credential) = Binding::reserve(reservation()).unwrap();
         let mut hello = valid_hello(&credential);
-        hello.capabilities =
-            BTreeSet::from([Capability::Files, Capability::Process, Capability::Search]);
+        hello.capabilities = BTreeSet::from([
+            Capability::Files,
+            Capability::Process,
+            Capability::BoundedSearch,
+        ]);
         assert!(binding.connect(&hello, ConnectionId::new("conn-1")).is_ok());
     }
 

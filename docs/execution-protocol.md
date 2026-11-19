@@ -530,7 +530,7 @@ physical Client:
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
   capability set `{Connection, ReadRange, DirectoryMetadata,
-  ConditionalWrite, ReadLines, DocumentPages}` — the
+  ConditionalWrite, ReadLines, DocumentPages, BoundedSearch}` — the
   operations this build physically implements — constructed by the
   client, never read from the mutable bundle.
 - After sending the Hello it reads one `HelloReply`; a reject is
@@ -545,13 +545,72 @@ physical Client:
   retained `PackageDirectory` and the shared `scan_text` scanner,
   `ReadDocument` answered through `rustx-document-reader` — the same
   whitelist, bounded acquisition, and parser policy as the native
-  Read tool — and
+  Read tool — `Search` answered through its bounded shared-universe
+  traversal and streaming matcher (see *Bounded workspace search*) — and
   `PrepareWrite`/`CommitWrite`/`AbortWrite` answered through the
   `WriteTarget`/`StagedWrite` kernel by the per-connection `Writes`
   owner. EOF
   after a successful handshake never permits the credential file to be
   replayed: the binding is `Detached` and the Server answers
   `RecoveryRequired`.
+
+### Bounded workspace search (implemented)
+
+`ClientRequest::Search { relative_root, spec }` carries one typed
+`SearchSpec` — `Glob { pattern, limit }` or `Grep { pattern, glob,
+literal, ignore_case, context, limit }` — over `relative_root`, the
+strict workspace-relative path the Server already confined. It is
+answered by `ClientReply::SearchPage { body, matches, hit_limit,
+byte_limit, short_lines }`: `body` is only the selected records (the
+sorted root-relative paths for Glob, the `path:line:`/`path-line-`
+rows for Grep) — the Server alone projects the model-facing notices
+and the exact no-results text, and never parses display text back
+into authority because Unix names can carry literal controls.
+
+The Client's `search` module enumerates one shared file universe
+descriptor-relative below the retained `PackageDirectory`: `names`
+capped per directory before allocation, `entry_metadata` without
+following, `descend` for real directories, hidden and ignored files
+included, symlink and special entries skipped, a symlinked root
+refused, a file root a whole universe for Grep only. The universe is
+a point-in-time enumeration, not an atomic snapshot: paths sort
+globally bytewise lexical; every retained file pins its enumeration
+stamp and reopens only through `root.file` on the single shared
+root-relative prefix joined to its own suffix — a path whose target
+changed since enumeration is a conflict, and a searched file is
+re-verified descriptor-wise and name-wise before its records
+publish. Glob matches `globset` compiled
+with `literal_separator`; Grep streams the verified descriptor
+through `grep_searcher::Searcher` under an 8 MiB working buffer after
+a whole-file `validate_utf8` pass — a file whose bytes break anywhere
+contributes nothing. Both physical passes read through a
+deadline-bounded reader so a single slow source cannot outrun the
+operation deadline by more than one in-flight kernel call, which maps
+to `Unavailable`. `hit_limit` is a proof: it is set only when a
+further match was observed and excluded, and a line that cannot fit
+the working buffer is the stable `SearchBudgetExceeded`, never an
+allocation explosion. Every traversal budget — depth 64, 4096 names
+per directory, 8 MiB retained path bytes charged on both owned forms
+of each path, and 65,536 visited entries —
+fails closed on the same typed code rather than returning a silent
+partial universe.
+
+The wire bounds are `MAX_SEARCH_PATTERN_BYTES` = 8 KiB per pattern or
+file-filter glob, `MAX_SEARCH_CONTEXT_LINES` = 20, a `body` bounded by
+`MAX_TEXT_BYTES` = 50 KiB, and the Grep line preview at 500 Unicode
+scalars — all enforced on encode before the frame can grow. The
+Server verifies the reply the same way it verifies a page: `body`
+inside the text bound, `matches` within the requested limit, a zero
+count pairing only with an empty body, `hit_limit` only at a proven
+full limit, `short_lines` impossible on Glob — any deviation retires
+the connection. The operation rides the same absolute exchange
+deadline, data budget, and single writer permit as the page reads
+through `SessionExecutionScope::search`; the native `glob`/`grep`
+executors interpret the root lexically, compile patterns Server-side
+for their own diagnostics, dispatch the typed spec, and project the
+exact pre-migration truncation notices. There is no Server-local
+traversal and no unbound fallback — an unadmitted Session answers
+`Session execution unavailable`.
 
 ### Authenticated connection is not readiness (frozen)
 
@@ -587,6 +646,11 @@ no second set may exist.
 | Data records per connection | `MAX_DATA_RECORDS_PER_CONNECTION` = 8 |
 | Control records per connection | `MAX_CONTROL_RECORDS_PER_CONNECTION` = 4 |
 | Optional Server → Client save absolute deadline | `OPTIONAL_SAVE_DEADLINE` = 5 s |
+| Search pattern or file-filter glob | `MAX_SEARCH_PATTERN_BYTES` = 8 KiB |
+| Grep context lines | `MAX_SEARCH_CONTEXT_LINES` = 20 |
+| Search traversal depth / visited entries | `MAX_SEARCH_DEPTH` = 64 / `MAX_SEARCH_ENTRIES` = 65,536 |
+| Retained search path bytes | `MAX_SEARCH_PATH_BYTES` = 8 MiB |
+| Grep searcher working buffer | `MAX_SEARCH_BUFFER_BYTES` = 8 MiB |
 
 The encoded-frame bound is enforced on the final serialized bytes —
 envelope, metadata, and escape expansion included — at the read/parse
@@ -689,8 +753,8 @@ envelope.
   WSS/TLS, health budgets, and recovery windows are pending.
 - No spawn, MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
-  two-phase conditional write, and the two logical-text page
-  operations exists
+  two-phase conditional write, the two logical-text page
+  operations, and the bounded search exists
   behind `Admission`;
   `Binding::status()` is observation only, and a `Live` phase is a
   connection fact, not an integration claim. `Capability::Files` and

@@ -1378,3 +1378,110 @@ fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
         b"before"
     );
 }
+
+/// The real Client searches one shared file universe for both `Glob` and
+/// `Grep`: the traversal never follows a link outside the binding, keeps
+/// hidden files visible, refuses a symlinked root, skips a file whose
+/// UTF-8 breaks after an apparent match, and answers a single-file root.
+#[test]
+fn search_serves_the_shared_universe_and_never_follows_links_outside() {
+    let rig = rig();
+    // Two links to outside: a directory and a file, neither may be
+    // traversed or reported.
+    let outside = private_dir().1;
+    fs::create_dir_all(outside.join("escape-dir")).unwrap();
+    fs::write(outside.join("escape.txt"), "needle\n").unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("escape-dir"),
+        rig.workspace_path.join("linked-dir"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("escape.txt"),
+        rig.workspace_path.join("linked.txt"),
+    )
+    .unwrap();
+    fs::create_dir_all(rig.workspace_path.join("z")).unwrap();
+    fs::write(rig.workspace_path.join("z/deep.txt"), "needle\n").unwrap();
+    fs::write(rig.workspace_path.join("a.txt"), "needle\n").unwrap();
+    fs::write(rig.workspace_path.join("b.txt"), "quiet\n").unwrap();
+    fs::write(rig.workspace_path.join(".hidden.txt"), "needle\n").unwrap();
+    // An invalid byte after an apparent match excludes the whole file.
+    fs::write(
+        rig.workspace_path.join("tail.txt"),
+        b"needle\nvalid\n\xff\xfe",
+    )
+    .unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // Glob: sorted lexical order, hidden files visible, links absent.
+    let page = connection
+        .search(
+            Path::new(""),
+            &rustx_execution_protocol::SearchSpec::Glob {
+                pattern: "**/*.txt".to_owned(),
+                limit: rustx_execution_protocol::DecimalU64::new(100),
+            },
+        )
+        .unwrap();
+    assert_eq!(page.body, ".hidden.txt\na.txt\nb.txt\ntail.txt\nz/deep.txt");
+    assert_eq!(page.matches, 5);
+    assert!(!page.hit_limit && !page.byte_limit && !page.short_lines);
+
+    // Grep: the invalid-UTF8 tail file contributes nothing even though a
+    // match precedes the bad bytes; only matching rows cross the wire.
+    let page = connection
+        .search(
+            Path::new(""),
+            &rustx_execution_protocol::SearchSpec::Grep {
+                pattern: "needle".to_owned(),
+                glob: None,
+                literal: false,
+                ignore_case: false,
+                context: 0,
+                limit: rustx_execution_protocol::DecimalU64::new(100),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        page.body,
+        ".hidden.txt:1: needle\na.txt:1: needle\nz/deep.txt:1: needle"
+    );
+    assert_eq!(page.matches, 3);
+
+    // A single-file root is the whole universe; the match row names the
+    // file itself.
+    let page = connection
+        .search(
+            Path::new("a.txt"),
+            &rustx_execution_protocol::SearchSpec::Grep {
+                pattern: "needle".to_owned(),
+                glob: None,
+                literal: false,
+                ignore_case: false,
+                context: 0,
+                limit: rustx_execution_protocol::DecimalU64::new(10),
+            },
+        )
+        .unwrap();
+    assert_eq!(page.body, "a.txt:1: needle");
+
+    // A symlinked search root is refused, and the connection stays live.
+    let error = connection
+        .search(
+            Path::new("linked-dir"),
+            &rustx_execution_protocol::SearchSpec::Glob {
+                pattern: "*".to_owned(),
+                limit: rustx_execution_protocol::DecimalU64::new(10),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    connection.ping().unwrap();
+
+    drop(connection);
+    expect_success(&mut child);
+}

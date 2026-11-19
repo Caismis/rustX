@@ -960,24 +960,23 @@ async fn bash_large_output_spills_to_managed_output() {
         "no managed-source body may leak: {error}"
     );
 
-    // Ordinary native Grep searches the single spill file and the managed
-    // root directory.
+    // Ordinary native Grep is confined to the same admitted workspace
+    // root as Read: the spill file and the managed root directory are
+    // outside the binding and honestly refuse — the same documented
+    // #576 gap (exec-01-evidence T31).
     let grep_file = run_tool(
         &fixture,
         "grep",
         serde_json::json!({"pattern": "spill-boundary-marker", "path": full_output}),
     )
     .await;
-    assert_eq!(grep_file.status, ToolExecutionStatus::Success);
-    let grep_file_text = grep_file
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("Grep text");
-    assert!(grep_file_text.contains(": spill-boundary-marker"));
+    let ToolExecutionStatus::Failed { error } = &grep_file.status else {
+        panic!("a managed-output path must be refused by Grep: {grep_file:?}");
+    };
+    assert!(
+        !error.contains("spill-boundary-marker"),
+        "no managed-source body may leak: {error}"
+    );
     let grep_root = run_tool(
         &fixture,
         "grep",
@@ -987,22 +986,22 @@ async fn bash_large_output_spills_to_managed_output() {
         }),
     )
     .await;
-    assert_eq!(grep_root.status, ToolExecutionStatus::Success);
-    let grep_root_text = grep_root
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("Grep text");
-    assert!(grep_root_text.contains(": spill-boundary-marker"));
+    let ToolExecutionStatus::Failed { error } = &grep_root.status else {
+        panic!("a managed-output root must be refused by Grep: {grep_root:?}");
+    };
+    assert!(
+        !error.contains("spill-boundary-marker"),
+        "no managed-source body may leak: {error}"
+    );
 }
 
 /// Every advertised Read/Grep path holds valid UTF-8 text (Issue #86):
 /// raw non-UTF-8 output decodes deterministically to U+FFFD replacement
-/// characters — never raw bytes — so the spilled file is always readable
-/// by Read and searchable by Grep. The decoded text is identical to the
+/// characters — never raw bytes — so the spilled file is inspectable by
+/// Server-local readers as deterministic text; native Read and Grep are
+/// confined to the Session's admitted workspace and honestly refuse the
+/// managed source (the same documented #576 gap, exec-01-evidence T31).
+/// The decoded text is identical to the
 /// one-shot lossy decoding of the same bytes.
 #[tokio::test]
 async fn bash_non_utf8_output_spills_as_deterministic_text() {
@@ -1041,8 +1040,8 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
     // `std::fs` read above — there is no model-facing managed-output
     // domain API yet; serving managed captures through the Execution
     // Client is unresolved #576 work (see exec-01-evidence T31). Native
-    // Read is confined to the Session's admitted workspace root and
-    // honestly refuses the managed source; Grep still searches it.
+    // Read and Grep are both confined to the Session's admitted
+    // workspace root and honestly refuse the managed source.
     let read = run_tool(&fixture, "read", serde_json::json!({"path": full_output})).await;
     let ToolExecutionStatus::Failed { error } = &read.status else {
         panic!("a managed-output path must be refused by Read: {read:?}");
@@ -1057,20 +1056,13 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
         serde_json::json!({"pattern": "end", "path": full_output}),
     )
     .await;
-    assert_eq!(
-        grep.status,
-        ToolExecutionStatus::Success,
-        "Grep searches the decoded-text spill"
+    let ToolExecutionStatus::Failed { error } = &grep.status else {
+        panic!("a managed-output path must be refused by Grep: {grep:?}");
+    };
+    assert!(
+        !error.contains("\u{FFFD}\u{FFFD}"),
+        "no managed-source body may leak: {error}"
     );
-    let grep_text = grep
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("Grep text");
-    assert!(grep_text.contains("... [truncated]"));
 }
 
 /// A shell parent that exits while a descendant stays in the owned process

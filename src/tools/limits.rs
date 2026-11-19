@@ -47,12 +47,12 @@ pub const DEFAULT_GREP_MATCHES: u64 = 100;
 pub const DEFAULT_GLOB_RESULTS: u64 = 1_000;
 
 /// The maximum number of context lines Grep returns on each side of a
-/// matching line.
-pub const MAX_GREP_CONTEXT_LINES: u32 = 20;
+/// matching line — the shared wire bound.
+pub const MAX_GREP_CONTEXT_LINES: u32 = rustx_execution_protocol::MAX_SEARCH_CONTEXT_LINES;
 
 /// The maximum Unicode scalar values of one line Grep reports. A longer line
-/// is shortened with an explicit marker.
-pub const MAX_GREP_LINE_CHARS: usize = 500;
+/// is shortened with an explicit marker — the shared wire bound.
+pub const MAX_GREP_LINE_CHARS: usize = rustx_execution_protocol::SEARCH_PREVIEW_SCALARS;
 
 /// The maximum length of one progress message text.
 pub const MAX_PROGRESS_MESSAGE_BYTES: usize = 512;

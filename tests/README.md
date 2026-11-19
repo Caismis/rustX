@@ -122,8 +122,9 @@ is the real Session-execution rig: it reserves a `SessionRuntimeManager`
 execution endpoint for a real catalog Session, launches the staged
 `rustx-execution-client` sibling, admits it, and kills/reaps the child on
 drop — compiled once for lib unit tests and once per integration target
-via `tests/common`, so any fixture that dispatches the native `read` or
-`read_image` tool needs a bound route (`native_fixture_with_execution`);
+via `tests/common`, so any fixture that dispatches the native `read`,
+`read_image`, `glob`, or `grep` tool needs a bound route
+(`native_fixture_with_execution`);
 an unbound fixture honestly answers `Session execution unavailable`.
 
 ## In-crate deterministic contract suites

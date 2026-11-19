@@ -1233,8 +1233,8 @@ async fn edit_accepts_known_model_argument_variants_but_keeps_one_canonical_exec
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn grep_is_in_process_text_output_with_cwd_absolute_single_file_and_context() {
-    let fixture = native_fixture();
+async fn grep_is_bounded_text_output_with_cwd_single_file_and_context() {
+    let fixture = native_fixture_with_execution(Vec::new());
     std::fs::create_dir_all(workspace_path(&fixture, "src")).expect("src");
     std::fs::write(
         workspace_path(&fixture, "src/a.txt"),
@@ -1252,6 +1252,8 @@ async fn grep_is_in_process_text_output_with_cwd_absolute_single_file_and_contex
     assert!(output.contains("a.txt:2: hit"));
     assert!(output.contains("a.txt-3- after"));
 
+    // An absolute root outside the admitted Client workspace is denied —
+    // the search never leaves the binding root, and no body leaks.
     let outside = fixture.dir().path().join("outside.txt");
     std::fs::write(&outside, "outside-hit").expect("outside");
     let result = run_tool(
@@ -1260,12 +1262,26 @@ async fn grep_is_in_process_text_output_with_cwd_absolute_single_file_and_contex
         serde_json::json!({"pattern": "hit", "path": outside.to_str().unwrap()}),
     )
     .await;
-    assert_eq!(text_content(&result), "outside.txt:1: outside-hit");
+    assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+    let error_text = error_content(&result);
+    assert!(
+        !error_text.contains("outside-hit"),
+        "no out-of-root body may leak: {error_text}"
+    );
+
+    // A single-file root inside the workspace is the whole grep universe.
+    let file = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "hit", "path": "src/a.txt"}),
+    )
+    .await;
+    assert_eq!(text_content(&file), "a.txt:2: hit");
 }
 
 #[tokio::test]
 async fn grep_default_and_large_limits_are_actionable_and_safe() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     for index in 0..101 {
         std::fs::write(
             workspace_path(&fixture, &format!("file-{index:03}.txt")),
@@ -1301,7 +1317,7 @@ async fn grep_default_and_large_limits_are_actionable_and_safe() {
 
 #[tokio::test]
 async fn grep_bounds_long_utf8_lines_and_the_50kb_projection() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let long = format!("{}hit{}", "a".repeat(600), "é".repeat(600));
     std::fs::write(workspace_path(&fixture, "long.txt"), &long).expect("fixture");
     let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "hit"})).await;
@@ -1328,7 +1344,7 @@ async fn grep_bounds_long_utf8_lines_and_the_50kb_projection() {
 
 #[tokio::test]
 async fn grep_preserves_regex_literal_case_context_and_binary_skip_semantics() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let root = fixture.runtime.workspace().root();
     std::fs::write(
         root.join("patterns.txt"),
@@ -1413,7 +1429,7 @@ async fn grep_preserves_regex_literal_case_context_and_binary_skip_semantics() {
 async fn grep_and_glob_keep_hidden_and_ignore_file_behavior_and_never_follow_symlinks() {
     use std::os::unix::fs::symlink;
 
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let root = fixture.runtime.workspace().root();
     std::fs::write(root.join(".gitignore"), "ignored.txt\n").expect("ignore fixture");
     std::fs::write(root.join(".hidden.txt"), "needle\n").expect("hidden fixture");
@@ -1435,9 +1451,35 @@ async fn grep_and_glob_keep_hidden_and_ignore_file_behavior_and_never_follow_sym
     assert!(!glob_text.contains("linked.txt"));
 }
 
+/// An unbound Session never falls back to Server-local traversal: the
+/// files exist on disk, yet glob and grep both refuse honestly and
+/// report no names and no matches.
+#[tokio::test]
+async fn unbound_sessions_refuse_search_without_server_traversal() {
+    let fixture = native_fixture();
+    std::fs::write(workspace_path(&fixture, "present.txt"), "needle\n").expect("fixture");
+    for (tool, arguments) in [
+        ("glob", serde_json::json!({"pattern": "*.txt"})),
+        ("grep", serde_json::json!({"pattern": "needle"})),
+    ] {
+        let result = run_tool(&fixture, tool, arguments).await;
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("an unbound search must fail honestly: {result:?}");
+        };
+        assert!(
+            error.contains("Session execution unavailable: no admitted Execution Client"),
+            "{tool} reports the honest unbound diagnostic: {error}"
+        );
+        assert!(
+            !error.contains("present.txt") && !error.contains("needle"),
+            "no traversal may run for an unbound Session: {error}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn grep_no_matches_is_exact_plain_text() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     std::fs::write(workspace_path(&fixture, "none.txt"), "nothing").expect("fixture");
     let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "missing"})).await;
     assert_eq!(text_content(&result), "No matches found");
@@ -1449,13 +1491,27 @@ async fn grep_no_matches_is_exact_plain_text() {
 
 #[tokio::test]
 async fn glob_is_cwd_oriented_sorted_posix_text_and_supports_absolute_roots() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     std::fs::create_dir_all(workspace_path(&fixture, "z/sub")).expect("directories");
     std::fs::write(workspace_path(&fixture, "z/sub/b.txt"), "b").expect("fixture");
     std::fs::write(workspace_path(&fixture, "a.txt"), "a").expect("fixture");
     let result = run_tool(&fixture, "glob", serde_json::json!({"pattern": "**/*.txt"})).await;
     assert_eq!(text_content(&result), "a.txt\nz/sub/b.txt");
 
+    // An absolute root inside the admitted workspace resolves exactly.
+    let inside = workspace_path(&fixture, "inside");
+    std::fs::create_dir_all(&inside).expect("inside");
+    std::fs::write(inside.join("inside.txt"), "inside").expect("inside fixture");
+    let result = run_tool(
+        &fixture,
+        "glob",
+        serde_json::json!({"pattern": "*.txt", "path": inside.to_str().unwrap()}),
+    )
+    .await;
+    assert_eq!(text_content(&result), "inside.txt");
+
+    // An absolute root outside the admitted Client workspace is denied —
+    // the traversal never leaves the binding root, and no name leaks.
     let outside = fixture.dir().path().join("outside");
     std::fs::create_dir_all(&outside).expect("outside");
     std::fs::write(outside.join("outside.txt"), "outside").expect("outside fixture");
@@ -1465,12 +1521,17 @@ async fn glob_is_cwd_oriented_sorted_posix_text_and_supports_absolute_roots() {
         serde_json::json!({"pattern": "*.txt", "path": outside.to_str().unwrap()}),
     )
     .await;
-    assert_eq!(text_content(&result), "outside.txt");
+    assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
+    let error_text = error_content(&result);
+    assert!(
+        !error_text.contains("outside.txt"),
+        "no out-of-root name may leak: {error_text}"
+    );
 }
 
 #[tokio::test]
 async fn glob_default_and_large_limits_have_continuation_guidance() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     for index in 0..1001 {
         std::fs::write(
             workspace_path(&fixture, &format!("file-{index:04}.txt")),
@@ -1496,7 +1557,7 @@ async fn glob_default_and_large_limits_have_continuation_guidance() {
 
 #[tokio::test]
 async fn glob_byte_limit_and_no_match_contract_are_plain_text() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     for index in 0..200 {
         let directory = workspace_path(&fixture, &format!("dir-{index:03}"));
         std::fs::create_dir_all(&directory).expect("directory");
@@ -1525,7 +1586,7 @@ async fn glob_byte_limit_and_no_match_contract_are_plain_text() {
 async fn glob_does_not_follow_symlinks_and_keeps_hidden_files_visible() {
     use std::os::unix::fs::symlink;
 
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let hidden = workspace_path(&fixture, ".hidden.txt");
     std::fs::write(&hidden, "hidden").expect("hidden");
     std::fs::write(workspace_path(&fixture, ".gitignore"), "ignored.txt\n").expect("ignore file");

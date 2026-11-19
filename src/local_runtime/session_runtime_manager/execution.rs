@@ -34,6 +34,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::runtime::ExecutionCancellation;
 use rustx_execution_server::{
     Binding, DirectoryListing, DocumentPage, LinesPage, LocalConnection, RangeRead, Reservation,
+    SearchResult,
 };
 
 use super::super::session::SessionId;
@@ -429,6 +430,36 @@ impl LocalExecutionEndpoint {
                     .map(project_lines)
                     .map(|(_metadata, page)| page)
             }
+        })
+    }
+
+    /// One admitted Agent search dispatch — the shared file-universe
+    /// traversal rooted at `path` narrowed by `spec` — for a caller that
+    /// already holds the shared `data` budget and the `writer` permit,
+    /// under the same contract as
+    /// [`read_page_admitted`](Self::read_page_admitted). `path` resolves
+    /// through [`workspace_entry`]: the workspace root itself is a legal
+    /// search root — the empty relative path the Client reads as "the
+    /// root itself" — unlike the page operations, which require a leaf.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as
+    /// [`read_page_admitted`](Self::read_page_admitted).
+    #[allow(clippy::too_many_arguments)] // one admitted exchange's full context
+    fn search_admitted(
+        &self,
+        path: &Path,
+        spec: &rustx_execution_protocol::SearchSpec,
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<SearchResult> {
+        self.with_connection(Some(data), true, |connection| {
+            let relative = workspace_entry(&connection.admission().workspace, path)?;
+            connection.search_admitted(&relative, spec, deadline, admit, sent)
         })
     }
 
@@ -830,6 +861,47 @@ impl SessionExecutionScope {
                     data,
                     writer,
                     &worker_cancellation,
+                )
+            },
+        )
+        .await
+    }
+
+    /// One bounded workspace search through the Session's admitted
+    /// Client — the physical backing of native `glob` and `grep`. `root`
+    /// is the already-interpreted absolute search root — the workspace
+    /// root itself included; `spec` is the typed wire spec with its
+    /// bounds pre-validated. The shared file universe, traversal
+    /// budgets, and record projection are the Client's contract; the
+    /// Server owns the model-facing notices over the verified page.
+    ///
+    /// # Errors
+    ///
+    /// The [`dispatch_data`](Self::dispatch_data) kinds plus the
+    /// connection's own: typed `NotFound`/`Denied`/`Conflict`/budget
+    /// refusals, and a retired `InvalidData` for a contradictory peer.
+    pub(crate) async fn search(
+        &self,
+        root: &Path,
+        spec: rustx_execution_protocol::SearchSpec,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<SearchResult> {
+        let worker_root = root.to_path_buf();
+        self.dispatch_data(
+            cancellation,
+            move |endpoint, data, writer, deadline, worker_cancellation| {
+                endpoint.search_admitted(
+                    &worker_root,
+                    &spec,
+                    deadline,
+                    data,
+                    writer,
+                    move || {
+                        worker_cancellation
+                            .with_active(|| ())
+                            .ok_or_else(cancelled_before_dispatch)
+                    },
+                    || (),
                 )
             },
         )
@@ -2428,5 +2500,168 @@ mod tests {
         ));
         let mut client = peer.join().unwrap();
         wire_is_closed(&mut client);
+    }
+
+    /// A verified `SearchPage` crosses the scope's bounded dispatch; a
+    /// peer that cannot account for its search — a match count beyond
+    /// the requested limit, or `hit_limit` without a proven further
+    /// match — retires the connection rather than publish dishonest
+    /// records.
+    #[tokio::test]
+    async fn a_search_page_is_verified_and_a_dishonest_one_retires() {
+        let (registry, session, endpoint, mut client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::BoundedSearch,
+            ]));
+        let peer = std::thread::spawn(move || {
+            let Ok(ClientRequest::Search { spec, .. }) = read_record(&mut client) else {
+                panic!("expected a search request");
+            };
+            assert!(matches!(
+                spec,
+                rustx_execution_protocol::SearchSpec::Glob { .. }
+            ));
+            write_record(
+                &mut client,
+                &ClientReply::SearchPage {
+                    body: "a.txt".to_owned(),
+                    matches: DecimalU64::new(1),
+                    hit_limit: false,
+                    byte_limit: false,
+                    short_lines: false,
+                },
+            )
+            .unwrap();
+            // Dishonest: the count exceeds the requested limit.
+            let Ok(ClientRequest::Search { .. }) = read_record(&mut client) else {
+                panic!("expected a second search request");
+            };
+            write_record(
+                &mut client,
+                &ClientReply::SearchPage {
+                    body: "x".to_owned(),
+                    matches: DecimalU64::new(5),
+                    hit_limit: false,
+                    byte_limit: false,
+                    short_lines: false,
+                },
+            )
+            .unwrap();
+            client
+        });
+        let scope = scope_for(&registry, &session);
+        let spec = |limit| rustx_execution_protocol::SearchSpec::Glob {
+            pattern: "*.txt".to_owned(),
+            limit: DecimalU64::new(limit),
+        };
+        let result = scope
+            .search(&workspace, spec(10), &detached_cancellation())
+            .await
+            .unwrap();
+        assert_eq!(result.body, "a.txt");
+        assert_eq!(result.matches, 1);
+        let error = scope
+            .search(&workspace, spec(2), &detached_cancellation())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+        assert!(matches!(
+            endpoint.binding().status().phase,
+            BindingPhase::Detached
+        ));
+        let mut client = peer.join().unwrap();
+        wire_is_closed(&mut client);
+    }
+
+    /// One scripted `SearchPage` case: a peer answers `Search` with
+    /// `reply`; `accepted` selects verified-`Ok`-and-quiet-wire versus
+    /// `InvalidData`-and-retired.
+    async fn search_case(
+        spec: rustx_execution_protocol::SearchSpec,
+        reply: ClientReply,
+        accepted: bool,
+    ) {
+        let (registry, session, endpoint, mut client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::BoundedSearch,
+            ]));
+        let peer = std::thread::spawn(move || {
+            let Ok(ClientRequest::Search { .. }) = read_record(&mut client) else {
+                panic!("expected a search request");
+            };
+            write_record(&mut client, &reply).unwrap();
+            client
+        });
+        let result = scope_for(&registry, &session)
+            .search(&workspace, spec, &detached_cancellation())
+            .await;
+        let mut client = peer.join().unwrap();
+        if accepted {
+            result.unwrap();
+            wire_is_quiet(&mut client);
+        } else {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert!(matches!(
+                endpoint.binding().status().phase,
+                BindingPhase::Detached
+            ));
+            wire_is_closed(&mut client);
+        }
+        drop(endpoint);
+        drop(registry);
+    }
+
+    /// A scripted `SearchPage` reply matrix: the one honest zero-match
+    /// body — before-context rows that filled the projection before the
+    /// match record fit — is accepted; every impossible accounting
+    /// combination retires the connection rather than reach the tool.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn search_reply_accounting_is_verified_before_trust() {
+        let grep = |context: u32| rustx_execution_protocol::SearchSpec::Grep {
+            pattern: "needle".to_owned(),
+            glob: None,
+            literal: false,
+            ignore_case: false,
+            context,
+            limit: DecimalU64::new(10),
+        };
+        let page = |body: &str, matches: u64, hit: bool, byte: bool, short: bool| {
+            ClientReply::SearchPage {
+                body: body.to_owned(),
+                matches: DecimalU64::new(matches),
+                hit_limit: hit,
+                byte_limit: byte,
+                short_lines: short,
+            }
+        };
+        let cases: &[(u32, ClientReply, bool)] = &[
+            // Honest before-context overflow: context rows, zero matches.
+            (20, page("d-1- ctx", 0, false, true, false), true),
+            // The same overflow landing before the first record.
+            (20, page("", 0, false, true, false), true),
+            // A nonempty body without a match is impossible for context=0.
+            (0, page("d-1- ctx", 0, false, true, false), false),
+            // Glob has no context rows at all.
+            (0, page("d:1: hit", 0, false, false, false), false),
+            // Mutually exclusive limits.
+            (0, page("x", 10, true, true, false), false),
+            // A count past the body's own byte length.
+            (0, page("x", 3, false, false, false), false),
+        ];
+        for (context, reply, accepted) in cases {
+            search_case(grep(*context), reply.clone(), *accepted).await;
+        }
+        // A Glob `short_lines` flag is impossible on its own request.
+        search_case(
+            rustx_execution_protocol::SearchSpec::Glob {
+                pattern: "*.txt".to_owned(),
+                limit: DecimalU64::new(10),
+            },
+            page("a.txt", 1, false, false, true),
+            false,
+        )
+        .await;
     }
 }

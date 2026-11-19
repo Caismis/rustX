@@ -30,7 +30,7 @@ mod mutation;
 mod text;
 
 pub use mutation::{CommitUnknown, PublishedWrite, StagedWrite, WriteTarget};
-pub use text::{PageEnd, PageLimits, TextPage};
+pub use text::{PageEnd, PageLimits, TextPage, validate_utf8};
 
 use std::ffi::OsStr;
 use std::fs::File;

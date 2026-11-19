@@ -266,9 +266,24 @@ fn scan(
         first_too_large: None,
         trailing_empty: false,
     };
-    // At most the three tail bytes of an incomplete UTF-8 sequence carry
-    // between blocks; an invalid sequence fails at the first invalid byte
-    // and a file ending mid-sequence is invalid too.
+    scan.original_bytes = scan_utf8_blocks(&mut reader, |valid| scan.feed(valid))?;
+    scan.finish_element(true);
+    Ok(scan.finish())
+}
+
+/// Streams `reader` to EOF through the whole-source UTF-8 validation the
+/// line scanner performs, feeding every validated run to `feed` and
+/// returning the exact byte count observed. At most the three tail bytes
+/// of an incomplete sequence carry between blocks; an invalid sequence
+/// fails at the first invalid byte and a source ending mid-sequence is
+/// invalid too.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidData`] for non-UTF-8 content and the
+/// reader's own errors otherwise.
+fn scan_utf8_blocks(mut reader: impl Read, mut feed: impl FnMut(&[u8])) -> io::Result<u64> {
+    let mut original_bytes = 0_u64;
     let mut carry = Vec::new();
     let mut block = vec![0u8; READ_BLOCK_BYTES];
     loop {
@@ -281,7 +296,7 @@ fn scan(
         if read == 0 {
             break;
         }
-        scan.original_bytes += read as u64;
+        original_bytes += read as u64;
         carry.extend_from_slice(&block[..read]);
         let valid = match std::str::from_utf8(&carry) {
             Ok(_) => carry.len(),
@@ -292,14 +307,26 @@ fn scan(
                 error.valid_up_to()
             }
         };
-        scan.feed(&carry[..valid]);
+        feed(&carry[..valid]);
         carry.drain(..valid);
     }
     if !carry.is_empty() {
         return Err(invalid_utf8());
     }
-    scan.finish_element(true);
-    Ok(scan.finish())
+    Ok(original_bytes)
+}
+
+/// Whole-source UTF-8 validation without any line accounting: streams
+/// `reader` to EOF and returns the exact observed byte count. The grep
+/// engine validates a file this way before matching — a file invalid
+/// anywhere, even after its last match, is skipped entirely.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::InvalidData`] for non-UTF-8 content and the
+/// reader's own errors otherwise.
+pub fn validate_utf8(reader: impl Read) -> io::Result<u64> {
+    scan_utf8_blocks(reader, |_| ())
 }
 
 fn invalid() -> io::Error {

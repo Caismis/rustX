@@ -62,6 +62,30 @@ pub const MAX_DOCUMENT_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 /// of the compressed source's byte length.
 pub const MAX_DOCUMENT_LOGICAL_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Maximum bytes of one `Search` pattern or file-filter glob — the wire
+/// policy, enforced before any traversal starts.
+pub const MAX_SEARCH_PATTERN_BYTES: usize = 8 * 1024;
+
+/// Maximum surrounding context lines one `Search` grep may select.
+pub const MAX_SEARCH_CONTEXT_LINES: u32 = 20;
+
+/// The grep record preview: at most this many Unicode scalars per line
+/// before the `... [truncated]` marker, which `short_lines` reports.
+pub const SEARCH_PREVIEW_SCALARS: usize = 500;
+
+/// The bounded traversal's maximum directory depth below the search root.
+pub const MAX_SEARCH_DEPTH: u32 = 64;
+
+/// The bounded traversal's total retained relative-path bytes.
+pub const MAX_SEARCH_PATH_BYTES: usize = 8 * 1024 * 1024;
+
+/// The bounded traversal's total visited directory entries.
+pub const MAX_SEARCH_ENTRIES: u64 = 65_536;
+
+/// The bounded grep working buffer per file — the searcher's heap limit
+/// and the regex compiled/determinization budgets share this wire policy.
+pub const MAX_SEARCH_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
 /// The closed rustX-owned whitelist of structured document formats a
 /// `ReadDocument` may decode.
 ///
@@ -383,8 +407,10 @@ pub enum Capability {
     /// under the binding workspace decoded by the shared parser policy
     /// into bounded logical-text pages.
     DocumentPages,
-    /// Data-side bounded glob/grep, conditional edit, document decoding.
-    Search,
+    /// The implemented bounded workspace search: one `Search` request
+    /// carries the shared file-universe traversal and the selected
+    /// glob/grep record projection under the binding workspace.
+    BoundedSearch,
     /// Managed processes under Server-assigned `OperationId`s.
     Process,
     /// Workspace `uv` and Managed Python fingerprint environments.
@@ -702,6 +728,58 @@ pub enum ClientRequest {
         /// The revision the file must still hold, when checked.
         expected_revision: Option<String>,
     },
+    /// One bounded workspace search: the shared file-universe traversal
+    /// rooted at `relative_root` — the workspace root itself when empty —
+    /// narrowed by `spec` into one selected-records page. The universe is
+    /// descriptor-relative the whole way: hidden and ignored files are
+    /// visible, symlinks and special entries are never part of it, and no
+    /// unselected file body ever crosses the wire.
+    Search {
+        /// The workspace-relative search root: normal components only, or
+        /// empty for the workspace root itself.
+        relative_root: PathBuf,
+        /// The kind of search and its bounds.
+        spec: SearchSpec,
+    },
+}
+
+/// The kind of one bounded `Search` request and its wire bounds.
+///
+/// Both variants enumerate the same shared file universe; the pattern and
+/// optional `glob` filter only narrow it — they never widen it. The
+/// caller is the sole authority for compiling the pattern for
+/// diagnostics; the Client compiles the same text for the physical match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SearchSpec {
+    /// Select the universe files whose root-relative path matches
+    /// `pattern`, in global bytewise lexical order. The root must be a
+    /// directory — a file root is [`ReadError::SearchNeedsDirectory`].
+    Glob {
+        /// The glob, at most [`MAX_SEARCH_PATTERN_BYTES`] bytes.
+        pattern: String,
+        /// The selected-record bound; never zero.
+        limit: DecimalU64,
+    },
+    /// Select the matching lines of every universe file — narrowed by
+    /// `glob`, when present — with `context` lines on each side. The root
+    /// may name one file, which is then the whole universe.
+    Grep {
+        /// The regex — or literal text when `literal` — at most
+        /// [`MAX_SEARCH_PATTERN_BYTES`] bytes.
+        pattern: String,
+        /// The file filter, at most [`MAX_SEARCH_PATTERN_BYTES`] bytes.
+        glob: Option<String>,
+        /// Match `pattern` literally rather than as a regex.
+        literal: bool,
+        /// Match without regard to case.
+        ignore_case: bool,
+        /// Surrounding lines on each side, at most
+        /// [`MAX_SEARCH_CONTEXT_LINES`].
+        context: u32,
+        /// The selected-match bound; never zero.
+        limit: DecimalU64,
+    },
 }
 
 /// The Client's one typed reply to a [`ClientRequest`].
@@ -788,6 +866,29 @@ pub enum ClientReply {
         shown_lines: u32,
         /// Why the page ended.
         end: LineEnd,
+    },
+    /// The bounded search's selected records: `body` is the already
+    /// projected record text — newline-joined tool records only, never
+    /// notices — and `matches` counts the selected primary records. The
+    /// limit flags are proofs, not hints: `hit_limit` asserts at least
+    /// one further match was seen and excluded past `matches` (which
+    /// then equals the request's bound), and `byte_limit` asserts the
+    /// joined-body budget stopped the selection. `short_lines` reports
+    /// at least one grep record preview shortened to
+    /// [`SEARCH_PREVIEW_SCALARS`] scalars — always false for a glob.
+    SearchPage {
+        /// The selected records, at most [`MAX_TEXT_BYTES`] joined bytes.
+        body: String,
+        /// The selected primary record count — matched files for a glob,
+        /// matched lines for a grep.
+        matches: DecimalU64,
+        /// At least one match was excluded because `matches` reached the
+        /// requested bound.
+        hit_limit: bool,
+        /// The joined-body byte budget stopped the selection.
+        byte_limit: bool,
+        /// At least one record preview was shortened — grep only.
+        short_lines: bool,
     },
     /// The request failed; `kind` carries only the stable reason.
     Error {
@@ -908,6 +1009,14 @@ pub enum ReadError {
     /// The document decoded but has no extractable text layer — OCR and
     /// image inference never substitute for one.
     NoTextLayer,
+    /// A `Search` exhausted one of its wire traversal or working budgets —
+    /// depth, entries, retained paths, directory names, or the grep
+    /// buffer — and fails closed rather than publishing a partial
+    /// universe.
+    SearchBudgetExceeded,
+    /// A `Search` glob root named a file — its universe is directories
+    /// only.
+    SearchNeedsDirectory,
     /// The read could not be completed for another reason.
     Unavailable,
 }

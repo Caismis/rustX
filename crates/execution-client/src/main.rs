@@ -33,7 +33,8 @@ use std::{env, fs};
 
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::transport::{
-    DeadlineStream, LOCAL_HANDSHAKE_TIMEOUT, read_optional_record, read_record, write_record,
+    DeadlineStream, LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, read_optional_record,
+    read_record, write_record,
 };
 use rustx_execution_protocol::{
     Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, EntryKind,
@@ -44,6 +45,7 @@ use rustx_execution_protocol::{
 };
 
 mod mutation;
+mod search;
 
 /// `O_NOFOLLOW` refuses a symlinked final component; `O_NONBLOCK` makes a
 /// misidentified special file (FIFO, device) fail instead of blocking.
@@ -159,6 +161,7 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
             Capability::ConditionalWrite,
             Capability::ReadLines,
             Capability::DocumentPages,
+            Capability::BoundedSearch,
         ]),
         credential: bootstrap.credential,
     };
@@ -339,6 +342,15 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
                 offset,
                 limit,
                 expected_revision.as_deref(),
+            ),
+            ClientRequest::Search {
+                relative_root,
+                spec,
+            } => search::search(
+                root,
+                &relative_root,
+                &spec,
+                std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
             ),
         };
         write_record(stream, &reply).map_err(|_| String::from("reply"))?;

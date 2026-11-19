@@ -72,10 +72,9 @@ pub(crate) use read::read_hooks;
 mod read_image;
 mod registration;
 pub(crate) use registration::input_schema;
-// The private native-search substrate shared by Glob and Grep. It is not a
-// tool: it is never registered, never reaches the model, and exists only
-// because Glob and Grep must observe one filesystem universe.
-mod search;
+// The shared Server-side projection of a physical-search failure — Glob
+// and Grep render the Client's wire codes onto the same diagnostics.
+mod search_failure;
 pub(crate) mod subagent;
 pub(crate) mod support;
 mod todo;

@@ -4690,7 +4690,6 @@ dependencies = [
  "getrandom 0.3.4",
  "globset",
  "grep-regex",
- "grep-searcher",
  "http",
  "httpdate",
  "ignore",
@@ -4770,6 +4769,9 @@ name = "rustx-execution-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "globset",
+ "grep-regex",
+ "grep-searcher",
  "nix",
  "rustx-confined-fs",
  "rustx-document-reader",

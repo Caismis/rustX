@@ -4361,8 +4361,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
   overlap — so runtime-private output files are not included in the default
-  cwd-based Glob/Grep traversal. An explicit absolute host path remains
-  subject to the ordinary native file-tool contract. The conversation's
+  cwd-based Glob/Grep traversal. An explicit absolute path still resolves
+  under the ordinary native file-tool contract: Write/Edit treat it as a
+  host path, while Read, Glob, and Grep refuse one outside the Session's
+  admitted Client workspace. The conversation's
   managed tool-output namespaces are disjoint from artifact and workspace
   roots. Namespace bindings, filesystem identities and ownership markers
   authorize only those private temporary directories, never the temporary
@@ -4774,14 +4776,16 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
 
 ## Native tools and Bash (M5)
 
-- Native Write/Edit/Grep/Glob resolve relative model paths against the
+- Native Write/Edit resolve relative model paths against the
   authoritative execution cwd (`Workspace::root()`) and use absolute paths
   as ordinary host filesystem paths. Both forms are lexically normalized for
   `.` and `..` before filesystem behavior, without requiring intermediate
   components to exist. They no longer impose workspace containment. Native
-  Read and `read_image` share the lexical normalization but require the
+  Read, `read_image`, Glob, and Grep share the lexical normalization but
+  require the
   result to stay inside the Session's admitted Client workspace — their
-  physical bytes cross the Execution Client boundary, and an unbound
+  physical reads and traversal cross the Execution Client boundary, and an
+  unbound
   Session answers `Session execution unavailable`. Workspace remains the runtime/Bash cwd authority, while
   `locator.rs` remains the runtime read resolver for advertised managed-output
   paths and unrelated runtime invariants; `ManagedToolOutput` owns the narrow
@@ -4817,21 +4821,25 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   file unchanged. The registry normalizes known malformed Edit arguments
   before canonical schema validation; the provider and Agent Loop remain
   unaware of those variants.
-- **Glob and Grep observe one shared file universe.** The private
-  `tools/native/search/` substrate — not either tool, and not a traversal
-  crate's defaults — owns that policy: relative roots are cwd-oriented and
-  absolute roots are host paths, hidden files visible, ignore files (`.gitignore`,
+- **Glob and Grep observe one shared file universe.** The Execution
+  Client's private `search` module — not either tool, and not a traversal
+  crate's defaults — owns that policy, enumerated descriptor-relative
+  below the retained workspace `PackageDirectory`: relative roots are
+  cwd-oriented and absolute roots must stay inside the Session's admitted
+  Client workspace, hidden files visible, ignore files (`.gitignore`,
   `.ignore`, git global excludes, `.git/info/exclude`) deliberately not
   applied, symlinks never followed (neither directory-symlink recursion nor
-  a file symlink's target enters the universe), normalized root-relative
+  a file symlink's target enters the universe, and a symlinked root is
+  refused), normalized root-relative
   paths, and deterministic lexical enumeration. A caller filter — Glob's
   `pattern`, Grep's optional `glob` — only narrows that shared set; neither
   tool can reach a file the other cannot see. The substrate is not a tool:
   it is never registered, never model-facing, and never a generic
   search-provider framework.
-- Native search is linked, never spawned: `ignore`, `globset`,
+- Native search is linked, never spawned: `globset`,
   `grep-regex`, and `grep-searcher` are implementation dependencies of the
-  shared substrate and of the Grep engine. The runtime never depends on a
+  Client-side shared substrate and of the Grep engine. The runtime never
+  depends on a
   system-installed or vendored `rg` executable, none of those crates'
   defaults are part of a model-facing contract, and `grep-searcher` never
   owns workspace traversal — it only decides how matching happens inside a

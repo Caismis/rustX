@@ -1803,7 +1803,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1814,7 +1814,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -1833,7 +1833,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1844,7 +1844,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -2149,7 +2149,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2160,7 +2160,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -2179,7 +2179,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2190,7 +2190,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -2495,7 +2495,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2506,7 +2506,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -2525,7 +2525,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2536,7 +2536,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -2841,7 +2841,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2852,7 +2852,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -2871,7 +2871,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2882,7 +2882,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -3187,7 +3187,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3198,7 +3198,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -3217,7 +3217,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3228,7 +3228,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -3533,7 +3533,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3544,7 +3544,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -3563,7 +3563,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3574,7 +3574,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -3879,7 +3879,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3890,7 +3890,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -3909,7 +3909,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3920,7 +3920,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
