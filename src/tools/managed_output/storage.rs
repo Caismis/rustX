@@ -428,7 +428,7 @@ impl Namespaces {
             match openat(
                 &dir,
                 leaf.as_str(),
-                OFlag::O_WRONLY
+                OFlag::O_RDWR
                     | OFlag::O_APPEND
                     | OFlag::O_CREAT
                     | OFlag::O_EXCL

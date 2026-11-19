@@ -61,6 +61,14 @@ it('typed InvalidRange is a source range failure rather than a resync',()=>{
   assert.equal(isResyncRequired(failure),false);
 });
 
+it('typed SteerUnavailable formats clearly without triggering resync', () => {
+  const error = { code: -32000, message: 'The expected Turn is no longer active or steerable', data: { kind: 'steer_unavailable' as const } };
+  assert.equal(describeRpcError(error), 'the expected Turn is no longer active or steerable');
+  const failure = new AppServerRequestError('turn/steer', error);
+  assert.equal(failure.kind, 'steer_unavailable');
+  assert.equal(isResyncRequired(failure), false);
+});
+
 describe("Rust-produced App Server fixtures", () => {
   it("classifies every message as a request, a response, or a notification", () => {
     assert.ok(fixtures.length > 0, "the generated fixture set is not empty");

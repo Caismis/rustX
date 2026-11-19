@@ -25,8 +25,8 @@
 //! # Platform sensitivity
 //!
 //! Every suite here exercises semantics where operating systems genuinely
-//! differ (process groups, SIGKILL, unix sockets, shell supervision), so the
-//! `boundary_suites::` prefix also runs on the macOS CI job.
+//! differ (process groups, SIGKILL, unix sockets, shell supervision). CI is
+//! Linux-only. Run the suite locally on macOS when changing those primitives.
 //!
 //! # Domain ownership
 //!

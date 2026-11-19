@@ -40,7 +40,7 @@ export function Content({ blocks, messageId, publicationStream, markdown = false
 }
 
 /** Separate attachment and text seats without changing canonical block indices. */
-function UserMessageContent({ message, label, actions }: { message: Extract<MessageBlock, { role: 'user' }>; label: string; actions?: ReactNode }) {
+function UserMessageContent({ message, label, actions, editor }: { message: Extract<MessageBlock, { role: 'user' }>; label: string; actions?: ReactNode; editor?: ReactNode }) {
   const { presentation } = useContentSource();
   const attachments: number[] = [], text: number[] = [];
   message.content.forEach((block, index) => {
@@ -48,7 +48,7 @@ function UserMessageContent({ message, label, actions }: { message: Extract<Mess
     else if (block.text !== '' || (messageContentBinding(presentation, message.id, index)?.content_ref.readable_end ?? 0) > 0) text.push(index);
   });
   return <UserMessage label={label} actions={actions} attachments={attachments.length > 0 ? <Content messageId={message.id} blocks={message.content} include={attachments} messageAttachments/> : undefined}>
-    {text.length > 0 ? text.map((index, position) => <Fragment key={index}>{position > 0 && '\n\n'}<Content messageId={message.id} blocks={message.content} include={[index]}/></Fragment>) : undefined}
+    {editor ?? (text.length > 0 ? text.map((index, position) => <Fragment key={index}>{position > 0 && '\n\n'}<Content messageId={message.id} blocks={message.content} include={[index]}/></Fragment>) : undefined)}
   </UserMessage>;
 }
 function MessageText({ messageId, publicationStream, index, text, markdown, streaming, renderText }: { messageId?: string; publicationStream?: string; index: number; text: string; markdown: boolean; streaming: boolean; renderText?: (text: string) => ReactNode }) {
@@ -59,13 +59,13 @@ function MessageText({ messageId, publicationStream, index, text, markdown, stre
   const deferred = binding && (binding.deferred || new TextEncoder().encode(text).length !== binding.content_ref.readable_end);
   return <SourceContent bindings={binding ? [{ ...binding, deferred: !!deferred }] : []} owned={source?.owned ?? (() => false)} read={source ? read : undefined} presentationOwner={presentation?.owner} inlineText={deferred ? undefined : text} fallback={render(text)}>{render}</SourceContent>;
 }
-export function Message({ message, publicationStream, tools = [], actions, streaming = false, stopped = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; publicationStream?: string; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; stopped?: boolean; blocks?: (AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
+export function Message({ message, publicationStream, tools = [], actions, editor, streaming = false, stopped = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; publicationStream?: string; tools?: ForegroundToolExecution[]; actions?: ReactNode; editor?: ReactNode; streaming?: boolean; stopped?: boolean; blocks?: (AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation(), receiver = useContext(AgentConversationContext);
   // Results belong to the native call projection; Context injections are
   // Harness hidden rows, whose content Trace keeps.
   if (message.role === 'tool' || isContextInjection(message)) return null;
   if (message.role === 'user' && !isPlainMessageKind(message.kind)) return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content messageId={message.id} blocks={message.content} markdown/></details>;
   if (message.role === 'user' && !isUserBubble(message, receiver?.parent_agent_id)) return <InboundMessage message={message}/>;
-  return message.role === 'user' ? <UserMessageContent message={message} label={tx(message.source === 'human' ? 'agent:message.your-message' : 'common:subagents.parent-message')} actions={actions}/>
+  return message.role === 'user' ? <UserMessageContent message={message} label={tx(message.source === 'human' ? 'agent:message.your-message' : 'common:subagents.parent-message')} actions={actions} editor={editor}/>
     : <AssistantMessage label={tx(stopped ? 'agent:message.incomplete-response' : streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')} stopped={stopped ? tx('agent:turn-process.stopped') : undefined} actions={actions}><Content messageId={message.id} publicationStream={publicationStream} blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden} include={include}/></AssistantMessage>;
 }

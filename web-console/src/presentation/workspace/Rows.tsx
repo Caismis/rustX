@@ -281,14 +281,14 @@ interface SessionStatus {
 function sessionStatuses(
   node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount' | 'forking' | 'runtimeStatus' | 'statusUnavailable'>,
   t: RowTranslate,
-): readonly [SessionStatus, ...SessionStatus[]] {
+): readonly SessionStatus[] {
   if(node.statusUnavailable)return [{state:'warning',label:t('common:session-product.observation-unavailable')}];
-  if(node.runtimeStatus?.labels.length) return node.runtimeStatus.labels.map(label=>({state:node.runtimeStatus!.state,label})) as [SessionStatus,...SessionStatus[]];
-  return [{state:'warning',label:t('common:session-product.observation-unavailable')}];
+  if(node.runtimeStatus?.labels.length) return node.runtimeStatus.labels.map(label=>({state:node.runtimeStatus!.state,label}));
+  return [];
 }
 
 /** Primary status dot plus every status's screen-reader label, shared by the search and session rows. */
-function SessionStatusDots({ statuses }: { statuses: readonly [SessionStatus, ...SessionStatus[]] }) {
+function SessionStatusDots({ statuses }: { statuses: readonly SessionStatus[] }) {
   return (
     <>
       <StateDot state={statuses[0].state} />
@@ -352,7 +352,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
     >
       <span className={css.searchResultHeading}>
         <span className={css.slot}>
-          {(primaryStatus.state !== 'done') && (
+          {primaryStatus && primaryStatus.state !== 'done' && (
             <SessionStatusDots statuses={statuses} />
           )}
         </span>
@@ -379,23 +379,22 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @param props.onRename - open the session rename dialog by native identity.
  * @param props.onFork - fork a session at its last completed turn.
  * @param props.onDelete - open native deletion preview.
- * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
  * @param props.menuFocusOwner - the scrolling tree that keeps the keyboard
  * when this row scrolls out from under its open actions menu.
  * @param props.t - the browser root's locale seat.
  * @returns the session row.
  */
 /** The current composer draft has no native Session identity or actions. */
-export function DraftConversationRow({ focus, flat = false }: { focus: () => void; flat?: boolean }) {
+export function DraftConversationRow({ focus }: { focus: () => void }) {
   const tx = useTranslation();
-  return <div className={clsx(css.sessionRow, css.selected, flat && css.flatSessionRowWithoutStatus)} role="treeitem" aria-selected="true" data-draft-conversation="" onClick={focus}>
-    {!flat && <span className={css.slot}/>}
+  return <div className={clsx(css.sessionRow, css.selected)} role="treeitem" aria-selected="true" data-draft-conversation="" onClick={focus}>
+    <span className={css.slot}/>
     <button type="button" className={clsx(css.title, css.titleButton)} aria-current="page">{tx('sidebar:session.new')}</button>
   </div>;
 }
 
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRename, onFork, onDelete, onPin, onCopyId, flat = false, menuFocusOwner, t,
+  node, currentId, now, onOpen, onRename, onFork, onDelete, onPin, onCopyId, menuFocusOwner, t,
 }: {
   node: SessionNode
   currentId: string | undefined
@@ -409,8 +408,6 @@ export function SessionNodeItem({
   onDelete: (id: SessionNode['id']) => void
   onPin?: (id: string) => void
   onCopyId?: (id: string) => void
-  /** The row is rendered without a parent Workspace header. */
-  flat?: boolean | undefined
   menuFocusOwner: RefObject<HTMLElement | null>
   t: RowTranslate
 }) {
@@ -420,7 +417,7 @@ export function SessionNodeItem({
   const selected = node.id === currentId
   const statuses = sessionStatuses(node, t)
   const primaryStatus = statuses[0]
-  const showStatus = primaryStatus.state !== 'done'
+  const showStatus = !!primaryStatus && primaryStatus.state !== 'done'
   const [menuOpen, setMenuOpen] = useState(false)
   const titleRef = useRef<HTMLSpanElement>(null)
   const marquee = useTitleMarquee(titleRef)
@@ -441,7 +438,6 @@ export function SessionNodeItem({
     <div
       className={clsx(
         css.sessionRow, selected && css.selected, menuOpen && css.menuOpen,
-        flat && !showStatus && css.flatSessionRowWithoutStatus,
       )}
       role="treeitem"
       aria-busy={node.forking || undefined}
@@ -455,11 +451,9 @@ export function SessionNodeItem({
       {/* Pending interaction and own or descendant activity outrank the
           finished-but-unviewed reminder, which returns after activity stops
           and is cleared by opening the session. */}
-      {(!flat || showStatus || node.taskMark) && (
-        <span className={css.slot}>
-          {showStatus ? <SessionStatusDots statuses={statuses} /> : node.taskMark}
-        </span>
-      )}
+      <span className={css.slot}>
+        {showStatus ? <SessionStatusDots statuses={statuses} /> : node.taskMark}
+      </span>
 <button ref={titleButton} type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
       <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>
       {node.pinned && <span className={css.pinIndicator} role="img" aria-label={t('workspace:row.pinned')}><IconPinFill16 size={14}/></span>}

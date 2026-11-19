@@ -2,7 +2,7 @@ import { useToastNotice } from '../locale/use-toast-notice';
 import type { Translate } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
-import { useEffect, useMemo, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { AppServerClient } from '../client/app-server';
 import type { ClientView } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
@@ -40,8 +40,8 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string,
   if (!transition && state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
-  associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
+export function WorkspaceNavigation({ pins, associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
+  pins: SessionPins; associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string;
   metadataChanged: (removed?: string) => void;
@@ -61,8 +61,6 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
   const folderPick = useRef<AbortController | undefined>(undefined);
   const [renaming, setRenaming] = useState<{ id: string; title: string }>();
   const [toast, setToast] = useState<{ sequence: number; copied: boolean }>();
-  const pinScope = JSON.stringify([state.endpoint, state.authorityId]);
-  const pins = useMemo(() => { let storage: Storage | undefined; try { storage = globalThis.localStorage; } catch {} return new SessionPins(pinScope, storage); }, [pinScope]);
   const pinned = useSyncExternalStore(pins.subscribe, pins.getSnapshot);
   useEffect(() => client.subscribeSessionDeletion(id => pins.remove(id)), [client, pins]);
   const [dialog, setDialog] = useState<{ kind: 'workspace' | 'remove' | 'add'; id: string; name: string; mutation: WorkspaceMutation; catalog: WorkspaceCatalog }>();
@@ -164,6 +162,8 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
   </>;
 }
 
+const UNAVAILABLE_GRACE_MS = 750;
+
 /** Only the individual activity row observes execution; the browser stays catalog-owned. */
 function LiveSessionNode({ client, node, children, transition }: { client: AppServerClient; node: SessionNode; transition?: SessionTransition; children: (node: SessionNode) => ReactNode }) {
   const tx = useTranslation();
@@ -173,22 +173,48 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
   const tasks = records.filter(row => row.binding.session_id === node.id && row.state === 'enabled').sort((a, b) => (a.next_due_utc ?? '').localeCompare(b.next_due_utc ?? ''));
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
-    const row=state.sessions.find(row=>row.id===node.id)??view?.summary;
-    const entry=row?.thread_status;
-    const available=state.connection==='connected'&&state.threadStatusSynchronized!==false&&entry!=null;
-    let runtimeStatus:SessionNode['runtimeStatus'];
-    if(available)switch(entry.status.type) {
-      case 'idle':runtimeStatus={state:'done',labels:[tx('workspace:status.idle')]};break;
-      case 'notLoaded':runtimeStatus={state:'done',labels:[tx('workspace:status.notLoaded')]};break;
-      case 'systemError':runtimeStatus={state:'error',labels:[tx('workspace:status.systemError')]};break;
-      case 'active':runtimeStatus={state:entry.status.activeFlags.length?'warning':'ongoing',labels:entry.status.activeFlags.length?entry.status.activeFlags.map(flag=>tx(flag==='waitingOnApproval'?'workspace:status.waitingApproval':'workspace:status.waitingAnswer')):[tx('workspace:status.running')]};break;
+    const row = state.sessions.find(row => row.id === node.id) ?? view?.summary;
+    const target = view?.target?.conversation_id ?? view?.nodeConversationId ?? row?.thread_id;
+    const entry = (view?.threadStatus && view.threadStatus.threadId === target ? view.threadStatus : undefined)
+      ?? (row?.thread_status && (!target || row.thread_status.threadId === target) ? row.thread_status : undefined);
+    const connected = state.connection === 'connected';
+    let runtimeStatus: SessionNode['runtimeStatus'];
+    if (connected && entry != null) switch (entry.status.type) {
+      case 'idle': runtimeStatus = { state: 'done', labels: [tx('workspace:status.idle')] }; break;
+      case 'notLoaded': runtimeStatus = { state: 'done', labels: [tx('workspace:status.notLoaded')] }; break;
+      case 'systemError': runtimeStatus = { state: 'error', labels: [tx('workspace:status.systemError')] }; break;
+      case 'active': runtimeStatus = { state: entry.status.activeFlags.length ? 'warning' : 'ongoing', labels: entry.status.activeFlags.length ? entry.status.activeFlags.map(flag => tx(flag === 'waitingOnApproval' ? 'workspace:status.waitingApproval' : 'workspace:status.waitingAnswer')) : [tx('workspace:status.running')] }; break;
     }
-    return { running:available&&entry.status.type==='active',
-      runtimeStatus,statusUnavailable:!available,
-      pendingInteraction:undefined,
+    return { connected, generation: state.generation, synchronized: state.threadStatusSynchronized !== false,
+      running: connected && entry?.status.type === 'active',
+      runtimeStatus,
       observation: sessionObservation(tx, state, node.id, transition) };
   }, sameValue);
-  return children({ ...node, ...activity,
+  const retained = useRef<{ client: AppServerClient; id: string; generation: number; running: boolean; runtimeStatus: NonNullable<SessionNode['runtimeStatus']> }>(undefined);
+  const [, refreshExpiredStatus] = useState(0);
+  useEffect(() => {
+    if (activity.connected && activity.runtimeStatus) {
+      retained.current = { client, id: node.id, generation: activity.generation, running: activity.running, runtimeStatus: activity.runtimeStatus };
+    }
+  }, [client, node.id, activity]);
+  const previous = retained.current;
+  const lastKnown = activity.connected && previous?.client === client && previous.id === node.id && previous.generation === activity.generation ? previous : undefined;
+  // A busy native metadata lock briefly withholds status even after a resync.
+  // Allow its recovery notification to arrive before showing a row warning.
+  const missing = activity.synchronized && !activity.runtimeStatus;
+  useEffect(() => {
+    if (!lastKnown || !missing) return;
+    const timer = window.setTimeout(() => {
+      if (retained.current !== lastKnown) return;
+      retained.current = undefined;
+      refreshExpiredStatus(n => n + 1);
+    }, UNAVAILABLE_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [lastKnown, missing]);
+  const runtimeStatus = activity.runtimeStatus ?? lastKnown?.runtimeStatus;
+  const running = activity.runtimeStatus ? activity.running : lastKnown?.running ?? false;
+  const statusUnavailable = !activity.connected || (activity.synchronized && !runtimeStatus);
+  return children({ ...node, running, runtimeStatus, statusUnavailable, pendingInteraction: undefined, observation: activity.observation,
     taskMark: tasks.length ? <span className={taskCss.clockMark} role="img" aria-label={taskCopy('header.count', { count: tasks.length })}><IconClockOutline16 size={14}/></span> : undefined,
     taskHover: tasks.length ? <section className={taskCss.hoverTasks}><strong>{taskCopy('title')}</strong>{tasks.slice(0, 2).map(task => <p key={task.id.conversation_id + ':' + task.id.ordinal}>{task.title}<small>{frequency(task.spec, taskCopy, locale)}</small>{task.next_due_utc && <small>{displayInstant(task.next_due_utc, locale).absolute}</small>}</p>)}{tasks.length > 2 && <p>{taskCopy('sidebar.more', { count: tasks.length - 2 })}</p>}</section> : undefined,
   });

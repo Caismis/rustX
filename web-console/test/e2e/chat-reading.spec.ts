@@ -49,12 +49,25 @@ for (const width of [1440, 390]) test(`opening Chat preserves history through it
     observer.observe(port, { childList: true, subtree: true });
     (window as any).stopOpeningObserver = () => observer.disconnect();
   });
+  const lastRow = port.locator('[data-chat-anchor-key]').last();
+  const rowTop = () => lastRow.evaluate(row => row.getBoundingClientRect().top);
+  await expect(port.locator('[data-composer-dock]')).toBeVisible();
+  // Finish the sidebar and viewport resize before measuring the cold handoff.
+  await page.evaluate(async () => {
+    await Promise.allSettled(document.getAnimations().filter(animation =>
+      animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished));
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+  const previewTop = await rowTop();
   await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   await expect.poll(() => page.evaluate(() => (window as any).startupFixture.observation('A').state)).toBe('checkpointLoading');
   await expect(first).toBeAttached();
+  await expect(port.locator('[data-composer-dock]')).toBeVisible();
+  expect(await rowTop()).toBe(previewTop);
   await page.evaluate(() => (window as any).startupFixture.release('session/checkpoint'));
   await expect.poll(() => page.evaluate(() => (window as any).startupFixture.observation('A').state)).toBe('following');
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(await rowTop()).toBe(previewTop);
   await expect(port.locator('[data-chat-anchor-key]')).toHaveCount(20);
   await expect(port).not.toHaveAttribute('data-history-removed', 'true');
   expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/transcript'))).toEqual([]);

@@ -20,9 +20,6 @@ export interface PreviewViewState {
   pdfScrollTop?: number;
   pdfScrollLeft?: number;
   workbookSheet?: number;
-  htmlMode?: 'rendered' | 'source';
-  htmlScrollTop?: number;
-  htmlScrollLeft?: number;
 }
 
 export interface PreviewViewStateProps {

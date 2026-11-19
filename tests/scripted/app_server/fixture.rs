@@ -329,7 +329,7 @@ impl Fixture {
         phases.enter("manager construction");
         let residency = owner.as_ref().map_or(
             RuntimeResidencyPolicy {
-                max_resident_runtimes: 8,
+                max_resident_runtimes: None,
                 idle_grace_ms: 300_000,
             },
             |(_, policy)| RuntimeResidencyPolicy {

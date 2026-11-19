@@ -1,91 +1,216 @@
-/* Copyright (c) 2026 DeepSeek. MIT. JobListAction grouping and header surface adapted to native Jobs; see PROVENANCE.md. */
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { createPortal } from 'react-dom';
-import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-jobs JobsSection.tsx; see PROVENANCE.md. */
+import { useEffect, useState } from 'react';
 import type { RuntimeClientJob, TraceRecord } from '../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
-import { JobStateDot } from './JobStateDot';
-import { IconChevronDownOutline14 } from '../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconChevronUpOutline14 } from '../../presentation/primitives/icons';
+import { HoverCardGroup } from '../../presentation/primitives/HoverCard';
 import { BackgroundJobItem } from './BackgroundJobItem';
-import { MenuSurface } from '../../presentation/primitives/MenuSurface';
+import { useJobsSessionStore, type JobGroup } from './jobs-store';
 import { jobActive } from './job-state';
+import { toggleElementId } from './session-panel-state';
 import css from './BackgroundJobs.module.css';
 
 const NO_JOBS: RuntimeClientJob[] = [];
-const FOCUSABLE = 'button:not(:disabled), summary, a[href], [tabindex="0"]';
+const FOLD_LIMIT = 5;
+const KILL_ARM_MS = 3000;
 
-/** Subscribe outside the transcript so reading and scrolling never hide Jobs. */
+/** Blue indicator dot on the Session panel toggle when jobs run while closed. */
+export function JobsRunningIndicator({ client, sessionId, panelShown }: {
+  client: AppServerClient;
+  sessionId: string;
+  panelShown: boolean;
+}) {
+  const tx = useTranslation();
+  const running = useClientSelector(
+    client,
+    state => (state.views[sessionId]?.snapshot?.jobs ?? NO_JOBS).filter(jobActive).length,
+  );
+  if (panelShown || running === 0) return null;
+  return (
+    <span className={css.runningIndicator} data-jobs-running="">
+      <span className={css.visuallyHidden}>
+        {tx('common:activity.jobs-running', { count: running })}
+      </span>
+    </span>
+  );
+}
+
+/** Background jobs section mounted inside SessionPanel while the panel shows. */
 export function BackgroundJobs({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const jobs = useClientSelector(client, state => state.views[sessionId]?.snapshot?.jobs) ?? NO_JOBS;
   const conversation = useClientSelector(client, state => state.views[sessionId]?.target?.conversation_id);
+  const generation = useClientSelector(client, state => state.generation);
   const records = useClientSelector(client, state => state.views[sessionId]?.snapshot?.trace.records);
-  return <BackgroundJobMenu key={`${sessionId}:${conversation}`} jobs={jobs} records={records} client={client} sessionId={sessionId}/>;
+  const storeKey = `${generation}:${sessionId}:${conversation ?? ''}`;
+  return <BackgroundJobsSection key={storeKey} jobs={jobs} records={records} client={client} sessionId={sessionId} storeKey={storeKey}/>;
 }
 
-/** Clearing acknowledges only the ended identities visible at that gesture. */
-export function BackgroundJobMenu({ jobs, records, client, sessionId }: { jobs: RuntimeClientJob[]; records?: readonly TraceRecord[]; client?: AppServerClient; sessionId?: string }) {
-  const tx = useTranslation(), id = useId();
-  const [open, setOpen] = useState(false), [endedOpen, setEndedOpen] = useState<boolean>();
-  const [expandedKey, setExpandedKey] = useState<string>(), [armedKey, setArmedKey] = useState<string>();
-  const [acceptedStop, setAcceptedStop] = useState<{ key: string; current: () => boolean }>();
-  const [cleared, setCleared] = useState<ReadonlySet<string>>(new Set());
+/** Ordered running + finished background jobs list with 5-row folds and session-persisted clear. */
+export function BackgroundJobsSection({ jobs, records, client, sessionId, storeKey }: {
+  jobs: readonly RuntimeClientJob[];
+  records?: readonly TraceRecord[];
+  client?: AppServerClient;
+  sessionId?: string;
+  storeKey?: string;
+}) {
+  const tx = useTranslation();
+  const [localEndedOpen, setLocalEndedOpen] = useState<boolean>();
+  const [localUnfolded, setLocalUnfolded] = useState<Record<JobGroup, boolean>>({ live: false, settled: false });
+  const [localCleared, setLocalCleared] = useState<ReadonlySet<string>>(new Set());
+  const [localAcceptedStop, setLocalAcceptedStop] = useState<{ key: string; current: () => boolean }>();
+  const store = useJobsSessionStore(client, storeKey);
+  const persisted = !!(client && storeKey);
+  const endedOpen = persisted ? store.state.settledOpen : localEndedOpen;
+  const unfolded = persisted ? store.state.unfolded : localUnfolded;
+  const cleared = persisted ? store.state.cleared : localCleared;
+  const acceptedStop = persisted ? store.state.acceptedStop : localAcceptedStop;
+
+  const setEndedOpen = (value: boolean) => { if (persisted) store.setSettledOpen(value); else setLocalEndedOpen(value); };
+  const setUnfolded = (group: JobGroup, value: boolean) => { if (persisted) store.setUnfolded(group, value); else setLocalUnfolded(prev => ({ ...prev, [group]: value })); };
+  const markCleared = (ids: readonly string[]) => {
+    if (persisted) store.clearSettled(ids);
+    else { setLocalCleared(prev => new Set([...prev, ...ids])); setLocalUnfolded(prev => ({ ...prev, settled: false })); }
+  };
+  const setAcceptedStop = (value: { key: string; current: () => boolean } | undefined) => {
+    if (persisted) store.setAcceptedStop(value);
+    else setLocalAcceptedStop(value);
+  };
+
+  const [expandedKey, setExpandedKey] = useState<string>();
+  const [armedKey, setArmedKey] = useState<string>();
   const [now, setNow] = useState(Date.now);
-  const keyboardEntry = useRef(false);
-  const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
-  const timings = useMemo(() => new Map(records?.filter(record => record.kind === 'background').map(record => [record.native_id, record.timing])), [records]);
+
+  const timings = new Map(records?.filter(record => record.kind === 'background').map(record => [record.native_id, record.timing]));
   const timing = (job: RuntimeClientJob) => timings.get(job.job_id);
   const ordered = [...jobs].sort((left, right) => {
     if (jobActive(left) !== jobActive(right)) return jobActive(left) ? -1 : 1;
     const a = timing(left), b = timing(right);
-    return jobActive(left) ? a && b ? Date.parse(a.started_at) - Date.parse(b.started_at) : 0
-      : a && b ? Date.parse(b.ended_at ?? b.started_at) - Date.parse(a.ended_at ?? a.started_at) : 0;
+    if (!a || !b) return 0;
+    if (jobActive(left)) return Date.parse(b.started_at) - Date.parse(a.started_at);
+    const finished = Date.parse(b.ended_at ?? b.started_at) - Date.parse(a.ended_at ?? a.started_at);
+    return finished !== 0 ? finished : Date.parse(a.started_at) - Date.parse(b.started_at);
   });
-  const live = ordered.filter(jobActive), ended = ordered.filter(job => !jobActive(job) && !cleared.has(job.job_id));
+
+  const live = ordered.filter(jobActive);
+  const ended = ordered.filter(job => !jobActive(job) && !cleared.has(job.job_id));
   const endedExpanded = endedOpen ?? live.length === 0;
+  const liveFoldable = live.length > FOLD_LIMIT + 1;
+  const shownLive = liveFoldable && !unfolded.live ? live.slice(0, FOLD_LIMIT) : live;
+  const endedFoldable = ended.length > FOLD_LIMIT + 1;
+  const openEnded = endedExpanded ? ended : NO_JOBS;
+  const shownEnded = endedFoldable && !unfolded.settled ? openEnded.slice(0, FOLD_LIMIT) : openEnded;
   const visible = live.length + ended.length > 0;
-  const ticking = open && live.some(job => timings.has(job.job_id));
-  useEffect(() => { if (!ticking) return; setNow(Date.now()); const clock = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(clock); }, [ticking]);
-  const { refs, floatingStyles, isPositioned } = useFloating({ open: open && visible, placement: 'bottom-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
-    middleware: [offset(5), flip({ padding: 16 }), shift({ padding: 16 }), size({ padding: 16, apply: ({ availableHeight, elements }) => { elements.floating.style.maxHeight = `${Math.max(0, Math.min(480, availableHeight))}px`; } })] });
-  const close = (restore = false) => { setOpen(false); setArmedKey(undefined); if (restore) trigger.current?.focus({ preventScroll: true }); };
-  const controls = () => [...(panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter(element => !element.closest('[hidden]'));
-  useEffect(() => { if (!armedKey) return; const timer = setTimeout(() => setArmedKey(undefined), 3000); return () => clearTimeout(timer); }, [armedKey]);
-  useEffect(() => { if (!jobs.some(job => job.job_id === armedKey && (job.state === 'running' || job.state === 'starting'))) setArmedKey(undefined); }, [jobs, armedKey]);
-  useLayoutEffect(() => { if (open && isPositioned && keyboardEntry.current) { controls()[0]?.focus({ preventScroll: true }); keyboardEntry.current = false; } }, [open, isPositioned]);
+  const ticking = live.some(job => timings.has(job.job_id));
+
   useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => { if (event.target instanceof Node && !trigger.current?.contains(event.target) && !panel.current?.contains(event.target)) close(); };
-    document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
-  }, [open]);
-  useEffect(() => { if (!visible) setOpen(false); }, [visible]);
-  const navigate = (event: KeyboardEvent) => {
-    if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
-    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); return; }
-    const rows = controls(), index = rows.indexOf(document.activeElement as HTMLElement);
-    if (event.key === 'Tab' && (event.shiftKey ? index === 0 : index === rows.length - 1)) {
-      if (event.shiftKey) event.preventDefault();
-      trigger.current?.focus({ preventScroll: true });
+    if (!ticking) return;
+    setNow(Date.now());
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(clock);
+  }, [ticking]);
+
+  useEffect(() => {
+    if (!armedKey) return;
+    const timer = setTimeout(() => setArmedKey(undefined), KILL_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [armedKey]);
+
+  useEffect(() => {
+    if (!jobs.some(job => job.job_id === armedKey && (job.state === 'running' || job.state === 'starting'))) {
+      setArmedKey(undefined);
     }
-  };
+  }, [jobs, armedKey]);
+
+  useEffect(() => {
+    if (expandedKey && !ordered.some(job => job.job_id === expandedKey)) setExpandedKey(undefined);
+  }, [ordered, expandedKey]);
+
   if (!visible) return null;
-  const item = (job: RuntimeClientJob) => <BackgroundJobItem key={job.job_id} job={job} timing={timing(job)} now={now} expanded={expandedKey === job.job_id} onToggle={() => setExpandedKey(current => current === job.job_id ? undefined : job.job_id)} armed={armedKey === job.job_id} onArm={() => setArmedKey(current => current === job.job_id ? undefined : job.job_id)} stopping={acceptedStop?.key === job.job_id && acceptedStop.current()} onStopped={current => setAcceptedStop({ key: job.job_id, current })} client={client} sessionId={sessionId}/>;
-  return <>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} type="button" className={css.trigger} aria-label={tx('common:activity.background-jobs')} aria-haspopup="dialog" aria-controls={open ? id : undefined} aria-expanded={open} onClick={() => { setNow(Date.now()); setOpen(value => !value); setArmedKey(undefined); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); keyboardEntry.current = true; if (open) controls()[0]?.focus({ preventScroll: true }); else setOpen(true); } else if (open && event.key === 'Tab' && !event.shiftKey) { event.preventDefault(); controls()[0]?.focus({ preventScroll: true }); } else if (open && event.key === 'Escape') { event.preventDefault(); close(true); } }}>
-      {live.length > 0 && <JobStateDot state="ongoing"/>}<span className={css.count}>{tx(live.length ? 'common:activity.jobs-running' : 'common:activity.jobs-count', { count: live.length || ended.length })}</span><IconChevronDownOutline14 size={12} className={open ? css.triggerOpen : undefined}/>
-    </button>
-    {open && createPortal(<MenuSurface id={id} role="dialog" aria-label={tx('common:activity.background-jobs')} ref={element => { panel.current = element; refs.setFloating(element); }} className={css.menu} style={{ ...floatingStyles, visibility: isPositioned ? undefined : 'hidden' }} onKeyDown={navigate}>
-      <ul className={css.menuBody}>
-        {live.length > 0 && <li className={css.sectionHeader}>{tx('common:activity.jobs-active')}</li>}
-        {live.map(item)}
-        {ended.length > 0 && <li className={css.sectionHeader}>
-          <button type="button" className={css.sectionToggle} aria-expanded={endedExpanded} onClick={() => setEndedOpen(!endedExpanded)}><IconChevronDownOutline14 size={12} className={endedExpanded ? `${css.sectionChevron} ${css.sectionChevronOpen}` : css.sectionChevron}/>{tx('common:activity.jobs-ended', { count: ended.length })}</button>
-          <button type="button" className={css.sectionClear} aria-label={tx('common:activity.clear-ended-jobs')} onClick={() => { setCleared(previous => new Set([...previous, ...ended.map(job => job.job_id)])); if (ended.some(job => job.job_id === expandedKey)) setExpandedKey(undefined); if (!live.length) { close(); [...trigger.current?.closest('header')?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []].find(element => element !== trigger.current)?.focus({ preventScroll: true }); } else trigger.current?.focus({ preventScroll: true }); }}>{tx('common:activity.clear-jobs')}</button>
-        </li>}
-        {endedExpanded && ended.map(item)}
+
+  const item = (job: RuntimeClientJob) => (
+    <BackgroundJobItem
+      key={job.job_id}
+      job={job}
+      timing={timing(job)}
+      now={now}
+      expanded={expandedKey === job.job_id}
+      onToggle={() => setExpandedKey(current => current === job.job_id ? undefined : job.job_id)}
+      armed={armedKey === job.job_id}
+      onArm={() => setArmedKey(current => current === job.job_id ? undefined : job.job_id)}
+      stopping={acceptedStop?.key === job.job_id && acceptedStop.current()}
+      onStopped={current => setAcceptedStop({ key: job.job_id, current })}
+      client={client}
+      sessionId={sessionId}
+    />
+  );
+
+  const fold = (group: JobGroup, hidden: number) => {
+    const expanded = unfolded[group];
+    const label = expanded
+      ? tx('common:activity.jobs-fold-less')
+      : tx(group === 'live' ? 'common:activity.jobs-live-more' : 'common:activity.jobs-ended-more', { count: hidden });
+    const name = tx(group === 'live' ? 'common:activity.jobs-live-fold-name' : 'common:activity.jobs-ended-fold-name', { label });
+    return (
+      <li key={`fold-${group}`} className={css.item}>
+        <div data-session-panel-row="fold">
+          <button
+            type="button"
+            data-fold=""
+            data-row-part="body"
+            aria-expanded={expanded}
+            aria-label={name}
+            onClick={() => setUnfolded(group, !expanded)}
+          >
+            <span data-row-part="icon" aria-hidden="true">
+              {expanded ? <IconChevronUpOutline14 size={14}/> : <IconChevronDownOutline14 size={14}/>}
+            </span>
+            <span data-row-part="content">{label}</span>
+          </button>
+        </div>
+      </li>
+    );
+  };
+
+  return (
+    <HoverCardGroup>
+      <ul className={css.list} data-jobs-section="" aria-label={tx('common:activity.background-jobs')}>
+        {shownLive.map(item)}
+        {liveFoldable && fold('live', live.length - FOLD_LIMIT)}
+        {ended.length > 0 && (
+          <li className={css.sectionHeader}>
+            <button
+              type="button"
+              className={css.sectionToggle}
+              aria-expanded={endedExpanded}
+              onClick={() => setEndedOpen(!endedExpanded)}
+            >
+              {tx('common:activity.jobs-ended', { count: ended.length })}
+              <IconChevronDownOutline14
+                size={14}
+                className={endedExpanded ? `${css.sectionChevron} ${css.sectionChevronOpen}` : css.sectionChevron}
+              />
+            </button>
+            <button
+              type="button"
+              className={css.sectionClear}
+              aria-label={tx('common:activity.clear-ended-jobs')}
+              onClick={() => {
+                markCleared(ended.map(job => job.job_id));
+                if (ended.some(job => job.job_id === expandedKey)) setExpandedKey(undefined);
+                if (!live.length && sessionId) {
+                  document.getElementById(toggleElementId(sessionId))?.focus({ preventScroll: true });
+                }
+              }}
+            >
+              {tx('common:activity.clear-jobs')}
+            </button>
+          </li>
+        )}
+        {shownEnded.map(item)}
+        {endedExpanded && endedFoldable && fold('settled', ended.length - FOLD_LIMIT)}
       </ul>
-    </MenuSurface>, document.body)}
-  </>;
+    </HoverCardGroup>
+  );
 }

@@ -384,7 +384,7 @@ impl Drop for RuntimeResidencyPin {
 /// The manager receives only residency policy, resolved by its composer.
 #[derive(Clone, Debug)]
 pub struct RuntimeResidencyPolicy {
-    pub max_resident_runtimes: usize,
+    pub max_resident_runtimes: Option<usize>,
     pub idle_grace_ms: u64,
 }
 
@@ -562,7 +562,9 @@ impl RegistryState {
         *count = count.saturating_add(1);
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
-        if self.by_session.len() + self.pending_creations >= self.policy.max_resident_runtimes {
+        if let Some(limit) = self.policy.max_resident_runtimes
+            && self.by_session.len() + self.pending_creations >= limit
+        {
             self.refuse("residency_capacity");
             return Err(RuntimeManagerError::ResidencyCapacity);
         }
@@ -797,7 +799,7 @@ impl SessionRuntimeManager {
         dependencies: LocalRuntimeDependencies,
         policy: RuntimeResidencyPolicy,
     ) -> Result<Self, RuntimeManagerError> {
-        if policy.max_resident_runtimes == 0 || policy.idle_grace_ms == 0 {
+        if policy.max_resident_runtimes == Some(0) || policy.idle_grace_ms == 0 {
             return Err(error("residency limits must be positive"));
         }
         sessions.runtime_owner.set(()).map_err(|()| {

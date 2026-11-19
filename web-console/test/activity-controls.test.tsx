@@ -52,7 +52,7 @@ it('intent receipts leave Agent and Job execution unchanged until their complete
   expect(row?.getAttribute('data-agent-state')).toBe('inactive');
   expect(within(document.getElementById('subagent-header-actions')!).getByRole('status').textContent).toBe('cancelled');
   expect(ui.queryByRole('button', { name: /^Stop task / })).toBeNull();
-  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Show output of Build' })));
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Show live output of Build' })));
   expect(ui.getByText('Process settled')).toBeTruthy();
   expect(server.requests.filter(({ request }) => request.method === 'agent/interrupt')).toHaveLength(1);
   expect(server.requests.filter(({ request }) => request.method === 'job/cancel')).toHaveLength(1);

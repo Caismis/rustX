@@ -67,6 +67,8 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   settings?: SessionPersistentState;
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
   submissions?: readonly Submission[];
+  /** Local sending rows retire when the transport settles. */
+  sendingSubmissions?: readonly Submission[];
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
@@ -75,14 +77,15 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
 }
-/** Exists only after `inbound_accepted` names the server MessageId, which is its
- * sole identity; settles when an authoritative snapshot contains that MessageId. */
+/** A local presentation of one input, before or after acknowledgement. */
 export interface Submission {
+  /** A presentation key before acceptance, otherwise the native MessageId. */
   messageId: string;
+  sendingInputId?: string;
   /** Local preview when known; read repair can prove identity without a body. */
   content?: readonly UserInputBlock[];
-  /** Observed activity at dispatch, solely for provisional placement. */
-  submittedWhileRunning: boolean;
+  /** Presentation only; native observations own durable placement. */
+  placement: 'transcript' | 'queued' | 'steering';
 }
 /** Settled local outcome of one CAS-bound native Goal control. A known outcome is
  * not projection convergence: `observed` reports whether an authoritative snapshot

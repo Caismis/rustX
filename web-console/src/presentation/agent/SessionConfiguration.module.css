@@ -81,8 +81,3 @@
   border-left: 3px solid var(--dsw-alias-state-error-primary);
   overflow-wrap: anywhere;
 }
-
-/* Reduced motion: "preparing" is still written out; the dot stops chasing. */
-@media (prefers-reduced-motion: reduce) {
-  .dot rect { animation: none; opacity: 0.6; }
-}

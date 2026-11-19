@@ -113,6 +113,8 @@ pub struct InboundItem {
     sequence: InboundSequence,
     message: UserMessageBlock,
     transcript_cursor: Option<TranscriptCursor>,
+    /// Public app-server input id, already projected from durable correlation.
+    input_id: Option<String>,
 }
 
 impl InboundItem {
@@ -125,13 +127,21 @@ impl InboundItem {
         revision: u64,
         sequence: u64,
         message: UserMessageBlock,
+        input_id: Option<String>,
     ) -> Self {
         Self {
             revision,
             sequence: InboundSequence::new(sequence),
             message,
             transcript_cursor: None,
+            input_id,
         }
+    }
+
+    /// Original public app-server input id, when this row carried one.
+    #[must_use]
+    pub(crate) fn input_id(&self) -> Option<&str> {
+        self.input_id.as_deref()
     }
 
     /// The durable inbound sequence of the item.
@@ -146,7 +156,7 @@ impl InboundItem {
         &self.message
     }
 
-    /// The durable transcript position allocated at acceptance, when this
+    /// The durable transcript position allocated on adoption, when this
     /// item is visible in the ordinary transcript.
     #[must_use]
     pub fn transcript_cursor(&self) -> Option<TranscriptCursor> {
@@ -160,12 +170,21 @@ impl InboundItem {
     }
 }
 
+fn inbound_from_pending(item: crate::durable::PendingInboundItem) -> InboundItem {
+    InboundItem {
+        revision: item.revision,
+        sequence: item.sequence,
+        message: item.message,
+        transcript_cursor: item.transcript_cursor,
+        input_id: crate::durable::observation::app_server_input_id(item.correlation.as_deref()),
+    }
+}
+
 /// One finite watermark-bounded pending batch.
 ///
 /// A batch is non-empty, belongs to exactly one [`ConversationId`], contains
-/// items in strictly increasing [`InboundSequence`] order, and its watermark
-/// equals the sequence of the final/highest selected item; no item sequence
-/// exceeds the watermark. One pending item still produces a one-item batch,
+/// items in model delivery order, and its watermark equals the highest selected
+/// acceptance sequence. One pending item still produces a one-item batch,
 /// and every item remains a separate canonical `UserMessageBlock`. An empty
 /// inbox produces `None`, never an empty batch.
 #[derive(Debug, Clone, PartialEq)]
@@ -188,7 +207,7 @@ impl InboundBatch {
         self.watermark
     }
 
-    /// The batch items in strictly increasing inbound sequence order.
+    /// The batch items in model delivery order.
     #[must_use]
     pub fn items(&self) -> &[InboundItem] {
         &self.items
@@ -686,12 +705,7 @@ impl ConversationInboundMailbox {
             .inbound
             .load_pending()?
             .into_iter()
-            .map(|item| InboundItem {
-                revision: item.revision,
-                sequence: item.sequence,
-                message: item.message,
-                transcript_cursor: item.transcript_cursor,
-            })
+            .map(inbound_from_pending)
             .collect();
         {
             let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
@@ -1193,16 +1207,7 @@ impl ConversationInboundMailbox {
         Ok(Some(InboundBatch {
             conversation_id: self.conversation_id.clone(),
             watermark: batch.watermark,
-            items: batch
-                .items
-                .into_iter()
-                .map(|item| InboundItem {
-                    revision: item.revision,
-                    sequence: item.sequence,
-                    message: item.message,
-                    transcript_cursor: item.transcript_cursor,
-                })
-                .collect(),
+            items: batch.items.into_iter().map(inbound_from_pending).collect(),
         }))
     }
 
@@ -1213,10 +1218,10 @@ impl ConversationInboundMailbox {
         batch
             .items
             .retain(|item| item.message.kind != InboundKind::QueuedMessage);
-        let Some(last) = batch.items.last() else {
+        let Some(watermark) = batch.items.iter().map(InboundItem::sequence).max() else {
             return Ok(None);
         };
-        batch.watermark = last.sequence;
+        batch.watermark = watermark;
         Ok(Some(batch))
     }
 
@@ -1293,12 +1298,7 @@ impl ConversationInboundMailbox {
             .inbound
             .load_pending()?
             .into_iter()
-            .map(|item| InboundItem {
-                revision: item.revision,
-                sequence: item.sequence,
-                message: item.message,
-                transcript_cursor: item.transcript_cursor,
-            })
+            .map(inbound_from_pending)
             .collect();
         Ok(Some(read(items)))
     }
@@ -1318,6 +1318,13 @@ impl ConversationInboundMailbox {
         expected: &crate::durable::PendingInboundRef,
     ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.pending_mutation(|| self.inbound.remove_pending(expected))
+    }
+    /// Promotes queued input while retaining message IDs and acceptance sequences.
+    pub(crate) fn steer_pending(
+        &self,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
+        self.pending_mutation(|| self.inbound.steer_pending(scope))
     }
     fn pending_mutation(
         &self,
@@ -1392,12 +1399,7 @@ impl PendingPublication<'_> {
         let items: Vec<_> = adopted
             .items
             .into_iter()
-            .map(|item| InboundItem {
-                revision: item.revision,
-                sequence: item.sequence,
-                message: item.message,
-                transcript_cursor: item.transcript_cursor,
-            })
+            .map(inbound_from_pending)
             .collect();
         if !items.is_empty() {
             let state = self
@@ -1426,7 +1428,7 @@ impl PendingPublication<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdoptedInbound {
     pub canonical_receipts: Vec<crate::durable::TranscriptCommitReceipt>,
-    /// The adopted items, in strict sequence order.
+    /// The adopted items, in canonical delivery order.
     pub items: Vec<InboundItem>,
     /// The committed adoption fact, present exactly when `items` is non-empty.
     pub adoption: Option<crate::events::types::RuntimeEventEnvelope>,

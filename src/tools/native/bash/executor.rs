@@ -426,16 +426,13 @@ async fn run_bash(
         }
     };
     let command = input.command.as_str();
-    // The executor-local deadline exists only when the model explicitly
-    // requested one as tool business input. There is no implicit
-    // executor-owned default in either mode: the generic Agent Loop
-    // execution-liveness lifecycle owns the hard deadline of every admitted
-    // foreground call (Issue #204), and background executions are
-    // conversation-owned and unbounded unless the model bounds them. When
-    // the generic deadline wins, it cancels this executor through the
-    // context's cancellation view and this executor proves physical
-    // settlement (process-group kill, wait, reap) exactly as for any other
-    // cancellation.
+    // The executor-local kill deadline exists only when the caller passes one.
+    // The Agent Loop does not pass the model timeout here: that value is the
+    // foreground promotion budget (120 seconds by default, explicit timeout
+    // overrides it, capped at 600 seconds). A refused background admission
+    // falls back to this kill. Background executions are conversation-owned
+    // and unbounded. When cancellation or an executor kill wins, this executor
+    // proves physical settlement (process-group kill, wait, reap).
     let timeout = input.explicit_timeout();
 
     #[cfg(not(unix))]

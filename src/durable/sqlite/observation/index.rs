@@ -815,18 +815,51 @@ pub(in crate::durable::sqlite) fn index_blocks(
     Ok(())
 }
 
+/// Revision-tagged pending header stored in `pending_inbound.observation_header`.
+/// Binds the derived display header to the exact native pending revision so a
+/// stale header can never be served if a later native revision update cannot
+/// overwrite or clear `observation_header`.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(in crate::durable::sqlite) struct StoredPendingHeader {
+    pub(in crate::durable::sqlite) revision: u64,
+    pub(in crate::durable::sqlite) message: MessageHeader,
+}
+
 /// Same native pending transaction stores a finite read header ahead of the original body.
 pub(in crate::durable::sqlite) fn index_pending_header(
     connection: &Connection,
     sequence: u64,
+    revision: u64,
     id: &crate::runtime::identity::MessageId,
     transcript: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes: Vec<u8> = connection
+        .query_row_cached(
+            "SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("pending source header exceeds bound"));
     }
-    connection.execute_cached("UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",params![bytes,transcript,sequence]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let message: MessageHeader =
+        serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+    let mut stored = StoredPendingHeader { revision, message };
+    let encoded = if let Some(encoded) = bounded_bytes(&stored, HEADER_ENCODED_MAX) {
+        encoded
+    } else {
+        stored.message.deferred = true;
+        stored.message.display = None;
+        bounded_bytes(&stored, HEADER_ENCODED_MAX)
+            .ok_or_else(|| storage("pending source header exceeds bound"))?
+    };
+    connection
+        .execute_cached(
+            "UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",
+            params![encoded, transcript, sequence],
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 

@@ -1,14 +1,14 @@
 import {traceRefreshed} from './fixture';
-import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v80';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution,SessionMessageVersion} from '../../protocol/app-server/v80';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {readTraceCollection} from '../src/client/trace-content';
 import {traceTool} from './trace-fixture';
 import {checkpoint,Server,snapshot} from './fixture';
 import {AgentTraceReader} from '../src/client/agent-trace';
 import {bindTraceDetailReader,type TraceDetailEntry,type TraceFieldReader} from '../src/client/trace';
-import { messageSource } from '../../protocol/app-server/content-identity';
+import { canonicalLocatorKey, messageSource } from '../../protocol/app-server/content-identity';
 const servers:Server[]=[];
 afterEach(()=>{cleanup();servers.splice(0).forEach(server=>server.client.disconnect());});
 const cut=()=>({...checkpoint(snapshot()).read_cut,revision:'9',through:'300'});
@@ -40,6 +40,27 @@ it('message continuation keeps native ordinals and displays the complete batch w
  const original=cut(),reader=direct(original);render(<TrajectoryInspector {...props(record())} detailPage={head(original)} detailReader={reader.reader}/>);
  await screen.findByText('ORIGINAL_PREVIEW_18');expect(screen.getByText('ORIGINAL_PREVIEW_0')).toBeTruthy();expect(screen.queryByRole('combobox')).toBeNull();
  expect(reader.page.mock.calls.map(args=>args.slice(0,3))).toEqual([[original,'trace.records.295.detail.messages',8],[original,'trace.records.295.detail.messages',16]]);
+});
+it.each([true, false])('switches an adopted input outside the first trace page (inline ID: %s)', async inlineId => {
+  const original = cut(), reader = direct(original);
+  const native = { ...record(), message_id: 'message-0' };
+  const version = (index: number): SessionMessageVersion => ({
+    node_id: 'current', conversation_id: original.conversation_id, boundary: row(index).locator,
+    message_id: index === 0 || inlineId ? row(index).identity : undefined, surface_revision: '20',
+  });
+  const next = { ...version(18), node_id: 'edited', conversation_id: 'edited-conversation' };
+  const switchVersion = vi.fn();
+  const versions = new Map([0, 18].map(index => {
+    const current = version(index);
+    return [canonicalLocatorKey(current.boundary), { current, current_index: 0, total: 2, next }];
+  }));
+  render(<TrajectoryInspector {...props(native)} facet="overview" detailPage={head(original)} detailReader={reader.reader}
+    messageHistory={{ switchVersion, versions }} />);
+  const item = await screen.findByRole('listitem');
+  expect(within(item).getByText('ORIGINAL_PREVIEW_18')).toBeTruthy();
+  expect(within(item).getByRole('status').textContent).toBe('1/2');
+  fireEvent.click(within(item).getByRole('button', { name: 'Switch to next message version' }));
+  expect(switchVersion).toHaveBeenCalledExactlyOnceWith(next);
 });
 it.each(['cursor','cut','offset','total','empty'] as const)('rejects changed %s on a native message continuation',async fault=>{
  const original=cut(),reader=direct(original),response=messagePage(original,8);

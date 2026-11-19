@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { PreviewViewState, PreviewViewStateProps } from '../src/presentation/right-panel/preview-view-state';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
-import { HtmlPreview } from '../src/app/components/documents/HtmlPreview';
+import { BasicHtmlFrame } from '../src/app/components/workbench-documents/html/HtmlBody';
 import { SpreadsheetPreview } from '../src/app/components/documents/SpreadsheetPreview';
 
 type RenderRecord = { number: number; zoom: number; canvas: HTMLCanvasElement; layer: HTMLDivElement; signal: AbortSignal; resolve: () => void };
@@ -57,19 +57,12 @@ it.each(['text', 'markdown', 'image'] as const)('%s retains bounded scroll metad
   if (kind === 'text') expect(view.getByRole('button', { name: 'Wrap lines' }).getAttribute('aria-pressed')).toBe('false');
 });
 
-it('HTML preserves source mode and source scroll without relaxing opaque sandbox isolation', () => {
-  const bytes = new TextEncoder().encode('<h1>Visible text</h1><script>window.bad=true</script>');
-  const content = (props: PreviewViewStateProps) => <HtmlPreview bytes={bytes} {...props}/>;
-  const view = render(<Retained>{content}</Retained>);
-  expect(view.getByTitle('Isolated HTML preview').getAttribute('sandbox')).toBe('');
-  fireEvent.click(view.getByRole('button', { name: 'Source' }));
-  scroll(view.container.querySelector('[data-preview-scroll="html"]')!, 240, 12);
-  view.rerender(<Retained visible={false}>{content}</Retained>);
-  view.rerender(<Retained>{content}</Retained>);
-  expect(view.getByRole('button', { name: 'Source' }).getAttribute('aria-pressed')).toBe('true');
-  expect(view.container.querySelector('iframe')).toBeNull();
-  expect(view.container.querySelector('[data-preview-scroll="html"]')!.scrollTop).toBe(240);
-  expect(view.container.querySelector('script')).toBeNull();
+it('static HTML preserves document styling inside the same sandbox as workspace files', () => {
+  const data = new TextEncoder().encode('<style>h1{color:red}</style><h1>Hello</h1>');
+  const view = render(<BasicHtmlFrame data={data}/>);
+  const frame = view.getByTitle('HTML');
+  expect(frame.getAttribute('sandbox')).toBe('');
+  expect(frame.getAttribute('srcdoc')).toContain('h1{color:red}');
 });
 
 const spreadsheet = vi.hoisted(() => ({ sheets: [{ id: 'a', name: 'First', status: 1, celldata: [] }, { id: 'b', name: 'Second', status: 0, celldata: [] }] }));

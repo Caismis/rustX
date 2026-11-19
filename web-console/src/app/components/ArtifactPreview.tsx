@@ -10,10 +10,8 @@ import { viewersForArtifact, loadsBytes } from './workbench-documents/definition
 import { ImagePreview } from './documents/ImagePreview';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { languageForPath } from '../../presentation/primitives/file-language';
-import { Menu } from '../../presentation/primitives/Menu';
-import { MarkdownText } from '../../presentation/markdown/MarkdownText';
-import { splitFrontmatter } from './workbench-documents/frontmatter';
-import { FrontmatterFields } from './workbench-documents/frontmatter-fields';
+import { ViewerMenu } from './workbench-documents/ViewerMenu';
+import { MarkdownBody } from './workbench-documents/MarkdownBody';
 import { documentFailure } from './documents/errors';
 import { GeometryDocument, preloadGeometry } from './documents/GeometryDocument';
 import { GeometryLoading } from './documents/GeometryLoading';
@@ -21,14 +19,14 @@ export interface PreviewArtifact { source: PreviewSource; name: string; image: b
 export interface PreviewIntents { openPreview: (artifact: PreviewArtifact) => void; download: (artifact: PreviewArtifact) => void }
 export const PreviewContext = createContext<PreviewIntents | undefined>(undefined);
 export function ArtifactPreview({ artifact, resources, viewState, onViewStateChange, onDownload, visible = true }: PreviewViewStateProps & { visible?: boolean; artifact: PreviewArtifact; resources: FilePreviewLease; onDownload: () => void }) {
-  const tx = useTranslation(), [menu, setMenu] = useState(false);
+  const tx = useTranslation();
   // Managed display names can be opaque IDs or alt text. Preserve their typed
   // media semantics; filesystem deliveries still use the suffix policy.
   const managed = artifact.source.kind === 'artifact', mime = managed ? artifact.mimeType?.split(';')[0].trim().toLowerCase() : undefined;
   const typedMarkdown = mime === 'text/markdown';
   const choices = viewersForArtifact(artifact);
   const mode = viewState.viewer && choices.includes(viewState.viewer) ? viewState.viewer : choices[0];
-  const kind = loadsBytes(mode) || mode === 'office' ? documentKind(artifact.name) : undefined;
+  const kind = mode === 'html' ? 'html' : loadsBytes(mode) || mode === 'office' ? documentKind(artifact.name) : undefined;
   const office = mode === 'office' && (kind === 'docx' || kind === 'pptx');
   const paged = mode !== undefined && !loadsBytes(mode) && !office;
   const owner = resources.content!, content = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
@@ -54,8 +52,8 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
   const failure = content.error === undefined ? undefined : documentFailure(content.error);
   const error = failure === undefined ? image.error : tx(`artifacts:document.${failure}`);
   return <Preview name={artifact.name} path={artifact.source.kind === 'session_file' ? artifact.source.file.path : artifact.name} image={false} markdown={mode === 'markdown'}
-    viewers={choices.length > 1 && <Menu open={menu} onClose={() => setMenu(false)} autoFocus selectedId={mode} items={choices.map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { saveViewState({ viewer: id as typeof mode }); setMenu(false); }} anchor={<button type="button" aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}
-    renderText={mode === 'code' ? text => <CodeBlock code={text} lang={typedMarkdown ? 'markdown' : languageForPath(artifact.name)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')}/> : mode === 'markdown' ? text => { const split = splitFrontmatter(text); return <div>{split && <FrontmatterFields source={split.source} fallback={<pre>{split.source}</pre>}/>}<MarkdownText text={split?.body ?? text} streaming={content.page !== undefined && !content.page.eof}/></div>; } : undefined}
+    viewers={<ViewerMenu choices={choices} mode={mode} select={viewer => saveViewState({ viewer })}/>}
+    renderText={mode === 'code' ? text => <CodeBlock code={text} lang={typedMarkdown ? 'markdown' : mime === 'text/html' ? 'html' : languageForPath(artifact.name)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')}/> : mode === 'markdown' ? text => <MarkdownBody text={text} streaming={content.page !== undefined && !content.page.eof}/> : undefined}
     text={paged ? content.text : undefined} error={error} retryable={!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure ?? '') && !(failure === 'too_large' && content.text === undefined)} loading={initialLoading} loadingLabel={mode === 'geometry' ? <GeometryLoading stage="reading"/> : undefined}
     notice={mode !== 'geometry' && !owner.automaticRefresh ? tx('artifacts:document.manual-refresh') : undefined}
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}

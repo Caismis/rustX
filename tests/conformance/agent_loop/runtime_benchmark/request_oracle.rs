@@ -48,7 +48,8 @@ const FULL_ACCESS_PERMISSION_REMINDER: &str = "Execution permission mode: full_a
 Defaults are allowed without Auxiliary or ordinary human review. Effective explicit deny and ask resource settings still apply.";
 
 const EXPECTED_TOOL_NAMES: [&str; 7] = ["read", "write", "edit", "glob", "grep", "bash", "todo"];
-const ARGUMENTS_DESCRIPTION_SUFFIX: &str = "Pass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.";
+const ARGUMENTS_DESCRIPTION_SUFFIX: &str =
+    "Pass business tool inputs inside the required arguments object.";
 const EXECUTION_MODE_REMINDER_SUFFIX: &str = "Execution ownership: every call to this tool must include the top-level \"execution_mode\" field, set to \"foreground\" when the agent needs this call's terminal result before it can continue, or \"background\" when the work should keep running independently while the agent proceeds.";
 
 pub(super) fn expected_replay_binding(provider: &str, endpoint: &str) -> String {
@@ -128,9 +129,10 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             properties["arguments"]["type"], "object",
             "tool {name} must inline the business object inside arguments"
         );
-        assert!(
+        assert_eq!(
             properties.contains_key("elevation_reason"),
-            "tool {name} must expose elevation_reason"
+            matches!(name, "write" | "edit" | "bash"),
+            "tool {name} elevation metadata"
         );
 
         let required = parameters
@@ -153,7 +155,7 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             );
         } else {
             assert!(
-                description.ends_with(ARGUMENTS_DESCRIPTION_SUFFIX),
+                !description.contains(EXECUTION_MODE_REMINDER_SUFFIX),
                 "tool {name} must not append model-selectable execution_mode reminder"
             );
             assert!(

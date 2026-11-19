@@ -35,9 +35,16 @@ export function recordedToolDetails(toolId: string | null | undefined, content: 
     const snapshot = object(blocks[1].value);
     if (!Array.isArray(snapshot?.tasks)) return;
     const items: ToolDetailsModel['items'][number][] = [];
+    let completed = 0, total = 0, active = 0, activeLabel = '';
     for (const entry of snapshot.tasks) {
       const task = object(entry);
       if (!task || !count(task.id) || typeof task.subject !== 'string' || !['pending', 'in_progress', 'completed', 'deleted'].includes(String(task.status))) return;
+      if (task.status !== 'deleted') total++;
+      if (task.status === 'completed') completed++;
+      if (task.status === 'in_progress') {
+        if (active === 0) activeLabel = (typeof task.active_form === 'string' && task.active_form.trim() ? task.active_form : task.subject).trim();
+        active++;
+      }
       items.push({ title: task.subject, subtitle: `#${task.id}`,
         status: { value: task.status as 'pending' | 'in_progress' | 'completed' | 'deleted', label: tx(task.status === 'pending' ? 'tools:detail.todo-pending' : task.status === 'in_progress' ? 'tools:detail.todo-progress' : task.status === 'completed' ? 'tools:detail.todo-complete' : 'tools:detail.todo-deleted') },
         description: typeof task.description === 'string' ? task.description : undefined,
@@ -47,6 +54,9 @@ export function recordedToolDetails(toolId: string | null | undefined, content: 
         ],
       });
     }
-    return { items, summary: blocks[0].text, empty: tx('tools:detail.todo-empty') };
+    const progress = tx('tools:todo.completed', { done: completed, total });
+    return { items, summary: activeLabel ? `${progress} · ${activeLabel}` : progress,
+      summarySuffix: activeLabel && active > 1 ? `+${active - 1}` : undefined,
+      caption: blocks[0].text, empty: tx('tools:detail.todo-empty') };
   }
 }

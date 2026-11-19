@@ -432,6 +432,76 @@ fn scheduler85_missing_native_proof_stays_blocked_until_the_actual_owner_settles
     );
 }
 #[test]
+fn scheduled_recovery_uses_one_snapshot_across_concurrent_return_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let current = fixture(
+        root.path(),
+        &Inputs {
+            kind: NodeKind::PureReturn,
+            ..Inputs::default()
+        },
+    );
+    let conversation = current.binding.conversation_id.clone();
+    let path = root.path().join("recovery.sqlite");
+    let writer =
+        crate::durable::SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    let reader =
+        crate::durable::SqliteConversationStore::open_existing(conversation, &path).unwrap();
+    let start = admit(
+        &writer,
+        &create(&writer, &current, "read-during-settlement"),
+    );
+    let prepared = current.prepare(&id(), &args()).unwrap();
+    writer
+        .scheduled_workflow_claim(&start.id, prepared.contract(), "native-owner", clock().0)
+        .unwrap()
+        .unwrap();
+
+    let start_id = start.id.clone();
+    let returned = serde_json::json!({"answer":"settled during the read"});
+    let result = returned.clone();
+    reader.arm_head_read_probe(move || {
+        assert_eq!(
+            writer
+                .scheduled_workflow_settle(
+                    &start_id,
+                    ScheduledWorkflowOutcome::Completed,
+                    ScheduledWorkflowQuiescence {
+                        source: QuiescenceSource::NativeExecutor,
+                    },
+                    Some(&result),
+                    clock().0,
+                )
+                .unwrap(),
+            ScheduledWorkflowSettlement::Settled
+        );
+    });
+
+    let before = reader
+        .scheduled_workflow_recovery(&start.id, 0, 1)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        before.start.state,
+        ScheduledWorkflowState::Claimed { .. }
+    ));
+    assert!(before.result.is_none() && before.start.result_digest.is_none());
+    let after = reader
+        .scheduled_workflow_recovery(&start.id, 0, 1)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        after.start.state,
+        ScheduledWorkflowState::Settled {
+            outcome: ScheduledWorkflowOutcome::Completed,
+            ..
+        }
+    ));
+    assert_eq!(after.result, Some(returned));
+    assert!(after.start.result_digest.is_some());
+}
+
+#[test]
 fn scheduler85_recovery_pages_do_not_expand_into_unbounded_work_lists() {
     let root = tempfile::tempdir().unwrap();
     let current = fixture(

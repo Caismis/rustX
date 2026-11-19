@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v80';
+import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceInspectionMessage, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v80';
 import { traceFields } from '../../../../protocol/app-server/trace-identity';
 import { readRequestField, readTraceBlocks, readTraceMessages, readTraceSource, traceProgram } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
@@ -8,7 +8,7 @@ import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
 
 export type ToolContent = { name?: string; arguments?: { value: unknown; truncated: boolean }; source?: TraceToolSource; definition?: TraceToolDefinition; result?: Pick<TraceToolResult, 'outcome' | 'detail' | 'blocks' | 'attachments'> | null };
 export type RequestContent = { options?: Record<string, unknown>; effective_system_prompt?: TraceText; previous_system_prompt?: TraceText; tools?: TraceToolDefinition[]; previous_tools?: TraceToolDefinition[] };
-interface Content { blocks?: TraceContentBlock[]; source?: UserSource | null; attachments?: TraceArtifact[]; tool?: ToolContent; request?: RequestContent }
+interface Content { messages?: TraceInspectionMessage[]; blocks?: TraceContentBlock[]; source?: UserSource | null; attachments?: TraceArtifact[]; tool?: ToolContent; request?: RequestContent }
 const object = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 function prompt(value: unknown): TraceText {
   const source = object(value);

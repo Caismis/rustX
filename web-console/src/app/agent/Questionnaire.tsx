@@ -23,11 +23,10 @@ export function parseRecommendedLabel(label: string) {
   const suffix = /\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$/i;
   return suffix.test(label) ? { label: label.replace(suffix, ''), recommended: true } : { label, recommended: false };
 }
-/** Only a marked first choice is an implicit draft; the user still submits it. */
 function initialDraft(question: QuestionSpecification): QuestionDraft {
   const shape = question.answer;
-  const first = shape.type === 'single_choice' || shape.type === 'multi_choice' ? shape.options[0] : undefined;
-  return first && parseRecommendedLabel(first.label).recommended ? { ...emptyDraft(), selected: [0] } : emptyDraft();
+  const candidates = shape.type === 'multi_choice' ? shape.options : shape.type === 'single_choice' ? shape.options.slice(0, 1) : [];
+  return { ...emptyDraft(), selected: candidates.flatMap((option, index) => parseRecommendedLabel(option.label).recommended ? [index] : []) };
 }
 const answered = (draft: QuestionDraft) => draft.selected.length > 0 || draft.text.trim() !== '' || draft.boolean !== undefined;
 /** Return whether a text-field key event belongs to an active IME composition. */
@@ -75,6 +74,15 @@ export function Questionnaire(props: QuestionnaireProps) {
   const id = useId();
   const surface = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
+  const [expandedCopy, setExpandedCopy] = useState<Set<string>>(new Set());
+  const copyToggle = (target: string, className: string) => {
+    const expanded = expandedCopy.has(target);
+    const label = tx(expanded ? 'interactions:questionnaire.collapse-text' : 'interactions:questionnaire.expand-text');
+    return <button type="button" className={clsx(css.iconButton, css.copyToggle, className)} aria-label={label} title={label}
+      aria-controls={target} aria-describedby={target} aria-expanded={expanded} onClick={() => setExpandedCopy(current => {
+        const next = new Set(current); if (next.has(target)) next.delete(target); else next.add(target); return next;
+      })}>{expanded ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}</button>;
+  };
   const [drafts, setDrafts] = useState<QuestionDraft[]>(() => record === undefined ? questions.map(initialDraft) : recordedDrafts(questions, record));
   // Collapsed to the header strip so the conversation above stays readable while the user decides.
   const [minimized, setMinimized] = useState(false);
@@ -144,23 +152,26 @@ export function Questionnaire(props: QuestionnaireProps) {
       </header>
       {!minimized && <>
         <div className={css.body} data-question-scroll>
-          <div className={css.questionTitle}><h2 className={css.title} id={titleId}>{form?.title ?? question.question}</h2></div>
+          <div className={css.questionTitle} data-expanded={expandedCopy.has(titleId) || undefined}><h2 className={clsx(css.title, css.titlePreview)} id={titleId}>{form?.title ?? question.question}</h2>{copyToggle(titleId, css.questionToggle)}</div>
           {form && <div className={css.detail}><MarkdownText text={question.question}/></div>}
           <div className={css.options} role={shape.type === 'single_choice' ? 'radiogroup' : 'group'} aria-labelledby={titleId}>
             {hasOptions && shape.options.map((option, optionIndex) => {
               const selected = draft.selected.includes(optionIndex);
               const display = parseRecommendedLabel(option.label);
-              return <div key={optionIndex}>
-                <button type="button" className={clsx(css.option, selected && !multi && css.optionSelected)}
+              const descriptionId = `${titleId}-option-${optionIndex}`;
+              const hasDescription = !!option.description?.trim();
+              return <div key={optionIndex}><div className={clsx(css.optionRow, !disabled && css.optionRowInteractive, selected && !multi && css.optionSelected)} data-expanded={expandedCopy.has(descriptionId) || undefined}>
+                <button type="button" className={css.option} aria-describedby={hasDescription ? descriptionId : undefined}
                   role={multi ? 'checkbox' : 'radio'} aria-checked={selected}
+                  onKeyDown={event => { if (event.key === 'Enter' && !disabled) { event.preventDefault(); submitDrafts(drafts); } }}
                   aria-label={display.label} disabled={disabled} onClick={() => choose(optionIndex)}>
                   {multi ? <span className={clsx(css.checkbox, selected && css.checkboxChecked)} aria-hidden>{selected && <IconCheckOutline14 size={12} />}</span>
                     : <span className={css.number}>{optionIndex + 1}</span>}
                   <span className={css.optionCopy}><span className={css.optionLine}>
                     <span className={css.optionLabel}>{display.label}</span>{display.recommended && <span className={css.badge}>{tx('interactions:questionnaire.recommended')}</span>}
-                    <span className={css.description}>{option.description}</span>
-                  </span></span>
+                  </span>{hasDescription && <span className={css.description} id={descriptionId}>{option.description}</span>}</span>
                 </button>
+                {hasDescription && copyToggle(descriptionId, css.descriptionToggle)}</div>
                 {option.preview && selected && <div className={css.detail}><MarkdownText text={option.preview}/></div>}
               </div>;
             })}

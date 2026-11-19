@@ -8,8 +8,12 @@ pub struct AppServerPolicy {
     /// Empty denies these operations. Only User/Host configuration owns grants.
     #[schemars(length(max = 32))]
     pub environment_roots: Vec<std::path::PathBuf>,
+    /// Optional explicit cap on concurrently resident runtimes (`Loading`,
+    /// `Loaded`, `Unloading`, and reserved creations). `None` leaves residency
+    /// uncapped while idle reaping and host/transport limits continue to apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 256))]
-    pub max_resident_runtimes: usize,
+    pub max_resident_runtimes: Option<usize>,
     #[schemars(range(min = 1, max = 1024))]
     pub max_connections: usize,
     #[schemars(range(min = 1, max = 4096))]
@@ -23,7 +27,7 @@ impl Default for AppServerPolicy {
     fn default() -> Self {
         Self {
             environment_roots: Vec::new(),
-            max_resident_runtimes: 8,
+            max_resident_runtimes: None,
             max_connections: 32,
             max_external_attachments: 64,
             idle_grace_ms: 300_000,
@@ -45,7 +49,9 @@ impl AppServerPolicy {
                         .components()
                         .any(|part| matches!(part, std::path::Component::ParentDir))
             })
-            || !(1..=256).contains(&self.max_resident_runtimes)
+            || self
+                .max_resident_runtimes
+                .is_some_and(|limit| !(1..=256).contains(&limit))
             || !(1..=1024).contains(&self.max_connections)
             || !(1..=4096).contains(&self.max_external_attachments)
             || !(1..=86_400_000).contains(&self.idle_grace_ms)
@@ -62,7 +68,15 @@ mod tests {
     use super::*;
     #[test]
     fn process_budgets_are_positive_bounded_and_strict() {
-        assert!(AppServerPolicy::default().validate().is_ok());
+        let default = AppServerPolicy::default();
+        assert_eq!(default.max_resident_runtimes, None);
+        assert!(default.validate().is_ok());
+        assert_eq!(toml::from_str::<AppServerPolicy>("").unwrap(), default);
+        assert!(toml::Value::try_from(&default).is_ok());
+        assert_eq!(
+            serde_json::from_str::<AppServerPolicy>(r#"{"max_resident_runtimes":null}"#).unwrap(),
+            default
+        );
         for field in [
             "max_resident_runtimes",
             "max_connections",
@@ -81,7 +95,7 @@ mod tests {
         }
         assert!(toml::from_str::<AppServerPolicy>("unknown = 1").is_err());
         let impossible = AppServerPolicy {
-            max_resident_runtimes: usize::MAX,
+            max_resident_runtimes: Some(usize::MAX),
             ..AppServerPolicy::default()
         };
         assert!(impossible.validate().is_err());
@@ -89,6 +103,9 @@ mod tests {
     #[test]
     fn schema_and_startup_accept_the_same_policy_bounds() {
         let schema = serde_json::to_value(schemars::schema_for!(AppServerPolicy)).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&serde_json::json!({})));
+        assert!(validator.is_valid(&serde_json::json!({"max_resident_runtimes": null})));
         for (field, max) in [
             ("max_resident_runtimes", 256_u64),
             ("max_connections", 1024),
@@ -101,6 +118,7 @@ mod tests {
             for (number, valid) in [(0, false), (1, true), (max, true), (max + 1, false)] {
                 let mut value = serde_json::to_value(AppServerPolicy::default()).unwrap();
                 value[field] = number.into();
+                assert_eq!(validator.is_valid(&value), valid, "{field}={number}");
                 assert_eq!(
                     serde_json::from_value::<AppServerPolicy>(value)
                         .unwrap()

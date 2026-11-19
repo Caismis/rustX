@@ -1333,7 +1333,7 @@ impl ToolRegistry {
     pub fn preflight(&self, call: &ToolCall) -> Result<PreflightOutcome, ToolPreflightError> {
         let entry = self.resolve_entry(call)?;
         let (mode, elevation_reason, stripped) =
-            match resolve_invocation_metadata(entry.definition.execution_policy, &call.arguments) {
+            match resolve_invocation_metadata(&entry.definition, &call.arguments) {
                 Ok(value) => value,
                 Err(error) => {
                     return Ok(PreflightOutcome::Rejected {
