@@ -139,7 +139,8 @@ test('whole-model CAD tessellation refines coarse to full through one focused re
   const box=(await canvas.boundingBox())!;
   for(const button of ['left','right'] as const)for(let action=0;action<4;action++){const sign=action%2?-1:1,x=box.x+box.width/2,y=box.y+box.height/2;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+sign*24,y+sign*10,{steps:8});await page.mouse.up({button});}
   await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
-  await canvas.focus();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+  await canvas.focus();await canvas.press('Numpad5');await expect(canvas).toBeFocused();
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
   await page.evaluate(()=>(window as any).cadProgressive.final());await expect(canvas).toHaveCount(1);
   await expect(canvas).toHaveAttribute('data-geometry-lod','coarse');await expect(canvas).toBeFocused();
   await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeDisabled();
@@ -148,6 +149,7 @@ test('whole-model CAD tessellation refines coarse to full through one focused re
   await expect(canvas).toHaveAttribute('data-geometry-lod','coarse');await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeDisabled();await page.mouse.up();
   const full=page.locator('[data-geometry-completeness="complete"]');await expect(full).toBeVisible();await expect(full).toHaveAttribute('data-geometry-lod','full');await expect(full).toHaveAttribute('data-progressive-identity','same-context');await expect(full).toBeFocused();
   await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeEnabled();await expect.poll(async()=>(await resources(page)).workers).toBe(0);await expect(full).toHaveAttribute('data-geometry-quality','complete');
+  await expect.poll(()=>page.evaluate(()=>(window as any).geometryContract.snapshot().find((tab:any)=>tab.name==='cube.step')?.state?.camera?.projection)).toBe('perspective');
   const imported=await page.evaluate(()=>(window as any).geometryImports.at(-1));
   expect(imported.map((mesh:any)=>mesh.name)).toEqual(tiers[0].meshNames);expect(await page.evaluate(()=>(window as any).geometryImportRoots.at(-1))).toEqual(tiers[0].root);
   const triangles=imported.reduce((sum:number,mesh:any)=>sum+mesh.triangles,0);expect(triangles).toBeGreaterThan(tiers[0].triangles);

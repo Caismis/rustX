@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 export async function instrument(page: Page, profile: true | 'native' = true) {
   await page.addInitScript(profile => {
     const counts = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
+    const activity = { workersCreated: 0, contextsCreated: 0 };
     const drawing = { calls: 0, modelCalls: 0, scheduled: false, frameTriangles: 0, lastModelTriangles: 0 };
     const imports: { name: string; vertices: number; triangles: number }[][] = [];
     const importRoots: unknown[] = [];
@@ -26,7 +27,7 @@ export async function instrument(page: Page, profile: true | 'native' = true) {
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
       private live = true;
-      constructor(url: string | URL, options?: WorkerOptions) { const start = performance.now(); super(url, options); counts.workers++;
+      constructor(url: string | URL, options?: WorkerOptions) { const start = performance.now(); super(url, options); counts.workers++; activity.workersCreated++;
         this.addEventListener('message',event=>{if(event.data?.kind==='lod'&&lods.length<2){
           const model=event.data.model,pending=[model.root];let triangles=0;
           while(pending.length){const node=pending.pop();for(const index of node.meshes){const mesh=model.meshes[index];triangles+=(mesh.indices?.length??mesh.positions.length/3)/3;}pending.push(...node.children);}
@@ -48,7 +49,7 @@ export async function instrument(page: Page, profile: true | 'native' = true) {
     const getContext = HTMLCanvasElement.prototype.getContext;
     Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { value: function (this: HTMLCanvasElement, ...args: unknown[]) {
       const value = Reflect.apply(getContext, this, args);
-      if (value && args[0] === 'webgl2' && !this.dataset.countedGeometryContext) { this.dataset.countedGeometryContext = 'true'; counts.contexts++; this.addEventListener('webglcontextlost', () => {
+      if (value && args[0] === 'webgl2' && !this.dataset.countedGeometryContext) { this.dataset.countedGeometryContext = 'true'; counts.contexts++; activity.contextsCreated++; this.addEventListener('webglcontextlost', () => {
         counts.contexts--;
         // Context loss releases Three.js's internal fallback textures as well
         // as objects already explicitly deleted during renderer disposal.
@@ -65,7 +66,7 @@ export async function instrument(page: Page, profile: true | 'native' = true) {
     const createUrl = URL.createObjectURL, revokeUrl = URL.revokeObjectURL, urls = new Set<string>();
     URL.createObjectURL = value => { const url = createUrl(value); urls.add(url); counts.urls++; return url; };
     URL.revokeObjectURL = url => { if (urls.delete(url)) counts.urls--; revokeUrl(url); };
-    Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportRoots: importRoots, geometryImportTimings: importTimings, geometryPreviewTimings:previews, geometryModelFrames:modelFrames,geometryLods:lods });
+    Object.assign(window, { geometryResources: counts, geometryActivity: activity, geometryDrawCalls: drawing, geometryImports: imports, geometryImportRoots: importRoots, geometryImportTimings: importTimings, geometryPreviewTimings:previews, geometryModelFrames:modelFrames,geometryLods:lods });
   }, profile);
 }
 export const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));

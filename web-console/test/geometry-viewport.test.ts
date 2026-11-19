@@ -358,8 +358,12 @@ it('prunes hidden subtrees before raycasting and selects the nearest visible mes
   const f = mount(object); f.view.fit('front'); f.view.visibility('0.0', false);
   const hiddenRaycast = vi.spyOn(heavy, 'raycast'), nearRaycast = vi.spyOn(near, 'raycast');
   const canvas = f.renderer.domElement as HTMLCanvasElement;
-  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480 } as DOMRect);
-  canvas.dispatchEvent(new MouseEvent('pointerdown', { clientX: 320, clientY: 240 })); canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 320, clientY: 240 }));
+  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480, right: 640, bottom: 480 } as DOMRect);
+  document.body.append(f.element);
+  try {
+    const press = { pointerId: 1, isPrimary: true, clientX: 320, clientY: 240, bubbles: true };
+    canvas.dispatchEvent(new PointerEvent('pointerdown', press)); canvas.dispatchEvent(new PointerEvent('pointerup', press));
+  } finally { f.element.remove(); }
   expect(hiddenRaycast).not.toHaveBeenCalled(); expect(nearRaycast).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].selected).toBe('0.2');
   f.view.select('0.0'); expect(f.changed.mock.lastCall![0].selected).toBe('0.0');
 });
@@ -396,12 +400,13 @@ it('focuses transformed visible selection while preserving direction, and resets
   expect(f.changed.mock.lastCall![0].hidden).toEqual(['0.1']);
   const reset = f.changed.mock.lastCall![0].camera.position; expect(reset[0]).toBeCloseTo(reset[1]); expect(reset[1]).toBeCloseTo(reset[2]);
 });
-it('batches isolation and restoration into one publication/draw and ignores repeated operations', () => {
-  const f = mount(); draw(); f.view.select('0.0'); draw(); f.changed.mockClear();
-  f.view.isolate(); expect(f.changed).toHaveBeenCalledOnce(); expect(frames.size).toBe(1);
-  f.view.isolate(); expect(f.changed).toHaveBeenCalledOnce(); draw();
-  f.view.restore(); expect(f.changed).toHaveBeenCalledTimes(2); draw();
-  f.view.restore(); f.view.showAll(); expect(f.changed).toHaveBeenCalledTimes(2); expect(frames.size).toBe(0);
+it('toggles isolation through a single publication and draw per activation', () => {
+  const f = mount(); draw(); f.changed.mockClear();
+  f.view.toggleIsolation(); expect(f.changed).not.toHaveBeenCalled();
+  f.view.select('0.0'); draw(); f.changed.mockClear();
+  f.view.toggleIsolation(); expect(f.changed).toHaveBeenCalledOnce(); expect(frames.size).toBe(1); draw();
+  f.view.toggleIsolation(); expect(f.changed).toHaveBeenCalledTimes(2); expect(frames.size).toBe(1); draw();
+  f.view.showAll(); expect(f.changed).toHaveBeenCalledTimes(2); expect(frames.size).toBe(0);
 });
 it('focuses a small occurrence and restores its close camera without a whole-model distance floor', () => {
   const object = new Group(), a = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), tiny = a.clone();
@@ -438,13 +443,17 @@ it('owns generated outline buffers beside centered sources and preserves picking
   expect(visibility()).toEqual(new Float32Array([1, 0])); expect(f.view.inspect()).toEqual(inspection);
   const sourceRaycast = vi.spyOn(sources[0], 'raycast'); f.view.fit('front');
   const canvas = f.renderer.domElement as HTMLCanvasElement;
-  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480 } as DOMRect);
-  canvas.dispatchEvent(new MouseEvent('pointerdown', { clientX: 320, clientY: 240 })); canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 320, clientY: 240 }));
+  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480, right: 640, bottom: 480 } as DOMRect);
+  document.body.append(f.element);
+  try {
+    const press = { pointerId: 1, isPrimary: true, clientX: 320, clientY: 240, bubbles: true };
+    canvas.dispatchEvent(new PointerEvent('pointerdown', press)); canvas.dispatchEvent(new PointerEvent('pointerup', press));
+  } finally { f.element.remove(); }
   expect(sourceRaycast).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].selected).toBe('0.0');
   f.view.visibility('0.1', true); f.view.select('0.1'); f.view.focus();
   expect(f.control().target.toArray()).toEqual([.25, 0, 0]);
-  f.view.isolate(); expect(visibility()).toEqual(new Float32Array([0, 1]));
-  f.view.restore(); expect(visibility()).toEqual(new Float32Array([1, 1]));
+  f.view.toggleIsolation(); expect(visibility()).toEqual(new Float32Array([0, 1]));
+  f.view.toggleIsolation(); expect(visibility()).toEqual(new Float32Array([1, 1]));
   const geometryDispose = vi.spyOn(line.geometry, 'dispose'), materialDispose = vi.spyOn(line.material, 'dispose'); f.view.dispose(); f.view.dispose();
   expect(geometryDispose).toHaveBeenCalledOnce(); expect(materialDispose).toHaveBeenCalledOnce(); sources.forEach(source => expect(source.layers.mask).toBe(1));
 });
@@ -457,7 +466,7 @@ it('keeps authored outlines attached to the original occurrences with their loca
   }
 });
 it('switches projection with one renderer and preserves target-plane scale, target, up and orientation', () => {
-  const f = mount(); f.view.setProjection('perspective'); f.view.fit('top'); draw();
+  const f = mount(); f.view.fit('top'); f.view.setProjection('perspective'); draw();
   const perspective = f.control().object as PerspectiveCamera, target = f.control().target.clone(), up = perspective.up.clone(), position = perspective.position.clone(), rotation = perspective.quaternion.clone();
   const span = 2 * perspective.position.distanceTo(target) * Math.tan(perspective.fov * Math.PI / 360) / perspective.zoom;
   const old = f.control(); f.changed.mockClear(); f.view.setProjection('orthographic');
@@ -495,8 +504,12 @@ it('uses orthographic rays for picking and admits a restored distance above the 
   const f = mount(object, { copyId: 'copy', camera: { projection: 'orthographic', verticalSpan: 8, position: [0, 0, 500], target: [0, 0, 0], up: [0, 1, 0] } }); draw();
   expect(f.view.projection).toBe('orthographic'); expect(f.control().object.position.z).toBe(500); expect(f.control().maxDistance).toBeGreaterThanOrEqual(500);
   expect(f.control().object.far).toBeGreaterThan(500 + new Vector3().setFromMatrixPosition(near.matrixWorld).length());
-  const canvas = f.renderer.domElement as HTMLCanvasElement; vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480 } as DOMRect);
-  canvas.dispatchEvent(new MouseEvent('pointerdown', { clientX: 320, clientY: 240 })); canvas.dispatchEvent(new MouseEvent('pointerup', { clientX: 320, clientY: 240 }));
+  const canvas = f.renderer.domElement as HTMLCanvasElement; vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480, right: 640, bottom: 480 } as DOMRect);
+  document.body.append(f.element);
+  try {
+    const press = { pointerId: 1, isPrimary: true, clientX: 320, clientY: 240, bubbles: true };
+    canvas.dispatchEvent(new PointerEvent('pointerdown', press)); canvas.dispatchEvent(new PointerEvent('pointerup', press));
+  } finally { f.element.remove(); }
   expect(f.changed.mock.lastCall![0].selected).toBe('0.1');
 });
 it.each(['projection', 'fit', 'reset'] as const)('publishes one metadata update for an owner-driven %s after idle', action => {

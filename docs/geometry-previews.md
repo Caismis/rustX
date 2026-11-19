@@ -138,12 +138,12 @@ One scene implementation supplies orbit/pan/zoom, fit, isometric and six standar
 views, an orientation axis indicator, part selection/highlighting and visibility.
 Fit recenters the model without changing the chosen viewing direction; the
 view-angle menu explicitly chooses a standard direction.
-Reset view restores the initial isometric framing without changing visibility.
+Reset view restores the initial orthographic isometric framing and keeps current visibility.
 Three enlarged SVG arrows supply orientation and navigation, with no visible
 signed coordinate labels. Activate an arrow to align its positive axis; activate
 it again to reverse the view. Manual orbit updates the next action from the
-actual camera direction. Axis actions use orthographic projection; menu actions
-retain the chosen projection. Each arrow has a 24-pixel hit target, keyboard
+actual camera direction. All six axis views use orthographic projection from
+the gizmo, menu or keypad. Isometric retains the current projection. Each arrow has a 24-pixel hit target, keyboard
 activation and a localized action name; projected pole axes remain addressable.
 The View control and Isometric item share the original cube icon. Reset has its
 own reset symbol and shares a menu group with Isometric. Each of the six standard
@@ -155,13 +155,59 @@ Chinese label and tooltip are simply “轮廓线”. Pointer activation of an a
 does not draw a rectangular focus outline; keyboard focus remains distinguishable.
 Background outline preparation has no visible loading message; busy state and
 explicit unavailable/failure feedback remain accessible.
-One Pan icon toggles the left-button drag action. Default rotation uses normal
-OrbitControls rotation; pressed Pan uses its public mouse/touch pan actions.
-Pan, Outlines and Isolate share the same selected visual state. Right-button
-pan, wheel zoom and keyboard navigation retain their existing behavior. The
-navigation mode belongs to the current geometry copy and survives parked-tab
-restoration, projection/up-axis changes and coarse-to-final adoption without
-creating another renderer or import.
+### Viewport navigation (#535)
+
+The shared delivery and Workbench viewer uses Blender's default middle-button
+gesture family and numeric keypad layout. The viewer retains its existing Y-up
+presentation and imported coordinates, transforms and units. Free orbit uses
+the Y-up turntable and retains the current projection. Top and Bottom use a
+screen-up vector along Z at the poles, and free orbit returns to the Y-up axis.
+Auto Perspective and Orbit Around Selection are optional Blender preferences.
+rustX changes the orbit target on explicit framing and panning actions. Focus
+centers the visible selected subtree and uses its center for the next orbit.
+
+| Input | Action |
+| --- | --- |
+| Middle drag | Orbit |
+| Shift + middle drag | Pan |
+| Ctrl + middle drag | Continuous zoom toward drag start |
+| Wheel | Zoom toward the pointer |
+| Left click | Select the hit occurrence or clear selection on empty space |
+| Left drag | Orbit or pan according to the single Pan toggle |
+| Right drag or arrow keys | Pan |
+| Home | Frame all visible content |
+| Numpad decimal | Frame the visible selection |
+| Numpad 1 / 3 / 7 | Front / Right / Top |
+| Ctrl + Numpad 1 / 3 / 7 | Back / Left / Bottom |
+| Numpad 5 | Toggle projection |
+| Numpad 2 / 4 / 6 / 8 | Orbit in 15° steps |
+| Numpad Divide | Use the Isolate toggle |
+
+The middle action is chosen at pointerdown. Ctrl takes precedence over Shift,
+and the Pan toggle keeps its own state. Movement greater than four CSS pixels
+invalidates the click for the whole gesture. Pointer cancellation and capture
+loss retire the gesture before it can pick or navigate again.
+
+Zoom toward the pointer adapts Blender's optional zoom-to-mouse preference
+through OrbitControls. In perspective the eye moves along the pointer ray,
+keeping points on the ray projected at the pointer. Orthographic zoom
+compensates for scale about that same screen position. On empty background the
+anchor is the intersection with the current target plane. This projection
+calculation works during motion rendering without a depth query. Selection
+raycasts use the admitted original geometry.
+
+Shortcuts require focus on the canvas or its axis gizmo. Physical keypad
+codes work with Num Lock on or off. Normal digits and slash remain available
+outside the viewport and in text inputs. The compact controls are available
+without a middle button or keypad. Pan, Outlines and Isolate share the same
+selected visual state. Navigation and the retained camera state stay with
+the current copy through parked-tab restoration and coarse-to-final
+adoption. They reuse the existing renderer, geometry and outline ownership.
+
+See [#535](https://github.com/Caismis/rustX/issues/535),
+[#516](https://github.com/Caismis/rustX/issues/516),
+[#517](https://github.com/Caismis/rustX/pull/517) and
+[#534](https://github.com/Caismis/rustX/issues/534).
 Camera fitting centers a presentation-only parent. The admitted mesh surface,
 position-derived bounds and physical scale remain intact; preparation can remove
 redundant tessellation. Bounds are recomputed from admitted coordinates,

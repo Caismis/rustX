@@ -1,6 +1,6 @@
 export const en = {
   refining: 'Refining model…',
-  preview: '3D model preview', loading: 'Loading model…', reading: 'Reading model…', initializing: 'Initializing CAD runtime…', importing: 'Importing model…', preparing: 'Preparing display…', canvas: '3D model. Drag to rotate or enable Pan to move the view. Right-drag or use arrow keys to pan, scroll to zoom.',
+  preview: '3D model preview', loading: 'Loading model…', reading: 'Reading model…', initializing: 'Initializing CAD runtime…', importing: 'Importing model…', preparing: 'Preparing display…', canvas: '3D model. Middle-drag to orbit, Shift-middle-drag to pan, and Ctrl-middle-drag to zoom. Use left drag or the Pan toggle, right drag or arrow keys to pan, and the wheel to zoom toward the pointer. Home frames the model. The numeric keypad controls views, framing, and isolation.',
   controls: 'Model controls', view: 'View angle', pan: 'Pan',
   projection: 'Projection', perspective: 'Perspective', orthographic: 'Orthographic',
   fit: 'Fit view', isometric: 'Isometric', front: 'Front', back: 'Back', left: 'Left', right: 'Right', top: 'Top', bottom: 'Bottom',
@@ -23,7 +23,7 @@ export const en = {
 } as const;
 export const zh = {
   refining: '正在逐步精细化模型…',
-  preview: '三维模型预览', loading: '正在加载模型…', reading: '正在读取模型…', initializing: '正在初始化 CAD 运行环境…', importing: '正在导入模型…', preparing: '正在准备显示…', canvas: '三维模型。拖动旋转，选中平移后拖动移动视图。右键拖动或使用方向键平移，滚动缩放。',
+  preview: '三维模型预览', loading: '正在加载模型…', reading: '正在读取模型…', initializing: '正在初始化 CAD 运行环境…', importing: '正在导入模型…', preparing: '正在准备显示…', canvas: '三维模型。中键拖动旋转，Shift 加中键拖动平移，Ctrl 加中键拖动缩放。也可左键拖动旋转，或启用平移后拖动。右键拖动或方向键可平移，滚轮向指针位置缩放。Home 键适合窗口，数字小键盘可切换视图、取景和隔离。',
   controls: '模型控件', view: '视角', pan: '平移',
   projection: '投影', perspective: '透视投影', orthographic: '正交投影',
   fit: '适合窗口', isometric: '等轴视图', front: '前视图', back: '后视图', left: '左视图', right: '右视图', top: '俯视图', bottom: '仰视图',

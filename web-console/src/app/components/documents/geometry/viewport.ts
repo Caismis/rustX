@@ -4,6 +4,7 @@ import type { PreviewViewState } from '../../../../presentation/right-panel/prev
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
 import type { GeometryLodLevel } from './lod-data';
 import { createStructure } from './structure';
+import { bindViewportInput } from './viewport-input';
 import { createAxisNavigation, type AxisLabels } from './axes';
 import { createDisplayQuality } from './display-quality';
 import { createDrawBatches } from './draw-batches';
@@ -73,7 +74,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const orbitUp = camera.up.clone();
   let navigationMode: NavigationMode = saved?.navigationMode === 'pan' ? 'pan' : 'orbit';
   const configureNavigation = () => { controls.mouseButtons.LEFT = navigationMode === 'pan' ? MOUSE.PAN : MOUSE.ROTATE; controls.touches.ONE = navigationMode === 'pan' ? TOUCH.PAN : TOUCH.ROTATE; };
-  const configureControls = () => { controls.enabled = visible; controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; configureNavigation(); controls.listenToKeyEvents(canvas); };
+  const configureControls = () => { controls.enabled = visible; controls.enableDamping = false; controls.zoomToCursor = true; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; configureNavigation(); controls.listenToKeyEvents(canvas); };
   const configureZoom = () => {
     if (!(camera instanceof OrthographicCamera)) return;
     const height = camera.top - camera.bottom;
@@ -83,7 +84,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   configureControls();
   const axisCamera = new PerspectiveCamera(45, 1, 0.01, 10);
   canvas.setAttribute('aria-description', labels.axes);
-  const navigation = createAxisNavigation(container, labels, view => { options?.onInteraction?.(false); frameBounds(structure.bounds(object, true), view, true); });
+  const navigation = createAxisNavigation(container, labels, view => { options?.onInteraction?.(false); fit(view); });
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
   const structure = createStructure(object, center, saved);
   const quality = options?.provisional ? undefined : createDisplayQuality(object);
@@ -202,14 +203,19 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     controls.minDistance = frameRadius / 100; controls.maxDistance = Math.max(radius * 100, distance);
     camera.near = Math.max(Math.min(radius, frameRadius) / 10_000, 1e-12); camera.updateProjectionMatrix(); synchronizeOrbit(target); updateClipping(); renderMoving(); emit();
   };
-  const fit = (view?: StandardView) => frameBounds(structure.bounds(object, true), view);
-  const reset = () => frameBounds(contentBounds.clone().translate(center.clone().negate()), 'isometric');
+  const fit = (view?: StandardView) => frameBounds(structure.bounds(object, true), view, view !== undefined && view !== 'isometric');
+  const reset = () => frameBounds(contentBounds.clone().translate(center.clone().negate()), 'isometric', true);
   const focus = () => { if (structure.selectedObject) frameBounds(structure.bounds(structure.selectedObject, true)); };
   const visibility = (id: string, visible: boolean) => {
     if (!structure.visibility(id, visible)) return;
     outlines?.sync(); updateHighlight(); renderMoving(); emit();
   };
   const structureAction = (action: () => boolean) => { if (action()) { outlines?.sync(); updateHighlight(); renderMoving(); emit(); } };
+  const toggleIsolation = () => {
+    if (options?.provisional) return;
+    const target = structure.snapshot().isolation?.target;
+    structureAction(target && (!structure.selected || target === structure.selected) ? structure.restore : structure.isolate);
+  };
   const setOutlines = async (enabled: boolean): Promise<OutlineStatus> => {
     if (options?.provisional) return 'off';
     const request = ++outlineRequest;
@@ -323,19 +329,54 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   watchResolution();
   const themeObserver = new MutationObserver(() => { if (!disposed && visible && outlines?.enabled) { outlines.recolor(); render(); } });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
-  const raycaster = new Raycaster(); let down: [number, number] | undefined;
-  const pointerDown = (event: PointerEvent) => { if (visible) down = [event.clientX, event.clientY]; };
-  const pointerUp = (event: PointerEvent) => {
-    if (!visible || options?.provisional) return;
-    if (!down || Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 4) return; down = undefined;
-    const rect = canvas.getBoundingClientRect(); raycaster.setFromCamera(new Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
+  const raycaster = new Raycaster();
+  const selectPointer = (event: PointerEvent) => {
+    if (options?.provisional) return;
+    const rect = canvas.getBoundingClientRect();
+    raycaster.setFromCamera(new Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
     const candidates: Mesh[] = [];
     object.traverseVisible(item => { if (item instanceof Mesh) candidates.push(item); });
     const hit = quality!.pick(raycaster, candidates);
     select(hit ? structure.occurrenceIds.get(hit.object) : undefined);
   };
+  function turntable() {
+    if (camera.up.x === 0 && camera.up.y === 1 && camera.up.z === 0) return;
+    const target = controls.target.clone(), offset = camera.position.clone().sub(target);
+    // Pole views use a screen up perpendicular to Y. Nudge exact poles toward
+    // +Z before restoring turntable Y, preserving the top/bottom screen heading.
+    if (Math.hypot(offset.x, offset.z) < offset.length() * 1e-6) camera.position.z += offset.length() * 1e-6;
+    camera.up.set(0, 1, 0);
+    synchronizeOrbit(target);
+  }
+  const input = bindViewportInput(canvas, navigation.element, {
+    visible: () => visible && !disposed,
+    controls: () => controls,
+    turntable,
+    select: selectPointer,
+    shortcut(action) {
+      switch (action.kind) {
+        case 'view': fit(action.view); break;
+        case 'fit': fit(); break;
+        case 'focus': focus(); break;
+        case 'projection': setProjection(projection() === 'orthographic' ? 'perspective' : 'orthographic'); break;
+        case 'isolate': toggleIsolation(); break;
+        case 'orbit': {
+          turntable();
+          const step = Math.PI / 12;
+          if (action.direction === 'left' || action.direction === 'right') controls.rotateLeft(action.direction === 'left' ? step : -step);
+          else controls.rotateUp(action.direction === 'up' ? step : -step);
+          inputFinished();
+          break;
+        }
+      }
+    },
+    cancelNavigation() {
+      controls.disconnect(); controls.connect(canvas); controls.listenToKeyEvents(canvas);
+      if (interacting) ended();
+    },
+  });
   const contextLost = (event: Event) => { event.preventDefault(); dispose(); lost(); };
-  canvas.addEventListener('pointerdown', pointerDown); canvas.addEventListener('pointerup', pointerUp); canvas.addEventListener('webglcontextlost', contextLost);
+  canvas.addEventListener('webglcontextlost', contextLost);
   const setVisible = (value: boolean) => {
     if (disposed || value === visible) return;
     if (!value) flush();
@@ -344,7 +385,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (!value) {
       cancelAnimationFrame(frame); frame = 0; cancelAnimationFrame(presentationFrame); presentationFrame = 0;
       clearTimeout(refinement); refinement = undefined; clearTimeout(publication); publication = undefined;
-      down = undefined; interacting = false; options?.onInteraction?.(false);
+      input.cancel(); interacting = false; options?.onInteraction?.(false);
       return;
     }
     resolution.removeEventListener('change', resolutionChanged); watchResolution();
@@ -356,7 +397,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   function retire(keepGraphics: boolean) {
     if (disposed) return; flush(); if (disposed) return;
     disposed = true; outlineRequest++; releaseBackground?.(); releaseBackground = undefined; outlines?.dispose(); quality?.dispose(); batches?.dispose(); clearTimeout(refinement); clearTimeout(publication); cancelAnimationFrame(frame); cancelAnimationFrame(presentationFrame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
-    canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp); canvas.removeEventListener('webglcontextlost', contextLost);
+    input.dispose(); canvas.removeEventListener('webglcontextlost', contextLost);
     canvas.ownerDocument.removeEventListener('pointermove', inputMoved, true); canvas.removeEventListener('keydown', inputFinished, true);
     controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
     highlight.geometry.dispose(); highlight.material.dispose();
@@ -375,7 +416,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     get focusedAxis() { return navigation.focusedAxis; }, focusAxis: navigation.focusAxis,
     setNavigationMode, get navigationMode() { return navigationMode; },
     setOutlines, setProjection, refreshPreview: () => { backgroundPending=false;releaseBackground?.();releaseBackground=undefined;quality?.refresh();if(moving){refine();render();} }, get projection() { return projection(); },
-    isolate: () => structureAction(structure.isolate), restore: () => structureAction(structure.restore), showAll: () => structureAction(structure.showAll),
+    toggleIsolation, showAll: () => structureAction(structure.showAll),
     relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); },
     refreshContent: (latestBounds: Box3, level: GeometryLodLevel) => {
       if (disposed || !options?.provisional) return;

@@ -29,7 +29,8 @@ vi.mock('three', async original => {
     setViewport() {} compile(){} render = vi.fn(); clearDepth() {} dispose = vi.fn(); forceContextLoss() {}
     constructor() {
       Object.defineProperties(this.domElement, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
-      this.domElement.setPointerCapture = vi.fn(); this.domElement.releasePointerCapture = vi.fn();
+      this.domElement.getBoundingClientRect = () => new DOMRect(0, 0, 640, 480);
+      this.domElement.setPointerCapture = vi.fn(); this.domElement.releasePointerCapture = vi.fn(); this.domElement.hasPointerCapture = vi.fn(() => false);
       runtime.renderers.push(this);
     }
   } };
@@ -57,8 +58,8 @@ function mount() {
   const renderer = runtime.renderers.at(-1), canvas = renderer.domElement as HTMLCanvasElement;
   return { view, changed, renderer, canvas };
 }
-function pointer(target: EventTarget, type: string, x: number, button = 2) {
-  const event = new MouseEvent(type, { button, buttons: type === 'pointerup' ? 0 : button === 0 ? 1 : 2, clientX: x, clientY: 200, bubbles: true });
+function pointer(target: EventTarget, type: string, x: number, button = 2, y = 200) {
+  const event = new MouseEvent(type, { button, buttons: type === 'pointerup' ? 0 : button === 0 ? 1 : 2, clientX: x, clientY: y, bubbles: true });
   Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: 'mouse' } }); target.dispatchEvent(event);
 }
 it('renders a 120px sub-EPS pan during the gesture and persists its final pose without idle polling', async () => {
@@ -93,8 +94,10 @@ it.each(['orthographic', 'perspective'] as const)('uses left-drag Pan and Orbit 
     expect(camera.position.clone().sub(control.target).distanceTo(before.direction)).toBeLessThan(1e-9); expect(camera.zoom).toBe(before.zoom);
     expect(f.changed.mock.lastCall![0].navigationMode).toBe('pan');
     f.view.setNavigationMode('orbit'); const target = control.target.clone(), direction = camera.position.clone().sub(target);
-    pointer(f.canvas, 'pointerdown', 300, 0); pointer(document, 'pointermove', 420, 0); pointer(document, 'pointerup', 420, 0);
-    expect(control.target.distanceTo(target)).toBeLessThan(1e-9);
+    pointer(f.canvas, 'pointerdown', 300, 0); pointer(document, 'pointermove', 420, 0, 140); pointer(document, 'pointerup', 420, 0, 140);
+    const turntable = updates.mock.contexts.at(-1) as OrbitControls;
+    expect(turntable.target.distanceTo(target)).toBeLessThan(1e-9);
+    expect(camera.up.toArray()).toEqual([0, 1, 0]);
     expect(camera.position.clone().sub(target).distanceTo(direction)).toBeGreaterThan(.01);
     expect(f.changed.mock.lastCall![0].navigationMode).toBeUndefined(); expect(runtime.renderers).toHaveLength(1);
   } finally { updates.mockRestore(); disposals.mockRestore(); }
@@ -136,17 +139,18 @@ it('captures tiny keyboard pans and wheel zooms, and fences queued observations 
   await Promise.resolve(); await Promise.resolve(); expect(frames.size).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws + 1); vi.advanceTimersByTime(100);
   expect(f.changed).toHaveBeenCalledOnce(); const before = f.changed.mock.lastCall![0].camera;
   f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
+  await Promise.resolve();
   expect(f.changed).toHaveBeenCalledTimes(2); expect(f.changed.mock.lastCall![0].camera.position).not.toEqual(before.position);
   f.canvas.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true, cancelable: true }));
   f.view.dispose(); const publications = f.changed.mock.calls.length;
   await Promise.resolve(); vi.advanceTimersByTime(1000);
   expect(f.changed).toHaveBeenCalledTimes(publications); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.dispose).toHaveBeenCalledOnce();
 });
-it('persists real orthographic wheel zoom with an unchanged position and no idle work', () => {
+it('persists anchored orthographic wheel zoom with no idle work', () => {
   const f = mount(); expect(f.view.projection).toBe('orthographic'); draw(); f.changed.mockClear();
   const camera = f.renderer.render.mock.calls.at(-1)![1], position = camera.position.clone(), before = (camera.top - camera.bottom) / camera.zoom;
   f.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 200, bubbles: true, cancelable: true }));
-  expect(f.changed).toHaveBeenCalledOnce(); expect(camera.position.distanceTo(position)).toBeLessThan(1e-12);
+  expect(f.changed).toHaveBeenCalledOnce(); expect(camera.position.distanceTo(position)).toBeGreaterThan(0);
   expect(f.changed.mock.lastCall![0].camera.projection).toBe('orthographic'); expect(f.changed.mock.lastCall![0].camera.verticalSpan).toBeLessThan(before);
   draw(); vi.advanceTimersByTime(L.refineDelayMs); draw();
   const draws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(draws);
@@ -163,7 +167,7 @@ it.each(['front', 'top'] as const)('preserves an off-origin tiny focused part th
   const element = document.createElement('div'); document.body.append(element);
   Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
   const changed = vi.fn(), view = mountGeometry(element, object, new Box3().setFromObject(object), undefined, en, changed, vi.fn()); mounted.push(view);
-  view.setProjection('perspective'); view.fit(viewAngle); view.select('0.2'); view.focus(); draw();
+  view.fit(viewAngle); view.setProjection('perspective'); view.select('0.2'); view.focus(); draw();
   const before = changed.mock.lastCall![0].camera;
   const distance = new Vector3().fromArray(before.position).distanceTo(new Vector3().fromArray(before.target));
   expect(distance).toBeGreaterThan(2e-6); expect(distance).toBeLessThan(3e-6);
@@ -201,7 +205,7 @@ it.each(['perspective', 'orthographic'] as const)('replaces a whole-model tier w
     view!.setProjection(projection); draw();
     const renderer = runtime.renderers[0], canvas = renderer.domElement as HTMLCanvasElement;
     canvas.focus(); expect(document.activeElement).toBe(canvas);
-    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000, bubbles: true, cancelable: true })); draw();
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000, clientX: 320, clientY: 240, bubbles: true, cancelable: true })); draw();
     pointer(canvas, 'pointerdown', 300); pointer(document, 'pointermove', 320);
     const camera = renderer.render.mock.calls.at(-1)![1], control = updateControls.mock.contexts.at(-1) as OrbitControls, graph = first.scene.parent!, before = {
       position: camera.position.clone(), rotation: camera.quaternion.clone(), up: camera.up.clone(), zoom: camera.zoom, near: camera.near,
@@ -225,8 +229,10 @@ it.each(['perspective', 'orthographic'] as const)('replaces a whole-model tier w
     if (camera instanceof OrthographicCamera) expect(camera.zoom).toBe(before.zoom);
     else expect(camera.position.distanceTo(before.position)).toBeLessThan(1);
     for (const action of [() => view!.fit('front'), () => view!.reset()]) {
-      action(); draw(); camera.updateMatrixWorld(true);
-      const frustum = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      action(); draw();
+      const framingCamera = renderer.render.mock.calls.at(-1)![1];
+      framingCamera.updateMatrixWorld(true);
+      const frustum = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(framingCamera.projectionMatrix, framingCamera.matrixWorldInverse));
       for (const admitted of [distant]) {
         const box = new Box3().setFromObject(admitted.scene);
         for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) expect(frustum.containsPoint(new Vector3(x, y, z))).toBe(true);
@@ -280,7 +286,7 @@ it('starts a fresh view with a real orthographic camera and restores a saved per
 });
 
 it('changes a perspective view to orthographic right and left through one axis action at a time', () => {
-  const f = mount(); f.view.setProjection('perspective'); f.view.fit('front'); draw();
+  const f = mount(); f.view.fit('front'); f.view.setProjection('perspective'); draw();
   expect(f.view.projection).toBe('perspective');
   const axis = f.canvas.parentElement!.querySelector<SVGGElement>('[data-axis="X"]')!;
   for (const sign of [1, -1]) {
