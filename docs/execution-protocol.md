@@ -2,9 +2,10 @@
 
 Status: accepted — layers 1–3 implemented (binding arbitration; local
 bootstrap with authenticated handshake; and the first physical
-operation, bounded revision-checked range reading of the bound
-workspace). Remaining contracts below are frozen in shape and pending
-implementation in later layers.
+operations: bounded revision-checked range reading, entry metadata,
+and bounded directory pages of the bound workspace). Remaining
+contracts below are frozen in shape and pending implementation in
+later layers.
 
 This ADR grounds its decisions in the verified server/client separation
 plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
@@ -49,7 +50,8 @@ The workspace has four execution members; the names are fixed.
   Server arbitrates and dispatches, it never touches the workspace.
 - `rustx-confined-fs` (`crates/confined-fs`): the physical
   descriptor-relative filesystem primitives — the proven
-  `PackageDirectory` and the bounded revision-checked range reader —
+  `PackageDirectory` and the bounded revision-checked range, metadata,
+and directory-page readers —
   factored out of the Agent Server itself so both the runtime and the
   Client share exactly one implementation. No Agent, cancellation,
   store, or process dependency.
@@ -62,12 +64,14 @@ The workspace has four execution members; the names are fixed.
   over `rustx-confined-fs`, preserving every existing semantic.
 
 These layers perform authenticated negotiation, binding arbitration,
-local bootstrap, and exactly one physical operation — the bounded
-revision-checked range read. There is no production dispatch beyond it,
+local bootstrap, and three physical operations — the bounded
+revision-checked range read, entry metadata, and bounded directory
+pages. There is no production dispatch beyond them,
 no process spawn of business work, no write path, and no remote
 transport; none may exist until the gates below exist. Nothing claims
-unimplemented I/O: a runtime Hello advertises `Capability::Connection`
-and `Capability::ReadRange`, exactly what the Client implements, never
+unimplemented I/O: a runtime Hello advertises `Capability::Connection`,
+`Capability::ReadRange`, and `Capability::DirectoryMetadata`, exactly
+what the Client implements, never
 `Files`.
 
 ### Identities
@@ -243,10 +247,12 @@ publishes the trusted-channel bundle:
   restores blocking mode only on success; a failed handshake
   stream is shut down still nonblocking.
 - `LocalConnection` exposes only typed, Server-initiated exchanges —
-  `ping()` (`Ping`/`Pong`) and `read_range(...)` (`ReadRange`/`Range`)
-  — never a raw message path. `read_range` first consults the
-  capabilities the peer actually advertised in its Hello: a connection
-  that never claimed `ReadRange` gets `io::ErrorKind::Unsupported` and
+  `ping()` (`Ping`/`Pong`), `read_range(...)` (`ReadRange`/`Range`),
+  `entry_metadata(...)` (`GetMetadata`/`Metadata`), and
+  `directory_page(...)` (`ReadDirectory`/`Directory`) — never a raw
+  message path. Each first consults the capabilities the peer actually
+  advertised in its Hello: a connection that never claimed `ReadRange`
+  or `DirectoryMetadata` gets `io::ErrorKind::Unsupported` and
   no request is written. Every exchange serializes the request with
   `encode_record` *before* the gate, so an unencodable request fails
   without touching the binding or the wire, then re-acquires the binding
@@ -303,7 +309,7 @@ offset: DecimalU64, max_bytes: u32, expected_revision: Option<String>
 metadata }` or `ClientReply::Error { kind }` with the stable
 `ReadError` codes `invalid`, `denied`, `not-found`, `conflict`,
 `unavailable` — no raw paths or payload details cross back. `metadata`
-is a `RegularFileStamp { size: DecimalU64, revision, identity,
+is a `FileStamp { size: DecimalU64, revision, identity,
 modified_at_ms }`: the source descriptor of the file the bytes were
 read from, projected from the same `FileChunk.metadata` the confined
 read already verified — the Client performs no second stat for the
@@ -311,6 +317,34 @@ reply, and a nonregular result is denied rather than stamped. The wire
 file type is implicitly regular; `Range` never describes another kind.
 The Client validates `relative_path` to normal components only and
 enforces `1..=64 KiB` before touching the filesystem.
+
+The two query operations share the same exchange discipline.
+`ClientRequest::GetMetadata { relative_path }` is answered by
+`ClientReply::Metadata { metadata: EntryStamp }` — an `EntryStamp`
+pairs the `FileStamp` descriptor with an explicit `EntryKind`
+(`regular-file`, `directory`, `symlink`, `other`), stamped by
+`fstatat` with `AT_SYMLINK_NOFOLLOW` through the retained
+`PackageDirectory` so a leaf symlink reports itself, never its target.
+`ClientRequest::ReadDirectory { relative_path, offset: u32,
+limit: u32, expected_revision }` is answered by `ClientReply::Directory
+{ revision, entries, next_offset }`: at most `limit` (never more than
+`MAX_DIRECTORY_PAGE_ENTRIES`, 128) `PageEntry` records carrying a
+sorted name plus its own `EntryStamp`, a directory `FileStamp`
+revision for the expected-revision check, and a continuation cursor
+that is exactly `offset + entries.len()` while a full page is
+delivered. For both, an empty `relative_path` names the workspace root
+itself — the only path that may; every other path is validated to
+normal components, intermediate symlinks are refused, and the Server
+side applies the same name discipline on the reply: strictly
+increasing single components of at most 255 bytes each — never `/`,
+`.`, or `..`, while control characters remain ordinary literal name
+data on both DTO sides, matching the established product listing
+contract — plus valid stamps, and `MAX_DIRECTORY_NAMES` (4096) as
+the physical listing bound. A name
+the wire shape cannot honestly carry — a non-UTF-8 member — is
+reported `invalid` by the Client rather than emitted. Malformed replies — wrong cursor,
+unordered or illegal names, bad stamps — retire the stream and detach
+the binding exactly like a malformed `Range`.
 
 `rustx-execution-client --binding-file PATH --workspace PATH` is the
 physical Client:
@@ -346,16 +380,18 @@ physical Client:
   verification, and `finish()` restoring blocking mode before the client
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
-  capability set `{Connection, ReadRange}` — the operations this build
-  physically implements — constructed by the client, never read from the
-  mutable bundle.
+  capability set `{Connection, ReadRange, DirectoryMetadata}` — the
+  operations this build physically implements — constructed by the
+  client, never read from the mutable bundle.
 - After sending the Hello it reads one `HelloReply`; a reject is
   reported by its stable code, and a matching `Admission` must echo
   exactly this binding's fields — protocol version included — before
   the client proceeds.
 - The client then serves only typed requests until a clean EOF before a
-  record ends it: `Ping` → `Pong`, and `ReadRange` answered through the
-  retained `PackageDirectory` via `rustx_confined_fs::read_range`. EOF
+  record ends it: `Ping` → `Pong`, `ReadRange` answered through the
+  retained `PackageDirectory` via `rustx_confined_fs::read_range`, and
+  `GetMetadata`/`ReadDirectory` answered through its
+  `entry_metadata`/`directory_page`. EOF
   after a successful handshake never permits the credential file to be
   replayed: the binding is `Detached` and the Server answers
   `RecoveryRequired`.
@@ -495,7 +531,8 @@ envelope.
   record framing and the local Unix-socket bootstrap are implemented.
   WSS/TLS, health budgets, and recovery windows are pending.
 - No write, spawn, MCP session, Python, managed output, or any file
-  operation beyond the bounded range read exists behind `Admission`;
+  operation beyond the range read and the two query operations exists
+  behind `Admission`;
   `Binding::status()` is observation only, and a `Live` phase is a
   connection fact, not an integration claim. `Capability::Files` and
   everything it implies stay unadvertised until that capability lands.
@@ -522,13 +559,14 @@ envelope.
   `/` cwd, sealed stdio and `kill_on_drop`), race its connect against
   `LOCAL_HANDSHAKE_TIMEOUT`, admit it through the blocking handshake, and
   stop+reap it inside the drain deadline; bare mode composes nothing.
-  `fs/readFile` now routes through this owner: the App Server resolves
-  the request's `sessionId` through the non-creating
-  `execution_endpoint` lookup (absence is `ExecutionUnavailable`, never
-  a fallback), authorizes the admitted workspace against the configured
-  environment roots before and after the exchange, and projects the
-  returned `RangeRead` — including its source-descriptor
-  `RegularFileStamp` — into the wire `FileChunk`. Every other
+  `fs/readFile`, `fs/getMetadata`, and `fs/readDirectory` now route
+  through this owner: the App Server resolves the request's `sessionId`
+  through the non-creating `execution_endpoint` lookup (absence is
+  `ExecutionUnavailable`, never a fallback), authorizes the admitted
+  workspace against the configured environment roots before and after
+  the exchange, and projects the returned `RangeRead`, `EntryStamp`,
+  or `DirectoryListing` — including their source-descriptor
+  `FileStamp`s — into the wire shapes. Every other
   filesystem method still flows through the prior environment readers
   (delegating to `rustx-confined-fs`); their migration remains
   outstanding.

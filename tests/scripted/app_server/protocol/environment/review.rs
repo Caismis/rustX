@@ -231,6 +231,7 @@ pub(crate) async fn watch_recheck() {
         &connection,
         2,
         Method::FsGetMetadata {
+            session_id: session_id.clone(),
             path: path.display().to_string(),
         },
     )

@@ -23,6 +23,70 @@ pub(in crate::app_server) fn error(error: std::io::Error) -> RpcError {
     domain(data)
 }
 impl AppServerConnection {
+    /// The shared dispatch gate every file query routed to a Session's
+    /// admitted Execution Client passes: the non-creating endpoint
+    /// lookup (absence is `ExecutionUnavailable`, never a fallback), the
+    /// admitted-workspace authorization against configured environment
+    /// roots checked before *and* after the exchange — a policy change
+    /// mid-exchange never reaches the caller — the detached-blocking
+    /// shape that keeps admission through a dropped waiter, and the
+    /// shared error mapping. Nothing here opens or stats the workspace.
+    async fn execution_file_query(
+        &self,
+        session_id: crate::local_runtime::session::SessionId,
+        owner: crate::app_server::host::ServerOperation,
+        query: impl FnOnce(
+            &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        ) -> std::io::Result<MethodResult>
+        + Send
+        + 'static,
+    ) -> Result<MethodResult, RpcError> {
+        let manager = self.host.manager().clone();
+        let closed = self.service_events.closed.clone();
+        tokio::task::spawn_blocking(move || {
+            let _owner = owner;
+            if closed.is_cancelled() {
+                return Err(domain(ErrorData::ConnectionClosed));
+            }
+            // Non-creating lookup: no endpoint means no admitted
+            // Client — absence is unavailability, not an error a
+            // fallback could hide.
+            let endpoint = manager
+                .execution_endpoint(&session_id)
+                .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+            // Logical authorization only: the admitted workspace
+            // must sit under a configured root. A configured
+            // subtree grant never widens upward to the whole
+            // workspace, and nothing here opens or stats it.
+            let authorized = || {
+                manager
+                    .process_policy()
+                    .environment_roots
+                    .iter()
+                    .any(|root| endpoint.workspace().starts_with(root))
+            };
+            if !authorized() {
+                return Err(domain(ErrorData::EnvironmentUnauthorized));
+            }
+            let result = query(&endpoint).map_err(|io| match io.kind() {
+                std::io::ErrorKind::NotConnected | std::io::ErrorKind::BrokenPipe => {
+                    domain(ErrorData::ExecutionUnavailable)
+                }
+                std::io::ErrorKind::WouldBlock => domain(ErrorData::EnvironmentCapacityOrConflict),
+                _ => error(io),
+            })?;
+            if !authorized() {
+                return Err(domain(ErrorData::EnvironmentUnauthorized));
+            }
+            if closed.is_cancelled() {
+                return Err(domain(ErrorData::ConnectionClosed));
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|_| domain(ErrorData::OutcomeUnknown))?
+    }
+
     #[allow(clippy::too_many_lines)] // One exhaustive arm per native environment operation.
     pub(super) async fn environment(
         &self,
@@ -83,62 +147,15 @@ impl AppServerConnection {
                 if !(1..=rustx_execution_protocol::MAX_RAW_CHUNK_BYTES).contains(&max_bytes) {
                     return Err(domain(ErrorData::InvalidParams));
                 }
-                let manager = self.host.manager().clone();
-                let closed = self.service_events.closed.clone();
-                // Detached blocking work retains admission through the
-                // exchange; a dropped transport waiter never frees it.
-                tokio::task::spawn_blocking(move || {
-                    let _owner = owner;
-                    if closed.is_cancelled() {
-                        return Err(domain(ErrorData::ConnectionClosed));
-                    }
-                    // Non-creating lookup: no endpoint means no admitted
-                    // Client — absence is unavailability, not an error a
-                    // fallback could hide.
-                    let endpoint = manager
-                        .execution_endpoint(&session_id)
-                        .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
-                    // Logical authorization only: the admitted workspace
-                    // must sit under a configured root. A configured
-                    // subtree grant never widens upward to the whole
-                    // workspace, and nothing here opens or stats it.
-                    let authorized = || {
-                        manager
-                            .process_policy()
-                            .environment_roots
-                            .iter()
-                            .any(|root| endpoint.workspace().starts_with(root))
-                    };
-                    if !authorized() {
-                        return Err(domain(ErrorData::EnvironmentUnauthorized));
-                    }
-                    let bounded =
-                        u32::try_from(max_bytes).map_err(|_| domain(ErrorData::InvalidParams))?;
-                    let range = endpoint
-                        .read_range(
-                            std::path::Path::new(&path),
-                            offset,
-                            bounded,
-                            expected_revision.as_deref(),
-                        )
-                        .map_err(|io| match io.kind() {
-                            std::io::ErrorKind::NotConnected | std::io::ErrorKind::BrokenPipe => {
-                                domain(ErrorData::ExecutionUnavailable)
-                            }
-                            std::io::ErrorKind::WouldBlock => {
-                                domain(ErrorData::EnvironmentCapacityOrConflict)
-                            }
-                            _ => error(io),
-                        })?;
-                    // A policy change during the exchange never reaches
-                    // the caller — authorization and liveness are checked
-                    // again before bytes are exposed.
-                    if !authorized() {
-                        return Err(domain(ErrorData::EnvironmentUnauthorized));
-                    }
-                    if closed.is_cancelled() {
-                        return Err(domain(ErrorData::ConnectionClosed));
-                    }
+                let bounded =
+                    u32::try_from(max_bytes).map_err(|_| domain(ErrorData::InvalidParams))?;
+                self.execution_file_query(session_id, owner, move |endpoint| {
+                    let range = endpoint.read_range(
+                        std::path::Path::new(&path),
+                        offset,
+                        bounded,
+                        expected_revision.as_deref(),
+                    )?;
                     Ok(MethodResult::FileChunk {
                         chunk: rustx_confined_fs::FileChunk {
                             data_base64: base64::engine::general_purpose::STANDARD
@@ -158,7 +175,44 @@ impl AppServerConnection {
                     })
                 })
                 .await
-                .map_err(|_| domain(ErrorData::OutcomeUnknown))?
+            }
+            Method::FsGetMetadata { session_id, path } => {
+                self.execution_file_query(session_id, owner, move |endpoint| {
+                    endpoint
+                        .entry_metadata(std::path::Path::new(&path))
+                        .map(|metadata| MethodResult::FileMetadata { metadata })
+                })
+                .await
+            }
+            Method::FsReadDirectory {
+                session_id,
+                path,
+                offset,
+                limit,
+                expected_revision,
+            } => {
+                // Parameter gate before enqueue — the schema range and
+                // this bound are the same physical page limits.
+                if !(1..=rustx_execution_protocol::MAX_DIRECTORY_PAGE_ENTRIES).contains(&limit)
+                    || offset > rustx_execution_protocol::MAX_DIRECTORY_NAMES
+                {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (offset, limit) = (
+                    u32::try_from(offset).map_err(|_| domain(ErrorData::InvalidParams))?,
+                    u32::try_from(limit).map_err(|_| domain(ErrorData::InvalidParams))?,
+                );
+                self.execution_file_query(session_id, owner, move |endpoint| {
+                    endpoint
+                        .directory_page(
+                            std::path::Path::new(&path),
+                            offset,
+                            limit,
+                            expected_revision.as_deref(),
+                        )
+                        .map(|page| MethodResult::DirectoryPage { page })
+                })
+                .await
             }
             method => {
                 let environment = self.host.manager().environment.clone();
@@ -186,17 +240,6 @@ impl AppServerConnection {
                                 .write(&path, &bytes, expected_revision.as_deref())
                                 .map(|metadata| MethodResult::FileMetadata { metadata })
                         }
-                        Method::FsReadDirectory {
-                            path,
-                            offset,
-                            limit,
-                            expected_revision,
-                        } => environment
-                            .list(&path, offset, limit, expected_revision.as_deref())
-                            .map(|page| MethodResult::DirectoryPage { page }),
-                        Method::FsGetMetadata { path } => environment
-                            .metadata(&path)
-                            .map(|metadata| MethodResult::FileMetadata { metadata }),
                         Method::FsCreateDirectory { path, recursive } => environment
                             .create_directory(&path, recursive)
                             .map(|()| MethodResult::EnvironmentAccepted {}),

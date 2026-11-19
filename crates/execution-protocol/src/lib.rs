@@ -34,6 +34,13 @@ pub const MAX_ENCODED_FRAME_BYTES: usize = 1024 * 1024;
 /// expansion still counts against [`MAX_ENCODED_FRAME_BYTES`].
 pub const MAX_RAW_CHUNK_BYTES: usize = 64 * 1024;
 
+/// Maximum names one directory may hold for paging — the listing cap
+/// `Directory` pages are paginated through.
+pub const MAX_DIRECTORY_NAMES: usize = 4096;
+
+/// Maximum entries one `Directory` page reply may carry.
+pub const MAX_DIRECTORY_PAGE_ENTRIES: usize = 128;
+
 /// Maximum data records queued or in flight on one connection.
 pub const MAX_DATA_RECORDS_PER_CONNECTION: usize = 8;
 
@@ -269,9 +276,13 @@ pub enum Capability {
     /// Workspace file I/O: read, write, conditional replace, metadata,
     /// directory paging, copy/delete, change notifications.
     Files,
-    /// The one implemented physical operation: bounded revision-checked
+    /// The one implemented byte operation: bounded revision-checked
     /// range reads under the binding workspace.
     ReadRange,
+    /// The implemented query operations: entry metadata stat'ed without
+    /// following the leaf, and bounded directory paging, under the
+    /// binding workspace.
+    DirectoryMetadata,
     /// Data-side bounded glob/grep, conditional edit, document decoding.
     Search,
     /// Managed processes under Server-assigned `OperationId`s.
@@ -493,9 +504,9 @@ pub type HelloReply = Result<Admission, Reject>;
 /// The Server's one typed request on a live execution connection.
 ///
 /// The Server is the only initiator; the Client answers every request with
-/// exactly one [`ClientReply`]. `Ping`/`Pong` is the liveness control flow
-/// and `ReadRange` is the one implemented physical operation — there is no
-/// raw or arbitrary message path.
+/// exactly one [`ClientReply`]. `Ping`/`Pong` is the liveness control flow;
+/// `ReadRange`, `GetMetadata`, and `ReadDirectory` are the implemented
+/// physical operations — there is no raw or arbitrary message path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ClientRequest {
@@ -510,6 +521,25 @@ pub enum ClientRequest {
         /// At most [`MAX_RAW_CHUNK_BYTES`] bytes.
         max_bytes: u32,
         /// The revision the file must still hold, when checked.
+        expected_revision: Option<String>,
+    },
+    /// The metadata of one entry under the binding workspace, stat'ed
+    /// without following a final symlink.
+    GetMetadata {
+        /// The workspace-relative entry path: normal components only, or
+        /// empty for the workspace root itself.
+        relative_path: PathBuf,
+    },
+    /// One bounded page of a directory under the binding workspace.
+    ReadDirectory {
+        /// The workspace-relative directory path: normal components only,
+        /// or empty for the workspace root itself.
+        relative_path: PathBuf,
+        /// The entry index the page starts at.
+        offset: u32,
+        /// At most [`MAX_DIRECTORY_PAGE_ENTRIES`] entries.
+        limit: u32,
+        /// The revision the directory must still hold, when checked.
         expected_revision: Option<String>,
     },
 }
@@ -529,7 +559,21 @@ pub enum ClientReply {
         /// The next offset to read, absent at end of file.
         next_offset: Option<DecimalU64>,
         /// The source-descriptor stamp of the file the bytes came from.
-        metadata: RegularFileStamp,
+        metadata: FileStamp,
+    },
+    /// The kind and stamp of the queried entry.
+    Metadata {
+        /// The entry's kind and stamp, stat'ed without following it.
+        metadata: EntryStamp,
+    },
+    /// One page of a directory listing.
+    Directory {
+        /// The revision the listing was verified under.
+        revision: String,
+        /// The page's entries in the directory's stable name order.
+        entries: Vec<PageEntry>,
+        /// The index the next page starts at, absent at the end.
+        next_offset: Option<u32>,
     },
     /// The request failed; `kind` carries only the stable reason.
     Error {
@@ -538,23 +582,63 @@ pub enum ClientReply {
     },
 }
 
-/// The source-descriptor stamp of the regular file a range was read from.
+/// The source-descriptor stamp of one filesystem entry.
 ///
-/// Carried on every [`ClientReply::Range`] so the Server can project the
-/// file-read result without re-statting the workspace itself. The wire file
-/// type is implicitly regular: a `Range` reply only ever describes
-/// regular-file bytes.
+/// Carried on every physical reply so the Server can project the result
+/// without re-statting the workspace itself: a general entry stamp of
+/// size, content-stable revision, `dev:ino` identity, and modification
+/// time. On a `Range` reply the wire file type is implicitly regular —
+/// a `Range` only ever describes regular-file bytes; queries report
+/// the kind explicitly through [`EntryStamp`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RegularFileStamp {
-    /// The file's byte length at the read.
+pub struct FileStamp {
+    /// The entry's byte length at the query.
     pub size: DecimalU64,
-    /// The content-stable revision stamp the range was verified under.
+    /// The content-stable revision stamp the entry was verified under.
     pub revision: String,
-    /// The `dev:ino` identity of the file read.
+    /// The `dev:ino` identity of the entry.
     pub identity: String,
     /// Modification time in milliseconds since the Unix epoch, when known.
     pub modified_at_ms: Option<i64>,
+}
+
+/// The kind of one filesystem entry reported by a query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EntryKind {
+    /// A regular file.
+    RegularFile,
+    /// A directory.
+    Directory,
+    /// A symbolic link — reported, never followed.
+    Symlink,
+    /// Any other entry type (fifo, socket, device node).
+    Other,
+}
+
+/// One filesystem entry's kind plus its source-descriptor stamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryStamp {
+    /// What the entry is.
+    pub kind: EntryKind,
+    /// The entry's size, revision, `dev:ino` identity, and mtime.
+    pub stamp: FileStamp,
+}
+
+/// One entry of a directory page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageEntry {
+    /// The entry name verbatim: exactly one component — never `/`, `.`,
+    /// or `..`. Any other byte is ordinary literal name data, control
+    /// characters included (the pre-migration product contract returned
+    /// names unchanged); the Server never joins a name into a path it
+    /// opens, so no byte can escape through it.
+    pub name: String,
+    /// The entry's kind and stamp, stat'ed without following it.
+    pub metadata: EntryStamp,
 }
 
 /// The stable machine reason a physical read failed.

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use rustx_execution_protocol::EntryKind;
 use rustx_execution_protocol::transport::{read_record, write_record};
 use rustx_execution_protocol::{
     BindingCredential, Bootstrap, Capability, ClientInstanceId, EnvironmentId, Generation, Hello,
@@ -421,6 +422,151 @@ fn oversized_and_zero_requests_are_invalid_not_reads() {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{max_bytes}");
     }
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn metadata_and_directory_cover_root_and_leaf_symlinks() {
+    let rig = rig();
+    fs::write(rig.workspace_path.join("file"), b"bytes").unwrap();
+    fs::create_dir(rig.workspace_path.join("sub")).unwrap();
+    std::os::unix::fs::symlink("file", rig.workspace_path.join("link")).unwrap();
+    // A symlinked intermediate component must still be refused.
+    let outside = private_dir();
+    fs::write(outside.1.join("secret"), b"no").unwrap();
+    std::os::unix::fs::symlink(&outside.1, rig.workspace_path.join("escape")).unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // The root itself answers with a directory stamp and pages its names
+    // sorted, leaf symlinks reported — never followed.
+    let root = connection.entry_metadata(Path::new("")).unwrap();
+    assert_eq!(root.kind, EntryKind::Directory);
+    let page = connection
+        .directory_page(Path::new(""), 0, 16, None)
+        .unwrap();
+    let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["escape", "file", "link", "sub"]);
+    assert_eq!(page.next_offset, None);
+    let kind_of = |name: &str| {
+        page.entries
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap()
+            .metadata
+            .kind
+    };
+    assert_eq!(kind_of("escape"), EntryKind::Symlink);
+    assert_eq!(kind_of("file"), EntryKind::RegularFile);
+    assert_eq!(kind_of("link"), EntryKind::Symlink);
+    assert_eq!(kind_of("sub"), EntryKind::Directory);
+
+    // A leaf symlink's own metadata is allowed.
+    assert_eq!(
+        connection.entry_metadata(Path::new("link")).unwrap().kind,
+        EntryKind::Symlink
+    );
+    assert_eq!(
+        connection.entry_metadata(Path::new("sub")).unwrap().kind,
+        EntryKind::Directory
+    );
+
+    // Traversal, symlinked intermediates, absolute and embedded-`.`
+    // paths are refused — the link itself is never followed. A raw `.`
+    // is refused on the wire too: only the endpoint's lexical helper may
+    // spell the root as `.`, normalizing to the empty path first.
+    for path in [
+        "../outside",
+        "escape/secret",
+        "/etc",
+        ".",
+        "sub/../file",
+        "sub/./file",
+    ] {
+        assert!(
+            connection.entry_metadata(Path::new(path)).is_err(),
+            "{path}"
+        );
+        assert!(
+            connection
+                .directory_page(Path::new(path), 0, 16, None)
+                .is_err(),
+            "{path}"
+        );
+    }
+    // A regular file is not pageable as a directory: the physical
+    // ENOTDIR surfaces as the stable `not-found` wire answer.
+    assert_eq!(
+        connection
+            .directory_page(Path::new("file"), 0, 16, None)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    for limit in [0, 129] {
+        assert_eq!(
+            connection
+                .directory_page(Path::new(""), 0, limit, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput,
+            "{limit}"
+        );
+    }
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn directory_pages_bound_the_listing_and_reject_stale_revisions() {
+    let rig = rig();
+    for name in ["a", "b", "c"] {
+        fs::write(rig.workspace_path.join(name), name.as_bytes()).unwrap();
+    }
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // A bound smaller than the directory pages with a continuation
+    // cursor; resuming returns the remainder and no cursor.
+    let first = connection
+        .directory_page(Path::new(""), 0, 2, None)
+        .unwrap();
+    assert_eq!(
+        first
+            .entries
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert_eq!(first.next_offset, Some(2));
+    let rest = connection
+        .directory_page(Path::new(""), 2, 16, None)
+        .unwrap();
+    assert_eq!(
+        rest.entries
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        ["c"]
+    );
+    assert_eq!(rest.next_offset, None);
+
+    // A membership change between pages makes the earlier revision
+    // stale: the expected revision conflicts like a file's does.
+    fs::write(rig.workspace_path.join("d"), b"d").unwrap();
+    let error = connection
+        .directory_page(Path::new(""), 0, 16, Some(&first.revision))
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    connection.ping().unwrap();
 
     drop(connection);
     expect_success(&mut child);

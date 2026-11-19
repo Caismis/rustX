@@ -2,7 +2,6 @@
 use super::{Environment, Root};
 use crate::package_io::PackageDirectory;
 use rustix::fs::{AtFlags, Mode, OFlags};
-use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Read, Write};
 #[cfg(test)]
@@ -13,7 +12,7 @@ use std::path::{Component, Path};
 // The physical metadata/chunk contract and its stamping live in
 // `rustx_confined_fs`, shared with the Execution Client; they are re-exported
 // so there is exactly one business type on each side of the workspace.
-pub use rustx_confined_fs::{FileChunk, FileMetadata};
+pub use rustx_confined_fs::{DirectoryEntry, DirectoryPage, FileChunk, FileMetadata};
 
 pub const CHUNK_BYTES: usize = 512 * 1024;
 const DIRECTORY_ENTRIES: usize = 4096;
@@ -79,32 +78,8 @@ fn conflict() -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, "filesystem revision conflict")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DirectoryEntry {
-    pub file_name: String,
-    pub metadata: FileMetadata,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DirectoryPage {
-    pub entries: Vec<DirectoryEntry>,
-    pub next_offset: Option<usize>,
-    pub revision: String,
-}
-
 pub(super) fn directory(root: &PackageDirectory, relative: &Path) -> io::Result<PackageDirectory> {
-    let mut current = None;
-    for part in relative.components() {
-        match part {
-            Component::CurDir => {}
-            Component::Normal(name) => {
-                current = Some(current.as_ref().unwrap_or(root).child(name)?);
-            }
-            _ => return Err(denied()),
-        }
-    }
-    current.map_or_else(|| root.child(std::ffi::OsStr::new(".")), Ok)
+    root.descend(relative)
 }
 fn parent(root: &Root, relative: &Path) -> io::Result<(PackageDirectory, std::ffi::OsString)> {
     let leaf = relative
@@ -122,20 +97,14 @@ fn open(directory: &PackageDirectory, leaf: &std::ffi::OsStr) -> io::Result<File
         Mode::empty(),
     )?))
 }
+/// The physical stat lives in `rustx_confined_fs` — no-follow descent,
+/// leaf `fstatat(AT_SYMLINK_NOFOLLOW)`, chain verify before and after.
+/// The root grant's cancellation is the only product-level check here.
 pub(crate) fn metadata(root: &Root, relative: &Path) -> io::Result<FileMetadata> {
     if root.cancelled.is_cancelled() {
         return Err(denied());
     }
-    if relative.as_os_str().is_empty() {
-        return FileMetadata::of(&File::from(root.directory.descriptor().try_clone()?));
-    }
-    let (directory, leaf) = parent(root, relative)?;
-    directory.verify()?;
-    FileMetadata::stat(&nix::sys::stat::fstatat(
-        directory.descriptor(),
-        leaf.as_os_str(),
-        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-    )?)
+    root.directory.entry_metadata(relative)
 }
 
 /// Retain the exact native watch source instead of resolving its pathname again
@@ -185,9 +154,6 @@ pub(crate) fn read_range(
 }
 
 impl Environment {
-    pub(crate) fn metadata(&self, path: &str) -> io::Result<FileMetadata> {
-        self.with_paths(&[path], |paths| metadata(&paths[0].1, &paths[0].2))
-    }
     pub(crate) fn write(
         &self,
         path: &str,
@@ -213,51 +179,6 @@ impl Environment {
                 |output| output.write_all(bytes),
             )?;
             metadata(root, relative).map_err(uncertain)
-        })
-    }
-    pub(crate) fn list(
-        &self,
-        path: &str,
-        offset: usize,
-        limit: usize,
-        expected: Option<&str>,
-    ) -> io::Result<DirectoryPage> {
-        if !(1..=128).contains(&limit) || offset > DIRECTORY_ENTRIES {
-            return Err(invalid("invalid directory page"));
-        }
-        self.with_paths(&[path], |paths| {
-            let (_, root, relative) = &paths[0];
-            let before = metadata(root, relative)?;
-            if expected.is_some_and(|expected| expected != before.revision) {
-                return Err(conflict());
-            }
-            let directory = directory(&root.directory, relative)?;
-            let names = directory.names(DIRECTORY_ENTRIES)?;
-            let mut entries = Vec::new();
-            for name in names.iter().skip(offset).take(limit) {
-                let file_name = name
-                    .to_str()
-                    .ok_or_else(|| invalid("non-UTF-8 filename"))?
-                    .to_owned();
-                let child = nix::sys::stat::fstatat(
-                    directory.descriptor(),
-                    name.as_os_str(),
-                    nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-                )?;
-                entries.push(DirectoryEntry {
-                    file_name,
-                    metadata: FileMetadata::stat(&child)?,
-                });
-            }
-            if before != metadata(root, relative)? {
-                return Err(conflict());
-            }
-            Ok(DirectoryPage {
-                next_offset: (offset + entries.len() < names.len())
-                    .then_some(offset + entries.len()),
-                entries,
-                revision: before.revision,
-            })
         })
     }
     pub(crate) fn create_directory(&self, path: &str, recursive: bool) -> io::Result<()> {
@@ -672,9 +593,9 @@ mod tests {
     fn atomic_faults_conflicts_and_permissions_preserve_the_current_file() {
         let (_temporary, environment, root) = fixture();
         let path = format!("{root}/file");
-        let metadata = environment.write(&path, b"original", None).unwrap();
+        let written = environment.write(&path, b"original", None).unwrap();
         let directory = PackageDirectory::open(Path::new(&root)).unwrap();
-        let revision = Some(metadata.revision.as_str());
+        let revision = Some(written.revision.as_str());
         let root_authority = authority(&root);
         assert!(
             atomic_write(
@@ -715,7 +636,10 @@ mod tests {
             vec![std::path::PathBuf::from("file")]
         );
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750)).unwrap();
-        let revision = environment.metadata(&path).unwrap().revision;
+        let revision = environment
+            .with_paths(&[&path], |paths| metadata(&paths[0].1, &paths[0].2))
+            .unwrap()
+            .revision;
         environment
             .write(&path, b"replacement", Some(&revision))
             .unwrap();
@@ -735,7 +659,9 @@ mod tests {
             .unwrap();
         let directory = PackageDirectory::open(&Path::new(&root).join("parent")).unwrap();
         let revision = environment
-            .metadata(&format!("{root}/parent/file"))
+            .with_paths(&[format!("{root}/parent/file").as_str()], |paths| {
+                metadata(&paths[0].1, &paths[0].2)
+            })
             .unwrap()
             .revision;
         let outside = tempfile::tempdir().unwrap();
@@ -823,10 +749,24 @@ mod tests {
         std::fs::rename(temporary.path(), &retired).unwrap();
         std::fs::create_dir(temporary.path()).unwrap();
         std::fs::write(temporary.path().join("file"), b"replacement").unwrap();
-        assert!(environment.metadata(&format!("{root}/file")).is_err());
+        assert!(
+            environment
+                .with_paths(&[format!("{root}/file").as_str()], |paths| metadata(
+                    &paths[0].1,
+                    &paths[0].2
+                ))
+                .is_err()
+        );
         environment.configure(&[]);
         environment.configure(&[Path::new(&root).to_path_buf()]);
-        assert!(environment.metadata(&format!("{root}/file")).is_ok());
+        assert!(
+            environment
+                .with_paths(&[format!("{root}/file").as_str()], |paths| metadata(
+                    &paths[0].1,
+                    &paths[0].2
+                ))
+                .is_ok()
+        );
         std::fs::remove_dir_all(retired).unwrap();
     }
     #[test]
@@ -837,18 +777,30 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), temporary.path().join("link")).unwrap();
         assert!(
             environment
-                .metadata(&format!("{root}/link"))
+                .with_paths(&[format!("{root}/link").as_str()], |paths| metadata(
+                    &paths[0].1,
+                    &paths[0].2
+                ))
                 .unwrap()
                 .is_symlink
         );
         assert!(
-            environment.list(&root, 0, 16, None).unwrap().entries[0]
+            environment
+                .with_paths(&[root.as_str()], |paths| paths[0]
+                    .1
+                    .directory
+                    .directory_page(&paths[0].2, 0, 16, None, DIRECTORY_ENTRIES, 128))
+                .unwrap()
+                .entries[0]
                 .metadata
                 .is_symlink
         );
         assert!(
             environment
-                .metadata(&format!("{root}/link/private"))
+                .with_paths(
+                    &[format!("{root}/link/private").as_str()],
+                    |paths| metadata(&paths[0].1, &paths[0].2)
+                )
                 .is_err()
         );
         environment

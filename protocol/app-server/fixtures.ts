@@ -4977,6 +4977,7 @@ export const fixtures = [
     "id": "environment-6",
     "method": "fs/getMetadata",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file"
     }
   },
@@ -4985,6 +4986,7 @@ export const fixtures = [
     "id": "environment-7",
     "method": "fs/readDirectory",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace",
       "offset": 0,
       "limit": 32,

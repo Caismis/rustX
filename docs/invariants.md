@@ -8562,8 +8562,10 @@ local Execution Protocol over Unix sockets:
   accounting.
 - **Confinement is descriptor-relative.** The client opens the workspace root
   once through `PackageDirectory::open` and serves only normal-component
-  bounded reads; `..`, absolute paths, symlinks, and special files have no
-  addressable path, and a path replaced between the two open/verify calls is
+  bounded reads and queries; `..`, absolute paths, and special files have
+  no addressable path, intermediate symlink components are refused while a
+  leaf symlink's own metadata is reported never followed, and a path
+  replaced between the two open/verify calls is
   an `AlreadyExists` conflict, never silently followed.
 - **Session claims are process-owned, once, and fenced by residency.** The
   manager admits an execution claim only under the catalog visibility cut

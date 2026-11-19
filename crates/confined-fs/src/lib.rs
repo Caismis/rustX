@@ -12,8 +12,12 @@
 //!   the same path twice through the caller's opener, reads at most
 //!   `max_bytes`, and refuses to publish bytes if the file's revision changed
 //!   across the read.
-//! - [`FileMetadata`]/[`FileChunk`] are the shared wire shapes; their serde
-//!   field names and `schemars` schema are the established contract.
+//! - [`PackageDirectory::entry_metadata`] stamps one entry without following
+//!   a final symlink, and [`PackageDirectory::directory_page`] is the
+//!   bounded, revision-checked directory pager.
+//! - [`FileMetadata`]/[`FileChunk`]/[`DirectoryEntry`]/[`DirectoryPage`] are
+//!   the shared wire shapes; their serde field names and `schemars` schema
+//!   are the established contract.
 //!
 //! There is no Agent, cancellation, store, or process dependency here — only
 //! files and directories.
@@ -223,6 +227,149 @@ impl PackageDirectory {
         }
         Err(io::Error::other("empty package-relative path"))
     }
+
+    /// Resolves `relative` component by component to a directory handle
+    /// inside this root: every component opens no-follow as a directory,
+    /// `.` components are skipped, and anything else is denied. An empty
+    /// path re-opens this directory itself (`.`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::PermissionDenied`] for a `..`, root, or
+    /// prefix component, or the underlying `openat`/`verify` error — an
+    /// intermediate symlink or non-directory component fails the
+    /// no-follow directory open.
+    pub fn descend(&self, relative: &Path) -> io::Result<Self> {
+        let mut current = None;
+        for part in relative.components() {
+            match part {
+                Component::CurDir => {}
+                Component::Normal(name) => {
+                    current = Some(current.as_ref().unwrap_or(self).child(name)?);
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "unsafe package-relative path",
+                    ));
+                }
+            }
+        }
+        current.map_or_else(|| self.child(OsStr::new(".")), Ok)
+    }
+
+    /// Splits `relative` into its containing directory and leaf name —
+    /// the shape `fstatat`/`renameat`-style calls need.
+    fn parent_entry(&self, relative: &Path) -> io::Result<(Self, std::ffi::OsString)> {
+        let leaf = relative
+            .file_name()
+            .ok_or_else(|| invalid("operation requires a leaf path"))?;
+        let parent = self.descend(relative.parent().unwrap_or_else(|| Path::new("")))?;
+        Ok((parent, leaf.to_os_string()))
+    }
+
+    /// Stamps the metadata of `relative` inside this directory. Every
+    /// intermediate component resolves no-follow as a directory and the
+    /// leaf is `fstatat`'ed with `AT_SYMLINK_NOFOLLOW` — a symlinked leaf
+    /// reports `is_symlink` and is never followed. An empty `relative`
+    /// stamps this directory itself. The retained ancestor chain is
+    /// re-verified immediately before and after the stat.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::PermissionDenied`] for a `..` component
+    /// or a replaced ancestor, [`io::ErrorKind::InvalidInput`] when the
+    /// path has no leaf, or the underlying `openat`/`fstatat` error.
+    pub fn entry_metadata(&self, relative: &Path) -> io::Result<FileMetadata> {
+        if relative.as_os_str().is_empty() {
+            self.verify()?;
+            let metadata = FileMetadata::of(&File::from(self.fd.try_clone()?))?;
+            self.verify()?;
+            return Ok(metadata);
+        }
+        let (parent, leaf) = self.parent_entry(relative)?;
+        parent.verify()?;
+        let metadata = FileMetadata::stat(&nix::sys::stat::fstatat(
+            parent.fd.as_ref(),
+            leaf.as_os_str(),
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )?)?;
+        parent.verify()?;
+        Ok(metadata)
+    }
+
+    /// One bounded, revision-checked page of the directory `relative`
+    /// names — an empty path lists this directory itself.
+    ///
+    /// `limit` must be within `1..=page_cap` and `offset` must not exceed
+    /// `name_cap`; the directory is enumerated fail-closed at `name_cap`
+    /// entries. A supplied `expected` revision must match the directory's
+    /// current revision. Entry metadata is stat'ed without following —
+    /// a symlinked member reports `is_symlink`. The directory is stat'ed
+    /// before and after the listing; a change in between is
+    /// [`io::ErrorKind::AlreadyExists`], never published.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] for out-of-range paging
+    /// arguments or a non-UTF-8 member name,
+    /// [`io::ErrorKind::AlreadyExists`] for a stale `expected` revision
+    /// or a directory changed across the listing, and the underlying
+    /// traversal/stat error otherwise.
+    pub fn directory_page(
+        &self,
+        relative: &Path,
+        offset: usize,
+        limit: usize,
+        expected: Option<&str>,
+        name_cap: usize,
+        page_cap: usize,
+    ) -> io::Result<DirectoryPage> {
+        if !(1..=page_cap).contains(&limit) || offset > name_cap {
+            return Err(invalid("invalid directory page"));
+        }
+        // `before` describes the directory this page is read from — the
+        // opened descriptor itself, never a pathname whose target could
+        // be swapped between stamping and descent.
+        let directory = self.descend(relative)?;
+        let before = FileMetadata::of(&File::from(directory.descriptor().try_clone()?))?;
+        if expected.is_some_and(|expected| expected != before.revision) {
+            return Err(conflict());
+        }
+        let names = directory.names(name_cap)?;
+        let mut entries = Vec::new();
+        for name in names.iter().skip(offset).take(limit) {
+            let file_name = name
+                .to_str()
+                .ok_or_else(|| invalid("non-UTF-8 filename"))?
+                .to_owned();
+            let member = nix::sys::stat::fstatat(
+                directory.fd.as_ref(),
+                name.as_os_str(),
+                nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+            )?;
+            entries.push(DirectoryEntry {
+                file_name,
+                metadata: FileMetadata::stat(&member)?,
+            });
+        }
+        // Before release the retained chain must still resolve, the
+        // opened directory itself must be unchanged on the same
+        // descriptor, and the pathname must still resolve to that same
+        // directory — otherwise the delivered entries and the stamped
+        // revision could describe different things (ABA swap).
+        directory.verify()?;
+        if before != FileMetadata::of(&File::from(directory.descriptor().try_clone()?))?
+            || before != self.entry_metadata(relative)?
+        {
+            return Err(conflict());
+        }
+        Ok(DirectoryPage {
+            next_offset: (offset + entries.len() < names.len()).then_some(offset + entries.len()),
+            entries,
+            revision: before.revision,
+        })
+    }
 }
 
 // The metadata stamp and content revision of one filesystem entry. The wire
@@ -300,6 +447,27 @@ pub struct FileChunk {
     pub offset: u64,
     pub next_offset: Option<u64>,
     pub metadata: FileMetadata,
+}
+
+// One named directory entry with its no-follow metadata stamp — wire
+// shape and schema are the established contract, so fields carry no doc
+// comments. `file_name` is verbatim name data: one component, never
+// re-joined into a path by the consumer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryEntry {
+    pub file_name: String,
+    pub metadata: FileMetadata,
+}
+
+// One bounded, revision-checked page of directory entries — wire shape
+// and schema are the established contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DirectoryPage {
+    pub entries: Vec<DirectoryEntry>,
+    pub next_offset: Option<usize>,
+    pub revision: String,
 }
 
 /// The bounded, revision-checked range read, parametrized by the caller's

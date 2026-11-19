@@ -176,14 +176,21 @@ pub enum Method {
     },
     #[serde(rename = "fs/readDirectory")]
     FsReadDirectory {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         offset: usize,
+        #[schemars(range(min = 1, max = 128))]
         limit: usize,
         #[serde(rename = "expectedRevision")]
         expected_revision: Option<String>,
     },
     #[serde(rename = "fs/getMetadata")]
-    FsGetMetadata { path: String },
+    FsGetMetadata {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
+        path: String,
+    },
     #[serde(rename = "fs/createDirectory")]
     FsCreateDirectory { path: String, recursive: bool },
     #[serde(rename = "fs/remove")]

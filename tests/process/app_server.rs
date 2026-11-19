@@ -450,6 +450,7 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
         let marker = b"only through the admitted client";
         std::fs::write(f.root.path().join("a/marker"), marker).unwrap();
         std::fs::write(f.root.path().join("b/marker"), b"decoy").unwrap();
+        std::os::unix::fs::symlink("marker", f.root.path().join("a/link")).unwrap();
 
         let rustx = isolated_server_pair(f.root.path());
         let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
@@ -530,6 +531,77 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
             panic!("oversize read must fail")
         };
         assert_eq!(failure.error.data, Some(ErrorData::InvalidParams));
+
+        // fs/getMetadata reports the leaf symlink itself — never
+        // followed — with the Client's own source stamp.
+        let MethodResult::FileMetadata { metadata } = result(
+            &client,
+            Method::FsGetMetadata {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("link").display().to_string(),
+            },
+        )
+        .await
+        else {
+            panic!("fs/getMetadata through the admitted Client")
+        };
+        assert!(metadata.is_symlink && !metadata.is_file);
+        let expected_link = std::fs::symlink_metadata(workspace.join("link")).unwrap();
+        assert_eq!(metadata.size, expected_link.len());
+
+        // fs/readDirectory pages the Session's root through the Client:
+        // both names, sorted, the link reported as a symlink.
+        let MethodResult::DirectoryPage { page } = result(
+            &client,
+            Method::FsReadDirectory {
+                session_id: f.sessions[0].clone(),
+                path: workspace.display().to_string(),
+                offset: 0,
+                limit: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readDirectory through the admitted Client")
+        };
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|e| e.file_name.as_str())
+                .collect::<Vec<_>>(),
+            ["link", "marker"]
+        );
+        assert_eq!(page.next_offset, None);
+        assert!(page.entries[0].metadata.is_symlink);
+        assert!(page.entries[1].metadata.is_file);
+
+        // Session B's unbound queries fail the same way its read did.
+        for method in [
+            Method::FsGetMetadata {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+            },
+            Method::FsReadDirectory {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                offset: 0,
+                limit: 16,
+                expected_revision: None,
+            },
+        ] {
+            let Response::Failure(failure) = rpc(&client, 12, method).await else {
+                panic!("Session B query must fail")
+            };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
 
         client.close().await;
         terminate(&child);

@@ -24,10 +24,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError};
 
 use rustx_execution_protocol::{
-    Capability, ClientInstanceId, EnvironmentId, Generation, Reject, is_normalized_absolute_path,
-    transport::LOCAL_HANDSHAKE_TIMEOUT,
+    Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, Generation, Reject,
+    is_normalized_absolute_path, transport::LOCAL_HANDSHAKE_TIMEOUT,
 };
-use rustx_execution_server::{Binding, LocalConnection, RangeRead, Reservation};
+use rustx_execution_server::{Binding, DirectoryListing, LocalConnection, RangeRead, Reservation};
 
 use super::super::session::SessionId;
 use super::{RuntimeManagerError, SessionRuntimeManager, error};
@@ -209,6 +209,64 @@ impl LocalExecutionEndpoint {
         max_bytes: u32,
         expected_revision: Option<&str>,
     ) -> io::Result<RangeRead> {
+        self.with_connection(|connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection.read_range(&relative, offset, max_bytes, expected_revision)
+        })
+    }
+
+    /// The metadata of one entry through the admitted Client — `path`
+    /// may name the workspace root itself (the exact reserved absolute
+    /// path or a bare `.`), never an embedded `.`/`..`.
+    ///
+    /// Serializes with every other dispatch on the connection: `path`
+    /// gates lexically on the reserved workspace, and the binding's
+    /// live-connection check authorizes the send at dispatch time.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_range`](Self::read_range)
+    /// and the typed exchange's own errors.
+    pub fn entry_metadata(&self, path: &Path) -> io::Result<rustx_confined_fs::FileMetadata> {
+        self.with_connection(|connection| {
+            let relative = workspace_entry(&connection.admission().workspace, path)?;
+            connection.entry_metadata(&relative).map(project_metadata)
+        })
+    }
+
+    /// One bounded, revision-checked directory page through the admitted
+    /// Client — `path` may name the workspace root itself under the same
+    /// lexical rule as [`entry_metadata`](Self::entry_metadata).
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_range`](Self::read_range)
+    /// and the typed exchange's own errors.
+    pub fn directory_page(
+        &self,
+        path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+    ) -> io::Result<rustx_confined_fs::DirectoryPage> {
+        self.with_connection(|connection| {
+            let relative = workspace_entry(&connection.admission().workspace, path)?;
+            connection
+                .directory_page(&relative, offset, limit, expected_revision)
+                .map(project_page)
+        })
+    }
+
+    /// Serializes one synchronous exchange on the admitted connection:
+    /// `WouldBlock` while another dispatch holds it — a bounded busy
+    /// signal, never a queue — and `NotConnected` before admission.
+    /// The connection stays locked across the whole dispatch, so the
+    /// reply accounting of one exchange is never interleaved with the
+    /// next.
+    fn with_connection<T>(
+        &self,
+        dispatch: impl FnOnce(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
         let mut guard = match self.connection.try_lock() {
             Ok(guard) => guard,
             Err(TryLockError::WouldBlock) => {
@@ -225,8 +283,7 @@ impl LocalExecutionEndpoint {
                 "no client is admitted",
             ));
         };
-        let relative = workspace_relative(&connection.admission().workspace, path)?;
-        connection.read_range(&relative, offset, max_bytes, expected_revision)
+        dispatch(connection)
     }
 
     /// The single arbitration point the endpoint itself arbitrates
@@ -278,6 +335,50 @@ fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
         return Err(denied());
     }
     Ok(relative.to_path_buf())
+}
+
+/// `workspace_relative` for the query operations, which may name the
+/// workspace root itself: only the exact reserved absolute path or a
+/// bare `.` spell the root — an embedded `.`/`..` anywhere is still
+/// refused. The result is the empty relative path the Client reads as
+/// "the root itself".
+fn workspace_entry(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
+    if path.as_os_str() == workspace.as_os_str() || path.as_os_str().as_bytes() == b"." {
+        return Ok(PathBuf::new());
+    }
+    workspace_relative(workspace, path)
+}
+
+/// Projects a validated wire stamp onto the shared product shape —
+/// the kind becomes the boolean triple the wire contract carries.
+fn project_metadata(entry: EntryStamp) -> rustx_confined_fs::FileMetadata {
+    rustx_confined_fs::FileMetadata {
+        is_directory: entry.kind == EntryKind::Directory,
+        is_file: entry.kind == EntryKind::RegularFile,
+        is_symlink: entry.kind == EntryKind::Symlink,
+        size: entry.stamp.size.get(),
+        revision: entry.stamp.revision,
+        identity: entry.stamp.identity,
+        modified_at_ms: entry.stamp.modified_at_ms,
+    }
+}
+
+/// Projects a validated wire page onto the shared product shape.
+fn project_page(listing: DirectoryListing) -> rustx_confined_fs::DirectoryPage {
+    rustx_confined_fs::DirectoryPage {
+        entries: listing
+            .entries
+            .into_iter()
+            .map(|entry| rustx_confined_fs::DirectoryEntry {
+                file_name: entry.name,
+                metadata: project_metadata(entry.metadata),
+            })
+            .collect(),
+        next_offset: listing
+            .next_offset
+            .map(|offset| usize::try_from(offset).expect("u32 cursor fits usize")),
+        revision: listing.revision,
+    }
 }
 
 impl std::fmt::Debug for LocalExecutionEndpoint {
@@ -577,8 +678,8 @@ mod tests {
     use base64::Engine as _;
     use rustx_execution_protocol::transport::{read_record, write_record};
     use rustx_execution_protocol::{
-        Bootstrap, ClientReply, ClientRequest, DecimalU64, Hello, HelloReply, PROTOCOL_VERSION,
-        RegularFileStamp,
+        Bootstrap, ClientReply, ClientRequest, DecimalU64, FileStamp, Hello, HelloReply,
+        PROTOCOL_VERSION,
     };
     use rustx_execution_server::BindingPhase;
 
@@ -823,12 +924,80 @@ mod tests {
                 data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
                 offset,
                 next_offset: None,
-                metadata: RegularFileStamp {
+                metadata: FileStamp {
                     size: DecimalU64::new(2),
                     revision: "a".repeat(64),
                     identity: String::from("1:1"),
                     modified_at_ms: None,
                 },
+            },
+        )
+        .unwrap();
+        client
+    }
+
+    /// A scripted metadata answer for exactly one `GetMetadata` request.
+    fn answer_metadata(mut client: UnixStream, expected: &Path) -> UnixStream {
+        let request: ClientRequest = read_record(&mut client).unwrap();
+        let ClientRequest::GetMetadata { relative_path } = request else {
+            panic!("expected a metadata request");
+        };
+        assert_eq!(relative_path, expected);
+        write_record(
+            &mut client,
+            &ClientReply::Metadata {
+                metadata: EntryStamp {
+                    kind: EntryKind::Symlink,
+                    stamp: FileStamp {
+                        size: DecimalU64::new(0),
+                        revision: "b".repeat(64),
+                        identity: String::from("2:2"),
+                        modified_at_ms: None,
+                    },
+                },
+            },
+        )
+        .unwrap();
+        client
+    }
+
+    /// A scripted page answer for exactly one `ReadDirectory` request.
+    fn answer_directory(mut client: UnixStream, expected: &Path) -> UnixStream {
+        let request: ClientRequest = read_record(&mut client).unwrap();
+        let ClientRequest::ReadDirectory {
+            relative_path,
+            offset,
+            limit,
+            ..
+        } = request
+        else {
+            panic!("expected a directory request");
+        };
+        assert_eq!((relative_path.as_path(), offset, limit), (expected, 0, 16));
+        let stamp = |revision: char, identity: &str| EntryStamp {
+            kind: EntryKind::RegularFile,
+            stamp: FileStamp {
+                size: DecimalU64::new(1),
+                revision: revision.to_string().repeat(64),
+                identity: identity.into(),
+                modified_at_ms: None,
+            },
+        };
+        write_record(
+            &mut client,
+            &ClientReply::Directory {
+                revision: "c".repeat(64),
+                entries: vec![
+                    rustx_execution_protocol::PageEntry {
+                        name: String::from("a"),
+                        metadata: stamp('a', "1:1"),
+                    },
+                    rustx_execution_protocol::PageEntry {
+                        name: String::from("b"),
+                        metadata: stamp('b', "1:2"),
+                    },
+                ],
+                next_offset: None,
             },
         )
         .unwrap();
@@ -846,7 +1015,11 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
-            capabilities: BTreeSet::from([Capability::Connection, Capability::ReadRange]),
+            capabilities: BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+                Capability::DirectoryMetadata,
+            ]),
             credential: published.credential.clone(),
         };
         let (accepted, _) = endpoint.listener().accept().unwrap();
@@ -943,6 +1116,16 @@ mod tests {
         assert_eq!(range.bytes, b"ab");
         let mut client = answer.join().unwrap();
 
+        // The root itself is a legal query target but never a file:
+        // `read_range` denies it along with the empty path.
+        for path in [published.workspace.clone(), PathBuf::new()] {
+            assert_eq!(
+                endpoint.read_range(&path, 0, 64, None).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied,
+                "{path:?}"
+            );
+        }
+
         // Foreign and traversal paths are refused before any request byte
         // is written.
         for path in [
@@ -954,12 +1137,71 @@ mod tests {
             // the interior `.` away — the raw segment must be refused.
             published.workspace.join("./blob"),
             PathBuf::from("a/./blob"),
-            published.workspace.clone(),
-            PathBuf::new(),
             PathBuf::from("a\0b"),
         ] {
             assert_eq!(
                 endpoint.read_range(&path, 0, 64, None).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied,
+                "{path:?}"
+            );
+        }
+        wire_is_quiet(&mut client);
+    }
+
+    /// The metadata and directory dispatches share the same serialization
+    /// and lexical gate; the workspace root itself is legal for them only.
+    #[tokio::test]
+    async fn the_endpoint_dispatches_workspace_queries_for_its_own_session() {
+        let (_root, manager, sessions) = fixture(1).await;
+        let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
+        let published = bundle(&endpoint);
+        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+        admit(&endpoint, &mut client);
+
+        // Leaf and root metadata, then a bounded page of the root.
+        let answer = std::thread::spawn(move || answer_metadata(client, Path::new("link")));
+        let metadata = endpoint.entry_metadata(Path::new("link")).unwrap();
+        assert!(metadata.is_symlink && !metadata.is_file);
+        let client = answer.join().unwrap();
+        let answer = std::thread::spawn(move || answer_metadata(client, Path::new("")));
+        let root_meta = endpoint.entry_metadata(&published.workspace).unwrap();
+        assert!(root_meta.is_symlink && !root_meta.is_file);
+        let client = answer.join().unwrap();
+        let answer = std::thread::spawn(move || answer_directory(client, Path::new("")));
+        let page = endpoint
+            .directory_page(&published.workspace, 0, 16, None)
+            .unwrap();
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].file_name, "a");
+        assert_eq!(page.next_offset, None);
+        let client = answer.join().unwrap();
+
+        // A bare `.` spells the same root only for the queries.
+        let answer = std::thread::spawn(move || answer_metadata(client, Path::new("")));
+        endpoint.entry_metadata(Path::new(".")).unwrap();
+        let mut client = answer.join().unwrap();
+
+        // Foreign and traversal paths are refused before any request byte
+        // is written.
+        for path in [
+            PathBuf::from("/etc/hostname"),
+            PathBuf::from("../escape"),
+            published.workspace.join("../escape"),
+            published.workspace.join("a/../../x"),
+            published.workspace.join("./blob"),
+            PathBuf::from("a/./blob"),
+            PathBuf::from("a\0b"),
+        ] {
+            assert_eq!(
+                endpoint.entry_metadata(&path).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied,
+                "{path:?}"
+            );
+            assert_eq!(
+                endpoint
+                    .directory_page(&path, 0, 16, None)
+                    .unwrap_err()
+                    .kind(),
                 io::ErrorKind::PermissionDenied,
                 "{path:?}"
             );

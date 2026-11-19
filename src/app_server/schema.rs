@@ -1652,8 +1652,16 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             data_base64: "aGk=".into(),
             expected_revision: Some("native-revision".into()),
         },
-        Method::FsGetMetadata { path: path.clone() },
+        Method::FsGetMetadata {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
+            path: path.clone(),
+        },
         Method::FsReadDirectory {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: "/workspace".into(),
             offset: 0,
             limit: 32,

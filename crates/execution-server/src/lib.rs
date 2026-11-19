@@ -18,9 +18,9 @@ use base64::Engine as _;
 use constant_time_eq::constant_time_eq_32;
 use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
-    ClientRequest, ConnectionId, DecimalU64, EnvironmentId, Generation, Hello, HelloReply,
-    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, RegularFileStamp, Reject, SessionId,
-    is_normalized_absolute_path,
+    ClientRequest, ConnectionId, DecimalU64, EntryStamp, EnvironmentId, FileStamp, Generation,
+    Hello, HelloReply, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES, MAX_RAW_CHUNK_BYTES,
+    PROTOCOL_VERSION, PageEntry, ReadError, Reject, SessionId, is_normalized_absolute_path,
     transport::{Handshake, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
@@ -446,7 +446,22 @@ pub struct RangeRead {
     /// The next offset to read, absent at end of file.
     pub next_offset: Option<u64>,
     /// The source-descriptor stamp of the file the bytes came from.
-    pub metadata: RegularFileStamp,
+    pub metadata: FileStamp,
+}
+
+/// A verified directory page reply from the Client.
+///
+/// Names, order, cursor, and every entry stamp were checked against the
+/// request bounds before this value exists — the reply's own claims are
+/// never trusted raw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryListing {
+    /// The revision the listing was verified under.
+    pub revision: String,
+    /// The page's entries in stable name order.
+    pub entries: Vec<PageEntry>,
+    /// The index the next page starts at, absent at the end.
+    pub next_offset: Option<u32>,
 }
 
 impl LocalConnection {
@@ -615,26 +630,8 @@ impl LocalConnection {
         if reply_offset.get() != offset {
             return Err(self.retire(violation("range reply offset does not echo request")));
         }
-        // The revision is a SHA-256 hex stamp: exactly 64 lowercase
-        // hexadecimal characters, nothing else.
-        if metadata.revision.len() != 64
-            || !metadata
-                .revision
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(self.retire(violation("range reply carries an invalid revision")));
-        }
-        // The identity is the confined-fs `dev:ino` layout: two canonical
-        // decimal halves under the u64 pair bound, nothing else.
-        if metadata.identity.len() > 41
-            || !metadata.identity.split_once(':').is_some_and(|(dev, ino)| {
-                [dev, ino]
-                    .into_iter()
-                    .all(|part| part.parse::<DecimalU64>().is_ok())
-            })
-        {
-            return Err(self.retire(violation("range reply carries an invalid identity")));
+        if let Some(reason) = stamp_violation(metadata) {
+            return Err(self.retire(violation(reason)));
         }
         if let Some(expected) = expected_revision
             && metadata.revision != expected
@@ -662,17 +659,230 @@ impl LocalConnection {
             metadata: metadata.clone(),
         })
     }
+
+    /// The metadata query: `relative_path` names one entry under the
+    /// binding workspace, stat'ed without following a final symlink.
+    ///
+    /// The peer must have advertised [`Capability::DirectoryMetadata`] at
+    /// admission or the call is [`io::ErrorKind::Unsupported`] and no
+    /// request is sent. The reply's stamp is trusted only after the shared
+    /// `stamp_violation` validation; a malformed reply retires the
+    /// stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// capability, the [`ReadError`] the Client reported mapped onto an
+    /// I/O error kind, or [`io::ErrorKind::InvalidData`] for a malformed
+    /// reply.
+    pub fn entry_metadata(&mut self, relative_path: &Path) -> io::Result<EntryStamp> {
+        if !self.capabilities.contains(&Capability::DirectoryMetadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no directory metadata capability",
+            ));
+        }
+        let reply = self.exchange(&ClientRequest::GetMetadata {
+            relative_path: relative_path.to_path_buf(),
+        })?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::Metadata { metadata } = reply else {
+            return Err(self.retire(violation("unexpected reply to metadata query")));
+        };
+        if let Some(reason) = stamp_violation(&metadata.stamp) {
+            return Err(self.retire(violation(reason)));
+        }
+        Ok(metadata)
+    }
+
+    /// One bounded, revision-checked directory page under the binding
+    /// workspace.
+    ///
+    /// The peer must have advertised [`Capability::DirectoryMetadata`] at
+    /// admission. `limit` must be within `1..=`[`MAX_DIRECTORY_PAGE_ENTRIES`]
+    /// and `offset` within [`MAX_DIRECTORY_NAMES`] — bounds are enforced
+    /// before any request is sent. The reply is trusted only after
+    /// validation: at most `limit` entries, each name a single component
+    /// of at most 255 bytes — never `/`, `.`, or `..` — in strictly
+    /// increasing order, every stamp passing `stamp_violation`, the
+    /// directory revision well-formed, and a `next_offset` cursor that
+    /// equals exactly `offset + entries.len()`, may only continue a
+    /// page that filled the requested `limit`, and must stay strictly
+    /// inside [`MAX_DIRECTORY_NAMES`] — delivered names may end exactly
+    /// at the cap, but a continuation there could never exist. A
+    /// violation retires the
+    /// stream — it is never reused with reply accounting that cannot be
+    /// trusted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// capability, [`io::ErrorKind::InvalidInput`] for out-of-range paging
+    /// arguments, the [`ReadError`] the Client reported mapped onto an
+    /// I/O error kind, or [`io::ErrorKind::InvalidData`] for a malformed
+    /// or untruthful reply.
+    pub fn directory_page(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+    ) -> io::Result<DirectoryListing> {
+        if !self.capabilities.contains(&Capability::DirectoryMetadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no directory metadata capability",
+            ));
+        }
+        let name_cap = u32::try_from(MAX_DIRECTORY_NAMES).unwrap_or(u32::MAX);
+        if !(1..=u32::try_from(MAX_DIRECTORY_PAGE_ENTRIES).unwrap_or(u32::MAX)).contains(&limit)
+            || offset > name_cap
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid directory page request",
+            ));
+        }
+        let reply = self.exchange(&ClientRequest::ReadDirectory {
+            relative_path: relative_path.to_path_buf(),
+            offset,
+            limit,
+            expected_revision: expected_revision.map(str::to_owned),
+        })?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        self.validate_directory(offset, limit, expected_revision, &reply)
+    }
+
+    /// Verifies a `Directory` reply against the request before trusting
+    /// it — names, order, cursor, and every stamp. Any deviation means
+    /// the peer cannot account for its answers honestly, so the
+    /// connection is retired.
+    fn validate_directory(
+        &mut self,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        reply: &ClientReply,
+    ) -> io::Result<DirectoryListing> {
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::Directory {
+            revision,
+            entries,
+            next_offset,
+        } = reply
+        else {
+            return Err(self.retire(violation("unexpected reply to directory read")));
+        };
+        if !valid_revision(revision) {
+            return Err(self.retire(violation("directory reply carries an invalid revision")));
+        }
+        if entries.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
+            return Err(self.retire(violation("directory reply exceeds requested page")));
+        }
+        let mut previous: Option<&str> = None;
+        for entry in entries {
+            let name = entry.name.as_str();
+            // One normal component, verbatim: no `/`, never `.` or `..`,
+            // no longer than a native name, never NUL — the one byte no
+            // path API could ever carry. Every other byte — control
+            // characters included — is ordinary literal name data the
+            // Server never joins into a path it opens.
+            if name.len() > 255
+                || name.is_empty()
+                || name.contains('/')
+                || name.contains('\0')
+                || name == "."
+                || name == ".."
+            {
+                return Err(self.retire(violation("directory reply carries an invalid entry name")));
+            }
+            if previous.is_some_and(|previous| previous >= name) {
+                return Err(self.retire(violation("directory reply names are out of order")));
+            }
+            previous = Some(name);
+            if let Some(reason) = stamp_violation(&entry.metadata.stamp) {
+                return Err(self.retire(violation(reason)));
+            }
+        }
+        let delivered = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        let Some(cursor) = offset.checked_add(delivered) else {
+            return Err(self.retire(violation("directory reply overflows the name space")));
+        };
+        // The delivered names must stay inside the physical listing
+        // bound even on a final page: a reply claiming entries past the
+        // name cap is corrupt regardless of the cursor it carries.
+        let name_cap = u32::try_from(MAX_DIRECTORY_NAMES).unwrap_or(u32::MAX);
+        if cursor > name_cap {
+            return Err(self.retire(violation("directory reply exceeds the name cap")));
+        }
+        // Continuation is legal only after a page that filled the
+        // requested limit, and the cursor must land exactly past the
+        // delivered entries — strictly inside the name cap, since a
+        // resumption at the cap could never deliver another entry.
+        match next_offset {
+            Some(next) if delivered == limit && *next == cursor && cursor < name_cap => {}
+            Some(_) => {
+                return Err(self.retire(violation("directory reply cursor is inconsistent")));
+            }
+            None => {}
+        }
+        if let Some(expected) = expected_revision
+            && revision != expected
+        {
+            return Err(self.retire(violation("directory reply revision ignores expectation")));
+        }
+        Ok(DirectoryListing {
+            revision: revision.clone(),
+            entries: entries.clone(),
+            next_offset: *next_offset,
+        })
+    }
+}
+
+/// The shared content-revision check: a SHA-256 stamp is exactly 64
+/// lowercase hexadecimal characters, nothing else.
+fn valid_revision(revision: &str) -> bool {
+    revision.len() == 64
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// The shared source-stamp validator every verified reply passes: the
+/// revision is a well-formed stamp and the identity is the confined
+/// `dev:ino` layout — two canonical decimal halves under the u64 pair
+/// bound. Anything else means the peer cannot account for its answers
+/// honestly.
+fn stamp_violation(stamp: &FileStamp) -> Option<&'static str> {
+    if !valid_revision(&stamp.revision) {
+        return Some("reply carries an invalid revision");
+    }
+    if stamp.identity.len() > 41
+        || !stamp.identity.split_once(':').is_some_and(|(dev, ino)| {
+            [dev, ino]
+                .into_iter()
+                .all(|part| part.parse::<DecimalU64>().is_ok())
+        })
+    {
+        return Some("reply carries an invalid identity");
+    }
+    None
 }
 
 /// Maps a stable [`ReadError`] wire code onto an I/O error kind. No raw
 /// path or payload crosses here — only the kind.
 fn read_error(kind: ReadError) -> io::Error {
     let (error_kind, message) = match kind {
-        ReadError::Invalid => (io::ErrorKind::InvalidInput, "range request invalid"),
-        ReadError::Denied => (io::ErrorKind::PermissionDenied, "range read denied"),
-        ReadError::NotFound => (io::ErrorKind::NotFound, "range path not found"),
-        ReadError::Conflict => (io::ErrorKind::AlreadyExists, "range revision conflict"),
-        ReadError::Unavailable => (io::ErrorKind::Other, "range read unavailable"),
+        ReadError::Invalid => (io::ErrorKind::InvalidInput, "physical request invalid"),
+        ReadError::Denied => (io::ErrorKind::PermissionDenied, "physical access denied"),
+        ReadError::NotFound => (io::ErrorKind::NotFound, "physical path not found"),
+        ReadError::Conflict => (io::ErrorKind::AlreadyExists, "physical revision conflict"),
+        ReadError::Unavailable => (io::ErrorKind::Other, "physical operation unavailable"),
     };
     io::Error::new(error_kind, message)
 }
@@ -776,6 +986,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use rustx_execution_protocol::EntryKind;
     use rustx_execution_protocol::transport::MAX_RECORD_BYTES;
 
     use super::*;
@@ -1214,7 +1425,7 @@ mod tests {
                     data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
                     offset,
                     next_offset: None,
-                    metadata: RegularFileStamp {
+                    metadata: FileStamp {
                         size: DecimalU64::new(2),
                         revision: "a".repeat(64),
                         identity: String::from("1:1"),
@@ -1331,7 +1542,7 @@ mod tests {
                     data_base64: String::new(),
                     offset,
                     next_offset: None,
-                    metadata: RegularFileStamp {
+                    metadata: FileStamp {
                         size: DecimalU64::new(0),
                         revision: String::from("not-a-revision"),
                         identity: String::from("1:1"),
@@ -1378,7 +1589,7 @@ mod tests {
                     data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
                     offset,
                     next_offset: None,
-                    metadata: RegularFileStamp {
+                    metadata: FileStamp {
                         size: DecimalU64::new(5),
                         revision: "a".repeat(64),
                         identity: String::from("1:1"),
@@ -1390,6 +1601,329 @@ mod tests {
         });
         let error = connection
             .read_range(Path::new("file"), 0, 64, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    fn entry(name: &str) -> PageEntry {
+        PageEntry {
+            name: name.into(),
+            metadata: EntryStamp {
+                kind: EntryKind::RegularFile,
+                stamp: FileStamp {
+                    size: DecimalU64::new(1),
+                    revision: "a".repeat(64),
+                    identity: String::from("1:1"),
+                    modified_at_ms: None,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn a_missing_directory_capability_denies_before_the_wire() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadRange,
+        ]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        for error in [
+            connection.entry_metadata(Path::new("file")).unwrap_err(),
+            connection
+                .directory_page(Path::new(""), 0, 16, None)
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        }
+
+        // Nothing was written; the connection stays live and still
+        // answers an exact Ping.
+        peer.set_nonblocking(true).unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            peer.read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        peer.set_nonblocking(false).unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        connection.ping().unwrap();
+        answer.join().unwrap();
+    }
+
+    #[test]
+    fn an_out_of_order_directory_reply_retires_the_stream() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        // Names that are not strictly increasing are untrusted wire
+        // data: the stream retires and the binding detaches.
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { .. } = request else {
+                panic!("expected a directory request");
+            };
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("b"), entry("a")],
+                    next_offset: None,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .directory_page(Path::new(""), 0, 16, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_directory_reply_with_a_wrong_cursor_retires_the_stream() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        // A full page whose continuation cursor does not equal
+        // offset + entries.len() violates the paging contract.
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { offset, .. } = request else {
+                panic!("expected a directory request");
+            };
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("a"), entry("b")],
+                    next_offset: Some(offset + 99),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .directory_page(Path::new(""), 0, 16, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_nul_directory_name_retires_the_stream() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        // Every other control byte is literal name data; NUL is the one
+        // byte no path API could ever carry.
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { .. } = request else {
+                panic!("expected a directory request");
+            };
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("a\0b"), entry("a\u{1f}")],
+                    next_offset: None,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .directory_page(Path::new(""), 0, 16, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_directory_reply_past_the_name_cap_retires_the_stream() {
+        // A continuation cursor may never sit at the cap itself: a
+        // resumption there could never deliver another entry, so the
+        // `Some` is a lie even when the arithmetic agrees.
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        let cap = u32::try_from(MAX_DIRECTORY_NAMES).unwrap();
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { offset, .. } = request else {
+                panic!("expected a directory request");
+            };
+            assert_eq!(offset, cap - 1);
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("a")],
+                    next_offset: Some(cap),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .directory_page(Path::new(""), cap - 1, 1, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+
+        // And a reply claiming entries past the cap is corrupt even on
+        // a final page — the delivered names themselves exceed the
+        // physical listing bound, `next=None` notwithstanding.
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { offset, .. } = request else {
+                panic!("expected a directory request");
+            };
+            assert_eq!(offset, cap);
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("a")],
+                    next_offset: None,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .directory_page(Path::new(""), cap, 1, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_directory_page_ending_exactly_at_the_name_cap_is_legitimate() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        // The final entry may land exactly on the cap: `next=None` is
+        // the honest answer — the directory can hold no more.
+        let cap = u32::try_from(MAX_DIRECTORY_NAMES).unwrap();
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { offset, .. } = request else {
+                panic!("expected a directory request");
+            };
+            assert_eq!(offset, cap - 2);
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("a"), entry("b")],
+                    next_offset: None,
+                },
+            )
+            .unwrap();
+        });
+        let page = connection
+            .directory_page(Path::new(""), cap - 2, 16, None)
+            .unwrap();
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.next_offset, None);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_dot_segment_directory_name_retires_the_stream() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DirectoryMetadata,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDirectory { .. } = request else {
+                panic!("expected a directory request");
+            };
+            write_record(
+                &mut peer,
+                &ClientReply::Directory {
+                    revision: "a".repeat(64),
+                    entries: vec![entry("..")],
+                    next_offset: None,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .directory_page(Path::new(""), 0, 16, None)
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         answer.join().unwrap();

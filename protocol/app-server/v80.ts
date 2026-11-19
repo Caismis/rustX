@@ -101,6 +101,7 @@ export type Request1 =
   | {
       method: 'fs/readDirectory';
       params: {
+        sessionId: SessionId;
         path: string;
         offset: number;
         limit: number;
@@ -110,6 +111,7 @@ export type Request1 =
   | {
       method: 'fs/getMetadata';
       params: {
+        sessionId: SessionId;
         path: string;
       };
     }

@@ -5,10 +5,11 @@
 //! workspace as a [`PackageDirectory`] held by descriptor for the whole
 //! session, performs the authenticated `Hello`/`Admission` handshake over
 //! the bound Unix socket, then serves the Server's typed requests until
-//! EOF: `Ping` liveness and bounded revision-checked `ReadRange` — the one
-//! implemented physical operation, executed through `rustx-confined-fs`,
-//! the same primitives the Agent Server itself uses. No process, MCP, or
-//! Python I/O exists here.
+//! EOF: `Ping` liveness and the implemented physical operations — bounded
+//! revision-checked `ReadRange`, `GetMetadata` stat'ed without following
+//! the leaf, and bounded `ReadDirectory` paging — all executed through
+//! `rustx-confined-fs`, the same primitives the Agent Server itself uses.
+//! No process, MCP, or Python I/O exists here.
 //!
 //! The workspace is local policy, never a server request: `--workspace`
 //! must match the bootstrap workspace byte for byte or the client refuses
@@ -31,9 +32,9 @@ use rustx_execution_protocol::transport::{
     Handshake, LOCAL_HANDSHAKE_TIMEOUT, read_optional_record, read_record, write_record,
 };
 use rustx_execution_protocol::{
-    Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, Hello, HelloReply,
-    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, RegularFileStamp,
-    is_normalized_absolute_path,
+    Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, EntryKind,
+    EntryStamp, FileStamp, Hello, HelloReply, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
+    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, PageEntry, ReadError, is_normalized_absolute_path,
 };
 
 /// `O_NOFOLLOW` refuses a symlinked final component; `O_NONBLOCK` makes a
@@ -129,7 +130,11 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
         workspace: bootstrap.workspace,
         // Independently known, fixed, actually implemented capabilities —
         // never read from the file.
-        capabilities: BTreeSet::from([Capability::Connection, Capability::ReadRange]),
+        capabilities: BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadRange,
+            Capability::DirectoryMetadata,
+        ]),
         credential: bootstrap.credential,
     };
     let mut handshake =
@@ -257,6 +262,19 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
                 max_bytes,
                 expected_revision.as_deref(),
             ),
+            ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
+            ClientRequest::ReadDirectory {
+                relative_path,
+                offset,
+                limit,
+                expected_revision,
+            } => read_directory(
+                root,
+                &relative_path,
+                offset,
+                limit,
+                expected_revision.as_deref(),
+            ),
         };
         write_record(stream, &reply).map_err(|_| String::from("reply"))?;
     }
@@ -305,7 +323,7 @@ fn read_range(
                 data_base64: chunk.data_base64,
                 offset,
                 next_offset: chunk.next_offset.map(DecimalU64::new),
-                metadata: RegularFileStamp {
+                metadata: FileStamp {
                     size: DecimalU64::new(chunk.metadata.size),
                     revision: chunk.metadata.revision,
                     identity: chunk.metadata.identity,
@@ -314,13 +332,133 @@ fn read_range(
             }
         }
         Err(error) => ClientReply::Error {
-            kind: match error.kind() {
-                std::io::ErrorKind::InvalidInput => ReadError::Invalid,
-                std::io::ErrorKind::PermissionDenied => ReadError::Denied,
-                std::io::ErrorKind::NotFound => ReadError::NotFound,
-                std::io::ErrorKind::AlreadyExists => ReadError::Conflict,
-                _ => ReadError::Unavailable,
-            },
+            kind: read_error(&error),
+        },
+    }
+}
+
+/// The shared physical-error projection: stable wire codes only, never a
+/// raw path or payload. A symlink loop mid-path is a denial — the
+/// traversal never follows one — and a component that is not a directory
+/// makes the addressed entry absent.
+fn read_error(error: &std::io::Error) -> ReadError {
+    if error.raw_os_error() == Some(nix::libc::ELOOP) {
+        return ReadError::Denied;
+    }
+    match error.kind() {
+        std::io::ErrorKind::InvalidInput => ReadError::Invalid,
+        std::io::ErrorKind::PermissionDenied => ReadError::Denied,
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => ReadError::NotFound,
+        std::io::ErrorKind::AlreadyExists => ReadError::Conflict,
+        _ => ReadError::Unavailable,
+    }
+}
+
+/// The lexical gate every physical request shares: normal components
+/// only, never absolute. An empty path — legal for the query operations —
+/// names the workspace root itself.
+fn relative_entry(relative_path: &Path) -> Result<&Path, ReadError> {
+    if relative_path.is_absolute()
+        || !relative_path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Err(ReadError::Invalid);
+    }
+    Ok(relative_path)
+}
+
+/// Projects one verified `rustx-confined-fs` stamp onto the wire — the
+/// same `FileMetadata` the physical check produced, never a fresh stat.
+fn stamp(metadata: &rustx_confined_fs::FileMetadata) -> EntryStamp {
+    EntryStamp {
+        kind: if metadata.is_file {
+            EntryKind::RegularFile
+        } else if metadata.is_directory {
+            EntryKind::Directory
+        } else if metadata.is_symlink {
+            EntryKind::Symlink
+        } else {
+            EntryKind::Other
+        },
+        stamp: FileStamp {
+            size: DecimalU64::new(metadata.size),
+            revision: metadata.revision.clone(),
+            identity: metadata.identity.clone(),
+            modified_at_ms: metadata.modified_at_ms,
+        },
+    }
+}
+
+/// `GetMetadata`: `relative_path` names one entry — or the workspace root
+/// itself when empty. Intermediate components resolve no-follow; a
+/// symlinked leaf reports `symlink` and is never followed. Errors cross
+/// as stable [`ReadError`] codes only.
+fn get_metadata(root: &PackageDirectory, relative_path: &Path) -> ClientReply {
+    let Ok(relative) = relative_entry(relative_path) else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    match root.entry_metadata(relative) {
+        Ok(metadata) => ClientReply::Metadata {
+            metadata: stamp(&metadata),
+        },
+        Err(error) => ClientReply::Error {
+            kind: read_error(&error),
+        },
+    }
+}
+
+/// `ReadDirectory`: one revision-checked page under the workspace — an
+/// empty `relative_path` lists the root. Bounds are enforced before any
+/// physical work; errors cross as stable [`ReadError`] codes only.
+fn read_directory(
+    root: &PackageDirectory,
+    relative_path: &Path,
+    offset: u32,
+    limit: u32,
+    expected_revision: Option<&str>,
+) -> ClientReply {
+    let Ok(relative) = relative_entry(relative_path) else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    let Ok(offset) = usize::try_from(offset) else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    let Ok(limit) = usize::try_from(limit) else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    match root.directory_page(
+        relative,
+        offset,
+        limit,
+        expected_revision,
+        MAX_DIRECTORY_NAMES,
+        MAX_DIRECTORY_PAGE_ENTRIES,
+    ) {
+        Ok(page) => ClientReply::Directory {
+            revision: page.revision,
+            entries: page
+                .entries
+                .iter()
+                .map(|entry| PageEntry {
+                    name: entry.file_name.clone(),
+                    metadata: stamp(&entry.metadata),
+                })
+                .collect(),
+            next_offset: page
+                .next_offset
+                .and_then(|offset| u32::try_from(offset).ok()),
+        },
+        Err(error) => ClientReply::Error {
+            kind: read_error(&error),
         },
     }
 }

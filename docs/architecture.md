@@ -7772,7 +7772,8 @@ current layer status.
   depends on no other workspace crate; both boundary crates depend on it.
 - `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
-  and typed request dispatch (`Ping`, `ReadRange`). Binding uniqueness is per
+  and typed request dispatch (`Ping`, `ReadRange`, `GetMetadata`,
+  `ReadDirectory`). Binding uniqueness is per
   `Binding`, not per `Session`: each binding admits at most one live
   connection, and a `Detached` binding is closed to every new Hello until the
   live-instance recovery work in #577.
@@ -7783,19 +7784,20 @@ current layer status.
   admitted under the catalog visibility cut and the residency mutex
   together, prepared exactly once on a blocking task, and fenced on
   Session delete and process drain. The endpoint's typed surface —
-  `admit_local_stream` and one serialized `read_range` exchange (busy
-  refusal, lexical workspace gate, binding live-check at send time) — is
-  the Session's live dispatch owner. The claim is not reachable through
+  `admit_local_stream` and serialized `read_range`, `entry_metadata`,
+  and `directory_page` exchanges (busy refusal, lexical workspace
+  gate, binding live-check at send time) — is the Session's live
+  dispatch owner. The claim is not reachable through
   the App Server protocol. The paired `--local-execution-session` /
   `--local-execution-workspace` flags make the App Server itself the
   explicit composer: it claims the endpoint, launches the trusted sibling
   Client (empty environment, sealed stdio, killed-and-reaped on failure
   and at drain) and admits it before transport readiness; bare mode
-  still launches nothing. `fs/readFile` is routed through the
-  endpoint's serialized `read_range` (with `sessionId` on the wire and
-  `ExecutionUnavailable` for an uncomposed Session); the remaining
-  filesystem methods stay on their prior paths until their own
-  migrations land.
+  still launches nothing. `fs/readFile`, `fs/getMetadata`, and
+  `fs/readDirectory` are routed through the endpoint's serialized
+  exchanges (with `sessionId` on the wire and `ExecutionUnavailable`
+  for an uncomposed Session); the remaining filesystem methods stay on
+  their prior paths until their own migrations land.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
   Its production workspace dependencies are the protocol and
@@ -7805,10 +7807,13 @@ current layer status.
   byte against the bootstrap record; the server cannot redirect it.
 - `rustx-confined-fs` holds the proven descriptor-relative primitives factored
   out of the root package I/O — `PackageDirectory`, `FileMetadata`,
-  `FileChunk`, and the bounded revision-checked `read_range`. Root `rustx`
+  `FileChunk`, `DirectoryEntry`, `DirectoryPage`, the bounded
+  revision-checked `read_range`, and the `entry_metadata` /
+  `directory_page` queries. Root `rustx`
   and the client both depend on it; the server does not.
-- The boundary currently serves exactly one physical operation: bounded,
-  revision-checked range reads over the isolated Unix socket. The product's
-  own file reads still use the local path through `rustx`'s delegating
-  `PackageDirectory` wrapper; no runtime path is rewired to the boundary yet,
-  and no second Agent, in-process fallback, or speculative launcher exists.
+- The boundary currently serves three physical operations: bounded,
+  revision-checked range reads, entry metadata, and bounded directory
+  pages over the isolated Unix socket. The product's write, copy,
+  remove, create-directory, and watch paths still use the local path
+  through `rustx`'s delegating `PackageDirectory` wrapper, and no
+  second Agent, in-process fallback, or speculative launcher exists.

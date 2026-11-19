@@ -57,6 +57,41 @@ impl PackageDirectory {
         OPENED_FILES.with(|files| files.borrow_mut().push(relative.to_path_buf()));
         self.inner.file(relative)
     }
+
+    /// Resolves `relative` component by component to a directory handle —
+    /// the shared no-follow descent.
+    pub(crate) fn descend(&self, relative: &Path) -> std::io::Result<Self> {
+        self.inner.descend(relative).map(|inner| Self { inner })
+    }
+
+    /// Metadata of `relative` inside this directory — the shared
+    /// implementation stat's the leaf without following it.
+    pub(crate) fn entry_metadata(
+        &self,
+        relative: &Path,
+    ) -> std::io::Result<rustx_confined_fs::FileMetadata> {
+        self.inner.entry_metadata(relative)
+    }
+
+    /// One bounded, revision-checked directory page — the shared
+    /// implementation; the enumeration it performs counts as one list.
+    /// Production listing dispatches through the Execution Client; the
+    /// root keeps the primitive for test assertions only.
+    #[cfg(test)]
+    pub(crate) fn directory_page(
+        &self,
+        relative: &Path,
+        offset: usize,
+        limit: usize,
+        expected: Option<&str>,
+        name_cap: usize,
+        page_cap: usize,
+    ) -> std::io::Result<rustx_confined_fs::DirectoryPage> {
+        #[cfg(test)]
+        DIRECTORY_LISTS.with(|count| count.set(count.get() + 1));
+        self.inner
+            .directory_page(relative, offset, limit, expected, name_cap, page_cap)
+    }
 }
 
 fn stamp(meta: &Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {

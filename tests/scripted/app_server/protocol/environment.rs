@@ -924,6 +924,10 @@ pub(crate) async fn filesystem_scenario() {
     // Client; the child stays owned until it is reaped at the end.
     let mut execution = fixture.start_execution(0).await;
     let session_id = fixture.sessions[0].id.clone();
+    // Workspace[1]'s listings dispatch through Session B's own admitted
+    // Client — both children stay owned until they are reaped at the end.
+    let mut execution_b = fixture.start_execution(1).await;
+    let session_b = fixture.sessions[1].id.clone();
     let path = fixture.workspaces[0].join("document").display().to_string();
     let MethodResult::FileMetadata { metadata } = call(
         &connection,
@@ -1049,6 +1053,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         10,
         Method::FsReadDirectory {
+            session_id: session_b.clone(),
             path: directory.clone(),
             offset: 0,
             limit: 16,
@@ -1155,6 +1160,7 @@ pub(crate) async fn filesystem_scenario() {
             &connection,
             14,
             Method::FsGetMetadata {
+                session_id: session_id.clone(),
                 path: fixture.workspaces[0].display().to_string()
             }
         )
@@ -1162,6 +1168,7 @@ pub(crate) async fn filesystem_scenario() {
         ErrorData::EnvironmentUnauthorized
     );
     execution.kill().await.unwrap();
+    execution_b.kill().await.unwrap();
     connection.close();
 }
 

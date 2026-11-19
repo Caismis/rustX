@@ -146,8 +146,8 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 | --- | --- |
 | `fs/readFile` | Revision-checked base64 chunk with offset and continuation, served by the Session's admitted Execution Client. |
 | `fs/writeFile` | Single-file atomic replace/create with an expected revision. |
-| `fs/readDirectory` | Bounded, sorted direct-entry page and revision. |
-| `fs/getMetadata` | Native type, size, identity, revision and optional modification time. |
+| `fs/readDirectory` | Bounded, sorted direct-entry page and revision, served by the Session's admitted Execution Client. |
+| `fs/getMetadata` | Native type, size, identity, revision and optional modification time, served by the Session's admitted Execution Client. |
 | `fs/createDirectory` | One directory or bounded path-wise parent creation. |
 | `fs/remove` | File/link unlink or bounded recursive removal; missing handling is explicit. |
 | `fs/copy` | Authorized source/destination; atomic individual files, bounded recursive trees. |
@@ -165,6 +165,10 @@ counts remain safe JSON integers. Use generated types and wire fixtures.
 
 Read frames carry at most 64 KiB of decoded file data per range; writes remain
 at most 512 KiB of decoded file data pending their own execution migration.
+`fs/readFile`, `fs/getMetadata`, and `fs/readDirectory` carry `sessionId` and
+dispatch through that Session's admitted Execution Client — a Session with no
+composed Client fails `ExecutionUnavailable`; write, copy, remove,
+create-directory, and watch remain on the prior environment path.
 Reads can continue
 through a large file with the same expected revision. Existing native upload and
 chunked delivery contracts remain available for their existing source domains;

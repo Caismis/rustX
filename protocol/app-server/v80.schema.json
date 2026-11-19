@@ -34501,6 +34501,9 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "path": {
                   "type": "string"
                 },
@@ -34513,8 +34516,8 @@
                 "limit": {
                   "type": "integer",
                   "format": "uint",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
+                  "minimum": 1,
+                  "maximum": 128
                 },
                 "expectedRevision": {
                   "type": [
@@ -34525,6 +34528,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "path",
                 "offset",
                 "limit"
@@ -34546,12 +34550,16 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "path": {
                   "type": "string"
                 }
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "path"
               ]
             }
