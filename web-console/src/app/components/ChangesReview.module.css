@@ -1,6 +1,6 @@
 .root { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .selector { display: flex; flex-direction: column; gap: 6px; padding: 12px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.selector select { width: 100%; min-width: 0; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); padding: 8px; }
+.selector select { width: 100%; min-width: 0; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); padding: 8px; }
 .body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; }
 .comparison { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
@@ -19,5 +19,4 @@
 .previewLine:is([data-diff-line='add'], [data-diff-line='del']) :is(.number, .sign) { color: var(--change-color); }
 .previewLine:is([data-diff-line='add'], [data-diff-line='del']) .number { background: color-mix(in srgb, var(--change-color) 12%, transparent); }
 .previewLine:is([data-diff-line='add'], [data-diff-line='del']) .number:first-child { box-shadow: inset 3px 0 var(--change-color); }
-
 .copy { flex: none; min-width: 64px; }

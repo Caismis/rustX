@@ -14,7 +14,6 @@
   container-type: inline-size;
   pointer-events: none;
 }
-
 .frame {
   --turn-preview-height: 100px;
 
@@ -34,7 +33,6 @@
   pointer-events: auto;
   transform: translateY(-50%);
 }
-
 /* The frame's inner scroller: no visible scrollbar, no scroll chaining into
    the transcript, and gradient fades over the ends that can still scroll. */
 .scroller {
@@ -44,19 +42,15 @@
   overscroll-behavior: contain;
   scrollbar-width: none;
 }
-
 .scroller::-webkit-scrollbar {
   display: none;
 }
-
 .fadeTop {
   mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 100%);
 }
-
 .fadeBottom {
   mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%);
 }
-
 .fadeTop.fadeBottom {
   mask-image: linear-gradient(
     to bottom,
@@ -66,11 +60,9 @@
     transparent 100%
   );
 }
-
 .marks {
   position: relative;
 }
-
 .mark {
   position: absolute;
   top: 0;
@@ -79,85 +71,73 @@
   height: 10px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   cursor: pointer;
 }
-
 .mark[aria-disabled='true'] {
   cursor: default;
 }
-
 .mark::before {
   position: absolute;
   top: 50%;
   right: 0;
   width: 20px;
   height: 2px;
-  border-radius: 2px;
+  border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-border-l4);
   content: '';
   transform: translateY(-50%) scaleX(0.6);
   transform-origin: right center;
   transition: transform 140ms ease, background-color 140ms ease;
 }
-
 /* Ordered before hover/active so those states keep their stronger tick. */
 .markUnloaded::before {
   transform: translateY(-50%) scaleX(0.4);
   opacity: 0.6;
 }
-
 .markPreview::before {
   transform: translateY(-50%) scaleX(0.9);
   background: var(--dsw-alias-label-tertiary);
 }
-
 .markBusy::before {
   animation: dsh-turn-mark-busy 1s ease-in-out infinite;
 }
-
 .markActive::before {
   transform: translateY(-50%) scaleX(1);
   background: var(--dsw-alias-label-primary);
 }
-
 /* Keyboard focus outranks both resting states: the tick takes the brand color
    the rest of the rail never uses, and a hairline ring keeps it legible
    against a busy transcript. */
 .mark:focus-visible::before {
   transform: translateY(-50%) scaleX(1);
-  background: var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  background: var(--dsw-alias-state-business-primary);
 }
-
 .mark:focus-visible {
   outline: none;
 }
-
 .mark:focus-visible::after {
   position: absolute;
   inset: 0 0 0 auto;
   width: 20px;
   border-radius: inherit;
-  outline: 1px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline: 1px solid var(--dsw-alias-state-business-primary);
   /* The scroller clips the right edge; keep the marker's ring inside it. */
   outline-offset: -1px;
   content: '';
 }
-
-.preview,
-.feedback {
+.preview, .feedback {
   box-sizing: border-box;
   width: min(300px, calc(100cqw - 120px));
   padding: 10px 12px;
   border: 0;
   /* Harness --dsw-radius-lg. */
-  border-radius: 16px;
+  border-radius: var(--dsw-radius-lg);
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: var(--dsw-elevation-panel);
 }
-
 .preview {
   position: absolute;
   top: clamp(
@@ -172,27 +152,22 @@
   animation: dsh-turn-preview-enter 120ms ease-out;
   transition: top 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-
-.previewPrompt,
-.previewResponse {
+.previewPrompt, .previewResponse {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   overflow-wrap: anywhere;
 }
-
 .previewPrompt {
   font: var(--dsw-font-xs-strong-13);
   -webkit-line-clamp: 1;
 }
-
 .previewResponse {
   margin-top: 4px;
   color: var(--dsw-alias-label-caption);
   font: var(--dsw-font-xxs-12);
   -webkit-line-clamp: 3;
 }
-
 /* A native outline read failure stays recoverable beside the rail. */
 .feedback {
   position: absolute;
@@ -202,30 +177,29 @@
   overflow-wrap: anywhere;
   pointer-events: auto;
 }
-
 .feedback p {
   margin: 0 0 8px;
 }
-
 .feedback button {
   padding: 4px 10px;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
   color: inherit;
   background: transparent;
   font: inherit;
   cursor: pointer;
 }
-
 .feedback button:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
 }
 
+
 @keyframes dsh-turn-preview-enter {
   from { opacity: 0; transform: translateX(4px); }
   to { opacity: 1; transform: translateX(0); }
 }
+
 
 @keyframes dsh-turn-mark-busy {
   0%,
@@ -233,11 +207,13 @@
   50% { opacity: 0.35; }
 }
 
+
 @container (max-width: 900px) {
   .frame {
     display: none;
   }
 }
+
 
 @media (prefers-reduced-motion: reduce) {
   .frame,

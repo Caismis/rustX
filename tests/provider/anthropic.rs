@@ -20,6 +20,36 @@ fn adapter(server: &crate::common::FixtureServer) -> AnthropicMessagesAdapter {
     AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("test-key", server.url("")))
 }
 
+#[tokio::test]
+async fn compatible_endpoint_roots_and_auth_headers_are_automatic() {
+    let server = crate::common::FixtureServer::start(|_, head| {
+        assert!(
+            head.starts_with("POST /gateway/v1/messages HTTP/1.1"),
+            "{head}"
+        );
+        let headers = head.to_ascii_lowercase();
+        assert!(headers.contains("x-api-key: test-key"));
+        assert!(headers.contains("authorization: bearer test-key"));
+        sse_fixture("anthropic", "text.sse")
+    })
+    .await;
+    for root in ["/gateway", "/gateway/", "/gateway/v1", "/gateway/v1/"] {
+        let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
+            "test-key",
+            server.url(root),
+        ));
+        let events = collect_events(
+            &adapter,
+            simple_request(ModelProtocol::AnthropicMessages, "glm-test", "Hi"),
+        )
+        .await;
+        assert!(
+            matches!(events.last(), Some(ModelEvent::Completed { .. })),
+            "{events:?}"
+        );
+    }
+}
+
 fn request_with_tools(prompt: &str) -> ModelRequest {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", prompt);
     request.tools = vec![
@@ -1677,13 +1707,76 @@ async fn redacted_thinking_without_data_is_a_provider_failure() {
     );
 }
 
-/// A thinking block that stops without a `signature_delta` is a provider
-/// protocol error: without its provider signature the block cannot be
-/// replayed losslessly, so a state-less reasoning block is never emitted.
+/// Compatible Messages APIs return empty or absent signatures. Preserve the
+/// original native block through streaming and the next request.
 #[tokio::test]
-async fn thinking_without_signature_is_a_provider_failure() {
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("anthropic", "thinking_missing_signature.sse")
+async fn unsigned_thinking_round_trips_without_fabricating_a_signature() {
+    for signature in [Some(""), None] {
+        let fixture =
+            std::fs::read_to_string("tests/fixtures/m2/anthropic/thinking_missing_signature.sse")
+                .unwrap();
+        let fixture = if signature.is_none() {
+            fixture.replace(",\"signature\":\"\"", "")
+        } else {
+            fixture
+        };
+        let server = crate::common::FixtureServer::start(move |_, _| {
+            crate::common::FixtureReply::body(200, "OK", "text/event-stream", fixture.clone())
+        })
+        .await;
+        let mut request = simple_request(ModelProtocol::AnthropicMessages, "qwen-test", "Compute");
+        let events = collect_events(&adapter(&server), request.clone()).await;
+        assert!(
+            matches!(events.last(), Some(ModelEvent::Completed { .. })),
+            "{events:?}"
+        );
+        let state = events
+            .iter()
+            .find_map(|event| match event {
+                ModelEvent::ContinuationState {
+                    state: ProviderContinuationState::Anthropic(state),
+                    ..
+                } => Some(state.clone()),
+                _ => None,
+            })
+            .expect("complete native thinking unit");
+        assert_eq!(state.opaque["thinking"], "Think.");
+        assert_eq!(
+            state
+                .opaque
+                .get("signature")
+                .and_then(serde_json::Value::as_str),
+            signature
+        );
+        request.messages.insert(
+            0,
+            MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("unsigned-thinking"),
+                content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
+                        text: Some("Think.".into()),
+                        provider_state: Some(ProviderContinuationState::Anthropic(state.clone())),
+                    },
+                )],
+            })
+            .into(),
+        );
+        let events = collect_events(&adapter(&server), request).await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(1)).unwrap();
+        assert_eq!(body["messages"][0]["content"][0], *state.opaque);
+    }
+}
+
+#[tokio::test]
+async fn signature_fragments_are_concatenated() {
+    let fixture = std::fs::read_to_string("tests/fixtures/m2/anthropic/thinking_streaming.sse").unwrap()
+        .replace("\"signature\":\"sig-stream-1\"", "\"signature\":\"sig-\"")
+        .replace("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"stream-1\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}");
+    let server = crate::common::FixtureServer::start(move |_, _| {
+        crate::common::FixtureReply::body(200, "OK", "text/event-stream", fixture.clone())
     })
     .await;
     let events = collect_events(
@@ -1691,12 +1784,10 @@ async fn thinking_without_signature_is_a_provider_failure() {
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Compute"),
     )
     .await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, ModelEvent::ContinuationState { .. })),
-        "no continuation state without a provider signature"
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    assert_eq!(
+        anthropic_state_of(&events[3]).opaque["signature"],
+        "sig-stream-1"
     );
 }
 

@@ -1,10 +1,11 @@
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalWorkspaceHost } from '../host/workspaces';
+import { DesktopAdapter } from '../host/desktop';
 import { startWorkspaceHost } from './e2e/workspace-host';
 const publication = vi.hoisted(() => ({ inspect: undefined as undefined | ((from: string, to: string) => void) }));
 vi.mock('node:fs', async original => {
@@ -17,7 +18,7 @@ vi.mock('node:fs', async original => {
 const directories: string[] = [];
 afterEach(() => { directories.splice(0).forEach(path => rmSync(path, { force: true, recursive: true })); });
 function fixture(picker = true, endpoint = 'ws://127.0.0.1:8080/') {
-  const directory = mkdtempSync(join(tmpdir(), 'workspace-host-')); directories.push(directory);
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'workspace-host-'))); directories.push(directory);
   const a = join(directory, 'A'), b = join(directory, 'B'); mkdirSync(a); mkdirSync(b);
   const config = { endpoint, picker, metadataFile: join(directory, 'registrations.json'), roots: [{ id: 'a', cwd: a, displayName: 'Alpha' }, { id: 'b', cwd: b, displayName: 'Beta' }] };
   return { config, a, b, host: new LocalWorkspaceHost(config), endpoint, directory };
@@ -63,29 +64,111 @@ it('HTTP carrier refuses path adoption and cross-origin mutations', async () => 
   } finally { await service.stop(); }
 });
 
-it('registration admits the authorized directory rather than the location id', async () => {
+it('registers only a directory selected by the system chooser and preserves its exact identity', async () => {
+  const f = fixture();
+  const selected = join(f.directory, '项目 with spaces');
+  mkdirSync(selected);
+  const alias = join(f.directory, 'alias');
+  symlinkSync(selected, alias);
+  const answers = [null, alias, selected];
+  const desktop = new DesktopAdapter({
+    platform: 'linux', env: { PATH: '/usr/bin', DISPLAY: ':fixture' },
+    executable: path => path === '/usr/bin/zenity' ? path : undefined,
+    launch: async () => { throw new Error('Not a launcher request'); },
+    pickFolder: async () => { if (!answers.length) throw new Error('Unexpected chooser'); return answers.shift()!; },
+  });
+  const config = { ...f.config, nativePicker: true, nativeFilesystem: 'shared' as const, transportToken: 'fixture' };
+  const service = await startWorkspaceHost(config, desktop);
+  try {
+    const initial = await service.host.listWorkspaces();
+    const scope = { authorityId: initial.authorityId, endpoint: initial.endpoint };
+    expect(initial.picker.kind).toBe('native');
+    const pick = (body: object) => fetch(`${service.url}/product-host/pick-workspace`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await pick({ scope, path: selected })).status).toBe(400);
+    expect((await pick({ scope: { ...scope, authorityId: 'retired' } })).status).toBe(400);
+    expect(await (await pick({ scope })).json()).toBeNull();
+    expect((await service.host.listWorkspaces()).workspaces).toEqual(initial.workspaces);
+    const id = await (await pick({ scope })).json();
+    expect(await (await pick({ scope })).json()).toBe(id);
+    expect((await service.host.listWorkspaces()).workspaces).toHaveLength(initial.workspaces.length + 1);
+    const restarted = new LocalWorkspaceHost(config, desktop);
+    try {
+      expect(await restarted.resolveWorkspace(id, f.endpoint)).toEqual({ cwd: selected });
+      expect(await restarted.classifyLocations([selected], f.endpoint)).toEqual([{ authorized: true, workspaceId: id }]);
+      renameSync(selected, selected + '-old'); mkdirSync(selected);
+      await expect(restarted.resolveWorkspace(id, f.endpoint)).rejects.toThrow('unavailable');
+      await restarted.removeWorkspace(await restarted.listWorkspaces(), id);
+      expect(await restarted.classifyLocations([selected], f.endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
+    } finally { await restarted.close(); }
+  } finally { await service.stop(); }
+});
+
+it('browses configured roots and registers the exact confirmed descendant on a headless Host', async () => {
+  const f = fixture();
+  const selected = join(f.a, 'projects', 'nested');
+  mkdirSync(selected, { recursive: true });
+  writeFileSync(join(f.a, 'plain.txt'), 'not a directory');
+  symlinkSync(f.b, join(f.a, 'outside-link'));
+  const config = { ...f.config, browsePicker: true, nativeFilesystem: 'shared' as const, transportToken: 'fixture' };
+  const host = new LocalWorkspaceHost(config);
+  try {
+    const scope = await host.listWorkspaces();
+    expect(scope.picker.kind).toBe('browser');
+    expect((await host.browseWorkspace(scope, 'a', '')).folders).toEqual(['projects']);
+    expect(await host.classifyLocations([selected], f.endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
+    await expect(host.browseWorkspace(scope, 'a', '../B')).rejects.toThrow();
+    await expect(host.browseWorkspace(scope, 'a', 'outside-link')).rejects.toThrow();
+    await expect(host.browseWorkspace(scope, 'a', f.b)).rejects.toThrow();
+    const path = 'projects/nested', { revision } = await host.browseWorkspace(scope, 'a', path);
+    renameSync(selected, selected + '-old'); mkdirSync(selected);
+    await expect(host.registerWorkspaceFolder(scope, 'a', { path, revision })).rejects.toThrow('folder changed');
+    const current = await host.browseWorkspace(scope, 'a', path);
+    const id = await host.registerWorkspaceFolder(scope, 'a', { path, revision: current.revision });
+    expect(await host.resolveWorkspace(id, f.endpoint)).toEqual({ cwd: selected });
+    expect(await host.classifyLocations([selected], f.endpoint)).toEqual([{ authorized: true, workspaceId: id }]);
+    expect(await host.registerWorkspaceFolder(scope, 'a', { path, revision: current.revision })).toBe(id);
+  } finally { await host.close(); }
+});
+
+it.each(['configured', 'native', 'browser'] as const)('%s registration admits the authorized directory rather than the location id', async mode => {
   const home = mkdtempSync(join(tmpdir(), 'workspace-home-')); directories.push(home);
   const previous = process.env.HOME;
   process.env.HOME = home;
   try {
     const shared = fixture();
-    const host = new LocalWorkspaceHost({ ...shared.config, nativeFilesystem: 'shared' });
+    const selected = mode === 'configured' ? shared.a : join(shared.a, 'selected');
+    if (mode !== 'configured') mkdirSync(selected);
+    const desktop = new DesktopAdapter({
+      platform: 'linux', env: { PATH: '/usr/bin', DISPLAY: ':fixture' },
+      executable: path => path === '/usr/bin/zenity' ? path : undefined,
+      launch: async () => { throw new Error('Unexpected launcher request'); },
+      pickFolder: async () => selected,
+    });
+    const host = new LocalWorkspaceHost({ ...shared.config, nativeFilesystem: 'shared', transportToken: 'fixture',
+      nativePicker: mode === 'native', browsePicker: mode === 'browser' }, desktop);
     const [alpha] = (await host.listWorkspaces()).workspaces;
     await host.removeWorkspace(await host.listWorkspaces(), alpha.id);
     let publications = 0;
     publication.inspect = (from, to) => {
-      expect(readFileSync(from, 'utf8')).toBe(shared.a);
+      expect(readFileSync(from, 'utf8')).toBe(selected);
       expect(to.endsWith('.txt')).toBe(true);
       expect(existsSync(to)).toBe(false);
       expect(readdirSync(join(home, 'rustx', 'runtime', 'workspace-python', 'admit')).filter(name => name.endsWith('.txt'))).toEqual([]);
       publications++;
     };
-    await host.adoptWorkspace(await host.listWorkspaces(), 'a');
+    const scope = await host.listWorkspaces();
+    if (mode === 'configured') await host.adoptWorkspace(scope, 'a');
+    else if (mode === 'native') await host.pickWorkspace(scope);
+    else {
+      const { revision } = await host.browseWorkspace(scope, 'a', 'selected');
+      await host.registerWorkspaceFolder(scope, 'a', { path: 'selected', revision });
+    }
     expect(publications).toBe(1);
     const admit = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
     const files = readdirSync(admit);
     expect(files).toHaveLength(1);
-    expect(readFileSync(join(admit, files[0]), 'utf8').trim()).toBe(shared.a);
+    expect(readFileSync(join(admit, files[0]), 'utf8').trim()).toBe(selected);
     const plain = fixture();
     const before = readdirSync(admit);
     const [plainAlpha] = (await plain.host.listWorkspaces()).workspaces;

@@ -232,7 +232,7 @@ fn read_tools(
     for fact in latest(
         store,
         cut,
-        vec![K::ToolExecutionStarted],
+        vec![K::ToolCallRequested, K::ToolExecutionStarted],
         TraceFactScope::All,
         32,
     )?
@@ -242,10 +242,14 @@ fn read_tools(
         if !same_attempt(&start.location, &fact.location) {
             continue;
         }
-        let D::ToolStart {
+        let (D::ToolRequest {
             occurrence: Some(occurrence),
             ..
-        } = fact.fact
+        }
+        | D::ToolStart {
+            occurrence: Some(occurrence),
+            ..
+        }) = fact.fact
         else {
             return Err(ConversationStoreError::Storage(
                 "historical Tool occurrence unavailable".into(),

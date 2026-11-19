@@ -773,6 +773,33 @@ impl SessionRuntimeManager {
             .map_err(SourceSettingsError::Source)
     }
 
+    fn capture_committed_source(
+        &self,
+        application: &mut super::super::configuration::application::ApplicationState,
+        target: &super::super::configuration::settings::SourceTarget,
+        transfer: Option<(
+            crate::runtime::resources::SourceScope,
+            super::super::configuration::settings::TransferOperation,
+        )>,
+        publish_catalog: Option<bool>,
+    ) {
+        use super::super::configuration::settings::{SourceTarget, TransferOperation};
+        use crate::runtime::resources::SourceScope;
+        if let Some((from, operation)) = transfer {
+            if from == SourceScope::User || operation == TransferOperation::Move {
+                self.capture_source_consumers(application, target);
+            }
+            if from == SourceScope::Workspace || operation == TransferOperation::Move {
+                self.capture_source_consumers(application, &SourceTarget::User);
+            }
+        } else {
+            self.capture_source_consumers(application, target);
+        }
+        if let Some(removing) = publish_catalog {
+            application.publish_creation_catalog(target.workspace(), &self.credentials, removing);
+        }
+    }
+
     /// Commit one source edit and transfer its application responsibility.
     /// The revision is captured from candidate bytes at native publication,
     /// never from a subsequent current-state read.
@@ -790,7 +817,20 @@ impl SessionRuntimeManager {
         tokio::task::spawn_blocking(move || {
             use super::super::configuration::settings::{ConfigMutation, SourceMutation};
             target.validate().map_err(SourceSettingsError::Source)?;
+            // Skill content preparation is outside the process-wide application
+            // lock. Only revalidation, publication, and application handoff enter it.
+            let prepared_skill = owner
+                .configuration
+                .prepare_skill_content(&target, &expected, &mutation)
+                .map_err(SourceSettingsError::Source)?;
             let mut application = owner.applications.lock();
+            let display_only = matches!(&mutation, SourceMutation::SkillDisplay { .. });
+            let transfer = match &mutation {
+                SourceMutation::ResourceTransfer {
+                    from, operation, ..
+                } => Some((*from, *operation)),
+                _ => None,
+            };
             let publish_catalog = match &mutation {
                 SourceMutation::Config {
                     mutation:
@@ -808,23 +848,26 @@ impl SessionRuntimeManager {
                 } => Some(false),
                 _ => None,
             };
-            let result = owner
-                .configuration
-                .write_source_settings(&target, &expected, mutation);
-            if result.is_ok()
-                || matches!(
-                    &result,
-                    Err(super::super::configuration::settings::SettingsError::Committed)
-                )
+            let result = if let Some(prepared) = prepared_skill {
+                owner.configuration.commit_skill_transfer(prepared)
+            } else {
+                owner
+                    .configuration
+                    .write_source_settings(&target, &expected, mutation)
+            };
+            if !display_only
+                && (result.is_ok()
+                    || matches!(
+                        &result,
+                        Err(super::super::configuration::settings::SettingsError::Committed)
+                    ))
             {
-                owner.capture_source_consumers(&mut application, &target);
-                if let Some(removing) = publish_catalog {
-                    application.publish_creation_catalog(
-                        target.workspace(),
-                        &owner.credentials,
-                        removing,
-                    );
-                }
+                owner.capture_committed_source(
+                    &mut application,
+                    &target,
+                    transfer,
+                    publish_catalog,
+                );
                 owner.applications.notify(&application);
             }
             let configuration_revision = application

@@ -160,6 +160,25 @@ impl TraceProjection<'_> {
             self.ending(anchor.sequence, &endings)?
         };
         facts.terminal(ending, anchor.sequence);
+        if matches!(anchor.fact, D::ToolRequest { .. }) {
+            if let Some(outcome) = facts.tool.as_ref().and_then(|tool| tool.outcome) {
+                use crate::observation::trace::types::TraceToolOutcome as O;
+                facts.state = match outcome {
+                    O::Success => TraceState::Completed,
+                    O::Failed => TraceState::Failed,
+                    O::Denied => TraceState::Denied,
+                    O::Cancelled => TraceState::Cancelled,
+                    O::TimedOut => TraceState::TimedOut,
+                    O::OutcomeUnknown => TraceState::OutcomeUnknown,
+                };
+            }
+            if let Some(result) = self.ending(anchor.sequence, &[K::ToolMessageCommitted])? {
+                facts.timing.ended_at = Some(result.timestamp);
+                facts.timing.duration_ms =
+                    u64::try_from((result.timestamp - facts.timing.started_at).num_milliseconds())
+                        .ok();
+            }
+        }
         Ok(facts)
     }
     fn workflow_nodes(
@@ -238,12 +257,8 @@ impl TraceProjection<'_> {
                 );
                 Vec::new()
             }
-            D::ToolStart {
-                occurrence,
-                call_id,
-                tool_id,
-            } => {
-                self.tool_start(facts, occurrence.as_ref(), call_id.clone(), tool_id.clone())?;
+            D::ToolStart { .. } | D::ToolRequest { .. } => {
+                self.tool_start(facts, anchor)?;
                 vec![K::ToolExecutionCompleted, K::ToolExecutionFailed]
             }
             D::CompactionStart { native_id } => {
@@ -297,20 +312,37 @@ impl TraceProjection<'_> {
     fn tool_start(
         &self,
         facts: &mut AnchorFacts,
-        occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
-        call_id: Option<crate::runtime::identity::ToolCallId>,
-        tool_id: Option<crate::runtime::identity::ToolId>,
+        anchor: &TraceFactHeader,
     ) -> Result<(), ConversationStoreError> {
+        let (D::ToolStart {
+            occurrence,
+            call_id,
+            tool_id,
+        }
+        | D::ToolRequest {
+            occurrence,
+            call_id,
+            tool_id,
+        }) = &anchor.fact
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "not a Tool anchor".into(),
+            ));
+        };
+        let started = matches!(anchor.fact, D::ToolStart { .. })
+            || self
+                .ending(anchor.sequence, &[K::ToolExecutionStarted])?
+                .is_some();
         facts.kind = TraceKind::Tool;
         facts.has_detail = true;
         let mut tool = TraceToolSummary {
-            call_id,
-            tool_id,
-            occurrence: occurrence.map(public_occurrence),
+            call_id: call_id.clone(),
+            tool_id: tool_id.clone(),
+            occurrence: occurrence.as_ref().map(public_occurrence),
             fields: Vec::new(),
             name: None,
             arguments: None,
-            started: true,
+            started,
             outcome: None,
             detail: None,
         };

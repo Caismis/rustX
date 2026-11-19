@@ -22,6 +22,7 @@ pub(super) use catalog::{
 };
 pub(super) use event::{
     Prepared, index_event, prepare_event, prepare_request_core, request_core, settle_fields,
+    tool_request_owner,
 };
 #[cfg(test)]
 pub(super) use event::{accepted_compare_work, accepted_identity_equal};
@@ -45,6 +46,7 @@ impl TraceFactKind {
             Self::ModelRequestFailed => "model_request_failed",
             Self::AssistantMessageCommitted => "assistant_message_committed",
             Self::ToolExecutionStarted => "tool_execution_started",
+            Self::ToolCallRequested => "tool_call_requested",
             Self::ToolExecutionCompleted => "tool_execution_completed",
             Self::ToolExecutionFailed => "tool_execution_failed",
             Self::ToolMessageCommitted => "tool_message_committed",
@@ -66,7 +68,7 @@ impl TraceFactKind {
         }
     }
     /// Every native Trace fact kind.
-    pub(crate) const ALL: [Self; 32] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::AttemptStarted,
         Self::AttemptCompleted,
         Self::AttemptFailed,
@@ -99,6 +101,7 @@ impl TraceFactKind {
         Self::InteractionRequested,
         Self::InteractionSettled,
         Self::ConfigurationApplied,
+        Self::ToolCallRequested,
     ];
     pub(crate) fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.as_str() == value)
@@ -120,6 +123,7 @@ impl TraceFactKind {
                 | Self::ModelRequestStarted
                 | Self::AssistantMessageCommitted
                 | Self::ToolExecutionStarted
+                | Self::ToolCallRequested
                 | Self::CompactionStarted
                 | Self::BackgroundExecutionCommitted
                 | Self::SubagentOwnershipCommitted
@@ -286,7 +290,11 @@ pub(super) fn facts(
     cut: &ObservationReadCut,
     query: &TraceFactQuery,
 ) -> Result<Vec<TraceFactHeader>, ConversationStoreError> {
-    if query.limit == 0 || query.limit > 32 || query.kinds.is_empty() || query.kinds.len() > 32 {
+    if query.limit == 0
+        || query.limit > 32
+        || query.kinds.is_empty()
+        || query.kinds.len() > TraceFactKind::ALL.len()
+    {
         return Err(ConversationStoreError::InvalidReference(
             "invalid bounded Trace fact query".into(),
         ));

@@ -264,38 +264,154 @@ fn position(
         [id.as_str()],
     )
 }
+#[allow(clippy::too_many_lines)] // Closed dispatch of native lifecycle ownership.
 fn terminal_owner(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<Option<u64>, ConversationStoreError> {
     let before = event.sequence;
-    match &event.event{
-        E::AttemptCompleted{..}|E::AttemptFailed{..}|E::AttemptCancelled{..}|E::AttemptTimedOut{..}|E::AttemptLimitExceeded{..}=>attempt_start(connection,event,false),
-        E::TurnCompleted=>step_start(connection,event,false),
-        E::ModelRequestCompleted{request_id,..}|E::ModelRequestFailed{request_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE event_request_id=?1 AND event_kind='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![request_id.as_str(),before]),
-        E::ToolExecutionCompleted{tool_call_id,tool_id,..}|E::ToolExecutionFailed{tool_call_id,tool_id,..}=>{
-            if let Some(occurrence)=&event.tool_occurrence{
-                find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])
-            }else{
-                find(connection,concat!("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE event_tool_call_id=?1 AND attempt_key IS ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"), " AND turn_key IS (", crate::durable::sqlite::event_owner_key::turn!("?3"), ") AND event_kind='tool_execution_started' AND json_extract(event_json,'$.event.tool_id')=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 1"),params![tool_call_id.as_str(),event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),event.turn_id.as_ref().map(crate::runtime::identity::TurnId::as_str),tool_id.as_str(),before])
+    match &event.event {
+        E::ToolExecutionStarted { .. } => {
+            Ok(tool_request_owner(connection, event)?.or(Some(before)))
+        }
+        E::AttemptCompleted { .. }
+        | E::AttemptFailed { .. }
+        | E::AttemptCancelled { .. }
+        | E::AttemptTimedOut { .. }
+        | E::AttemptLimitExceeded { .. } => attempt_start(connection, event, false),
+        E::TurnCompleted => step_start(connection, event, false),
+        E::ModelRequestCompleted { request_id, .. } | E::ModelRequestFailed { request_id, .. } => {
+            find(
+                connection,
+                "SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE event_request_id=?1 AND event_kind='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+                params![request_id.as_str(), before],
+            )
+        }
+        E::ToolExecutionCompleted {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | E::ToolExecutionFailed {
+            tool_call_id,
+            tool_id,
+            ..
+        } => {
+            if let Some(request) = tool_request_owner(connection, event)? {
+                return Ok(Some(request));
             }
-        },
-        E::ToolMessageCommitted{..}=>{
-            event.tool_occurrence.as_ref().map(|occurrence|find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])).transpose().map(Option::flatten)
-        },
-        E::CompactionCompleted{..}|E::CompactionFailed{..}=>find(connection,concat!("SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",crate::durable::sqlite::event_kind_key::sql!("event_kind"),"='compaction_started'"," AND sequence<?1 ORDER BY sequence DESC LIMIT 1"),[before]),
-        E::BackgroundTerminalPublished{execution_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE event_execution_id=?1 AND event_kind='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![execution_id.as_str(),before]),
-        E::SubagentTerminalPublished{subagent_id,..}|E::SubagentTerminalSettled{subagent_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE event_subagent_id=?1 AND event_kind='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![subagent_id.as_str(),before]),
-        E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>{
-            let (kind,identity)=match &run_id.origin {
-                crate::runtime::workflow::WorkflowRunOrigin::Tool{attempt_id}=>("tool",attempt_id.as_str()),
-                crate::runtime::workflow::WorkflowRunOrigin::Scheduled{start_id}=>("scheduled",start_id.as_str()),
+            if let Some(occurrence) = &event.tool_occurrence {
+                find(
+                    connection,
+                    "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND observation_kind='tool_execution_started' AND sequence<?3 ORDER BY sequence DESC LIMIT 1",
+                    params![
+                        occurrence.ledger_position,
+                        occurrence.block_index.get(),
+                        before
+                    ],
+                )
+            } else {
+                find(
+                    connection,
+                    concat!(
+                        "SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE event_tool_call_id=?1 AND attempt_key IS ",
+                        crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"),
+                        " AND turn_key IS (",
+                        crate::durable::sqlite::event_owner_key::turn!("?3"),
+                        ") AND event_kind='tool_execution_started' AND json_extract(event_json,'$.event.tool_id')=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 1"
+                    ),
+                    params![
+                        tool_call_id.as_str(),
+                        event
+                            .attempt_id
+                            .as_ref()
+                            .map(crate::runtime::identity::AttemptId::as_str),
+                        event
+                            .turn_id
+                            .as_ref()
+                            .map(crate::runtime::identity::TurnId::as_str),
+                        tool_id.as_str(),
+                        before
+                    ],
+                )
+            }
+        }
+        E::ToolMessageCommitted { .. } => {
+            if let Some(request) = tool_request_owner(connection, event)? {
+                return Ok(Some(request));
+            }
+            event.tool_occurrence.as_ref().map(|occurrence|find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND observation_kind='tool_execution_started' AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])).transpose().map(Option::flatten)
+        }
+        E::CompactionCompleted { .. } | E::CompactionFailed { .. } => find(
+            connection,
+            concat!(
+                "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                "='compaction_started'",
+                " AND sequence<?1 ORDER BY sequence DESC LIMIT 1"
+            ),
+            [before],
+        ),
+        E::BackgroundTerminalPublished { execution_id, .. } => find(
+            connection,
+            "SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE event_execution_id=?1 AND event_kind='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+            params![execution_id.as_str(), before],
+        ),
+        E::SubagentTerminalPublished { subagent_id, .. }
+        | E::SubagentTerminalSettled { subagent_id, .. } => find(
+            connection,
+            "SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE event_subagent_id=?1 AND event_kind='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+            params![subagent_id.as_str(), before],
+        ),
+        E::WorkflowCompleted { run_id, .. }
+        | E::WorkflowFailed { run_id, .. }
+        | E::WorkflowCancelled { run_id, .. } => {
+            let (kind, identity) = match &run_id.origin {
+                crate::runtime::workflow::WorkflowRunOrigin::Tool { attempt_id } => {
+                    ("tool", attempt_id.as_str())
+                }
+                crate::runtime::workflow::WorkflowRunOrigin::Scheduled { start_id } => {
+                    ("scheduled", start_id.as_str())
+                }
             };
-            find(connection,"SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.origin.type')=?2 AND coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id'))=?3 AND json_extract(event_json,'$.event.run_id.invocation')=?4 AND event_kind='workflow_started' AND sequence<?5 ORDER BY sequence DESC LIMIT 1",params![run_id.conversation_id.as_str(),kind,identity,run_id.invocation,before])
-        },
-        E::InteractionSettled{interaction_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE event_interaction_id=?1 AND event_kind='interaction_requested' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![interaction_id.as_str(),before]),
-        _=>Ok(Some(before)),
+            find(
+                connection,
+                "SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.origin.type')=?2 AND coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id'))=?3 AND json_extract(event_json,'$.event.run_id.invocation')=?4 AND event_kind='workflow_started' AND sequence<?5 ORDER BY sequence DESC LIMIT 1",
+                params![
+                    run_id.conversation_id.as_str(),
+                    kind,
+                    identity,
+                    run_id.invocation,
+                    before
+                ],
+            )
+        }
+        E::InteractionSettled { interaction_id, .. } => find(
+            connection,
+            "SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE event_interaction_id=?1 AND event_kind='interaction_requested' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+            params![interaction_id.as_str(), before],
+        ),
+        _ => Ok(Some(before)),
     }
+}
+/// A request owns its review, execution and result phases. Independently
+/// recorded executions retain their own original start as lifecycle owner.
+pub(in crate::durable::sqlite) fn tool_request_owner(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<Option<u64>, ConversationStoreError> {
+    let Some(occurrence) = &event.tool_occurrence else {
+        return Ok(None);
+    };
+    find(
+        connection,
+        "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND observation_kind='tool_call_requested' AND sequence<?3 ORDER BY sequence DESC LIMIT 1",
+        params![
+            occurrence.ledger_position,
+            occurrence.block_index.get(),
+            event.sequence
+        ],
+    )
 }
 fn adoption(
     connection: &Connection,
@@ -411,7 +527,11 @@ fn core_data(
                     .ok_or_else(|| storage("native Assistant C absent"))?,
             })
         }
-        E::ToolExecutionStarted {
+        E::ToolCallRequested {
+            tool_call_id,
+            tool_id,
+        }
+        | E::ToolExecutionStarted {
             tool_call_id,
             tool_id,
         } => {
@@ -429,10 +549,21 @@ fn core_data(
                 "tool_id",
                 tool_id.as_str(),
             )?;
-            Ok(TraceFactData::ToolStart {
-                occurrence: event.tool_occurrence.clone(),
-                call_id: (tool_call_id.as_str().len() <= 512).then(|| tool_call_id.clone()),
-                tool_id: (tool_id.as_str().len() <= 512).then(|| tool_id.clone()),
+            let occurrence = event.tool_occurrence.clone();
+            let call_id = (tool_call_id.as_str().len() <= 512).then(|| tool_call_id.clone());
+            let tool_id = (tool_id.as_str().len() <= 512).then(|| tool_id.clone());
+            Ok(if matches!(event.event, E::ToolCallRequested { .. }) {
+                TraceFactData::ToolRequest {
+                    occurrence,
+                    call_id,
+                    tool_id,
+                }
+            } else {
+                TraceFactData::ToolStart {
+                    occurrence,
+                    call_id,
+                    tool_id,
+                }
             })
         }
         E::ToolMessageCommitted { message_id, .. } => Ok(TraceFactData::CanonicalToolCommit {
@@ -733,6 +864,7 @@ fn data(
         | E::InboundTurnAdopted { .. }
         | E::ModelRequestStarted { .. }
         | E::AssistantMessageCommitted { .. }
+        | E::ToolCallRequested { .. }
         | E::ToolExecutionStarted { .. }
         | E::ToolMessageCommitted { .. }
         | E::CompactionStarted { .. } => core_data(

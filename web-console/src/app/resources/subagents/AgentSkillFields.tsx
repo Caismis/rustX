@@ -16,7 +16,7 @@ export function AgentSkillFields({ client, source, scope, active, value, change 
   const catalog = useSkillCatalog(client, source, active, scope);
   const scopes = resourceScopes(scope);
   const skills = (catalog?.skills ?? []).filter(skill => !skill.disable_model_invocation && scopes.includes(skill.provenance.source));
-  const selected = value === 'all' ? skills.map(skill => skill.catalog.name) : value;
+  const selected = value === 'all' ? skills.filter(skill => skill.enabled_by_default).map(skill => skill.catalog.name) : value;
   const names = new Set(skills.map(skill => skill.catalog.name));
   const unavailable = catalog && !catalog.error ? selected.filter(name => !names.has(name)) : [];
   return <div className={css.choiceGroup} role="group" aria-labelledby={heading}>

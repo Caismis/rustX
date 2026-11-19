@@ -137,7 +137,13 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       close: () => closing ??= (signal.aborted ? abort() : this.settledFileCall<void>('file', scope, { identity: bound.identity }, undefined, 'preview-close')).finally(() => signal.removeEventListener('abort', abort)),
     };
   }
-  configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
+  configureWorkspace = async (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => {
+    try { return await this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation }); }
+    catch (cause) {
+      if (cause instanceof WorkspaceHostError || operation.kind !== 'transfer') throw cause;
+      throw new WorkspaceHostError('Resource transfer acknowledgement lost', undefined, true);
+    }
+  };
   workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
     try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
     catch (cause) {
@@ -147,6 +153,11 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     }
   };
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
+  pickWorkspace = (scope: WorkspaceAuthorityScope, signal?: AbortSignal) => this.call<string | null>('pick-workspace', { scope }, signal);
+  browseWorkspace = (scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal) =>
+    this.call<import('./host.ts').WorkspaceFolderListing>('browse-workspace', { scope, location, path }, signal);
+  registerWorkspaceFolder = (scope: WorkspaceAuthorityScope, location: string, selection: import('./host.ts').WorkspaceFolderSelection) =>
+    this.call<string>('register-workspace-folder', { scope, location, selection });
   renameWorkspace = (scope: WorkspaceAuthorityScope, id: string, displayName: string) => this.call<void>('rename', { scope, id, displayName });
   reorderWorkspace = (scope: WorkspaceAuthorityScope, id: string, before?: string) => this.call<void>('reorder', { scope, id, before });
   selectWorkspace = (scope: WorkspaceAuthorityScope, id: string, intent: import('./host.ts').WorkspaceSelectionIntent) => this.call<void>('select', { scope, id, intent }, undefined, true);

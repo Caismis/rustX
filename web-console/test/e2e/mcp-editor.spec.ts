@@ -146,10 +146,18 @@ for (const width of [1440, 390]) test(`MCP connectivity indicators match across 
   await page.getByRole('button',{name:'Settings',exact:true}).click();
   if (width === 1440) await page.getByRole('button',{name:'Dark',exact:true}).click();
   await openResourceModule(page,'mcp','Global');
-  const surface=page.locator('[data-mcp-page]');
+  const region=page.getByRole('region',{name:'MCP servers',exact:true});
+  const surface=region.getByRole('group',{name:'Installed',exact:true});
   for (const scope of ['User','Workspace A']) {
     if(scope !== 'User') {
       await openResourceModule(page,'mcp','Workspace A');
+    }
+    const inherited = region.getByRole('group',{name:'Available from Global',exact:true});
+    if (scope === 'Workspace A') {
+      for (const name of ['exa','broken']) {
+        await expect(inherited.getByRole('listitem',{name,exact:true}).locator('[data-status]')).toHaveAttribute('data-status','unknown');
+        await expect(inherited.getByRole('button',{name:`Test connection ${name}`,exact:true})).toBeDisabled();
+      }
     }
     await expect(surface.getByRole('listitem',{name:'exa'}).locator('[data-status]')).toHaveAttribute('data-status','unknown');
     await surface.getByRole('button',{name:'Test connection exa',exact:true}).click();
@@ -160,8 +168,12 @@ for (const width of [1440, 390]) test(`MCP connectivity indicators match across 
     await page.getByRole('region',{name:'MCP servers',exact:true}).getByRole('button',{name:'Refresh',exact:true}).click();
     await expect(page.getByRole('region',{name:'MCP servers',exact:true}).getByRole('button',{name:'Refresh',exact:true})).toBeEnabled();
     await expect(surface.getByRole('img',{name:'Connection test succeeded.'})).toBeVisible();
+    if (scope === 'Workspace A') {
+      // Global cards cannot inherit a Workspace-scoped probe result.
+      for (const name of ['exa','broken']) await expect(inherited.getByRole('listitem',{name,exact:true}).locator('[data-status]')).toHaveAttribute('data-status','unknown');
+    }
   }
-  await surface.screenshot({path:`/tmp/rustx-mcp-probes-${width}.png`});
+  await region.screenshot({path:`/tmp/rustx-mcp-probes-${width}.png`});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });

@@ -209,11 +209,8 @@ async fn chat_replays_previous_reasoning() {
         .find(|message| message["reasoning"] == "Think.")
         .expect("assistant reasoning is replayed");
     assert_eq!(reasoning_message["role"], "assistant");
-    assert!(
-        reasoning_message["content"]
-            .as_array()
-            .expect("assistant content array")
-            .is_empty(),
+    assert_eq!(
+        reasoning_message["content"], "",
         "reasoning is not flattened into visible assistant content"
     );
 }
@@ -331,7 +328,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
         .as_array()
         .expect("messages")
         .iter()
-        .find(|message| message["content"][0]["text"] == "Visible answer.")
+        .find(|message| message["content"] == "Visible answer.")
         .expect("visible assistant content is preserved");
     assert!(message.get("reasoning").is_none());
     assert!(message.get("reasoning_content").is_none());
@@ -388,7 +385,7 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
         .as_array()
         .expect("messages")
         .iter()
-        .find(|message| message["content"][0]["text"] == "Keep this text.")
+        .find(|message| message["content"] == "Keep this text.")
         .expect("visible assistant content is preserved");
     assert!(message.get("reasoning").is_none());
     assert!(message.get("reasoning_content").is_none());
@@ -447,10 +444,7 @@ async fn chat_replay_concatenates_plaintext_and_skips_opaque_blocks() {
             .find(|message| message.get(field).is_some())
             .unwrap();
         assert_eq!(reasoning[field], "firstsecond");
-        assert_eq!(
-            reasoning["content"].as_array().unwrap(),
-            &Vec::<serde_json::Value>::new()
-        );
+        assert_eq!(reasoning["content"], "");
     }
 }
 
@@ -496,7 +490,7 @@ async fn chat_translates_full_history_roles() {
     );
     let tool_message = &messages[3];
     assert_eq!(tool_message["tool_call_id"], "call_1");
-    assert_eq!(tool_message["content"][0]["text"], "[\"a.txt\"]");
+    assert_eq!(tool_message["content"], "[\"a.txt\"]");
 }
 
 /// Responses translates the same full history into input items.
@@ -804,17 +798,32 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
             match protocol {
                 ModelProtocol::OpenAiChatCompletions => {
                     let messages = body["messages"].as_array().unwrap();
-                    assert_eq!(messages.iter().filter(|m| m["role"] == "user").count(), 2);
-                    for id in ["call_1", "call_2"] {
-                        let tool = messages.iter().find(|m| m["tool_call_id"] == id).unwrap();
+                    assert_eq!(messages.iter().filter(|m| m["role"] == "user").count(), 4);
+                    let tool_positions: Vec<_> = messages
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, m)| (m["role"] == "tool").then_some(i))
+                        .collect();
+                    assert_eq!(tool_positions.len(), 2);
+                    assert_eq!(tool_positions[1], tool_positions[0] + 1);
+                    for (offset, id) in ["call_1", "call_2"].into_iter().enumerate() {
+                        let tool = &messages[tool_positions[offset]];
                         assert_eq!(tool["role"], "tool");
-                        assert_eq!(tool["content"][0]["text"], "A");
+                        assert_eq!(tool["tool_call_id"], id);
                         assert_eq!(
-                            tool["content"][1]["image_url"]["url"],
+                            tool["content"],
+                            "Ordered text and images follow in the labelled user message."
+                        );
+                        let media = &messages[tool_positions[1] + offset + 1];
+                        assert_eq!(media["role"], "user");
+                        assert!(media["content"][0]["text"].as_str().unwrap().contains(id));
+                        assert_eq!(media["content"][1]["text"], "A");
+                        assert_eq!(
+                            media["content"][2]["image_url"]["url"],
                             format!("data:image/png;base64,{encoded}")
                         );
-                        assert_eq!(tool["content"][2]["text"], "B");
-                        assert_eq!(tool["content"][3]["type"], "image_url");
+                        assert_eq!(media["content"][3]["text"], "B");
+                        assert_eq!(media["content"][4]["type"], "image_url");
                     }
                 }
                 ModelProtocol::OpenAiResponses => {

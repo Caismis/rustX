@@ -21,7 +21,7 @@ use crate::runtime::identity::{
 };
 
 /// The ABI version of the native context contribution contract.
-pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 6;
+pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 7;
 
 /// The finite user-context semantic lanes owned by rustX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -88,19 +88,18 @@ pub enum SystemSectionLane {
     /// Native capability guidance sections, including the request-time Skill
     /// catalog, rather than conversational User context facts.
     NativeCapabilityGuidance,
-    /// Sparse execution-permission mode reminder (Issue #544).
+    /// Permission-mode classification in immutable request snapshots.
     PermissionReminder,
 }
 
 impl SystemSectionLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::CoreRuntimeIdentity,
         Self::AgentProfile,
         Self::WorkspaceInstructions,
         Self::CertifiedExtension,
         Self::NativeCapabilityGuidance,
-        Self::PermissionReminder,
     ];
 
     /// Stable manifest spelling of one system-section lane.
@@ -167,7 +166,7 @@ pub struct NativeContextInput {
     pub core_runtime_identity: Option<String>,
     /// Agent profile/persona content for the effective system prompt.
     pub agent_profile: Option<String>,
-    /// Sparse permission-mode reminder for this request, when eligible.
+    /// Sparse permission-mode reminder, admitted as conversational User context.
     pub permission_reminder: Option<String>,
 }
 
@@ -859,6 +858,24 @@ impl ContextAssembly {
     ) -> Result<AcceptedContext, ContextAssemblyError> {
         let mut entries = Vec::new();
         let mut native_sections = self.system_sections(native)?;
+        if let Some(text) = &native.permission_reminder {
+            validate_text(text, "permission reminder")?;
+            entries.push(contribution_entry(
+                &ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder),
+                ContextProposal::NativeUserMessage {
+                    message: UserMessageProposal {
+                        content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                            text: format!("<system-reminder>\n{text}\n</system-reminder>"),
+                        })],
+                    },
+                    metadata: ContextKind::NativeEnvironment,
+                    presentation: None,
+                    emissions: Vec::new(),
+                },
+                ContributionPhase::RequestTime,
+                0,
+            )?);
+        }
 
         // Deferred context. The Agent Loop already staged these in canonical
         // `(ToolCall batch position, producer identity, proposal FIFO)` order,
@@ -992,7 +1009,7 @@ impl ContextAssembly {
                     return Ok(registered.generation.clone());
                 }
                 match identity {
-                    // These resource-only native owners use the core's fixed
+                    // These core-owned native contributors use the core's fixed
                     // generation authority, not dynamic contributor registration.
                     ContextContributorIdentity::Native(
                         owner @ (NativeContextContributor::WorkspaceInstructions
@@ -1182,14 +1199,6 @@ pub(crate) fn native_system_sections(
             text.clone(),
         ));
     }
-    if let Some(text) = &native.permission_reminder {
-        validate_text(text, "permission reminder")?;
-        sections.push(native_section(
-            SystemSectionLane::PermissionReminder,
-            NativeContextContributor::PermissionReminder,
-            text.clone(),
-        ));
-    }
     sections.sort_by(|left, right| {
         left.lane
             .cmp(&right.lane)
@@ -1304,6 +1313,49 @@ mod tests {
                 .expect("valid metadata"),
             ),
         }
+    }
+
+    #[tokio::test]
+    async fn permission_reminder_is_native_user_context_with_stable_system_authority() {
+        let assembly = ContextAssembly::new();
+        let native = NativeContextInput {
+            core_runtime_identity: Some("core identity".into()),
+            permission_reminder: Some("Execution permission mode: plan.".into()),
+            ..NativeContextInput::default()
+        };
+        let accepted = assembly.assemble(&input(), &native, &[]).await.unwrap();
+        assert_eq!(
+            render_effective_system_prompt(&accepted.system_sections),
+            "core identity"
+        );
+        assert_eq!(accepted.user_messages.len(), 1);
+        let reminder = &accepted.user_messages[0];
+        assert_eq!(reminder.source, UserSource::Runtime);
+        assert_eq!(reminder.kind, ContextKind::NativeEnvironment);
+        assert_eq!(
+            reminder.producer,
+            ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder)
+        );
+        assert_eq!(
+            reminder.content,
+            vec![UserContentBlock::Text(TextBlock {
+                text: "<system-reminder>\nExecution permission mode: plan.\n</system-reminder>"
+                    .into(),
+            })]
+        );
+        let quiet = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput {
+                    permission_reminder: None,
+                    ..native
+                },
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(quiet.system_sections, accepted.system_sections);
+        assert_eq!(quiet.user_messages, [] as [AcceptedUserContext; 0]);
     }
 
     #[tokio::test]
@@ -2272,8 +2324,8 @@ mod tests {
     fn manifest_is_derived_from_contract_constants() {
         let manifest = ContextAssembly::compatibility_manifest();
         assert_eq!(
-            CONTEXT_COMPATIBILITY_ABI_VERSION, 6,
-            "sparse permission reminders are a v6 ABI"
+            CONTEXT_COMPATIBILITY_ABI_VERSION, 7,
+            "permission reminders are canonical User context in v7"
         );
         assert_eq!(manifest.user_context_lanes, UserContextLane::ALL);
         assert_eq!(manifest.system_section_lanes, SystemSectionLane::ALL);

@@ -132,15 +132,22 @@ fn status_texts(messages: &[MessageBlock]) -> Vec<String> {
     messages
         .iter()
         .filter_map(|message| match message {
-            MessageBlock::User(user) if matches!(user.kind, InboundKind::Context(_)) => Some(
-                user.content
-                    .iter()
-                    .map(|block| match block {
-                        UserContentBlock::Text(text) => text.text.clone(),
-                        other => format!("{other:?}"),
-                    })
-                    .collect::<String>(),
-            ),
+            MessageBlock::User(user)
+                if matches!(
+                    user.kind,
+                    InboundKind::Context(crate::message::types::ContextKind::AgentStatus(_))
+                ) =>
+            {
+                Some(
+                    user.content
+                        .iter()
+                        .map(|block| match block {
+                            UserContentBlock::Text(text) => text.text.clone(),
+                            other => format!("{other:?}"),
+                        })
+                        .collect::<String>(),
+                )
+            }
             _ => None,
         })
         .collect()
@@ -387,23 +394,6 @@ fn system_prompt(durable: &Durable, index: usize) -> String {
         .clone()
 }
 
-/// Resource-generation comparisons ignore the sparse permission reminder
-/// (Issue #544 §10): it is injected on first/change/compaction request starts
-/// and is not part of the frozen resource generation under test.
-fn system_prompt_without_permission_reminder(prompt: &str) -> &str {
-    const MARKER: &str = "Execution permission mode:";
-    if let Some(index) = prompt.find("\n\nExecution permission mode:") {
-        &prompt[..index]
-    } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
-        &prompt[..index]
-    } else if prompt.starts_with(MARKER) {
-        ""
-    } else {
-        prompt
-    }
-}
-
-/// The model-facing tool names of one persisted request.
 fn tool_names(durable: &Durable, index: usize) -> Vec<String> {
     durable
         .request_snapshots()
@@ -665,7 +655,7 @@ fn a_turn_adopted_after_a_settled_attempt_continues() {
     );
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant", "user"],
+        vec!["user", "context", "context", "assistant", "user"],
         "the first turn is answered and the second turn is canonical"
     );
     let report = durable.recover();
@@ -706,7 +696,7 @@ fn a_turn_drained_into_a_live_attempt_continues() {
     );
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant", "user"],
+        vec!["user", "context", "context", "assistant", "user"],
         "the drained message is canonical behind the answered first turn"
     );
     assert!(
@@ -761,7 +751,7 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
     let durable = lab.durable();
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant", "user"]
+        vec!["user", "context", "context", "assistant", "user"]
     );
 
     // Recovery #1 permits the continuation and terminalizes the dead attempt
@@ -820,7 +810,7 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
     // Nothing was re-adopted, duplicated, or sent along the way.
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant", "user"],
+        vec!["user", "context", "context", "assistant", "user"],
         "the adopted turn is canonical exactly once"
     );
     assert_eq!(
@@ -870,7 +860,10 @@ fn assistant_canonical_commit_is_atomic() {
     process.wait_reached("before:settle_model_turn");
     process.sigkill();
     let durable = before.durable();
-    assert_eq!(shapes(&durable.canonical()), vec!["user", "context"]);
+    assert_eq!(
+        shapes(&durable.canonical()),
+        vec!["user", "context", "context"]
+    );
     assert!(!has_c(&durable));
     assert_publication_implication(&durable);
 
@@ -881,7 +874,7 @@ fn assistant_canonical_commit_is_atomic() {
     let durable = after.durable();
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant"]
+        vec!["user", "context", "context", "assistant"]
     );
     assert_eq!(
         durable
@@ -903,7 +896,7 @@ fn tool_result_batch_commit_is_atomic() {
     let durable = before.durable();
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant-call"]
+        vec!["user", "context", "context", "assistant-call"]
     );
     assert_eq!(
         tool_results(&durable.canonical()),
@@ -920,7 +913,7 @@ fn tool_result_batch_commit_is_atomic() {
     let durable = after.durable();
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant-call", "tool"]
+        vec!["user", "context", "context", "assistant-call", "tool"]
     );
     assert!(
         durable
@@ -1120,7 +1113,7 @@ fn terminal_only_publication_settles_atomically() {
     );
     assert_eq!(
         shapes(&durable.canonical()),
-        vec!["user", "context", "assistant"]
+        vec!["user", "context", "context", "assistant"]
     );
     assert_publication_implication(&durable);
     let report = durable.recover();
@@ -1787,7 +1780,7 @@ fn kill_during_the_compaction_summary_keeps_the_old_surface() {
     );
     assert_eq!(
         shapes(&durable.surface()),
-        vec!["user", "context", "assistant"],
+        vec!["user", "context", "context", "assistant"],
         "the pre-compaction Surface is still authoritative"
     );
 }
@@ -1880,7 +1873,7 @@ fn compaction_checkpoint_receipt_and_activation_are_atomic() {
     assert!(!durable.has_event(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })));
     assert_eq!(
         shapes(&durable.surface()),
-        vec!["user", "context", "assistant"]
+        vec!["user", "context", "context", "assistant"]
     );
     let ledger_before = shapes(&durable.canonical());
 
@@ -1994,15 +1987,13 @@ fn live_external_edits_never_expose_a_new_generation() {
     assert!(first.contains("R1 project instructions."));
     assert!(first.contains("R1 alpha summary"));
     assert!(
-        first.contains("Execution permission mode:"),
-        "first request carries the sparse permission reminder"
+        !first.contains("Execution permission mode:"),
+        "permission reminders never enter the System prompt"
     );
-    let first_generation = system_prompt_without_permission_reminder(&first);
+    let first_generation = &first;
     for index in 1..snapshots.len() {
-        // Later requests may still carry a reminder when they open a new
-        // Attempt admission; compare only the resource-derived System body.
         assert_eq!(
-            system_prompt_without_permission_reminder(&system_prompt(&durable, index)),
+            &system_prompt(&durable, index),
             first_generation,
             "request {index} still sends the R1 generation"
         );
@@ -2283,6 +2274,7 @@ fn assert_cut_lineage(scenario: &str) {
         vec![
             "user",
             "context",
+            "context",
             "assistant-call",
             "tool",
             "assistant",
@@ -2483,6 +2475,7 @@ fn assert_publication_is_atomic(scenario: &str, boundary: &str, committed: bool)
         shapes(&seeded.canonical()),
         vec![
             "user",
+            "context",
             "context",
             "assistant-call",
             "tool",
@@ -2940,6 +2933,7 @@ fn historical_status_and_history_never_revive_background_ownership() {
         shapes(&durable.canonical()),
         vec![
             "user",
+            "context",
             "context",
             "assistant-call",
             "tool",

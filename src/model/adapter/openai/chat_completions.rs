@@ -1443,7 +1443,7 @@ enum WireMessage<'a> {
     },
     Tool {
         tool_call_id: serde_json::Value,
-        content: Vec<WirePart<'a>>,
+        content: String,
     },
 }
 
@@ -1452,6 +1452,15 @@ enum WireMessage<'a> {
 enum AssistantContent<'a> {
     Parts(Vec<WirePart<'a>>),
     Text(String),
+}
+
+impl AssistantContent<'_> {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Parts(parts) => parts.is_empty(),
+            Self::Text(text) => text.is_empty(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1487,15 +1496,56 @@ pub(crate) struct ChatPrefix {
     origin: Option<crate::model::replay::ReplayOrigin>,
     images: crate::model::images::ResolvedImages,
     epoch: u64,
-    pieces: imbl::Vector<Option<std::sync::Arc<serde_json::value::RawValue>>>,
+    pieces: imbl::Vector<EncodedMessage>,
     count: usize,
     bytes: usize,
+}
+
+#[derive(Clone, Default)]
+struct EncodedMessage {
+    main: Option<std::sync::Arc<serde_json::value::RawValue>>,
+    media: Option<std::sync::Arc<serde_json::value::RawValue>>,
+    is_tool: bool,
+}
+
+impl EncodedMessage {
+    fn count(&self) -> usize {
+        usize::from(self.main.is_some()) + usize::from(self.media.is_some())
+    }
+
+    fn bytes(&self) -> usize {
+        self.main.as_ref().map_or(0, |raw| raw.get().len())
+            + self.media.as_ref().map_or(0, |raw| raw.get().len())
+    }
+}
+
+struct TranslatedMessage<'a> {
+    main: Option<WireMessage<'a>>,
+    media: Option<WireMessage<'a>>,
+}
+
+impl TranslatedMessage<'_> {
+    fn label_media(&mut self) {
+        if let (Some(WireMessage::Tool { tool_call_id, .. }), Some(WireMessage::User { content })) =
+            (&self.main, &mut self.media)
+        {
+            content.insert(
+                0,
+                WirePart::Text {
+                    text: Cow::Owned(format!(
+                        "Images from tool result {}:",
+                        tool_call_id.as_str().expect("encoded tool call id")
+                    )),
+                },
+            );
+        }
+    }
 }
 
 enum WireMessages<'a> {
     Cached {
         system: &'a str,
-        pieces: imbl::Vector<Option<std::sync::Arc<serde_json::value::RawValue>>>,
+        pieces: imbl::Vector<EncodedMessage>,
         count: usize,
         bytes: usize,
     },
@@ -1517,8 +1567,25 @@ impl Serialize for WireMessages<'_> {
                 if !system.is_empty() {
                     array.serialize_element(&WireMessage::System { content: system })?;
                 }
-                for piece in pieces.iter().flatten() {
-                    array.serialize_element(piece.as_ref())?;
+                let mut media = Vec::new();
+                for piece in pieces {
+                    // A complete tool-result group must precede synthetic
+                    // user media. Interleaving user messages with the group's
+                    // remaining tool results is rejected by Chat services.
+                    if !piece.is_tool {
+                        for part in media.drain(..) {
+                            array.serialize_element(part)?;
+                        }
+                    }
+                    if let Some(main) = &piece.main {
+                        array.serialize_element(main.as_ref())?;
+                    }
+                    if let Some(part) = &piece.media {
+                        media.push(part.as_ref());
+                    }
+                }
+                for part in media {
+                    array.serialize_element(part)?;
                 }
                 array.end()
             }
@@ -1583,7 +1650,7 @@ pub(crate) fn translate_request_with_limit<'a>(
 
 struct StagedMessages<'a> {
     prefix: ChatPrefix,
-    translated: Vec<(usize, Option<WireMessage<'a>>)>,
+    translated: Vec<(usize, TranslatedMessage<'a>)>,
 }
 
 fn stage_messages<'a>(
@@ -1623,7 +1690,7 @@ fn stage_messages<'a>(
         });
     let mut dirty = plan.dirty.clone();
     for index in prefix.prefix.len()..request.messages.len() {
-        prefix.pieces.push_back(None);
+        prefix.pieces.push_back(EncodedMessage::default());
         dirty.insert(index);
     }
     let mut translated = Vec::with_capacity(dirty.len());
@@ -1643,12 +1710,14 @@ fn stage_messages<'a>(
     let count = prefix.count
         - translated
             .iter()
-            .filter(|(index, _)| prefix.pieces[*index].is_some())
-            .count()
+            .map(|(index, _)| prefix.pieces[*index].count())
+            .sum::<usize>()
         + translated
             .iter()
-            .filter(|(_, message)| message.is_some())
-            .count();
+            .map(|(_, message)| {
+                usize::from(message.main.is_some()) + usize::from(message.media.is_some())
+            })
+            .sum::<usize>();
     if count == 0 && request.effective_system_prompt.is_empty() {
         return Err(invalid_request(
             "a Chat Completions request requires at least one message",
@@ -1656,7 +1725,7 @@ fn stage_messages<'a>(
     }
     plan.validate_wire().map_err(invalid_request)?;
     for (index, message) in &mut translated {
-        if let Some(message) = message {
+        if let Some(message) = &mut message.main {
             plan.encode_message_fields(*index, &request.messages[*index], |field| match message {
                 WireMessage::Assistant { tool_calls, .. } => {
                     for call in tool_calls {
@@ -1668,6 +1737,7 @@ fn stage_messages<'a>(
             })
             .map_err(invalid_request)?;
         }
+        message.label_media();
     }
     Ok(StagedMessages { prefix, translated })
 }
@@ -1683,34 +1753,38 @@ fn finish_messages<'a>(
         translated,
     } = staged;
     for (index, _) in &translated {
-        if let Some(previous) = prefix.pieces[*index].take() {
-            prefix.bytes -= previous.get().len();
-            prefix.count -= 1;
-        }
+        let previous = &prefix.pieces[*index];
+        prefix.bytes -= previous.bytes();
+        prefix.count -= previous.count();
     }
     if limit.is_some_and(|limit| prefix.bytes > limit) {
         return Err(crate::model::adapter::validation::wire_budget_error());
     }
     for (index, message) in translated {
-        let raw = message
-            .as_ref()
-            .map(|message| {
-                crate::model::adapter::cache::encode_raw(
+        let mut encoded = EncodedMessage {
+            is_tool: matches!(&message.main, Some(WireMessage::Tool { .. })),
+            ..EncodedMessage::default()
+        };
+        for (message, raw) in [
+            (message.main.as_ref(), &mut encoded.main),
+            (message.media.as_ref(), &mut encoded.media),
+        ] {
+            if let Some(message) = message {
+                let value = crate::model::adapter::cache::encode_raw(
                     message,
                     limit.map(|limit| limit - prefix.bytes),
-                )
-            })
-            .transpose()?;
+                )?;
+                prefix.bytes += value.get().len();
+                prefix.count += 1;
+                *raw = Some(value);
+            }
+        }
         #[cfg(test)]
         crate::model::adapter::cache::work(|work| {
             work.encoded_items += 1;
-            work.encoded_bytes += raw.as_ref().map_or(0, |raw| raw.get().len());
+            work.encoded_bytes += encoded.bytes();
         });
-        if let Some(raw) = &raw {
-            prefix.bytes += raw.get().len();
-            prefix.count += 1;
-        }
-        prefix.pieces.set(index, raw);
+        prefix.pieces.set(index, encoded);
     }
     prefix.prefix = crate::model::adapter::cache::Prefix::capture(&request.messages);
     let messages = WireMessages::Cached {
@@ -1768,15 +1842,10 @@ pub(crate) fn uncached_request(request: &ModelRequest) -> Result<WireRequest<'_>
         request,
         ModelProtocol::OpenAiChatCompletions,
     )?;
-    let mut messages = Vec::new();
-    if !request.effective_system_prompt.is_empty() {
-        messages.push(WireMessage::System {
-            content: &request.effective_system_prompt,
-        });
-    }
     let origin = request.invocation.replay_origin();
+    let mut translated = Vec::new();
     for block in &request.messages {
-        if let Some(message) = translate_message(
+        translated.push(translate_message(
             block,
             &request.images,
             request
@@ -1785,9 +1854,7 @@ pub(crate) fn uncached_request(request: &ModelRequest) -> Result<WireRequest<'_>
                 .chat_reasoning_replay
                 .unwrap_or_default(),
             origin.as_ref(),
-        )? {
-            messages.push(message);
-        }
+        )?);
     }
     let raw = request
         .messages
@@ -1809,19 +1876,39 @@ pub(crate) fn uncached_request(request: &ModelRequest) -> Result<WireRequest<'_>
     let labels =
         crate::model::adapter::correlation::wire_labels(&raw, ModelProtocol::OpenAiChatCompletions);
     crate::model::adapter::correlation::encode_fields(&labels, |field| {
-        for message in &mut messages {
-            match message {
-                WireMessage::Assistant { tool_calls, .. } => {
+        for message in &mut translated {
+            match &mut message.main {
+                Some(WireMessage::Assistant { tool_calls, .. }) => {
                     for call in tool_calls {
                         field(true, &mut call.id);
                     }
                 }
-                WireMessage::Tool { tool_call_id, .. } => field(false, tool_call_id),
+                Some(WireMessage::Tool { tool_call_id, .. }) => field(false, tool_call_id),
                 _ => {}
             }
         }
     })
     .map_err(invalid_request)?;
+    let mut messages = Vec::new();
+    if !request.effective_system_prompt.is_empty() {
+        messages.push(WireMessage::System {
+            content: &request.effective_system_prompt,
+        });
+    }
+    let mut media = Vec::new();
+    for mut translated in translated {
+        translated.label_media();
+        if !matches!(&translated.main, Some(WireMessage::Tool { .. })) {
+            messages.append(&mut media);
+        }
+        if let Some(message) = translated.main {
+            messages.push(message);
+        }
+        if let Some(message) = translated.media {
+            media.push(message);
+        }
+    }
+    messages.append(&mut media);
     Ok(wire_request(
         request,
         WireMessages::Uncached(messages),
@@ -1840,7 +1927,7 @@ fn translate_message<'a>(
     images: &crate::model::images::ResolvedImages,
     replay: ChatReasoningReplay,
     origin: Option<&crate::model::replay::ReplayOrigin>,
-) -> Result<Option<WireMessage<'a>>, ModelError> {
+) -> Result<TranslatedMessage<'a>, ModelError> {
     let translated = match block.view() {
         ModelMessageView::User(user) => {
             let mut content = Vec::with_capacity(user.len());
@@ -1867,14 +1954,17 @@ fn translate_message<'a>(
         }
         ModelMessageView::Assistant(assistant) => {
             let translated = translate_assistant_message(assistant, replay, origin)?;
-            if matches!(&translated, WireMessage::Assistant { content: AssistantContent::Parts(parts), tool_calls, reasoning: None, reasoning_content: None } if parts.is_empty() && tool_calls.is_empty())
+            if matches!(&translated, WireMessage::Assistant { content, tool_calls, reasoning: None, reasoning_content: None } if content.is_empty() && tool_calls.is_empty())
             {
-                return Ok(None);
+                return Ok(TranslatedMessage {
+                    main: None,
+                    media: None,
+                });
             }
             translated
         }
         ModelMessageView::Tool(tool_call_id, result) => {
-            translate_tool_message(tool_call_id, result, images)?
+            return translate_tool_message(tool_call_id, result, images);
         }
         ModelMessageView::RequestOnly(carryover) if carryover.is_assistant() => {
             WireMessage::Assistant {
@@ -1890,30 +1980,63 @@ fn translate_message<'a>(
             }],
         },
     };
-    Ok(Some(translated))
+    Ok(TranslatedMessage {
+        main: Some(translated),
+        media: None,
+    })
 }
+
+/// Bridge kept on the tool message when ordered text and images follow.
+/// The follow-up carries the complete order; this string does not repeat it.
+const MIXED_TOOL_RESULT_BRIDGE: &str =
+    "Ordered text and images follow in the labelled user message.";
 
 fn translate_tool_message<'a>(
     tool_call_id: &ToolCallId,
     result: &crate::tools::types::ToolExecutionResult,
     images: &crate::model::images::ResolvedImages,
-) -> Result<WireMessage<'a>, ModelError> {
-    let content = result
-        .image_projection()
-        .map_err(unsupported)?
-        .into_iter()
-        .map(|part| match part {
-            crate::tools::types::ModelToolResultPart::Text(text) => Ok(WirePart::Text {
-                text: Cow::Owned(text),
+) -> Result<TranslatedMessage<'a>, ModelError> {
+    let projected = result.image_projection().map_err(unsupported)?;
+    let has_image = projected
+        .iter()
+        .any(|part| matches!(part, crate::tools::types::ModelToolResultPart::Image(_)));
+    if !has_image {
+        let content = projected
+            .into_iter()
+            .map(|part| match part {
+                crate::tools::types::ModelToolResultPart::Text(text) => text,
+                crate::tools::types::ModelToolResultPart::Image(_) => unreachable!("no image"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Ok(TranslatedMessage {
+            main: Some(WireMessage::Tool {
+                tool_call_id: tool_call_id.as_str().into(),
+                content,
             }),
-            crate::tools::types::ModelToolResultPart::Image(image) => {
-                chat_image_part(&image, images)
+            media: None,
+        });
+    }
+    let mut ordered = Vec::new();
+    for part in projected {
+        match part {
+            crate::tools::types::ModelToolResultPart::Text(text) if !text.is_empty() => {
+                ordered.push(WirePart::Text {
+                    text: Cow::Owned(text),
+                });
             }
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(WireMessage::Tool {
-        tool_call_id: tool_call_id.as_str().into(),
-        content,
+            crate::tools::types::ModelToolResultPart::Text(_) => {}
+            crate::tools::types::ModelToolResultPart::Image(image) => {
+                ordered.push(chat_image_part(&image, images)?);
+            }
+        }
+    }
+    Ok(TranslatedMessage {
+        main: Some(WireMessage::Tool {
+            tool_call_id: tool_call_id.as_str().into(),
+            content: MIXED_TOOL_RESULT_BRIDGE.to_owned(),
+        }),
+        media: Some(WireMessage::User { content: ordered }),
     })
 }
 
@@ -1993,8 +2116,24 @@ fn translate_assistant_message<'a>(
         ChatReasoningReplay::ReasoningContent => (None, reasoning),
         ChatReasoningReplay::Omit => (None, None),
     };
+    let content = if parts
+        .iter()
+        .all(|part| matches!(part, WirePart::Text { .. }))
+    {
+        AssistantContent::Text(
+            parts
+                .iter()
+                .map(|part| match part {
+                    WirePart::Text { text } => text.as_ref(),
+                    _ => unreachable!("all parts are text"),
+                })
+                .collect(),
+        )
+    } else {
+        AssistantContent::Parts(parts)
+    };
     Ok(WireMessage::Assistant {
-        content: AssistantContent::Parts(parts),
+        content,
         tool_calls,
         reasoning,
         reasoning_content,
@@ -2043,7 +2182,10 @@ fn invalid_request(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatStreamNormalizer, translate_tool_message, translate_tools};
+    use super::{
+        ChatStreamNormalizer, translate_request, translate_tool_message, translate_tools,
+        uncached_request,
+    };
     use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
     use crate::model::adapter::validation::ValidatedTools;
@@ -2179,7 +2321,8 @@ mod tests {
                 &message.result,
                 &crate::model::images::ResolvedImages::new(),
             )
-            .expect("translate cancelled result"),
+            .expect("translate cancelled result")
+            .main,
         )
         .expect("serialize provider message");
         assert!(encoded.contains("runtime_shutdown"));
@@ -2231,25 +2374,20 @@ mod tests {
                     &message.result,
                     &crate::model::images::ResolvedImages::new(),
                 )
-                .expect("translate status result"),
+                .expect("translate status result")
+                .main,
             )
             .expect("serialize provider message");
             let projection = message.result.model_facing_projection();
-            let wire_parts: Vec<String> = encoded["content"]
-                .as_array()
-                .expect("text content array")
-                .iter()
-                .map(|part| part["text"].as_str().expect("text part").to_owned())
-                .collect();
             assert_eq!(
-                wire_parts.as_slice(),
-                projection.parts(),
+                encoded["content"],
+                projection.as_text(),
                 "the wire content is the canonical projection, verbatim"
             );
             assert!(
-                wire_parts[0].contains(required),
+                encoded["content"].as_str().unwrap().contains(required),
                 "the typed status feedback reaches the wire: {}",
-                wire_parts[0]
+                encoded["content"]
             );
         }
     }
@@ -2292,19 +2430,226 @@ mod tests {
                 &message.result,
                 &crate::model::images::ResolvedImages::new(),
             )
-            .expect("translate rejected tool result"),
+            .expect("translate rejected tool result")
+            .main,
         )
         .expect("serialize provider message");
         assert_eq!(encoded["tool_call_id"], "call-failed");
         let projection = message.result.model_facing_projection();
-        let wire_parts: Vec<String> = encoded["content"]
+        assert_eq!(encoded["content"], projection.as_text());
+        assert!(
+            encoded["content"]
+                .as_str()
+                .unwrap()
+                .contains("input schema validation failed: query is required")
+        );
+    }
+
+    fn picture(name: &str) -> ToolResultContent {
+        use crate::message::content::ImageReference;
+        use crate::runtime::identity::ArtifactId;
+        ToolResultContent::Image(ImageReference {
+            artifact_id: ArtifactId::new(name),
+            alt: None,
+        })
+    }
+
+    fn text_result(text: &str) -> ToolResultContent {
+        ToolResultContent::Text(TextBlock {
+            text: text.to_owned(),
+        })
+    }
+
+    fn encode_ordered_tool_media(groups: &[Vec<ToolResultContent>]) -> serde_json::Value {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+            ToolCallOccurrenceRef,
+        };
+        use crate::model::images::FrozenImage;
+        use crate::model::{ModelInputMessage, ModelProtocol};
+        use crate::tools::types::ToolCall;
+
+        let mut bytes = Vec::new();
+        png::Encoder::new(&mut bytes, 1, 1)
+            .write_header()
+            .unwrap()
+            .write_image_data(&[128])
+            .unwrap();
+        let frozen = FrozenImage::new(bytes).unwrap();
+        let mut request = crate::scripted_suites::common::simple_request(
+            ModelProtocol::OpenAiChatCompletions,
+            "fixture",
+            "inspect",
+        );
+        request.messages.clear();
+        request.tools.push(ModelToolDefinition {
+            id: ToolId::new("inspect"),
+            name: "inspect".into(),
+            description: "Inspect images".into(),
+            input_schema: serde_json::json!({"type":"object"}).into(),
+        });
+        request
+            .invocation
+            .capabilities
+            .input_modalities
+            .insert(crate::model::catalog::Modality::Image);
+        for group in groups {
+            for item in group {
+                if let ToolResultContent::Image(image) = item {
+                    request
+                        .images
+                        .insert(image.artifact_id.clone(), frozen.clone());
+                }
+            }
+        }
+        let assistant = MessageId::new("msg-a");
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(MessageBlock::Assistant(
+                AssistantMessageBlock {
+                    id: assistant.clone(),
+                    content: (0..groups.len())
+                        .map(|index| {
+                            AssistantContentBlock::ToolCall(ToolCall {
+                                id: ToolCallId::new(format!("call_{}", index + 1)),
+                                tool_id: ToolId::new("inspect"),
+                                name: "inspect".into(),
+                                arguments: serde_json::json!({}),
+                            })
+                        })
+                        .collect(),
+                },
+            )));
+        for (index, content) in groups.iter().enumerate() {
+            let id = format!("call_{}", index + 1);
+            request
+                .messages
+                .push(ModelInputMessage::Canonical(MessageBlock::Tool(
+                    ToolMessageBlock {
+                        occurrence: ToolCallOccurrenceRef::new(
+                            assistant.clone(),
+                            ContentBlockIndex::new(u32::try_from(index).unwrap()),
+                        ),
+                        id: MessageId::new(format!("result-{id}")),
+                        tool_call_id: ToolCallId::new(id),
+                        tool_id: ToolId::new("inspect"),
+                        result: ToolExecutionResult {
+                            deliveries: Vec::new(),
+                            status: ToolExecutionStatus::Success,
+                            content: content.clone(),
+                            duration_ms: 0,
+                            exit_code: None,
+                            artifacts: Vec::new(),
+                            truncation: None,
+                            workflow: None,
+                            managed_output: None,
+                        }
+                        .into(),
+                    },
+                )));
+        }
+        let tools = crate::model::adapter::validation::validate_request(
+            &request,
+            ModelProtocol::OpenAiChatCompletions,
+        )
+        .unwrap();
+        let cached = serde_json::to_value(translate_request(&request, &tools).unwrap()).unwrap();
+        let uncached = serde_json::to_value(uncached_request(&request).unwrap()).unwrap();
+        assert_eq!(
+            cached["messages"], uncached["messages"],
+            "cached and uncached Chat encodings must agree"
+        );
+        cached["messages"].clone()
+    }
+
+    fn labelled_user(messages: &serde_json::Value, index: usize) -> &serde_json::Value {
+        messages
             .as_array()
-            .expect("text content array")
+            .unwrap()
             .iter()
-            .map(|part| part["text"].as_str().expect("text part").to_owned())
+            .filter(|message| message["role"] == "user")
+            .nth(index)
+            .unwrap()
+    }
+
+    #[test]
+    fn mixed_tool_results_keep_distinct_order_across_cached_and_uncached_encoding() {
+        let qualified = encode_ordered_tool_media(&[vec![
+            text_result("合格："),
+            picture("artifact-a"),
+            picture("artifact-b"),
+            text_result("不合格："),
+            picture("artifact-c"),
+        ]]);
+        let unqualified = encode_ordered_tool_media(&[vec![
+            text_result("合格："),
+            picture("artifact-a"),
+            text_result("不合格："),
+            picture("artifact-b"),
+            picture("artifact-c"),
+        ]]);
+        assert_ne!(
+            qualified, unqualified,
+            "different text/image boundaries must remain distinguishable"
+        );
+        assert_eq!(
+            labelled_user(&qualified, 0)["content"][4]["text"],
+            "不合格："
+        );
+        assert_eq!(
+            labelled_user(&unqualified, 0)["content"][3]["text"],
+            "不合格："
+        );
+        assert!(
+            labelled_user(&qualified, 0)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("call_1")
+        );
+        let parallel = encode_ordered_tool_media(&[
+            vec![
+                text_result("合格："),
+                picture("artifact-a"),
+                text_result("不合格："),
+            ],
+            vec![
+                text_result("left"),
+                picture("artifact-b"),
+                text_result("right"),
+            ],
+        ]);
+        let roles: Vec<_> = parallel
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
             .collect();
-        assert_eq!(wire_parts.as_slice(), projection.parts());
-        assert!(wire_parts[0].contains("input schema validation failed: query is required"));
+        let tool_positions: Vec<_> = roles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, role)| (*role == "tool").then_some(index))
+            .collect();
+        assert_eq!(tool_positions, vec![1, 2], "tool results stay contiguous");
+        assert!(roles[3..].iter().all(|role| *role == "user"));
+        assert!(
+            labelled_user(&parallel, 0)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("call_1")
+        );
+        assert_eq!(labelled_user(&parallel, 0)["content"][1]["text"], "合格：");
+        assert_eq!(
+            labelled_user(&parallel, 0)["content"][3]["text"],
+            "不合格："
+        );
+        assert!(
+            labelled_user(&parallel, 1)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("call_2")
+        );
+        assert_eq!(labelled_user(&parallel, 1)["content"][1]["text"], "left");
+        assert_eq!(labelled_user(&parallel, 1)["content"][3]["text"], "right");
     }
 }
 

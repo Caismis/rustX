@@ -8,7 +8,11 @@
 .parts { list-style: none; padding: 6px; margin: 0; }
 .parts ul { list-style: none; padding-inline-start: 12px; margin: 0; }
 .partRow { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: var(--dsw-radius-sm); }
-.partRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+@media (hover: hover) {
+  .partRow:hover {
+     background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
 .parts .disclosure { width: 20px; flex: none; padding: 0; color: var(--dsw-alias-label-tertiary); }
 .disclosure svg { transition: transform 140ms ease; }
 .expanded { transform: rotate(90deg); }
@@ -21,4 +25,5 @@
 .visibilityAnchor { display: flex; flex: none; }
 .parts [data-hidden] .partButton { opacity: .5; }
 .empty { margin: 0; padding: 8px 12px 14px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+
 @media (prefers-reduced-motion: reduce) { .disclosure svg { transition: none; } }

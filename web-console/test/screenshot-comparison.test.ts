@@ -79,8 +79,11 @@ const cells = (region: NoiseRegion): [number, number][] => {
 };
 
 it('the Chinese profile focus corner accepts only its two measured sites with identical geometry', () => {
-  const name = 'model-profiles-zh-dark-linux.png';
-  const entry = manifest.find(row => row.reference === name)! as unknown as {
+  // Frozen pre-restyle evidence: the variant was last observed against the
+  // pre-restyle baseline and is not reproduced under the current styling, so
+  // the live manifest carries no allowance and this entry is comparator-only.
+  const name = 'pre-style-sync-model-profiles-zh-dark-linux.png';
+  const entry = previousStyleManifest.find(row => row.reference === name)! as unknown as {
     capture: string; referenceSha256: string; captureSha256: string;
     geometry: Record<'baseline' | 'variant', { file: string; sha256: string }>;
     regions: NoiseRegion[];
@@ -93,6 +96,7 @@ it('the Chinese profile focus corner accepts only its two measured sites with id
   };
   const { pngSha256: baselinePng, ...baselineState } = proof('baseline');
   const { pngSha256: variantPng, ...variantState } = proof('variant');
+  // The frozen proof was measured against this frozen baseline itself.
   expect(baselinePng).toBe(entry.referenceSha256);
   expect(variantPng).toBe(entry.captureSha256);
   expect(variantState).toEqual(baselineState);
@@ -109,11 +113,10 @@ it('the Chinese profile focus corner accepts only its two measured sites with id
     'border-top-left-radius': '8px', 'border-top-right-radius': '8px',
     'border-bottom-left-radius': '8px', 'border-bottom-right-radius': '8px',
   });
-  const expected = reference(name), actual = fixture(entry.capture);
-  const directory = new URL('./e2e/settings-model-editor.spec.ts-snapshots/', import.meta.url);
-  expect(hash(readFileSync(new URL(name, directory)))).toBe(entry.referenceSha256);
+  const expected = fixture(name), actual = fixture(entry.capture);
+  expect(hash(readFileSync(new URL(name, frozen)))).toBe(entry.referenceSha256);
   expect(hash(readFileSync(new URL(entry.capture, frozen)))).toBe(entry.captureSha256);
-  const measured = noisePolicy.find(row => row.reference === name)!.pixels!;
+  const measured = comparatorPolicy.find(row => row.reference === name)!.pixels!;
   expect(measured).toHaveLength(2);
   for (const [x, y, before, after] of measured) {
     expect(pixel(expected, x, y)).toEqual(before); expect(pixel(actual, x, y)).toEqual(after);
@@ -122,17 +125,19 @@ it('the Chinese profile focus corner accepts only its two measured sites with id
     [x, y, width, height, maxChangedPixels, maxChannelDelta])).toEqual([
     [642, 499, 1, 1, 1, 8], [642, 500, 1, 1, 1, 25],
   ]);
+  // The frozen variant is the real measured pair: accepted under the frozen
+  // policy, rejected without it, and rejected under a different reference name.
   expect(compare(actual, name, expected, []).ok).toBe(false);
-  const accepted = compare(actual, name, expected, noisePolicy);
+  const accepted = compare(actual, name, expected, comparatorPolicy);
   expect(accepted.ok).toBe(true); expect(accepted.totalChanged).toBe(2);
-  expect(compare(actual, 'model-advanced-zh-dark-linux.png', expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, 'model-advanced-zh-dark-linux.png', expected, comparatorPolicy).ok).toBe(false);
   for (const [x, y, limit] of [[642, 499, 8], [642, 500, 25]]) {
     const excessive = copy(expected); nudge(excessive, x, y, limit + 1);
-    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   }
   for (const [x, y] of [[641, 499], [643, 499], [642, 498], [642, 501], [641, 500], [643, 500]]) {
     const adjacent = copy(expected); nudge(adjacent, x, y, 1);
-    const rejected = compare(adjacent, name, expected, noisePolicy);
+    const rejected = compare(adjacent, name, expected, comparatorPolicy);
     expect(rejected.ok).toBe(false); expect(rejected.changedOutsideRegions).toBe(1);
   }
 });

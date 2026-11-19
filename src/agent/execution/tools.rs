@@ -374,6 +374,15 @@ impl AgentExecution<'_> {
         occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
+        for call in &calls {
+            self.emit(RuntimeEvent::ToolCallRequested {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            });
+            if let Some(error) = self.durable_failure_commit_error() {
+                return Err(error);
+            }
+        }
         if let Some(changes) = &self.workspace_changes {
             tokio::select! {
                 biased;

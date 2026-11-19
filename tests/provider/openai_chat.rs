@@ -30,6 +30,37 @@ fn request_with_tools(prompt: &str) -> ModelRequest {
     request
 }
 
+#[tokio::test]
+async fn compiled_kimi_tools_inline_single_use_business_objects() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let mut request = simple_request(
+        ModelProtocol::OpenAiChatCompletions,
+        "kimi-k3",
+        "Read a file",
+    );
+    let tool = rustx::tools::native::todo_tool_definition();
+    request.tools = vec![rustx::tools::schema::compile_model_definition(&tool).unwrap()];
+    let events = collect_events(&adapter(&server), request).await;
+    assert_normal_completion(&events);
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    let parameters = &body["tools"][0]["function"]["parameters"];
+    let arguments = &parameters["properties"]["arguments"];
+    assert_eq!(arguments["type"], "object");
+    assert_eq!(
+        arguments["properties"]["metadata"]["additionalProperties"],
+        true
+    );
+    assert!(parameters.get("$defs").is_none());
+    assert!(parameters.get("definitions").is_none());
+    assert!(!parameters.to_string().contains("json-schema:///"));
+    assert_eq!(parameters["required"], serde_json::json!(["arguments"]));
+}
+
 /// A request for a model that declares the Qwen in-band tool dialect.
 fn qwen_request(prompt: &str, expose_tools: bool) -> ModelRequest {
     let mut request = simple_request(ModelProtocol::OpenAiChatCompletions, "Qwen/Qwen3", prompt);
@@ -1398,7 +1429,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
         "list_directory"
     );
     assert_eq!(messages[1]["role"], "tool");
-    assert_eq!(messages[1]["content"][0]["text"], "listed");
+    assert_eq!(messages[0]["content"], "");
+    assert_eq!(messages[1]["content"], "listed");
     assert_eq!(messages[2]["role"], "user");
     assert_eq!(messages[2]["content"][0]["text"], "A");
     assert_eq!(messages[3]["role"], "user");

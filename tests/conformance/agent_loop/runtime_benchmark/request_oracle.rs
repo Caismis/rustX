@@ -7,7 +7,7 @@
 //! - Core system prompt: `src/context/system_prompt.rs` (`DEFAULT_SYSTEM_PROMPT`)
 //! - Full-access reminder: `src/runtime/permission/reminder.rs`
 //! - Provider replay binding: `SHA256(provider_bytes || 0x00 || endpoint_bytes)`
-//! - Tool invocation envelope: `urn:rustx:invocation` Draft-07 (`src/tools/schema.rs`,
+//! - Tool invocation envelope: `urn:rustx:invocation` (`src/tools/schema.rs`,
 //!   `src/tools/native/{read,write,edit,glob,grep,bash,todo}`)
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -60,16 +60,16 @@ pub(super) fn expected_replay_binding(provider: &str, endpoint: &str) -> String 
 }
 
 fn text(role: &str, value: &str) -> Value {
-    json!({"role":role,"content":[{"type":"text","text":value}],"tool_calls":null})
+    let content = if role == "assistant" {
+        json!(value)
+    } else {
+        json!([{"type":"text","text":value}])
+    };
+    json!({"role":role,"content":content,"tool_calls":null})
 }
 
-fn expected_system_prompt(index: usize) -> String {
-    let base = format!("{CORE_SYSTEM_PROMPT}{WORKSPACE_CWD_PREFIX}<WORKSPACE>");
-    if index == 0 {
-        format!("{base}\n\n{FULL_ACCESS_PERMISSION_REMINDER}")
-    } else {
-        base
-    }
+fn expected_system_prompt() -> String {
+    format!("{CORE_SYSTEM_PROMPT}{WORKSPACE_CWD_PREFIX}<WORKSPACE>")
 }
 
 fn assert_tool_envelope_contract(tools: &[Value]) {
@@ -96,8 +96,8 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
         let parameters = function["parameters"].as_object().expect("tool parameters");
         assert_eq!(
             parameters.get("$schema").and_then(Value::as_str),
-            Some("http://json-schema.org/draft-07/schema#"),
-            "tool {name} must declare Draft-07 envelope schema"
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "tool {name} must declare its business schema dialect"
         );
         assert_eq!(
             parameters.get("$id").and_then(Value::as_str),
@@ -115,13 +115,9 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             "tool {name} envelope must forbid unknown outer properties"
         );
 
-        let definitions = parameters
-            .get("definitions")
-            .and_then(Value::as_object)
-            .expect("bundled business definitions");
         assert!(
-            definitions.contains_key("json-schema:///"),
-            "tool {name} missing closed business resource"
+            !parameters.contains_key("$defs"),
+            "tool {name} has no shared or recursive schemas"
         );
 
         let properties = parameters
@@ -129,9 +125,8 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             .and_then(Value::as_object)
             .expect("envelope properties");
         assert_eq!(
-            properties.get("arguments"),
-            Some(&json!({"$ref": "json-schema:///"})),
-            "tool {name} must reference bundled business schema via arguments"
+            properties["arguments"]["type"], "object",
+            "tool {name} must inline the business object inside arguments"
         );
         assert!(
             properties.contains_key("elevation_reason"),
@@ -182,9 +177,13 @@ fn expected_tools() -> Value {
 
 pub(super) fn expected_body(case: &str, index: usize) -> Value {
     let mut messages = vec![
-        json!({"role":"system","content":expected_system_prompt(index)}),
+        json!({"role":"system","content":expected_system_prompt()}),
         text("user", "benchmark turn 0000"),
         text("user", &format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")),
+        text(
+            "user",
+            &format!("<system-reminder>\n{FULL_ACCESS_PERMISSION_REMINDER}\n</system-reminder>"),
+        ),
     ];
     if case.starts_with("short-") {
         for turn in 0..index {
@@ -192,11 +191,11 @@ pub(super) fn expected_body(case: &str, index: usize) -> Value {
             messages.push(text("user", &format!("benchmark turn {:04}", turn + 1)));
         }
     } else if case == "tool" && index == 1 {
-        messages.push(json!({"role":"assistant","content":[],"tool_calls":[{
+        messages.push(json!({"role":"assistant","content":"","tool_calls":[{
             "type":"function","id":"benchmark-read","function":{"name":"read",
             "arguments":{"arguments":{"path":"<WORKSPACE>/note.txt"}}}}]}));
         messages.push(json!({"role":"tool","tool_call_id":"benchmark-read",
-            "content":[{"type":"text","text":NOTE}],"tool_calls":null}));
+            "content":NOTE,"tool_calls":null}));
     } else {
         assert_eq!(index, 0);
     }
@@ -230,7 +229,7 @@ fn normalize(body: &Value, workspace: &str, dynamic: bool) -> Value {
             }
             continue;
         }
-        for block in message["content"].as_array_mut().unwrap() {
+        for block in message["content"].as_array_mut().into_iter().flatten() {
             if let Some(value) = block["text"].as_str()
                 && value.starts_with(TIME_PREFIX)
                 && dynamic
@@ -341,6 +340,7 @@ pub(super) fn reconstructed_body(request: &Value, provider: &str, endpoint: &str
                                 other => panic!("unexpected assistant block {other}"),
                             }
                         }
+                        let content: String = content.iter().map(|part| part["text"].as_str().unwrap()).collect();
                         json!({"role":"assistant","content":content,
                         "tool_calls":if calls.is_empty() { Value::Null } else { json!(calls) }})
                     }
@@ -348,8 +348,10 @@ pub(super) fn reconstructed_body(request: &Value, provider: &str, endpoint: &str
                         assert_eq!(message["tool_id"], "tool-read");
                         assert_eq!(message["result"]["status"], json!({"type":"success"}));
                         assert_eq!(message["result"]["artifacts"], json!([]));
+                        let content = message["result"]["content"].as_array().unwrap().iter()
+                            .map(|part| part["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n");
                         json!({"role":"tool","tool_call_id":message["tool_call_id"],
-                        "content":message["result"]["content"],"tool_calls":null})
+                        "content":content,"tool_calls":null})
                     }
                     other => panic!("unexpected semantic role {other}"),
                 }
@@ -426,7 +428,7 @@ mod tests {
         body["messages"][2]["content"][0]["text"] =
             json!(format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}"));
         if case == "tool" && index == 1 {
-            body["messages"][3]["tool_calls"][0]["function"]["arguments"] = json!(
+            body["messages"][4]["tool_calls"][0]["function"]["arguments"] = json!(
                 serde_json::to_string(&json!({
                     "arguments": {
                         "path": format!("{FIXTURE_WORKSPACE}/note.txt"),
@@ -439,12 +441,8 @@ mod tests {
     }
 
     fn canonical_request_from_fixture(case: &str, index: usize) -> Value {
-        let mut system_prompt =
+        let system_prompt =
             format!("{CORE_SYSTEM_PROMPT}{WORKSPACE_CWD_PREFIX}{FIXTURE_WORKSPACE}");
-        if index == 0 {
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(FULL_ACCESS_PERMISSION_REMINDER);
-        }
         let tools: Vec<Value> = expected_tools()
             .as_array()
             .unwrap()
@@ -471,6 +469,10 @@ mod tests {
                 "id": "msg-time-0",
                 "role": "user",
                 "content": [{"type": "text", "text": format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")}],
+            }),
+            json!({
+                "input_kind": "canonical", "id": "msg-permission-0", "role": "user",
+                "content": [{"type": "text", "text": format!("<system-reminder>\n{FULL_ACCESS_PERMISSION_REMINDER}\n</system-reminder>")}],
             }),
         ];
         if case.starts_with("short-") {
@@ -674,7 +676,7 @@ mod tests {
         );
 
         let mut flat_call = wire("tool", 1);
-        flat_call["messages"][3]["tool_calls"][0]["function"]["arguments"] =
+        flat_call["messages"][4]["tool_calls"][0]["function"]["arguments"] =
             json!(format!(r#"{{"path":"{FIXTURE_WORKSPACE}/note.txt"}}"#));
         assert!(
             std::panic::catch_unwind(|| {
@@ -685,8 +687,9 @@ mod tests {
     }
 
     #[test]
-    fn complete_oracle_rejects_missing_or_stale_system_prompt_reminder() {
-        let missing_turn0 = wire("short-small", 1);
+    fn complete_oracle_rejects_missing_conversation_reminder_or_system_prompt_injection() {
+        let mut missing_turn0 = wire("short-small", 0);
+        missing_turn0["messages"].as_array_mut().unwrap().remove(3);
         assert!(
             std::panic::catch_unwind(|| assert_bodies(
                 "short-small",
@@ -699,8 +702,10 @@ mod tests {
         );
 
         let mut stale_turn1 = wire("short-small", 1);
-        stale_turn1["messages"][0]["content"] =
-            wire("short-small", 0)["messages"][0]["content"].clone();
+        stale_turn1["messages"][0]["content"] = json!(format!(
+            "{}\n\n{FULL_ACCESS_PERMISSION_REMINDER}",
+            stale_turn1["messages"][0]["content"].as_str().unwrap()
+        ));
         assert!(
             std::panic::catch_unwind(|| assert_bodies(
                 "short-small",
@@ -766,7 +771,11 @@ mod tests {
 
         for index in [1, 2, 3] {
             let mut bad = good.clone();
-            bad["messages"][index]["content"][0]["text"] = json!("different frozen input");
+            if bad["messages"][index]["content"].is_string() {
+                bad["messages"][index]["content"] = json!("different frozen input");
+            } else {
+                bad["messages"][index]["content"][0]["text"] = json!("different frozen input");
+            }
             assert!(
                 std::panic::catch_unwind(|| {
                     assert_bodies("short-large", 64, FIXTURE_WORKSPACE, &good, &bad)

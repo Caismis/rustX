@@ -2,7 +2,7 @@ import {openResourceModule} from './settings-harness';
 import { changeJson, readJson } from './json-editor-helpers';
 // @vitest-environment jsdom
 import {afterEach,expect,it} from 'vitest';
-import {cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {cfg3Client,cfg3Host} from './cfg3-fixture';
 import {SettingsSurface,settingsReady,openSettingsPage,chooseOption} from './settings-harness';
 import {userSettingsTarget} from '../src/app/settings/projection';
@@ -210,7 +210,7 @@ it('HTTP authors header references without literal credential fields',async()=>{
  expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',authored:{definition:{sensitive_headers:{Authorization:'$TOKEN'}}}});
 });
 
-it('workspace MCP management shows inherited global definitions without probing or authoring them',async()=>{
+it('MCP cards only list definitions belonging to their authored scope',async()=>{
  const s=cfg3Client();
  s.source.target={kind:'workspace',directory:'/workspace/A'};
  s.source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
@@ -219,12 +219,11 @@ it('workspace MCP management shows inherited global definitions without probing 
  const {McpPage}=await import('../src/app/resources/mcp/McpPage');
  const {vi}=await import('vitest');
  const onFocus=vi.fn();
- const props={source:s.source,scope:'workspace' as const,onFocus,onEditorDraftChange:vi.fn(),scopeControl:<span>Workspace A</span>,query:'',view:'cards' as const};
+ const props={source:s.source,scope:'workspace' as const,onFocus,query:'',view:'cards' as const};
  const ui=render(<McpPage {...props}/>);
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();
- expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'exa'})).toBeTruthy();
+ expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
  expect(screen.queryByText('Inherited from user')).toBeNull();
- expect(screen.getByRole('button',{name:'Test connection exa'})).toHaveProperty('disabled',true);
  expect(s.request.mock.calls.some(([op])=>String(op.method).startsWith('mcp/'))).toBe(false);
  // Switching scope reveals the same user definition without copying or editing it.
  s.source.target={kind:'user'};
