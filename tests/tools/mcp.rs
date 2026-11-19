@@ -250,8 +250,9 @@ mod unix_tests {
 
     /// The real rmcp stdio boundary feeds complete MCP text into the shared
     /// Tool Plane normalizer. Exact-boundary output remains direct JSON-like
-    /// text, while boundary-plus-one and collectively oversized blocks use
-    /// one complete managed spill with typed continuation metadata.
+    /// text, while boundary-plus-one and collectively oversized blocks settle
+    /// a typed `Unavailable` continuation — foreground MCP output has no
+    /// eligible Execution Client save binding, so nothing is spilled.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn foreground_mcp_result_normalization_is_collective_and_complete() {
@@ -380,7 +381,7 @@ mod unix_tests {
                 if text.text.len() == rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
         ));
 
-        let (_over_directory, _over_artifacts, over) = invoke(
+        let (_over_directory, over_artifacts, over) = invoke(
             Some(rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
             None,
             "mcp-over",
@@ -390,33 +391,56 @@ mod unix_tests {
             over.status,
             rustx::tools::types::ToolExecutionStatus::Success
         );
-        let Some(rustx::tools::types::ManagedOutputContinuation::Complete { locator }) =
+        // No eligible Execution Client save binding exists for foreground
+        // MCP output: the overflow honestly settles `Unavailable` — never
+        // a locator, never a Read/Grep promise, never a local file.
+        let Some(rustx::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
             over.managed_output.as_deref()
         else {
-            panic!("boundary-plus-one MCP result must be Complete: {over:?}");
+            panic!("boundary-plus-one MCP result must be Unavailable: {over:?}");
         };
         assert_eq!(
-            std::fs::read(locator).expect("complete MCP spill"),
-            vec![b'x'; rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1]
+            diagnostic,
+            "Full output was not saved: no eligible Execution Client save binding at the \
+             preview threshold."
         );
         assert_eq!(
-            std::fs::read_dir(locator.parent().expect("results directory"))
-                .expect("results directory")
-                .filter(|e| e
-                    .as_ref()
-                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
-                .count(),
-            1
+            over.truncation.as_ref().and_then(|t| t.original_bytes),
+            Some((rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1) as u64)
+        );
+        let artifacts_files: Vec<String> = std::fs::read_dir(over_artifacts.path())
+            .expect("artifacts")
+            .flat_map(|entry| {
+                let entry = entry.expect("artifact entry");
+                if entry.file_type().expect("file type").is_dir() {
+                    std::fs::read_dir(entry.path())
+                        .expect("artifact subdir")
+                        .filter_map(|e| {
+                            e.ok().map(|e| e.file_name().to_string_lossy().into_owned())
+                        })
+                        .collect()
+                } else {
+                    vec![entry.file_name().to_string_lossy().into_owned()]
+                }
+            })
+            .collect();
+        assert!(
+            artifacts_files
+                .iter()
+                .all(|name| !name.starts_with("r-") && !name.starts_with("e-")),
+            "no save attempt may leave a managed-output file: {artifacts_files:?}"
         );
         assert!(
-            over.model_facing_projection()
+            !over
+                .model_facing_projection()
                 .as_text()
                 .contains("Read or Grep")
         );
 
         // Each block is below 16 KiB, but the deterministic newline-joined
         // aggregate is above it. Per-block truncation would incorrectly
-        // classify this as a direct result; the shared capture spills once.
+        // classify this as a direct result; the shared capture normalizes
+        // the crossing once and reports it as `Unavailable`.
         let first = rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2;
         let second = rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - first;
         let (_aggregate_directory, _aggregate_artifacts, aggregate) =
@@ -427,9 +451,12 @@ mod unix_tests {
         );
         assert!(matches!(
             aggregate.managed_output.as_deref(),
-            Some(rustx::tools::types::ManagedOutputContinuation::Complete { .. })
+            Some(rustx::tools::types::ManagedOutputContinuation::Unavailable { .. })
         ));
-        assert!(aggregate.truncation.is_some());
+        assert_eq!(
+            aggregate.truncation.as_ref().and_then(|t| t.original_bytes),
+            Some((first + 1 + second) as u64)
+        );
     }
 
     /// A real background MCP call reuses the dispatch-owned output file for

@@ -1896,8 +1896,10 @@ tools/locator.rs           runtime-owned read locator authority for advertised
 tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
                            tool-output store: lazy foreground result spills
                            (`r-<16 hex>.txt`, random short names,
-                           `create_new`) and the dispatch-allocated
-                           background live-output channel
+                           `create_new`) for the native Bash path —
+                           foreground MCP results stay preview-only until an
+                           Execution Client save binding exists — and the
+                           dispatch-allocated background live-output channel
                            (`e-<16 hex>.output`); owns model-mutation
                            rejection for its runtime-owned namespace
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
@@ -2762,7 +2764,10 @@ monotonic `artifact_N` ids, streaming spooling of genuine semantic
 artifacts), and the `ManagedToolOutput` store (auxiliary runtime-owned
 textual output storage addressed by absolute path, never a semantic
 artifact: `<temp>/rx-<16 hex>/r-<16 hex>.txt` lazy spill files of oversized
-foreground textual tool output, and `<temp>/rx-<16 hex>/e-<16 hex>.output`
+foreground textual tool output on the native Bash path — foreground MCP
+results stay preview-only with a typed `Unavailable` continuation until an
+Execution Client save binding exists — and
+`<temp>/rx-<16 hex>/e-<16 hex>.output`
 live-output files allocated at the background dispatch commit point and
 reused by the terminal settlement message). The
 artifact root and the workspace root must be disjoint filesystem regions:
@@ -3142,15 +3147,27 @@ The limits have deliberately different meanings:
   and not a semantic artifact/File result.
 
 In foreground mode, a complete deterministic representation at or below the
-shared preview threshold remains a direct result and creates no result spill.
-Crossing the threshold lazily allocates exactly one
-`r-<16 hex>.txt`, streams the complete representation there, and
-publishes a bounded deterministic preview plus typed `Complete` continuation.
-An allocation failure publishes `Unavailable`; a write/read failure retains
-the locator as `Partial`. Result size alone never changes semantic success to
-failure; an output-storage failure is a separate explicit failure fact.
+shared preview threshold remains a direct result and creates no file. The
+overflow contract is adapter-specific today because no remote save binding
+exists yet:
+
+- **Native Bash foreground** retains its standalone lazy spill: crossing the
+  threshold allocates exactly one `r-<16 hex>.txt`, streams the complete
+  representation there, and publishes a bounded preview plus typed `Complete`
+  continuation. An allocation failure publishes `Unavailable`; a write/read
+  failure retains the locator as `Partial`.
+- **Foreground MCP results** are preview-only: there is no eligible
+  Execution Client save binding, so crossing the threshold keeps only the
+  bounded preview and publishes a typed `Unavailable` continuation with an
+  explicit "not saved" diagnostic — no spill is allocated, no locator is
+  invented, and no Read/Grep promise is made. The remote `is_error`
+  success/failure verdict is never rewritten by the absent optional save.
+
+In both cases result size alone never changes semantic success to failure.
 MCP content blocks are budgeted collectively, so the canonical preview is
-always valid UTF-8 rather than malformed truncated JSON.
+always valid UTF-8 rather than malformed truncated JSON. The upstream `rmcp`
+`CallToolResult` is already fully materialized when it reaches the adapter;
+bounding the HTTP receive itself remains issue #578.
 
 In background mode, `prepare_dispatch` allocates exactly one
 `e-<16 hex>.output` before the accepted result advertises it. Bash streams

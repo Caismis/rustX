@@ -922,6 +922,7 @@ pub struct ToolRuntimeFixture {
     /// The admitted Execution Client route, when the fixture was built
     /// with one: declared after `runtime` so the scope's `Weak` never
     /// outlives the manager that owns the endpoint.
+    #[allow(clippy::used_underscore_binding)]
     _execution: Option<session_execution::ExecutionFixture>,
     /// The storage-root owner; dropping it removes the whole directory.
     /// Never move this field above `runtime`.

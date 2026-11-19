@@ -4897,15 +4897,22 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   managed output is complete
   auxiliary execution text, not canonical history or a semantic artifact.
   Foreground output at or below the threshold remains a direct result and
-  creates no file. Once the complete deterministic representation crosses
-  it, normalization lazily allocates exactly one result spill
+  creates no file. Past the threshold the contract splits by adapter: the
+  native Bash path lazily allocates exactly one result spill
   (`<temp>/rx-<16 hex>/r-<16 hex>.txt`, independent random names,
   `create_new`), writes the complete representation once, and publishes a
   bounded deterministic preview plus typed continuation metadata
   (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
   never a `FileReference`, never a semantic artifact, and never a model
-  `File` modality). Allocation failure is `Unavailable`; a write failure
-  retains the locator as `Partial`; result size alone never turns semantic
+  `File` modality); on that path allocation failure is `Unavailable` and a
+  write failure retains the locator as `Partial`. A foreground MCP result
+  instead has no eligible Execution Client save binding: its capture is
+  preview-only, so crossing the threshold publishes the bounded preview
+  plus a typed `Unavailable` continuation with an explicit not-saved
+  diagnostic — no spill, no locator, no Read/Grep promise, no Client
+  launch/query/wait and no local retention of the complete output; the
+  remote `is_error` verdict is never rewritten by the absent optional save.
+  Result size alone never turns semantic
   success into failure. Failing tool results are intentionally passed back
   to the model as bounded correction evidence. `ToolExecutionStatus` remains
   the typed canonical state; `ToolExecutionResult::model_facing_projection`
@@ -4914,10 +4921,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   bound. Provider adapters only translate that projection and do not choose
   failure policy or truncate independently. The bounded preview is the
   canonical replayable record and the model can Read/Grep the complete
-  auxiliary path explicitly.
+  auxiliary path explicitly only when a locator exists.
   MCP content blocks — a managed Python tool's results included — are
   budgeted collectively, so UTF-8/JSON framing is never delegated to bounded
-  subprocess stdout capture.
+  subprocess stdout capture. The upstream `rmcp` `CallToolResult` is already
+  fully materialized when it reaches the adapter; bounding the HTTP receive
+  itself remains issue #578.
   A **background** execution instead owns one live-output channel from the
   dispatch commit point on (`<temp>/rx-<16 hex>/e-<16 hex>.output`): the file is
   allocated before the accepted result advertises its absolute path
