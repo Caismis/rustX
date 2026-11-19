@@ -67,7 +67,7 @@ pub fn snapshot_command_environment(
 
 /// Decode at the final child boundary. Supervisors do not install these values
 /// into their own environment or forward the private pathname to the command.
-pub fn command_environment() -> Result<Vec<(String, String)>, String> {
+pub(crate) fn command_environment() -> Result<Vec<(String, String)>, String> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let path = std::env::var_os(COMMAND_ENVIRONMENT_FILE_ENV)
         .ok_or("missing command environment snapshot")?;
@@ -590,7 +590,7 @@ fn classify_containment_result(result: nix::Result<()>) -> ContainmentOutcome {
 /// keeps the group observable and turns an actually-empty owned group into
 /// an `Err` (unproven timeout), never into a false terminal result.
 #[cfg(target_os = "macos")]
-pub fn prove_group_absent(pgid: i32) -> Result<(), String> {
+pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
     let deadline = std::time::Instant::now() + GROUP_ABSENCE_TIMEOUT;
     loop {
         if group_absence_probe(
@@ -607,7 +607,10 @@ pub fn prove_group_absent(pgid: i32) -> Result<(), String> {
 /// Kept pure so the Darwin fail-closed deadline/EPERM contract is testable
 /// without waiting for a real orphan or changing the production deadline.
 #[cfg(any(target_os = "macos", test))]
-pub fn group_absence_probe(observed: nix::Result<()>, expired: bool) -> Result<bool, String> {
+pub(crate) fn group_absence_probe(
+    observed: nix::Result<()>,
+    expired: bool,
+) -> Result<bool, String> {
     match observed {
         Err(Errno::ESRCH) => Ok(true),
         Ok(()) | Err(Errno::EPERM) if expired => Err(
@@ -629,7 +632,7 @@ pub fn group_absence_probe(observed: nix::Result<()>, expired: bool) -> Result<b
 /// draining ([`FrameReader::pop`]) are deliberately separate so a frame can
 /// never be lost through an ignored return value.
 #[derive(Debug, Default)]
-pub struct FrameReader {
+pub(crate) struct FrameReader {
     buf: Vec<u8>,
 }
 
@@ -761,7 +764,7 @@ fn wait_control_writable(
 /// Commits one complete frame, or shuts down the channel on delivery failure.
 /// No caller can append another frame after an abandoned partial prefix.
 /// Per-send nonblocking mode also bounds calls made before `O_NONBLOCK` is set.
-pub fn write_frame(
+pub(crate) fn write_frame(
     socket: &mut impl std::os::fd::AsFd,
     kind: u8,
     payload: &[u8],

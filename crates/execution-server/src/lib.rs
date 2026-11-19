@@ -1299,7 +1299,8 @@ impl ControlShared {
 /// independent of the data lane's dispatch lock. `health` and
 /// `cancel_mutation` queue bounded commands delivered on the peer's own
 /// turn-taking polls and return only verified receipts;
-/// [`Self::stop`] ends the lane. Every clone shares the one lane: at
+/// the lane ends with the connection's own lifecycle teardown. Every
+/// clone shares the one lane: at
 /// most [`MAX_CONTROL_COMMANDS`] queued plus in-flight commands, probes
 /// included.
 #[derive(Clone)]
@@ -1900,7 +1901,7 @@ impl LocalConnection {
     ///
     /// # Errors
     ///
-    /// Returns the same kinds as [`read_range`], plus
+    /// Returns the same kinds as [`read_range`](Self::read_range), plus
     /// [`io::ErrorKind::FileTooLarge`] for a source larger than `bound`
     /// and the `admit` error verbatim.
     pub fn read_image(

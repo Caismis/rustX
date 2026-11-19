@@ -508,7 +508,7 @@ fn open_private_file(dir: &fs::File, name: &OsStr) -> Result<fs::File, String> {
 }
 
 /// Pins the path's parent directory: the whole component chain is
-/// walked no-follow from `/` by [`open_dir_nofollow`], then the
+/// walked no-follow from `/` by [`rustx_execution_transport::open_dir_nofollow`], then the
 /// descriptor itself is proven a directory owned by this euid at
 /// `0700` — never a re-resolved pathname.
 fn require_private_parent(path: &Path) -> Result<fs::File, String> {
