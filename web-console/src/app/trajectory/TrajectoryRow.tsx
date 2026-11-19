@@ -16,6 +16,8 @@ export interface TrajectoryRowActions {
     switchVersion: (version: SessionMessageVersion) => void;
     disabled?: boolean;
   };
+  /** Exact native detail locators promote a pager only when one family is unambiguous. */
+  detailFamilies?: ReadonlyMap<string, SessionMessageVersionFamily>;
   workflows?: ReadonlyMap<string, TraceRecord>;
   openedWorkflows?: ReadonlySet<string>;
   toggleWorkflow?: (id: string) => void;
@@ -42,8 +44,10 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
   const item = row.item;
   const record = item?.record;
   const messageHistory = actions.messageHistory;
-  const messageFamily = item?.type === 'RecordRow' && record?.kind === 'user' && record.message_id
-    ? messageHistory?.versions.get(canonicalLocatorKey({ type: 'by_message_id', message_id: record.message_id }))
+  const messageFamily = item?.type === 'RecordRow' && record?.kind === 'user' && messageHistory
+    ? (record.message_id
+      ? messageHistory.versions.get(canonicalLocatorKey({ type: 'by_message_id', message_id: record.message_id }))
+      : undefined) ?? actions.detailFamilies?.get(record.id)
     : undefined;
   const workflow = item && item.type !== 'WorkflowNode' ? actions.workflows?.get(item.owner_record_id) : undefined;
   const workflowOpen = !!workflow && actions.openedWorkflows?.has(workflow.id) === true;

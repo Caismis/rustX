@@ -1,3 +1,4 @@
+import { KindTag } from './TrajectoryCell';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness virtual ledger; see PROVENANCE.md. */
 import { useMemo, useImperativeHandle, useLayoutEffect, useEffect, useRef, type Ref } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -124,6 +125,14 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
     <div style={{ position: 'relative', ...(virtualized ? { height: virtualizer.getTotalSize() } : {}) }}>
       {rendered.map(({ row, index, start }) => {
         const style = { height: row.height, ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
+        if (row.inherited) {
+          const { role, ordinal, text } = row.inherited;
+          return <div key={row.display_key} data-display-key={row.display_key} data-kind={role} role="row" aria-rowindex={index + 1} className={css.record} style={style}>
+            <span role="cell" className={css.event}>{row.turnStart && <span className={css.turnLabel}>{tx('trajectory:copy.turn-value', { p0: ordinal })}</span>}<KindTag kind={role}/></span>
+            <span role="cell" className={css.content}><span className={css.contentText} title={text}>{text}</span></span>
+          </div>;
+        }
+        if (row.loadInherited) return <div key={row.display_key} className={css.loadRow} style={style}><button type="button" className={css.historyLoadButton} onClick={row.loadInherited}>{tx('artifacts:artifact-preview.load-more')}</button></div>;
         if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} data-history-load="" className={css.loadRow} style={style}>
           <button type="button" className={css.historyLoadButton} disabled={loading || !row.historyBefore && !canLoadEarlier} aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')} onClick={() => requestOlder(row.historyBefore)}>
             {loading && <StateDot state="ongoing" />}

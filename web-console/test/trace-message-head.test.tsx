@@ -1,3 +1,4 @@
+import { Trajectory } from '../src/app/trajectory/Trajectory';
 import {traceRefreshed} from './fixture';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -122,4 +123,24 @@ it('a complete small canonical block preserves its original opaque JSON formatti
  const original=cut(),reader=direct(original),domain='messages.ledger:1.blocks',initial=head(original,'user',1),raw=' {"n":1.0000,"integer":18446744073709551615} ',bytes=new TextEncoder().encode(raw),reference:ContentRef={conversation_id:original.conversation_id,source:{type:'canonical_message_block',component:'payload',locator:{type:'by_ledger_position',position:1},block_index:0},representation:'raw_json_utf8',version:1,content_revision:1,readable_end:bytes.length};advertise(initial,domain,'1');
  reader.page.mockResolvedValue({read_cut:original,cursor:original.revision,domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'tool_call',key:null,value:{id:'original-call',tool_id:'original-tool',name:'native-tool',arguments:{ arguments: {n:1} }},content:[{path:['value','arguments'],source_path:null,content_ref:reference,deferred:false}],deferred:false,body_complete:null}]});
  reader.content.mockResolvedValue({content_ref:reference,offset:0,data_base64:btoa(raw),end_offset:bytes.length,readable_end:bytes.length,next_offset:null,complete:true});render(<TrajectoryInspector {...props(record())} detailPage={initial} detailReader={reader.reader}/>);await waitFor(()=>expect(document.body.textContent).toContain('18446744073709551615'));expect(document.body.textContent).toContain('1.0000');expect(reader.content.mock.calls[0].slice(0,3)).toEqual([original,reference,0]);expect(reader.value).not.toHaveBeenCalled();
+});
+
+it('shows the ledger pager when one inspected input resolves by ledger position', () => {
+  const native = { ...record(), message_id: null };
+  const original = cut();
+  const current: SessionMessageVersion = {
+    boundary: row(0).locator, node_id: 'edited', conversation_id: original.conversation_id, surface_revision: '20',
+  };
+  const previous = { ...current, node_id: 'original', conversation_id: 'original' };
+  const switchVersion = vi.fn();
+  const versions = new Map([[canonicalLocatorKey(current.boundary), { current, previous, total: 2, current_index: 1 }]]);
+  const props = { loadEarlier: vi.fn(), onLoadDetail: vi.fn(), onSelect: vi.fn(), messageHistory: { versions, switchVersion } };
+  const cache = { page: { records: [native], next_cursor: null }, epoch: 1, details: {} };
+  const rendered = render(<Trajectory {...props} cache={cache}/>);
+  expect(screen.queryByRole('button', { name: 'Switch to previous message version' })).toBeNull();
+  rendered.rerender(<Trajectory {...props} cache={{ ...cache, details: { [native.id]: { epoch: 1, page: head(original, 'user', 1) } } }}/>);
+  fireEvent.click(within(screen.getByRole('table', { name: 'Trace ledger' })).getByRole('button', { name: 'Switch to previous message version' }));
+  expect(switchVersion).toHaveBeenCalledWith(previous);
+  rendered.rerender(<Trajectory {...props} cache={{ ...cache, details: { [native.id]: { epoch: 1, page: head(original, 'user', 19) } } }}/>);
+  expect(screen.queryByRole('button', { name: 'Switch to previous message version' })).toBeNull();
 });
