@@ -177,10 +177,10 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   );
   if (sessionId && tracePreview) return wrapCanvas(<Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { if (readingOwner.connected) void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>);
   if (sessionId && mode === 'trajectory' && readingOwner.coldReadable && !view?.trace) return <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
-    {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
+    {readingOwner.loading && !waiting && <div className={pendingCss.navigationProgress} role="status" aria-label={tx('common:activity.loading')}/>}
   </ChatViewport>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
-    {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
+    {readingOwner.loading && !waiting && <div className={pendingCss.navigationProgress} role="status" aria-label={tx('common:activity.loading')}/>}
     <PendingMessage client={client} sessionId={sessionId}/>
   </ChatViewport> : null;
   return wrapCanvas(mode === 'trajectory' && view.trace

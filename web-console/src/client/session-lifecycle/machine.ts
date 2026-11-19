@@ -123,15 +123,16 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
         const admission = await port.admit(current);
         const admitted = () => !!admission && admission.current() && current();
         if (admission && admitted()) {
-          const conversation = context().facts.nodeConversationId ?? await port.conversation(node, admitted);
+          // session/read already carries the active Node's immutable
+          // Conversation; only an addressed Node still needs its own read.
+          const conversation = context().facts.nodeConversationId ?? selected?.conversation ?? await port.conversation(node, admitted);
           if (admitted()) {
             self.send({ type: 'NODE', token: op.token, node, conversation });
             submit();
-            const result = await port.attach(node, conversation, { current: admitted, sent: proof.sent, validate: async signal => {
-              const valid = await admission.validate(signal);
-              if (valid && admitted()) port.cold(admitted);
-              return valid && admitted();
-            } });
+            // Exact identity is admitted before dispatch validation; durable
+            // preview reads overlap the Attach wait instead of following it.
+            port.cold(admitted);
+            const result = await port.attach(node, conversation, { current: admitted, sent: proof.sent, validate: async signal => await admission.validate(signal) && admitted() });
             if (settlement()) {
               self.send({ type: 'ATTACH_ACK', token: op.token, result });
               if (result.target.session_id !== context().id || result.target.conversation_id !== conversation) throw new Error('Mismatched attachment identity.');

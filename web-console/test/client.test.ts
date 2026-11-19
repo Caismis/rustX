@@ -811,7 +811,8 @@ it('terminal Release during final validation aborts the reservation and settles 
   const signal = await entered.promise; expect(signal.aborted).toBe(false);
   const closing = s.client.release('A'); gate.resolve(true); await Promise.all([refused, closing]);
   expect(signal.aborted).toBe(true); expectReleased(s); expect(states).not.toContain('error');
-  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/node']);
+  // session/read already owns the Conversation; fenced durable preview reads may overlap Attach validation.
+  expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/history', 'session/statistics', 'session/settings', 'session/traceHistory']);
   const afterIdentity = s.requests.length;
   s.held.add('session/summary');
   const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));

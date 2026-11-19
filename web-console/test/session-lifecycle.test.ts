@@ -106,6 +106,42 @@ it('transmitted obsolete Attach retains one cleanup claim until exact Detach ack
   expect(h.calls.map(c => c.kind)).toEqual(['attach', 'detach']); expect(h.claims.size).toBe(0);
 });
 
+it('authoritative Session read supplies the Conversation without a duplicate Node read', async () => {
+  const h = new Harness(); let nodeReads = 0;
+  h.port.conversation = async node => { nodeReads++; return `conversation-${node}`; };
+  const open = h.command('open'); h.ack(await h.next('attach')); await open;
+  expect(nodeReads).toBe(0);
+  expect(h.calls.map(call => call.kind)).toEqual(['attach']);
+  expect(h.facts).toMatchObject({ nodeId: 'A', nodeConversationId: 'conversation-A', attachment: 'attached' });
+  expect(h.claims.size).toBe(1);
+});
+
+it('an explicitly addressed Node still resolves its own Conversation', async () => {
+  const h = new Harness(); let nodeReads = 0;
+  h.port.conversation = async node => { nodeReads++; return `conversation-${node}`; };
+  const open = h.command('open', 'A'); h.ack(await h.next('attach')); await open;
+  expect(nodeReads).toBe(1);
+  expect(h.facts).toMatchObject({ nodeId: 'A', nodeConversationId: 'conversation-A', attachment: 'attached' });
+});
+
+it('durable preview reads start under admitted identity before Attach validation', async () => {
+  const h = new Harness(); h.validation = deferred<void>(); h.validationEntered = deferred<void>();
+  let cold = 0; h.port.cold = () => { cold++; };
+  const open = h.command('open', 'A');
+  await h.validationEntered.promise;
+  expect(cold).toBe(1);
+  h.validation.resolve(); h.ack(await h.next('attach')); await open;
+  expect(h.facts.attachment).toBe('attached');
+});
+
+it('a refused attach admission never starts durable preview reads', async () => {
+  const h = new Harness(); let cold = 0; h.port.cold = () => { cold++; };
+  h.port.admit = async () => false;
+  await h.command('open', 'A');
+  expect(cold).toBe(0); expect(h.calls).toEqual([]);
+  expect(h.facts).toMatchObject({ attachment: 'detached', attachmentIntent: 'wanted' });
+});
+
 it('equivalent Opens share one native claim; conflicting Open cannot change admitted identity', async () => {
   const h = new Harness(); let refreshes = 0;
   h.port.refresh = async () => { refreshes++; };

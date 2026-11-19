@@ -21,3 +21,12 @@
   .skeleton { animation-timing-function: step-end; }
   .skeleton span { animation: none; }
 }
+.navigationProgress {
+  height: 2px;
+  width: 100%;
+  background: var(--dsw-alias-bg-skeleton);
+  animation: reveal .16s ease-out .2s backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .navigationProgress { animation: none; }
+}
