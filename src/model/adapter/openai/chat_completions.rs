@@ -28,10 +28,10 @@ use crate::model::adapter::openai::mapping::{
 };
 use crate::model::adapter::openai::qwen_xml::{self, QwenReservedEnvelope};
 use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
-use crate::model::adapter::traits::{
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
+use crate::model::adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol,
 };

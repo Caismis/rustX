@@ -20,10 +20,10 @@ use reqwest::header::HeaderValue;
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
-use crate::model::adapter::traits::{
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
+use crate::model::adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };

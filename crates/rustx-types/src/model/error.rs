@@ -342,7 +342,7 @@ impl ModelError {
     /// for numbers — every consumer above the model layer reads
     /// [`Self::context_overflow`].
     #[must_use]
-    pub(crate) fn normalized(mut self) -> Self {
+    pub fn normalized(mut self) -> Self {
         if matches!(self.kind, ModelErrorKind::ContextWindowExceeded)
             && self.context_overflow.is_none()
         {
@@ -364,7 +364,7 @@ impl ModelError {
 /// streaming) the same classification before the agent loop applies its
 /// bounded compact-and-retry policy.
 #[must_use]
-pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>) -> bool {
+pub fn is_context_window_error(message: &str, provider_code: Option<&str>) -> bool {
     let message = message.to_ascii_lowercase();
 
     // Some throttling responses use phrases such as "too many tokens" for a
@@ -450,7 +450,7 @@ pub(crate) fn is_context_window_error(message: &str, provider_code: Option<&str>
 /// unquantified correction; a wrong one corrupts every budget derived from
 /// it.
 #[must_use]
-pub(crate) fn context_overflow_report(message: &str) -> ContextOverflowReport {
+pub fn context_overflow_report(message: &str) -> ContextOverflowReport {
     let lowered = message.to_ascii_lowercase();
     ContextOverflowReport {
         reported_input_tokens: marked_number(

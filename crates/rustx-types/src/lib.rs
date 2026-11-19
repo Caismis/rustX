@@ -13,7 +13,12 @@ pub mod toml_authoring;
 
 pub mod model {
     pub mod capabilities;
+    pub mod deadline;
+    pub mod error;
+    pub mod event;
     pub mod finish;
+    pub mod generation;
+    pub mod generation_evidence;
     #[cfg(any(test, feature = "test-fixtures"))]
     pub mod hash_work;
     pub mod images;
@@ -28,6 +33,10 @@ pub mod model {
     pub mod types;
     pub mod uploads;
     pub mod adapter {
+        pub mod stream;
+        pub use stream::{
+            ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
+        };
         pub mod response_budget;
         pub mod retry;
         pub mod transport;

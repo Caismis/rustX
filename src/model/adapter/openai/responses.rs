@@ -21,10 +21,10 @@ use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
 use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
-use crate::model::adapter::traits::{
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
+use crate::model::adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;

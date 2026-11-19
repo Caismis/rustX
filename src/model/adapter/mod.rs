@@ -28,8 +28,9 @@ pub mod traits;
 pub(crate) use rustx_types::model::adapter::transport;
 pub mod validation;
 
-pub use traits::{
-    ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
+pub use rustx_types::model::adapter::{
+    ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
+pub use traits::ModelAdapter;
 
 pub(crate) use rustx_types::model::adapter::response_budget;
