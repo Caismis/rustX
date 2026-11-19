@@ -176,33 +176,32 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async openDeliveryPreview(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal: AbortSignal): Promise<FilePreviewOperation> {
     this.mutationScope(scope); validateDeliveryRead(read);
     if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
-    return this.openPreviewOwner(scope, signal, async active => {
+    return this.openPreviewOwner(scope, signal, async (active, acquire) => {
       const roots = this.registrations.map(row => this.cwd(row.location));
       if (!roots.length || roots.length > 32) throw new Error('Product Host file roots unavailable');
-      return this.physicalPreview(scope, active, () => openNativeDeliveryPreview(this.config.endpoint, this.config.productHostToken!, read, roots, active));
+      return acquire(() => openNativeDeliveryPreview(this.config.endpoint, this.config.productHostToken!, read, roots, active));
     });
   }
   async openWorkspacePreview(scope: WorkspaceAuthorityScope, call: WorkbenchCall, signal: AbortSignal): Promise<FilePreviewOperation> {
     this.mutationScope(scope);
     if (call?.request?.kind !== 'preview' || typeof call.request.path !== 'string') throw new Error('Invalid workspace preview operation');
     const path = call.request.path;
-    return this.openPreviewOwner(scope, signal, async active => {
+    return this.openPreviewOwner(scope, signal, async (active, acquire) => {
       const root = await this.resolveWorkbenchRoot(scope, call.target, active);
-      let descriptor: FilePreviewOperation | undefined;
-      try { await this.physicalPreview(scope, active, async () => { descriptor = openWorkspaceBytePreview(root.cwd, path, active); return descriptor; }); }
-      catch (error) { await descriptor?.close().catch(() => {}); throw error; }
-      const operation = descriptor!;
       const check = async () => {
         const current = await this.resolveWorkbenchRoot(scope, call.target, active);
         if (current.cwd !== root.cwd) throw new WorkspaceHostError('source_changed', 'source_changed');
       };
-      return { ...operation,
-        read: async (range, signal) => { await check(); const value = await operation.read(range, signal); await check(); return value; },
-        close: async () => {
-          try { if (!active.aborted) await check(); } finally { await operation.close(); }
-          if (!active.aborted) await check();
-        },
-      };
+      return acquire(() => {
+        const operation = openWorkspaceBytePreview(root.cwd, path, active);
+        return { ...operation,
+          read: async (range, signal) => { await check(); const value = await operation.read(range, signal); await check(); return value; },
+          close: async () => {
+            try { if (!active.aborted) await check(); } finally { await operation.close(); }
+            if (!active.aborted) await check();
+          },
+        };
+      });
     });
   }
   private async physicalPreview<T>(scope: WorkspaceAuthorityScope, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
@@ -219,7 +218,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       throw error;
     } finally { if (settled) this.fileReads.delete(physical); }
   }
-  private async openPreviewOwner(scope: WorkspaceAuthorityScope, signal: AbortSignal, open: (signal: AbortSignal) => Promise<FilePreviewOperation>): Promise<FilePreviewOperation> {
+  private async openPreviewOwner(scope: WorkspaceAuthorityScope, signal: AbortSignal,
+    open: (signal: AbortSignal, acquire: (work: () => FilePreviewOperation | Promise<FilePreviewOperation>) => Promise<FilePreviewOperation>) => Promise<FilePreviewOperation>,
+  ): Promise<FilePreviewOperation> {
     signal.throwIfAborted();
     if (this.previewOwners.size >= 2) throw new WorkspaceHostError('Preview owner capacity reached', 'capacity');
     const owner = new AbortController(); this.previewOwners.add(owner);
@@ -252,8 +253,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const retired = () => { if (operation) void close().catch(() => {}); };
     const abort = () => owner.abort(); signal.addEventListener('abort', abort, { once: true }); owner.signal.addEventListener('abort', retired, { once: true });
     try {
-      operation = await open(owner.signal); owner.signal.throwIfAborted();
-      const source = operation;
+      const source = await open(owner.signal, work => this.physicalPreview(scope, owner.signal, async () => {
+        const opened = await work();
+        // The resource belongs to this owner before physicalPreview revalidates scope and roots.
+        operation = opened;
+        return opened;
+      }));
+      owner.signal.throwIfAborted();
       return { version: source.version, bytes: source.bytes, file: source.file,
         read: (range, active = owner.signal) => {
           validateFileRead({ kind: 'bytes', range });
@@ -265,8 +271,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         }, close,
       };
     } catch (error) {
-      if (operation) { owner.abort(); await close().catch(() => {}); }
-      else if (error instanceof WorkspaceHostError && error.kind === 'file_settlement_unknown') { clearTimeout(deadline); failRetirement(error); }
+      if (operation) {
+        owner.abort();
+        try { await close(); }
+        catch (retirementError) {
+          if (retirementError instanceof WorkspaceHostError && retirementError.kind === 'file_settlement_unknown') throw retirementError;
+        }
+      } else if (error instanceof WorkspaceHostError && error.kind === 'file_settlement_unknown') { clearTimeout(deadline); failRetirement(error); }
       else release();
       throw error;
     }

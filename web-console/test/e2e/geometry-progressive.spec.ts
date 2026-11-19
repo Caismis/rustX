@@ -1,5 +1,6 @@
 import {test,expect,type Page} from '@playwright/test';
 import {instrument,observeGeometryLatency,resources} from './geometry-observation';
+import {GEOMETRY_LIMITS} from '../../src/app/components/documents/geometry/limits';
 
 const origin=`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}`;
 test.use({connectOptions:{wsEndpoint:process.env.RUSTX_BROWSER_WS_ENDPOINT??'',exposeNetwork:'<loopback>'}});
@@ -68,7 +69,12 @@ for(const sample of naturalCases)test(sample.title,async({page},info)=>{
   const capture=()=>page.evaluate(()=>({nativeTiers:(window as any).geometryLods,latency:(window as any).geometryLatency,frames:(window as any).geometryModelFrames,imports:(window as any).geometryImports,roots:(window as any).geometryImportRoots,importTimings:(window as any).geometryImportTimings,createdContexts:(window as any).geometryCreatedContexts(),resources:{...(window as any).geometryResources}}));
   let captured=false;
   try {
-    const full=page.locator('[data-geometry-completeness="complete"][data-geometry-lod="full"]');await expect(full).toBeVisible();await expect(full).toHaveAttribute('data-geometry-quality','complete');
+    const full=page.locator('[data-geometry-completeness="complete"][data-geometry-lod="full"]');
+    const failure=page.locator('[data-geometry-format="step"]').getByRole('alert');
+    // Wait for the product's terminal outcome, including cold native meshing on CI.
+    await expect(full.or(failure)).toBeVisible({timeout:GEOMETRY_LIMITS.cadTimeoutMs});
+    if(await failure.isVisible())throw new Error(`STEP preview failed with "${await failure.textContent()}"`);
+    await expect(full).toHaveAttribute('data-geometry-quality','complete');
     await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.first)).toBeGreaterThan(0);await expect.poll(async()=>(await resources(page)).workers).toBe(0);
     // Settle test telemetry for tiers that really submitted triangles. A final
     // frame does not guarantee an earlier fence observer's rAF has run yet.
