@@ -1,0 +1,135 @@
+//! The native durable conversation authority (Issue #11).
+//!
+//! This module exposes one backend-independent semantic store for the six
+//! distinct durable domains. Pending Inbound remains its own authority for
+//! accepted-but-not-yet-canonically-adopted work:
+//!
+//! ```text
+//! Pending Inbound Inbox
+//!     owns accepted / not-yet-adopted inbound durability
+//!     owns the one per-conversation InboundSequence allocator
+//!     owns the acceptance linearization point
+//!     participates in the canonical-adoption transaction
+//! ```
+//!
+//! It is **not** the Message Ledger, not the Conversation Surface, not the
+//! Event Journal, not a generic queue framework, and not a second scheduler.
+//! The semantic ownership split is:
+//!
+//! ```text
+//! Pending Inbound Inbox  = accepted / not-yet-adopted inbound durability
+//! ConversationInboundMailbox = process-local coordination / wakeup
+//! Message Ledger         = adopted canonical conversational facts
+//! Conversation Surface   = current model-visible ordering/projection
+//! ConversationRuntime    = admission + safe-boundary adoption owner
+//! Event Journal          = execution facts
+//! Publication plane      = user-facing release durability (Issue #108)
+//! ```
+//!
+//! Human interaction (Issue #109) deliberately adds **no** seventh domain. A
+//! pending Questionnaire/Approval waiter is process-owned workflow state and is
+//! never made durable; only its low-frequency requested/settled semantic facts
+//! are persisted, and those are ordinary Event Journal facts reached through
+//! the narrow [`inbox::ConversationInteractionAudit`] capability.
+//!
+//! The publication plane is the newest and most easily confused of the six. It
+//! owns exactly one question — *what did rustX durably commit for release to a
+//! user-facing client, and how did that release settle* — and nothing else. It
+//! is not the Message Ledger (its audit content is not canonical message
+//! history, although it can be rendered by the derived transcript), not the
+//! Event Journal (it carries no execution fact), and not a display cache.
+//! Its three linearization points are documented on
+//! [`rustx_publication`].
+//!
+//! # Backend independence
+//!
+//! [`ConversationStore`] declares the backend-independent semantic
+//! transitions of all six durable domains as the union of the domain
+//! contracts in [`store`] and [`inbox`]. [`sqlite::SqliteConversationStore`]
+//! is the M8 concrete backend. A future M11 `PostgreSQL` backend must provide
+//! the same observable contract. The abstraction level is deliberately the
+//! rustX domain transitions — never a generic repository/queue/CRUD frame.
+//!
+//! # Pending inbound linearization points
+//!
+//! 1. **Acceptance**: [`InboxStore::accept_inbound`] commits the sequence
+//!    allocation, the pending record, and any correlation/idempotency state
+//!    in one transaction. Success is reported only after that commit.
+//! 2. **Adoption**: [`InboxStore::adopt_pending_batch`] atomically
+//!    reads current rows through the watermark, appends them to the canonical
+//!    Ledger/Surface, constructs their exact answer obligation, and removes
+//!    pending records. Its committed receipt is the only post-claim payload.
+//! 3. **Mutation**: exact pending edit/remove compare occurrence and revision
+//!    inside a durable transaction ordered against adoption. Removal also
+//!    retires the pending transcript reference; canonical history is immutable.
+//!
+//! The publication plane adds its own three (Issue #108): the provider outcome
+//! **P**, the publication terminal **U**
+//! ([`PublicationStore::commit_publication_terminal`]), and canonical
+//! acceptance **C** ([`PublicationStore::commit_canonical_publication`]),
+//! ordered `P < U < C` and enforced by the store as `C => U => P`.
+
+pub mod artifacts;
+pub mod auxiliary;
+pub mod background_facts;
+pub mod context_resources;
+pub mod contribution;
+pub mod inbound;
+pub mod inbox;
+pub mod lineage_remap;
+pub mod model;
+pub mod observation;
+pub mod presentation;
+pub mod preview;
+pub mod process_death;
+pub mod projection;
+pub mod read_layout;
+pub mod reading;
+pub mod recovery;
+pub mod recovery_frontier;
+pub mod scheduler;
+pub mod sqlite;
+pub mod store;
+pub mod subagent_facts;
+pub use store::schedule::ScheduleStore;
+pub use store::scheduled_workflow::ScheduledWorkflowStore;
+pub mod trace;
+pub mod workflow;
+
+pub use auxiliary::{
+    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliaryRetryCommit,
+    AuxiliarySettlementCommit, AuxiliaryWriteFailure,
+};
+pub use inbox::{
+    AcceptedInbound, AdoptedBatch, ConversationInboundCapability, ConversationInteractionAudit,
+    ConversationStoreBinding, GoalObservationReceipt, InboundDraft, InboxStore, PendingBatch,
+    PendingInboundItem, PendingInboundRef, PendingMutationOutcome, PendingObservationReceipt,
+    canonical_block, interaction_audit_capability,
+};
+#[cfg(any(test, feature = "test-hooks"))]
+pub use sqlite::conversation_store_opens_on_this_thread;
+pub use sqlite::{SqliteConversationStore, conversation_store_open_count};
+pub use store::auxiliary::AuxiliaryStore;
+pub use store::canonical::{
+    CanonicalMessagePage, CanonicalObservationBatch, CanonicalRawToolArguments, CanonicalStore,
+    DurableConversationHead, InspectionSeed, LineageSeed, NativeTodoObservation,
+    SurfaceUserMessageBoundary, SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT,
+    TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt, TranscriptCursor, TranscriptEntry,
+    TranscriptItem, TranscriptPage, TranscriptSnapshotCut, TranscriptTool,
+};
+pub use store::journal::{EventPage, JournalStore, PrivateAgentAuthority};
+pub use store::observation::ObservationStore;
+pub use store::projection::ProjectionStore;
+pub use store::publication::{PublicationAuditReceipt, PublicationAuditSummary, PublicationStore};
+pub use store::request::{
+    ContributionEmissionLookup, ContributionEmissionRecord, ModelTurnStartCommit,
+    ModelTurnStartCommitDisposition, RequestSnapshotPage, RequestStore, StatusObservationSource,
+};
+pub use store::{ConversationStore, ConversationStoreError};
+
+pub mod response;
+pub mod response_completed;
+
+pub use store::canonical::{
+    CommittedModelTurn, CommittedModelTurnBoundary, ModelTurnBoundary, ModelTurnSettlement,
+};

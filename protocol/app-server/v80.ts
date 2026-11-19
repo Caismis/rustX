@@ -2032,7 +2032,7 @@ export type EffectiveFieldName =
   | 'effective_model'
   | 'admitted_attempt';
 /**
- * An authored Model identity. Its spelling has no provider or wire semantics.
+ * A fully qualified `provider/model` catalog reference.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelRef".
@@ -3304,7 +3304,7 @@ export type ThreadActiveFlag = 'waitingOnApproval' | 'waitingOnUserInput';
  *
  * The sequence identifies one item of the conversation's inbound ordering
  * domain. It is **not**
- * [`RuntimeEventEnvelope`]`::sequence`
+ * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
  * and is never allocated from the Event Journal sequence; the durable
  * Pending Inbound Inbox owns allocation, and the first successful
  * acceptance of a conversation receives `1`.
@@ -4044,7 +4044,7 @@ export type TurnProcessOutcome =
 /**
  * The normalized client-visible failure of one attempt.
  *
- * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+ * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
  * (such as the raw provider error code) never appear here.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -4641,7 +4641,7 @@ export type ToolDeadlineKind = 'hard' | 'idle';
  * `TimedOut` is a proven deadline settlement, and
  * `OutcomeUnknown` means the executor could not prove the external outcome
  * at all. A terminal lifecycle never claims a stronger external outcome
- * than the canonical [`ToolExecutionStatus`] of the stored result proves —
+ * than the canonical `ToolExecutionStatus` of the stored result proves —
  * in particular an unknown outcome is never labelled `Failed`, and a
  * cancellation request that could not be confirmed physically never
  * becomes `Cancelled`.
@@ -5523,7 +5523,7 @@ export type RuntimeClientEvent =
             /**
              * The normalized client-visible failure of one attempt.
              *
-             * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+             * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
              * (such as the raw provider error code) never appear here.
              */
             error:
@@ -6062,7 +6062,7 @@ export type RuntimeClientEvent =
        *
        * The sequence identifies one item of the conversation's inbound ordering
        * domain. It is **not**
-       * [`RuntimeEventEnvelope`]`::sequence`
+       * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
        * and is never allocated from the Event Journal sequence; the durable
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
@@ -6082,7 +6082,7 @@ export type RuntimeClientEvent =
        *
        * The sequence identifies one item of the conversation's inbound ordering
        * domain. It is **not**
-       * [`RuntimeEventEnvelope`]`::sequence`
+       * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
        * and is never allocated from the Event Journal sequence; the durable
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
@@ -7443,6 +7443,8 @@ export type WorkflowModelPolicy =
       mode: 'explicit';
     };
 /**
+ * Typed Python/JavaScript main functions over the admitted workspace Bash tool.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowCodeLanguage".
  */
@@ -8608,7 +8610,7 @@ export type RuntimeClientAttemptPhase =
             /**
              * The normalized client-visible failure of one attempt.
              *
-             * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+             * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
              * (such as the raw provider error code) never appear here.
              */
             error:
@@ -8825,7 +8827,7 @@ export type RuntimeClientOutcome =
       /**
        * The normalized client-visible failure of one attempt.
        *
-       * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+       * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
        * (such as the raw provider error code) never appear here.
        */
       error:
@@ -11497,6 +11499,8 @@ export interface TraceRequestMessage {
   truncated: boolean;
 }
 /**
+ * Checkpoint activation order, independent of the Ledger and Journal domains.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "RequestMessageOccurrence".
  */
@@ -13078,7 +13082,7 @@ export interface GoalSnapshot {
  * order.
  *
  * ```compile_fail
- * use rustx_types::message::types::AgentStatusGenerationMetadata;
+ * use crate::message::types::AgentStatusGenerationMetadata;
  *
  * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
  *     metadata.modules = Vec::new();
@@ -13087,7 +13091,7 @@ export interface GoalSnapshot {
  *
  * ```rust
  * use chrono::Utc;
- * use rustx_types::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+ * use crate::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
  *
  * let metadata = AgentStatusGenerationMetadata::new(
  *     Utc::now(),
@@ -14550,7 +14554,7 @@ export interface RuntimeClientAttempt {
               /**
                * The normalized client-visible failure of one attempt.
                *
-               * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+               * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
                * (such as the raw provider error code) never appear here.
                */
               error:
@@ -14774,7 +14778,7 @@ export interface AttemptModelView {
  */
 export interface ModelInvocationView {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -14848,7 +14852,7 @@ export interface ModelCapabilities1 {
  */
 export interface ModelInvocationView1 {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -14885,7 +14889,7 @@ export interface ModelInvocationView1 {
  */
 export interface ModelInvocationView2 {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -14963,7 +14967,7 @@ export interface InboundItemView {
    *
    * The sequence identifies one item of the conversation's inbound ordering
    * domain. It is **not**
-   * [`RuntimeEventEnvelope`]`::sequence`
+   * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
    * and is never allocated from the Event Journal sequence; the durable
    * Pending Inbound Inbox owns allocation, and the first successful
    * acceptance of a conversation receives `1`.
@@ -15062,7 +15066,7 @@ export interface InboundDrainView {
    *
    * The sequence identifies one item of the conversation's inbound ordering
    * domain. It is **not**
-   * [`RuntimeEventEnvelope`]`::sequence`
+   * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
    * and is never allocated from the Event Journal sequence; the durable
    * Pending Inbound Inbox owns allocation, and the first successful
    * acceptance of a conversation receives `1`.
@@ -15330,7 +15334,7 @@ export interface RuntimeClientJob {
    * `TimedOut` is a proven deadline settlement, and
    * `OutcomeUnknown` means the executor could not prove the external outcome
    * at all. A terminal lifecycle never claims a stronger external outcome
-   * than the canonical [`ToolExecutionStatus`] of the stored result proves —
+   * than the canonical `ToolExecutionStatus` of the stored result proves —
    * in particular an unknown outcome is never labelled `Failed`, and a
    * cancellation request that could not be confirmed physically never
    * becomes `Cancelled`.
@@ -16295,7 +16299,7 @@ export interface SessionModelConfig1 {
  */
 export interface ModelInvocationView3 {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -16638,7 +16642,7 @@ export interface RuntimeClientProtocolEvent {
               /**
                * The normalized client-visible failure of one attempt.
                *
-               * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+               * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
                * (such as the raw provider error code) never appear here.
                */
               error:
@@ -17177,7 +17181,7 @@ export interface RuntimeClientProtocolEvent {
          *
          * The sequence identifies one item of the conversation's inbound ordering
          * domain. It is **not**
-         * [`RuntimeEventEnvelope`]`::sequence`
+         * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
          * and is never allocated from the Event Journal sequence; the durable
          * Pending Inbound Inbox owns allocation, and the first successful
          * acceptance of a conversation receives `1`.
@@ -17197,7 +17201,7 @@ export interface RuntimeClientProtocolEvent {
          *
          * The sequence identifies one item of the conversation's inbound ordering
          * domain. It is **not**
-         * [`RuntimeEventEnvelope`]`::sequence`
+         * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
          * and is never allocated from the Event Journal sequence; the durable
          * Pending Inbound Inbox owns allocation, and the first successful
          * acceptance of a conversation receives `1`.
@@ -19009,7 +19013,7 @@ export interface RuntimeClientJob1 {
    * `TimedOut` is a proven deadline settlement, and
    * `OutcomeUnknown` means the executor could not prove the external outcome
    * at all. A terminal lifecycle never claims a stronger external outcome
-   * than the canonical [`ToolExecutionStatus`] of the stored result proves —
+   * than the canonical `ToolExecutionStatus` of the stored result proves —
    * in particular an unknown outcome is never labelled `Failed`, and a
    * cancellation request that could not be confirmed physically never
    * becomes `Cancelled`.
@@ -20254,7 +20258,7 @@ export interface ModelCatalogView {
  */
 export interface CatalogModelView {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**

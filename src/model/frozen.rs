@@ -238,21 +238,6 @@ impl FrozenModelSpec {
         export(&mut self.primary.binding, "PRIMARY");
         export(&mut self.summary.0.binding, "SUMMARY");
     }
-    /// Rehydrate only the private credential capture committed with this authority.
-    pub(crate) fn restore_admitted_credentials(
-        &mut self,
-        credentials: &dyn CredentialEnvironment,
-    ) -> Result<(), ModelInvocationError> {
-        self.primary.binding.resolved_credential = Some(resolve_frozen_credential(
-            &self.primary.binding,
-            credentials,
-        )?);
-        self.summary.0.binding.resolved_credential = Some(resolve_frozen_credential(
-            &self.summary.0.binding,
-            credentials,
-        )?);
-        Ok(())
-    }
 
     /// Freezes one desired configuration against an already-admitted
     /// binding registry.

@@ -52,7 +52,6 @@ pub use rustx_types::runtime::monotonic;
 /// Fixed execution-permission modes, resource overrides, and the built-in
 /// permission matrix (Issue #544).
 pub mod permission;
-pub(crate) mod read_layout;
 
 /// Generic containment of nested supervised process units created inside a
 /// subagent child (Issue #145).

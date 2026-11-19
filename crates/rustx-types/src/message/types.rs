@@ -209,7 +209,7 @@ impl UserSource {
 /// wins over read).
 ///
 /// ```compile_fail
-/// use rustx_types::message::types::CompactionSummaryMetadata;
+/// use crate::message::types::CompactionSummaryMetadata;
 ///
 /// fn mutate(metadata: &mut CompactionSummaryMetadata) {
 ///     metadata.read_files = Vec::new();
@@ -217,7 +217,7 @@ impl UserSource {
 /// ```
 ///
 /// ```rust
-/// use rustx_types::message::types::CompactionSummaryMetadata;
+/// use crate::message::types::CompactionSummaryMetadata;
 ///
 /// let metadata = CompactionSummaryMetadata::new(
 ///     vec!["a.rs".to_owned()],
@@ -529,7 +529,7 @@ impl std::error::Error for AgentStatusMetadataError {}
 /// order.
 ///
 /// ```compile_fail
-/// use rustx_types::message::types::AgentStatusGenerationMetadata;
+/// use crate::message::types::AgentStatusGenerationMetadata;
 ///
 /// fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
 ///     metadata.modules = Vec::new();
@@ -538,7 +538,7 @@ impl std::error::Error for AgentStatusMetadataError {}
 ///
 /// ```rust
 /// use chrono::Utc;
-/// use rustx_types::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+/// use crate::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
 ///
 /// let metadata = AgentStatusGenerationMetadata::new(
 ///     Utc::now(),

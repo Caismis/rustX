@@ -10,7 +10,7 @@ use crate::context::resources::ResourceReadCut;
 use crate::model::error::ModelErrorKind;
 use crate::model::finish::ModelFinishReason;
 use crate::model::generation_evidence::GenerationEvidence;
-use crate::model::types::ModelUsage;
+pub use crate::model::types::ModelUsage;
 use crate::runtime::identity::{AuxiliaryCallId, CompactionOperationId, MessageId, RequestId};
 
 /// Largest Call or request audit page returned by the durable Store.

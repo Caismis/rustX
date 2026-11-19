@@ -30,7 +30,7 @@ pub(super) fn collection_identity<T: serde::de::DeserializeOwned>(
     })
 }
 pub(super) fn indexed_collection_read(
-    source: &crate::runtime::read_layout::SeekableObservationSource,
+    source: &rustx_durable::read_layout::SeekableObservationSource,
     cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
@@ -63,7 +63,7 @@ pub(super) fn direct_collection_read(
     range: (u64, u32),
 ) -> Result<super::super::checkpoint::CheckpointValueChunk, RuntimeClientError> {
     use base64::Engine;
-    let chunk = crate::runtime::read_layout::text_chunk(text, range.0, range.1)
+    let chunk = rustx_durable::read_layout::text_chunk(text, range.0, range.1)
         .map_err(RuntimeClientError::observation_read_error)?;
     Ok(super::super::checkpoint::CheckpointValueChunk {
         representation: super::super::checkpoint::CheckpointValueRepresentation::Utf8Text,

@@ -2391,7 +2391,7 @@ fn t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch()
         .unwrap()
         .unwrap();
     let (maximum_read, maximum_key, maximum_page, written) =
-        crate::runtime::read_layout::canonical::WORK.with(std::cell::Cell::get);
+        crate::durable::read_layout::canonical::WORK.with(std::cell::Cell::get);
     assert!(written > 3_000_000);
     assert!(maximum_read <= 65_536);
     assert!(maximum_key <= 65_536);
@@ -2471,7 +2471,7 @@ fn t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8() {
         .unwrap()
         .unwrap();
     let (read, key, page, written) =
-        crate::runtime::read_layout::canonical::WORK.with(std::cell::Cell::get);
+        crate::durable::read_layout::canonical::WORK.with(std::cell::Cell::get);
     assert!(written > 65_536);
     assert!(read <= 65_536 && key <= 65_536 && page <= 32);
     let mut restored = Vec::new();

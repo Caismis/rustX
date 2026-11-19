@@ -401,7 +401,13 @@ async fn reopened_workflow(claim_before_reopen: bool) {
             let store = crate::durable::SqliteConversationStore::recover_existing(
                 conversation.clone(),
                 &access.database_path,
-                &controller,
+                std::sync::Arc::new(
+                    crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                        controller.clone(),
+                        access.database_path.parent().unwrap(),
+                    )
+                    .unwrap(),
+                ),
             )
             .unwrap();
             let accepted = store.scheduled_workflow_get(&start.id).unwrap().unwrap();

@@ -3,15 +3,20 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::input::ModelInputMessage;
 use crate::model::input::{
     CarryoverOmissionCounts, RenderedUnresolvedOutputCarryover, RequestOnlyModelContext,
     UnresolvedOutputSettlement,
 };
+use crate::model::projected::{CanonicalMessageRef, FrozenModelInput};
 use crate::model::projected::{
     CheckpointSourceRef, DerivedModelMessage, ModelMessageView, ProjectedMessage,
     SemanticTransformation,
 };
-use rustx_identity::{CheckpointId, MessageId, PublicationStreamId};
+use crate::model::selected_input::ACTUAL_VISITS;
+use rustx_identity::{CheckpointId, ConversationId, MessageId, PublicationStreamId};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 fn user(index: usize) -> ModelInputMessage {
     ModelInputMessage::Canonical(MessageBlock::User(UserMessageBlock {
@@ -482,4 +487,64 @@ fn hashing_work_is_attributed_to_native_work_under_an_active_profile() {
     assert!(original_bytes + semantic_bytes > 0);
     let attributed = guard.snapshot().native_work.hash_bytes - baseline;
     assert!(attributed >= (original_bytes + semantic_bytes) as u64);
+}
+
+/// The cross-domain lease contract: bodies the registry shares into a
+/// `SelectedInputManifest` must be the very allocations owned by the
+/// canonical Ledger and the active Surface, at the same history sizes the
+/// registry occupancy proof covers.
+#[test]
+fn manifest_ledger_and_surface_lease_the_same_body_at_8_64_512_4096() {
+    let bodies = std::sync::Arc::new(rustx_conversation::bodies::CanonicalBodies::default());
+    let mut state = rustx_conversation::ConversationState::new();
+    state.bind_bodies(std::sync::Arc::clone(&bodies));
+    let scope = ConversationId::generate();
+    let mut manifest = crate::model::selected_input::SelectedInputManifest::default();
+    let mut leases = Vec::new();
+    for h in 1..=4096usize {
+        let message = original(&format!("m{h}"));
+        let id = state.commit(message.clone()).unwrap();
+        let lease = bodies.share(message);
+        leases.push(std::sync::Arc::clone(&lease));
+        manifest = manifest.append_shared(&scope, lease);
+        if ![8, 64, 512, 4096].contains(&h) {
+            continue;
+        }
+        let selected = manifest.messages();
+        for (i, lease) in leases.iter().enumerate() {
+            let shared = selected.shared(i);
+            assert!(std::sync::Arc::ptr_eq(&shared, lease));
+            let actual = shared.as_canonical().unwrap();
+            assert!(std::ptr::eq(
+                actual,
+                state.ledger().get(actual.id()).unwrap()
+            ));
+            assert!(std::ptr::eq(
+                actual,
+                state
+                    .freeze_active_surface()
+                    .messages
+                    .get(actual.id())
+                    .unwrap()
+            ));
+        }
+        assert!(std::ptr::eq(
+            selected.shared(h - 1).as_canonical().unwrap(),
+            state.ledger().get(&id).unwrap()
+        ));
+        // Re-binding the registry must not disturb already-leased bodies.
+        state.bind_bodies(std::sync::Arc::clone(&bodies));
+    }
+}
+
+fn original(id: &str) -> MessageBlock {
+    MessageBlock::User(UserMessageBlock {
+        id: MessageId::new(id),
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: format!("body {id}"),
+        })],
+    })
 }

@@ -166,7 +166,7 @@ fn assert_completed_member_head(
         call.state,
         crate::observation::tool::ForegroundToolState::Assembled { .. }
     ));
-    assert!(crate::observation::bounded::bounded_bytes(checkpoint, 786_432).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(checkpoint, 786_432).is_some());
 }
 
 fn copied_member_host(

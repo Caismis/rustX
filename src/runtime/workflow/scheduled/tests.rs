@@ -5,6 +5,7 @@ use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
 use crate::runtime::agent_profile::{
     AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
 };
+use crate::runtime::identity::RuntimeResourceRevision;
 use crate::runtime::identity::{
     CapabilityRevision, ConversationId, SessionId, SessionNodeId, ToolId,
 };

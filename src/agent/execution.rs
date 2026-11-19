@@ -76,7 +76,7 @@ mod compaction;
 mod construction;
 mod publication;
 mod recovery;
-mod request;
+pub mod request;
 mod start;
 mod step;
 mod stream;

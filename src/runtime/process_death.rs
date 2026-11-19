@@ -100,7 +100,7 @@ pub(crate) const GATE_NTH_ENV: &str = "RUSTX_FND06_GATE_NTH";
 pub(crate) const CONTROL_ENV: &str = "RUSTX_FND06_CONTROL";
 
 #[cfg(test)]
-pub(crate) use imp::{orphan_watchdog, reach, reach_event, recv_line, send_line};
+pub(crate) use imp::{orphan_watchdog, reach, recv_line, send_line};
 
 /// Parks the calling thread at `boundary` when the process was started to die
 /// there. Durable callers hold their transition's store or ownership lock;
@@ -110,19 +110,12 @@ pub(crate) use imp::{orphan_watchdog, reach, reach_event, recv_line, send_line};
 #[cfg(not(test))]
 pub(crate) const fn reach(_boundary: &str) {}
 
-/// Parks the calling thread at `"{prefix}:{event type}"` when the process was
-/// started to die there. Compiled away outside this crate's test build.
-#[cfg(not(test))]
-pub(crate) const fn reach_event(_prefix: &str, _event: &crate::events::types::RuntimeEvent) {}
-
 #[cfg(test)]
 mod imp {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, OnceLock};
-
-    use crate::events::types::RuntimeEvent;
 
     use super::{CONTROL_ENV, GATE_ENV, GATE_NTH_ENV};
 
@@ -235,30 +228,5 @@ mod imp {
             return;
         }
         park_at(boundary);
-    }
-
-    pub(crate) fn reach_event(prefix: &str, event: &RuntimeEvent) {
-        let Some(gate) = gate() else { return };
-        // The gate is armed for at most one boundary, so the event type is
-        // only ever rendered when this process might actually park.
-        if !gate.boundary.starts_with(prefix) {
-            return;
-        }
-        reach(&format!("{prefix}:{}", event_type(event)));
-    }
-
-    /// The wire discriminant of one runtime event, which is also its boundary
-    /// name: boundary keys are derived from the durable event contract instead
-    /// of a second hand-maintained vocabulary.
-    fn event_type(event: &RuntimeEvent) -> String {
-        serde_json::to_value(event)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_else(|| "unknown".to_owned())
     }
 }

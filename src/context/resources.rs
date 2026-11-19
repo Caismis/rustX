@@ -1,76 +1,16 @@
 //! Bounded detached reads of immutable compaction inputs. No execution authority.
+
 use std::io::Read as _;
 
-use crate::durable::{ConversationStore, ConversationStoreError, TranscriptCursor};
+use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::MessageBlock;
 use crate::runtime::identity::MessageId;
 
-pub use rustx_types::context::resources::{JournalFrontier, LedgerFrontier, ResourceReadCut};
-
-/// Hard logical materialization bounds, including the sum of all pages in an operation.
-#[derive(Debug, Clone, Copy)]
-pub struct ResourceLimits {
-    pub page_items: usize,
-    pub record_bytes: usize,
-    pub page_bytes: usize,
-    pub total_items: usize,
-    pub total_bytes: usize,
-}
-
-impl Default for ResourceLimits {
-    fn default() -> Self {
-        Self {
-            page_items: 64,
-            record_bytes: 1024 * 1024,
-            page_bytes: 4 * 1024 * 1024,
-            total_items: 8192,
-            total_bytes: 16 * 1024 * 1024,
-        }
-    }
-}
-
-impl ResourceLimits {
-    pub(crate) fn validate(self) -> Result<(), ConversationStoreError> {
-        let hard = Self::default();
-        if self.page_items == 0
-            || self.page_items > hard.page_items
-            || self.record_bytes == 0
-            || self.record_bytes > hard.record_bytes
-            || self.page_bytes == 0
-            || self.page_bytes > hard.page_bytes
-            || self.total_items == 0
-            || self.total_items > hard.total_items
-            || self.total_bytes == 0
-            || self.total_bytes > hard.total_bytes
-        {
-            return Err(bound("invalid compaction resource limits"));
-        }
-        Ok(())
-    }
-}
-
-/// Detached owned rows and their byte charge; the position is in the source domain.
-#[derive(Debug)]
-pub struct ResourcePage<T> {
-    pub rows: Vec<(u64, T)>,
-    pub bytes: usize,
-}
-
-/// One canonical typed working record, with source positions and real facts.
-#[derive(Debug, serde::Serialize)]
-pub struct TrajectoryMessage {
-    pub message: MessageBlock,
-    pub transcript_position: Option<TranscriptCursor>,
-    pub committed: Option<RuntimeEventEnvelope>,
-    pub tools: Vec<TrajectoryTool>,
-}
-#[derive(Debug, serde::Serialize)]
-pub struct TrajectoryTool {
-    pub occurrence: crate::message::types::ToolCallOccurrenceRef,
-    /// Real Started/terminal facts as of the cut; empty is unknown/inherited.
-    pub facts: Vec<RuntimeEventEnvelope>,
-}
+pub use rustx_durable::context_resources::{
+    JournalFrontier, LedgerFrontier, ResourceLimits, ResourcePage, ResourceReadCut,
+    TrajectoryMessage, TrajectoryTool, bound, bounded_encoded_len,
+};
 
 /// An operation's read-only capabilities and cumulative materialization account.
 /// Each SQL read is short-lived; retaining this value never retains a transaction.
@@ -352,36 +292,4 @@ impl<'a> CompactionResources<'a> {
             .compaction_event_page(&self.cut, after, self.allowance()?)?;
         self.charge(page)
     }
-}
-
-pub(crate) fn bound(message: &str) -> ConversationStoreError {
-    ConversationStoreError::ResourceBoundExceeded(message.to_owned())
-}
-
-/// Count encoding directly into a bounded sink; never allocate another source-sized buffer.
-pub(crate) fn bounded_encoded_len(
-    value: &impl serde::Serialize,
-    limit: usize,
-) -> Result<usize, ConversationStoreError> {
-    struct Counter {
-        bytes: usize,
-        limit: usize,
-    }
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.bytes = self
-                .bytes
-                .checked_add(bytes.len())
-                .filter(|n| *n <= self.limit)
-                .ok_or_else(|| std::io::Error::other("materialization byte limit"))?;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter { bytes: 0, limit };
-    serde_json::to_writer(&mut counter, value)
-        .map_err(|_| bound("cumulative compaction bytes exceeded"))?;
-    Ok(counter.bytes)
 }

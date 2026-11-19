@@ -6,7 +6,7 @@ mod tests {
         assert_eq!(
             {
                 let mut bytes = Vec::new();
-                crate::runtime::read_layout::canonical::to_writer(&mut bytes, &value).unwrap();
+                rustx_durable::read_layout::canonical::to_writer(&mut bytes, &value).unwrap();
                 bytes
             },
             "{\"a\":{\"a\":null,\"z\":true},\"z\":[{\"a\":2,\"z\":\"\\n水\"},1]}".as_bytes()

@@ -113,7 +113,7 @@ fn captured_wire_value<T: serde::Serialize + schemars::JsonSchema>(value: &T) ->
     }
     let schema = crate::observation::structural_json::root::<T>();
     let encoded = Wire(value, schema);
-    let bytes = crate::observation::bounded::bounded_bytes(
+    let bytes = rustx_types::observation::bounded::bounded_bytes(
         &encoded,
         crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
     )

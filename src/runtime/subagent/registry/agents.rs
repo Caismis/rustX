@@ -1154,6 +1154,17 @@ pub(super) const SUBAGENT_LIFECYCLE_KINDS: &[&str] = &[
     "subagent_physical_settlement_proven",
 ];
 
+fn load_durable_agent_authority(
+    store: &dyn crate::durable::JournalStore,
+    agent_id: &rustx_identity::AgentId,
+) -> Result<DurableAgentAuthority, crate::durable::ConversationStoreError> {
+    serde_json::from_value(store.load_agent_authority(agent_id)?.authority).map_err(|_| {
+        crate::durable::ConversationStoreError::InvalidReference(
+            "decode private Agent authority".to_owned(),
+        )
+    })
+}
+
 impl SubagentRegistry {
     /// Rebuild durable identity/activation relationships from committed facts.
     /// Startup reconciliation has already terminalized orphaned activations.
@@ -1177,7 +1188,10 @@ impl SubagentRegistry {
                 ..
             } = &envelope.event
             {
-                authorities.insert(agent_id.clone(), store.load_agent_authority(agent_id)?);
+                authorities.insert(
+                    agent_id.clone(),
+                    load_durable_agent_authority(store, agent_id)?,
+                );
             }
             events.push(envelope);
         }

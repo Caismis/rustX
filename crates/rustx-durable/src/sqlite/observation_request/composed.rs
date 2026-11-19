@@ -1,0 +1,473 @@
+//! Composed `RequestStart` inspection over the native immutable selected-input tree.
+//! Native nodes own occurrence order. These optional augmentations own only
+//! allowlisted encoded bytes and authenticated field geometry.
+use super::{Connection, ConversationStoreError, params, storage};
+use crate::sqlite::manifest;
+use crate::sqlite::statements::FixedStatements;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+mod fragments;
+mod index;
+#[cfg(any(test, feature = "test-hooks"))]
+mod measurement;
+mod nodes;
+#[cfg(feature = "issue-387-profile")]
+mod profile;
+mod read;
+mod record;
+mod scalar;
+mod schema;
+#[cfg(any(test, feature = "test-hooks"))]
+mod test_records;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use test_records::*;
+#[cfg(test)]
+mod schema_tests;
+mod weights;
+mod width_table;
+/// Install fixed connection workspace before any owner records schema cookies.
+/// Captures change only rows, so ordinary spill never invalidates read proofs.
+pub fn install_workspace(connection: &Connection) -> Result<(), ConversationStoreError> {
+    index::install_cache(connection)?;
+    connection
+        .execute_batch("CREATE TEMP TABLE request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID")
+        .map_err(|error| crate::sqlite::sqlite_error(&error,format!("install request capture workspace: {error}")))
+}
+#[cfg(any(test, feature = "test-hooks"))]
+pub use fragments::spool::exercise_workspace_spill;
+#[cfg(any(test, feature = "test-hooks"))]
+mod width_tests;
+pub use read::{coordinates, field, page, range};
+pub use schema::{create_schema, verify_schema};
+#[cfg(any(test, feature = "test-hooks"))]
+pub use width_tests::{assert_variants, boundary_length};
+#[cfg(any(test, feature = "test-hooks"))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Work {
+    pub index_pages: usize,
+    pub index_bytes: usize,
+    pub max_index_page: usize,
+    pub native_nodes: usize,
+    pub source_nodes: usize,
+    pub source_metadata_bytes: usize,
+    pub max_source_metadata: usize,
+    pub new_leaves: usize,
+    pub new_nodes: usize,
+    pub new_fragment_bytes: usize,
+    pub scalar_encodes: usize,
+    pub scalar_captures: usize,
+    pub scalar_reuses: usize,
+    pub header_decodes: usize,
+    pub template_loads: usize,
+    pub template_decodes: usize,
+    pub template_reuses: usize,
+    pub node_decodes: usize,
+    pub node_reuses: usize,
+    pub leaf_width_calls: usize,
+    pub width_hole_encodes: usize,
+    pub width_hole_reuses: usize,
+}
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_encodes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0,width_hole_reuses:0})};}
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn take_work() -> Work {
+    WORK.with(|work| work.replace(Work::default()))
+}
+#[cfg(any(test, feature = "test-hooks"))]
+fn record_metadata(bytes: usize) {
+    WORK.with(|work| {
+        let mut value = work.get();
+        value.source_nodes += 1;
+        value.source_metadata_bytes += bytes;
+        value.max_source_metadata = value.max_source_metadata.max(bytes);
+        work.set(value);
+    });
+}
+#[cfg(any(test, feature = "test-hooks"))]
+fn record_index(bytes: usize) {
+    WORK.with(|work| {
+        let mut value = work.get();
+        value.index_pages += 1;
+        value.index_bytes += bytes;
+        value.max_index_page = value.max_index_page.max(bytes);
+        work.set(value);
+    });
+}
+const SAFE: u64 = 9_007_199_254_740_991;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Fragment {
+    bytes: index::Reference,
+    fields: index::Reference,
+    length: u64,
+    max_path: u64,
+    max_key_path: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Template {
+    prefix: Fragment,
+    suffix: Fragment,
+    header_prefix: String,
+    header_suffix: String,
+    provenance_bytes: u64,
+    children: u64,
+    nodes: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Leaf {
+    /// Width classes reference deduplicated template metadata, never body copies.
+    #[serde(deserialize_with = "record::variants")]
+    variants: Vec<u8>,
+    #[serde(deserialize_with = "record::templates")]
+    templates: Vec<index::BlobRef>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum Content {
+    Leaf {
+        leaf: Leaf,
+    },
+    Branch {
+        left: manifest::NodeRef,
+        left_hash: index::Hash,
+        right: manifest::NodeRef,
+        right_hash: index::Hash,
+    },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Augmentation {
+    native: manifest::NodeRef,
+    /// Sum of static bytes at each occurrence width; actual J/rank digits are
+    /// generated at read time. Branch crossing a rank width descends its children.
+    widths: width_table::WidthTable,
+    max_path: u64,
+    max_key_path: u64,
+    content: Content,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RootKind {
+    Request,
+    #[cfg(any(test, feature = "test-hooks"))]
+    Scalar,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Root {
+    kind: RootKind,
+    sequence: u64,
+    native: Option<manifest::NodeRef>,
+    source_hash: Option<index::Hash>,
+    scalar: Fragment,
+    prefix: Option<Fragment>,
+    children: u64,
+    nodes: u64,
+    messages_start: u64,
+    messages_end: u64,
+    length: u64,
+}
+impl Root {
+    fn prefix_length(&self) -> u64 {
+        self.prefix.as_ref().map_or(0, |prefix| prefix.length)
+    }
+    fn base_length(&self) -> Result<u64, ConversationStoreError> {
+        add(self.prefix_length(), self.scalar.length)
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+// Ordinary fields retain navigation geometry only. Bounded display previews
+// are derived from authenticated byte chunks when inspection requests them.
+struct Fact {
+    // The F key and C parent/ordinal key own these producer-only coordinates.
+    #[serde(skip)]
+    path: Vec<String>,
+    #[serde(skip)]
+    parent: Option<Vec<String>>,
+    #[serde(skip)]
+    ordinal: Option<u64>,
+    start: u64,
+    end: u64,
+    children: u64,
+    nodes: u64,
+    object: bool,
+    container: bool,
+    key: Option<u64>,
+    name: Option<String>,
+}
+fn bounded<T: Serialize>(value: &T, max: usize) -> Result<Vec<u8>, ConversationStoreError> {
+    rustx_types::observation::bounded::bounded_bytes(value, max)
+        .ok_or_else(|| storage("composed observation metadata exceeds bound"))
+}
+fn hash(bytes: &[u8]) -> index::Hash {
+    Sha256::digest(bytes).into()
+}
+fn add(a: u64, b: u64) -> Result<u64, ConversationStoreError> {
+    a.checked_add(b)
+        .filter(|value| *value <= SAFE)
+        .ok_or_else(|| storage("composed observation byte offset exceeds bound"))
+}
+fn invalid() -> ConversationStoreError {
+    ConversationStoreError::InvalidReference("request field is unavailable".into())
+}
+fn root_checksum(root: &[u8]) -> index::Hash {
+    let mut sha = Sha256::new();
+    sha.update(b"rustx-composed-request-source-v1\0");
+    sha.update(root);
+    sha.finalize().into()
+}
+/// `trigger_free` is the caller's proof, inside this transaction, that the
+/// schema has no SQL program which could rewrite rows this capture stores.
+#[allow(clippy::too_many_arguments)] // The native request start plus its trigger proof.
+pub fn index_selection(
+    connection: &Connection,
+    trigger_free: bool,
+    sequence: u64,
+    scope: &rustx_types::runtime::identity::ConversationId,
+    input: &rustx_types::model::selected_input::SelectedModelInput,
+    snapshot: &crate::model::snapshot::RequestSnapshot,
+    selection: &manifest::Selection,
+    configuration: &super::super::native_request::FreshConfiguration,
+) -> Result<(), ConversationStoreError> {
+    #[cfg(feature = "issue-387-profile")]
+    let mut profile = profile::Request::new(sequence, selection.root.map_or(0, |root| root.count));
+    #[cfg(any(test, feature = "test-hooks"))]
+    let _measurement = measurement::Measurement::new(
+        rustx_types::agent::execution::attribution::SourceScope::Request,
+    );
+    let captured_root = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Capture);
+        #[cfg(any(test, feature = "test-hooks"))]
+        let _timer = rustx_types::agent::execution::attribution::Timer::new(
+            rustx_types::agent::execution::attribution::Phase::SourceCapture,
+        );
+        nodes::capture(connection, trigger_free, scope, input, snapshot, selection)?
+    };
+    let source_hash = captured_root.as_ref().map(|node| node.digest);
+    let captured = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Scalar);
+        #[cfg(any(test, feature = "test-hooks"))]
+        let _timer = rustx_types::agent::execution::attribution::Timer::new(
+            rustx_types::agent::execution::attribution::Phase::SourceScalar,
+        );
+        scalar::capture(connection, snapshot, configuration)?
+    };
+    let messages_length = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Geometry);
+        #[cfg(any(test, feature = "test-hooks"))]
+        let _timer = rustx_types::agent::execution::attribution::Timer::new(
+            rustx_types::agent::execution::attribution::Phase::SourceGeometry,
+        );
+        match (selection.root, captured_root) {
+            (Some(native), Some(captured)) => {
+                // Scalar capture writes can trigger changes to the root. Check
+                // actual storage now, then share the path/width traversal.
+                // All path errors still precede deferred length errors.
+                let node = captured.into_node(connection, native, trigger_free)?;
+                add(
+                    nodes::incremental_geometry(
+                        connection,
+                        &node,
+                        source_hash.ok_or_else(|| storage("selected Source hash unavailable"))?,
+                        0,
+                        sequence,
+                        &selection.geometry,
+                    )?,
+                    2,
+                )?
+            }
+            (None, None) => 2,
+            _ => return Err(storage("composed selected root unavailable")),
+        }
+    };
+    let length = add(
+        add(captured.prefix.length, captured.suffix.length)?
+            .checked_sub(2)
+            .ok_or_else(|| storage("scalar messages geometry unavailable"))?,
+        messages_length,
+    )?;
+    let root = Root {
+        kind: RootKind::Request,
+        sequence,
+        native: selection.root,
+        source_hash,
+        scalar: captured.suffix,
+        prefix: Some(captured.prefix),
+        children: captured.children,
+        nodes: captured.nodes,
+        messages_start: captured.messages_start,
+        messages_end: captured.messages_end,
+        length,
+    };
+    let bytes = record::encode(&root, 16_384)?;
+    let checksum = root_checksum(&bytes);
+    connection
+        .execute_cached(
+            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+            params![sequence.to_string(), bytes, checksum.as_slice()],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    connection
+        .execute_cached(
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'j',1,?2)",
+            params![crate::sqlite::content::keys::write(connection,"trace_request",&sequence.to_string())?, length],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    #[cfg(feature = "issue-387-profile")]
+    profile.layout_completed();
+    Ok(())
+}
+type RootRow = (
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<u64>,
+    Option<Vec<u8>>,
+    u64,
+    u64,
+);
+fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStoreError> {
+    let sequence: u64 = id.parse().map_err(|_| invalid())?;
+    if sequence == 0 || sequence.to_string() != id {
+        return Err(invalid());
+    }
+    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.checksum)='blob' AND length(r.checksum)=32 THEN r.checksum END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count,f.readable_end FROM request_source_roots r JOIN request_snapshots s ON s.started_sequence=CAST(r.source_id AS INTEGER) AND s.observation_source_id=r.source_id JOIN content_frontiers f ON f.source_kind='trace_request' AND f.source_id=?2 AND f.block_index=0 AND f.representation='j' AND f.revision=1 WHERE r.source_id=?1").map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![id,crate::sqlite::content::keys::read(connection,"trace_request",id)?], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes = row
+        .0
+        .ok_or_else(|| storage("composed request root unavailable"))?;
+    #[cfg(any(test, feature = "test-hooks"))]
+    record_metadata(bytes.len());
+    let digest = root_checksum(&bytes);
+    if row.1.as_deref() != Some(digest.as_slice()) {
+        return Err(storage("composed request root checksum differs"));
+    }
+    let root: Root = record::decode(&bytes)?;
+    let base_length = root.base_length()?;
+    if root.sequence != sequence
+        || root.length > SAFE
+        || root.length != row.5
+        || base_length > root.length
+        || root.kind != RootKind::Request
+            && (root.length != root.scalar.length
+                || root.prefix.is_some()
+                || root.children != 0
+                || root.nodes != 0
+                || root.messages_start != 0
+                || root.messages_end != 0
+                || root.source_hash.is_some())
+        || root.native.is_some_and(|node| {
+            node.count == 0
+                || node.count > manifest::MAX_ITEMS
+                || node.height == 0
+                || node.height > manifest::MAX_HEIGHT
+        })
+        || root.kind == RootKind::Request
+            && (root.prefix.is_none()
+                || root.prefix_length() == 0
+                || root.children != crate::observation::trace::frozen::REQUEST_FIELD_COUNT
+                || !(1..=33).contains(&root.nodes)
+                || root.messages_start < root.prefix_length()
+                || root.messages_start >= root.messages_end
+                || root.messages_end - root.messages_start != 2)
+        || root.messages_end > base_length
+        || root.native.map(|node| node.id) != row.2
+        || root.native.map_or(0, |node| node.count) != row.4
+        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.3.as_deref()
+        || root.kind == RootKind::Request && root.native.is_some() != root.source_hash.is_some()
+    {
+        return Err(storage("original composed request identity differs"));
+    }
+    Ok(root)
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
+    connection: &Connection,
+    sequence: u64,
+    value: &T,
+) -> Result<(), ConversationStoreError> {
+    let source = crate::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
+    let scalar = fragments::whole(connection, &source)?;
+    let native=connection.query_row("SELECT s.input_root,s.input_root_digest,s.input_count,n.height FROM request_snapshots s LEFT JOIN native_input_nodes n ON n.id=s.input_root WHERE s.started_sequence=CAST(?1 AS INTEGER) AND s.observation_source_id=?1",[sequence.to_string()],|row|{let id:Option<u64>=row.get(0)?;let digest:Option<Vec<u8>>=row.get(1)?;let count:u64=row.get(2)?;let height:Option<u8>=row.get(3)?;Ok((id,digest,count,height))}).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    let native = match native {
+        (Some(id), Some(digest), count, Some(height)) => Some(manifest::NodeRef {
+            id,
+            digest: digest
+                .try_into()
+                .map_err(|_| storage("native selected root digest unavailable"))?,
+            count,
+            height,
+        }),
+        (None, None, 0, None) => None,
+        _ => return Err(storage("native selected root unavailable")),
+    };
+    let root = Root {
+        kind: RootKind::Scalar,
+        sequence,
+        native,
+        source_hash: None,
+        length: scalar.length,
+        scalar,
+        prefix: None,
+        children: 0,
+        nodes: 0,
+        messages_start: 0,
+        messages_end: 0,
+    };
+    let bytes = record::encode(&root, 16384)?;
+    let checksum = root_checksum(&bytes);
+    connection
+        .execute(
+            "DELETE FROM request_source_roots WHERE source_id=?1",
+            [sequence.to_string()],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    connection
+        .execute_cached(
+            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+            params![sequence.to_string(), bytes, checksum.as_slice()],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    connection
+        .execute_cached(
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'j',1,?2)",
+            params![crate::sqlite::content::keys::write(connection,"trace_request",&sequence.to_string())?, root.length],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn assert_single_native_validation(connection: &Connection, sequence: u64) {
+    let root = load_root(connection, &sequence.to_string()).unwrap();
+    let native = root.native.unwrap();
+    assert!(native.height > 1);
+    manifest::take_node_read_work();
+    manifest::node(connection, &native).unwrap();
+    let expected = manifest::take_node_read_work();
+    nodes::load(connection, native, root.source_hash.unwrap()).unwrap();
+    let actual = manifest::take_node_read_work();
+    assert!(expected.0 > 0);
+    assert_eq!(expected.1, 1);
+    assert_eq!(
+        actual, expected,
+        "same-function Source validation reuses its actual native proof"
+    );
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn inspect_index_page(bytes: &[u8]) -> serde_json::Value {
+    index::inspect_page(bytes)
+}
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn encode_test_index_page(page: serde_json::Value) -> Vec<u8> {
+    index::encode_test_page(page)
+}
+
+#[cfg(test)]
+mod append_cost_tests;

@@ -55,7 +55,7 @@ pub(super) fn accumulate_transition(
         RuntimeClientEvent::ProjectionTransition { events, .. } => events.len(),
         _ => 1,
     };
-    let bytes = crate::observation::bounded::bounded_bytes(
+    let bytes = rustx_types::observation::bounded::bounded_bytes(
         &event,
         crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
     );
@@ -308,7 +308,7 @@ pub(crate) fn activation_view(
                 fields.push(vec!["detail".into()]);
             }
             if snapshot.profile.as_deref().is_some_and(|profile| {
-                crate::observation::bounded::bounded_bytes(profile, 2048).is_none()
+                rustx_types::observation::bounded::bounded_bytes(profile, 2048).is_none()
             }) {
                 fields.push(vec!["execution_profile".into()]);
             }

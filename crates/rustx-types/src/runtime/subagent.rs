@@ -142,3 +142,14 @@ impl core::fmt::Display for SubagentNameError {
 }
 
 impl std::error::Error for SubagentNameError {}
+
+/// run after publication, so the registry must never supply these values.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InheritedExecutionPolicy {
+    pub model_timeout: crate::model::deadline::ModelTimeoutPolicy,
+    pub tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy,
+    pub context: crate::context::engine::SessionContextPolicy,
+}
+
+/// Maximum bytes of a subagent terminal result message before it is rejected.
+pub const MAX_RESULT_CONTENT_BYTES: usize = 64 * 1024;

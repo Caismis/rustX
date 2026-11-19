@@ -1276,7 +1276,7 @@ impl CheckpointSeed {
                     &source.conversation_id,
                     &[],
                 );
-                item.value = crate::observation::bounded::bounded_bytes(
+                item.value = rustx_types::observation::bounded::bounded_bytes(
                     &message,
                     crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
                 )

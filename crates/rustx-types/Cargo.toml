@@ -11,7 +11,7 @@ toml_edit = "0.22"
 url = "2.5"
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 croner = "=4.0.2"
-chrono-tz = "0.10"
+chrono-tz = { version = "0.10", features = ["serde"] }
 referencing = "=0.60.2"
 serde_yaml_ng = "0.10.0"
 tempfile = "3"
@@ -42,6 +42,8 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "str
 http = "1"
 httpdate = "1"
 rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0", default-features = false, features = ["client"], optional = true }
+
+imbl = { version = "7.0.0", features = ["serde"] }
 
 [dev-dependencies]
 toml = "0.8"

@@ -623,21 +623,7 @@ pub fn tool_call_events(index: u32, call: &ScriptedCall) -> Vec<ModelEvent> {
 /// A normalized successful tool result with fixed deterministic fields.
 #[must_use]
 pub fn success_result(text: &str) -> ToolExecutionResult {
-    ToolExecutionResult {
-        deliveries: Vec::new(),
-        status: rustx::tools::types::ToolExecutionStatus::Success,
-        content: vec![rustx::tools::types::ToolResultContent::Text(
-            rustx::message::content::TextBlock {
-                text: text.to_owned(),
-            },
-        )],
-        duration_ms: 7,
-        exit_code: Some(0),
-        artifacts: Vec::new(),
-        truncation: None,
-        workflow: None,
-        managed_output: None,
-    }
+    rustx::durable::sqlite::test_support::success_result(text)
 }
 
 /// A normalized failed tool result.

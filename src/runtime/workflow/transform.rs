@@ -5,10 +5,10 @@ use super::{
     BTreeMap, BTreeSet, MAX_REFERENCE_COMPONENTS, MAX_VALUE_BYTES, SchemaMap, Value,
     WorkflowClassifierClass, WorkflowCompileError, WorkflowModelErrorStrategy,
     WorkflowModelMessage, WorkflowModelOutput, WorkflowModelPolicy, WorkflowModelProgram,
-    WorkflowModelRole, WorkflowRunError, WorkflowValue, WorkflowVarType, is_reserved_port,
-    schema_type, schemas_compatible, valid_local_key, value_schema,
+    WorkflowModelRole, WorkflowRunError, WorkflowValue, is_reserved_port, schema_type,
+    schemas_compatible, valid_local_key, value_schema,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use std::cmp::Ordering;
 use std::io::{self, Write};
@@ -16,57 +16,7 @@ use std::io::{self, Write};
 mod template_worker;
 pub(super) use template_worker::{render_isolated, run_worker};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowAggregateGroup {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_type: Option<WorkflowVarType>,
-    pub variables: Vec<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowListOperator {
-    Equal,
-    NotEqual,
-    Contains,
-    NotContains,
-    StartsWith,
-    EndsWith,
-    Greater,
-    GreaterEqual,
-    Less,
-    LessEqual,
-    Empty,
-    NotEmpty,
-    In,
-    NotIn,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowListFilter {
-    /// Empty selects a primitive item; otherwise literal object field names.
-    pub path: Vec<String>,
-    pub operator: WorkflowListOperator,
-    pub value: WorkflowValue,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowSortOrder {
-    Asc,
-    Desc,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowListSort {
-    pub path: Vec<String>,
-    pub order: WorkflowSortOrder,
-}
-
+pub use rustx_workflow::list::*;
 pub(super) fn text_schema() -> Value {
     json!({"type":"object","properties":{"output":{"type":"string"}},"required":["output"],"additionalProperties":false})
 }

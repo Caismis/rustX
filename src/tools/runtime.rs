@@ -437,9 +437,12 @@ impl ConversationToolRuntime {
         let mailbox = ConversationInboundMailbox::over_inbound_capability(
             durable_binding.inbound_capability(),
         );
-        let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
-            .map_err(ConversationRuntimeError::Artifacts)?
-            .with_lifecycle(config.lifecycle.clone());
+        let artifacts =
+            ArtifactStore::new(conversation_id.clone(), &artifacts_root)
+                .map_err(ConversationRuntimeError::Artifacts)?
+                .with_lifecycle(config.lifecycle.clone().map(|guard| {
+                    guard as std::sync::Arc<dyn rustx_durable::sqlite::OwnershipLock>
+                }));
         // Temporary output has explicit Conversation-local ownership metadata;
         // the artifact region and OS temporary root grant no output authority.
         let tool_output = ManagedToolOutput::new(conversation_id.clone(), &artifacts_root)

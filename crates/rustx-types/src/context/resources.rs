@@ -50,3 +50,11 @@ pub struct ResourceReadCut {
     pub transcript: TranscriptCursor,
     pub projection_activation: ProjectionActivationId,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RequestHistoryCut {
+    pub ledger: LedgerFrontier,
+    pub checkpoint_id: Option<crate::runtime::identity::CheckpointId>,
+    pub activation: crate::context::checkpoint::ProjectionActivationId,
+    pub base_frontier: LedgerFrontier,
+}

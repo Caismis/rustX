@@ -428,20 +428,7 @@ pub fn invocation(
     protocol: rustx::model::ModelProtocol,
     model: &str,
 ) -> rustx::model::ModelInvocationConfig {
-    let chat_reasoning_replay = (protocol == rustx::model::ModelProtocol::OpenAiChatCompletions)
-        .then_some(rustx::model::ChatReasoningReplay::Omit);
-    rustx::model::ModelInvocationConfig {
-        replay_binding: Some("test-binding".into()),
-        model: model.to_owned(),
-        protocol,
-        max_output_tokens: 512,
-        request_params: rustx::model::RequestParams::new(),
-        capabilities: rustx::model::ModelCapabilities::text_only(),
-        compat: rustx::model::ModelCompat {
-            chat_reasoning_replay,
-            ..rustx::model::ModelCompat::default()
-        },
-    }
+    rustx::durable::sqlite::test_support::invocation_for(protocol, model)
 }
 
 /// A canonical user-only request for the given protocol.
@@ -450,31 +437,7 @@ pub fn simple_request(
     model: &str,
     prompt: &str,
 ) -> rustx::model::ModelRequest {
-    use rustx::message::content::TextBlock;
-    use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
-    use rustx::runtime::identity::MessageId;
-    rustx::model::ModelRequest {
-        response_schema: None,
-        response_byte_limit: None,
-        continuation_source: None,
-        images: std::collections::BTreeMap::new(),
-        invocation: invocation(protocol, model),
-        messages: vec![rustx::model::ModelInputMessage::Canonical(
-            MessageBlock::User(UserMessageBlock {
-                id: MessageId::new("msg-user-1"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: prompt.to_owned(),
-                })],
-                source: UserSource::Human,
-                kind: rustx::message::types::InboundKind::Message,
-                timestamp: None,
-            }),
-        )]
-        .into(),
-        tools: Vec::new(),
-        effective_system_prompt: String::new(),
-        continuation: None,
-    }
+    rustx::durable::sqlite::test_support::simple_request(protocol, model, prompt)
 }
 
 /// Bind this explicitly selected fixture output to the previous simulated request.

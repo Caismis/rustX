@@ -683,6 +683,12 @@ fn count(hasher: &mut Sha256, key: &str, value: usize) {
     hasher.update(format!("{key}#{value}\n").as_bytes());
 }
 
+impl AsRef<str> for NamedAgentDefinitionDigest {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

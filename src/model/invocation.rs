@@ -52,10 +52,12 @@
 //! runtime field.
 //!
 //! Provider-owned reasoning/sampling fields are deliberately *not* protected
-//! merely because rustX recognizes their names: a Model Profile is expected
+//! merely because the runtime recognizes their names: a Model Profile is expected
 //! to own fields such as `thinking`, `reasoning`, `temperature`, or
 //! `output_config`.
 
+use rustx_types::model::request_params::append_content_modalities;
+pub use rustx_types::model::session::ModelSelection;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -624,39 +626,6 @@ pub struct ModelInvocationView {
     /// The raw capabilities the catalog claims, for clients that want to
     /// explain why an effective capability is absent.
     pub declared_capabilities: ModelCapabilities,
-}
-
-/// One desired model selection: the mutable configuration a session owns and
-/// a Runtime Client sets as a whole.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ModelSelection {
-    /// The selected catalog model.
-    pub model: ModelRef,
-    /// The selected Model Profile; the model's `default_profile` is used
-    /// when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<ModelProfileId>,
-    /// The explicit request-parameter overrides.
-    #[serde(default)]
-    pub request_params: RequestParams,
-    /// The explicit output-budget override; the selected profile's default,
-    /// else the model's hard maximum, is used when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-}
-
-impl ModelSelection {
-    /// A selection of one model with every default.
-    #[must_use]
-    pub fn of(model: ModelRef) -> Self {
-        Self {
-            model,
-            profile: None,
-            request_params: RequestParams::new(),
-            max_output_tokens: None,
-        }
-    }
 }
 
 /// One authored top-level provider-native request key.
@@ -1325,62 +1294,6 @@ pub fn validate_content_modalities<'a>(
     let mut required = Vec::new();
     append_content_modalities(messages, &mut required);
     validate_required_modalities(&required, capabilities)
-}
-
-pub(crate) fn append_content_modalities<'a>(
-    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
-    required: &mut Vec<Modality>,
-) {
-    use crate::message::types::{AssistantContentBlock, UserContentBlock};
-    use crate::model::projected::ModelMessageView;
-    use crate::tools::types::ToolResultContent;
-
-    let mut require = |modality: Modality| {
-        if !required.contains(&modality) {
-            required.push(modality);
-        }
-    };
-    for message in messages {
-        match message.view() {
-            ModelMessageView::User(user) => {
-                for content in user {
-                    match content {
-                        UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_) => {
-                            require(Modality::Text);
-                        }
-                        UserContentBlock::Image(_) => require(Modality::Image),
-                        UserContentBlock::File(_) => require(Modality::File),
-                    }
-                }
-            }
-            ModelMessageView::Assistant(assistant) => {
-                for content in assistant {
-                    match content {
-                        AssistantContentBlock::Image(_) => require(Modality::Image),
-                        AssistantContentBlock::Text(_)
-                        | AssistantContentBlock::Refusal(_)
-                        | AssistantContentBlock::Reasoning(_)
-                        | AssistantContentBlock::ToolCall(_) => require(Modality::Text),
-                    }
-                }
-            }
-            ModelMessageView::Tool(_, result) => {
-                for content in &result.content {
-                    match content {
-                        ToolResultContent::Image(_) => require(Modality::Image),
-                        ToolResultContent::File(_) => require(Modality::File),
-                        ToolResultContent::Text(_) | ToolResultContent::Json { .. } => {
-                            require(Modality::Text);
-                        }
-                    }
-                }
-            }
-            // Every request-only context item is a runtime-authored textual
-            // narration. It never carries image/file semantics or a
-            // canonical identity.
-            ModelMessageView::RequestOnly(_) => require(Modality::Text),
-        }
-    }
 }
 
 pub(crate) fn validate_required_modalities(

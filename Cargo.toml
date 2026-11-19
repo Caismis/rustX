@@ -18,7 +18,7 @@ mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-ht
 # production builds compile the recorders to no-ops and carry no measurement
 # atomic increment. Enable explicitly for the Session-create benchmark:
 #   cargo build --release --features issue-387-profile --example session_create_benchmark
-issue-387-profile = ["rustx-types/issue-387-profile"]
+issue-387-profile = ["rustx-types/issue-387-profile", "rustx-durable/issue-387-profile"]
 
 [lib]
 name = "rustx"
@@ -105,6 +105,8 @@ base64 = "0.22"
 rustx-types = { path = "crates/rustx-types" }
 rustx-conversation = { path = "crates/rustx-conversation" }
 rustx-publication = { path = "crates/rustx-publication" }
+rustx-durable = { path = "crates/rustx-durable" }
+rustx-workflow = { path = "crates/rustx-workflow" }
 # Workspace crates extracted from src/ (bottom-up split).
 rustx-bounded-json = { path = "crates/rustx-bounded-json" }
 rustx-bounded-file = { path = "crates/rustx-bounded-file" }
@@ -180,6 +182,7 @@ tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 rustx-identity = { path = "crates/rustx-identity", features = ["test-fixtures"] }
 rustx-types = { path = "crates/rustx-types", features = ["test-fixtures"] }
+rustx-durable = { path = "crates/rustx-durable", features = ["test-hooks"] }
 
 [profile.dev.build-override]
 # Derive and proc-macro expansion dominates the serial front-end of each rustX

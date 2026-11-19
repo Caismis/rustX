@@ -415,11 +415,7 @@ fn validate_continuation(
 fn validate_tools(request: &ModelRequest) -> Result<ValidatedTools, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = super::profile::phase(super::profile::Phase::Tools);
-    let mut cache = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache");
+    let mut cache = crate::model::adapter::cache::lock(&request.messages);
     if let Some(table) = cache
         .tools
         .as_ref()

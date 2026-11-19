@@ -137,7 +137,7 @@ mod connect;
 mod connection;
 mod diagnostics;
 mod dispatch;
-mod executor;
+pub(crate) mod executor;
 mod framing;
 mod generation;
 mod handler;

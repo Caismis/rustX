@@ -1,9 +1,11 @@
 //! Native context readings: a provider-measured request or the deterministic
 //! rebuilt context committed by compaction. Neither uses browser-visible history.
-use crate::context::tokens::bytes_to_tokens;
 #[cfg(test)]
 use crate::durable::ConversationStore;
+#[cfg(test)]
 use crate::durable::ConversationStoreError;
+#[cfg(test)]
+use crate::durable::context_resources::measure;
 #[cfg(test)]
 use crate::durable::presentation::{FactQuery, FactScope};
 #[cfg(test)]
@@ -57,9 +59,38 @@ pub(crate) fn read(
     }
 }
 
-/// Inherited occupancy follows projection activation independently of execution.
-/// An activation covering the newest retained completed turn supersedes its
-/// old request measurement; source/destination Journal domains are never compared.
+/// Prices the same primary request context validated and committed by compaction.
+/// The reading never contributes to cumulative provider usage.
+pub(crate) fn estimate(
+    input_tokens: u64,
+    context_window_tokens: u64,
+    model: &str,
+    system: &str,
+    tools: &[crate::tools::types::ModelToolDefinition],
+) -> ContextOccupancy {
+    use crate::context::TokenEstimator as _;
+    let estimator = crate::context::DefaultTokenEstimator;
+    let base = estimator.estimate_input(&[], "", &[]);
+    let system_tokens = estimator
+        .estimate_input(&[], system, &[])
+        .saturating_sub(base);
+    let tool_tokens = estimator
+        .estimate_input(&[], "", tools)
+        .saturating_sub(base);
+    ContextOccupancy {
+        estimated: true,
+        input_tokens,
+        context_window_tokens,
+        model: model.to_owned(),
+        breakdown: ContextBreakdown {
+            system_tokens,
+            tool_tokens,
+            message_tokens: input_tokens.saturating_sub(system_tokens.saturating_add(tool_tokens)),
+        },
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn inherit(
     turns: &[crate::durable::reading::TurnReadingProvenance],
     canonical: &[crate::message::types::MessageBlock],
@@ -90,83 +121,4 @@ pub(crate) fn inherit(
     }
     turn.and_then(|turn| turn.execution.as_ref())
         .and_then(|execution| execution.occupancy.clone())
-}
-
-/// The occupancy one terminal reading measures for its own frozen request.
-///
-/// # Errors
-///
-/// Fails only when the frozen request cannot be serialized for pricing.
-pub(crate) fn measure(
-    usage: &crate::model::types::ModelUsage,
-    snapshot: &crate::model::snapshot::RequestSnapshot,
-) -> Result<Option<ContextOccupancy>, ConversationStoreError> {
-    let Some(input_tokens) = usage.input_tokens else {
-        return Ok(None);
-    };
-    if snapshot.context_window_tokens == 0 {
-        return Ok(None);
-    }
-    // The same serialized forms the request estimate prices; an absent part costs nothing.
-    let estimate = |bytes: usize| bytes_to_tokens(bytes as u64);
-    let system_tokens = if snapshot.effective_system_prompt.is_empty() {
-        0
-    } else {
-        estimate(
-            serde_json::to_vec(&snapshot.effective_system_prompt)
-                .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?
-                .len(),
-        )
-    };
-    let tool_tokens = if snapshot.tool_definitions.is_empty() {
-        0
-    } else {
-        estimate(
-            serde_json::to_vec(&snapshot.tool_definitions)
-                .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))?
-                .len(),
-        )
-    };
-    Ok(Some(ContextOccupancy {
-        estimated: false,
-        input_tokens,
-        context_window_tokens: snapshot.context_window_tokens,
-        model: snapshot.invocation.model.clone(),
-        breakdown: ContextBreakdown {
-            system_tokens,
-            tool_tokens,
-            message_tokens: input_tokens.saturating_sub(system_tokens.saturating_add(tool_tokens)),
-        },
-    }))
-}
-
-/// Prices the same primary request context validated and committed by compaction.
-/// The reading never contributes to cumulative provider usage.
-pub(crate) fn estimate(
-    input_tokens: u64,
-    context_window_tokens: u64,
-    model: &str,
-    system: &str,
-    tools: &[crate::tools::types::ModelToolDefinition],
-) -> ContextOccupancy {
-    use crate::context::TokenEstimator as _;
-    let estimator = crate::context::DefaultTokenEstimator;
-    let base = estimator.estimate_input(&[], "", &[]);
-    let system_tokens = estimator
-        .estimate_input(&[], system, &[])
-        .saturating_sub(base);
-    let tool_tokens = estimator
-        .estimate_input(&[], "", tools)
-        .saturating_sub(base);
-    ContextOccupancy {
-        estimated: true,
-        input_tokens,
-        context_window_tokens,
-        model: model.to_owned(),
-        breakdown: ContextBreakdown {
-            system_tokens,
-            tool_tokens,
-            message_tokens: input_tokens.saturating_sub(system_tokens.saturating_add(tool_tokens)),
-        },
-    }
 }

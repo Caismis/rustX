@@ -151,3 +151,71 @@ pub fn overlay_shallow(base: &mut RequestParams, overlay: &RequestParams) {
         base.insert(key.clone(), value.clone());
     }
 }
+
+pub fn append_content_modalities<'a>(
+    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
+    required: &mut Vec<crate::model::capabilities::Modality>,
+) {
+    use crate::message::types::{AssistantContentBlock, UserContentBlock};
+    use crate::model::projected::ModelMessageView;
+    use crate::tools::types::ToolResultContent;
+
+    let mut require = |modality: crate::model::capabilities::Modality| {
+        if !required.contains(&modality) {
+            required.push(modality);
+        }
+    };
+    for message in messages {
+        match message.view() {
+            ModelMessageView::User(user) => {
+                for content in user {
+                    match content {
+                        UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_) => {
+                            require(crate::model::capabilities::Modality::Text);
+                        }
+                        UserContentBlock::Image(_) => {
+                            require(crate::model::capabilities::Modality::Image)
+                        }
+                        UserContentBlock::File(_) => {
+                            require(crate::model::capabilities::Modality::File)
+                        }
+                    }
+                }
+            }
+            ModelMessageView::Assistant(assistant) => {
+                for content in assistant {
+                    match content {
+                        AssistantContentBlock::Image(_) => {
+                            require(crate::model::capabilities::Modality::Image)
+                        }
+                        AssistantContentBlock::Text(_)
+                        | AssistantContentBlock::Refusal(_)
+                        | AssistantContentBlock::Reasoning(_)
+                        | AssistantContentBlock::ToolCall(_) => {
+                            require(crate::model::capabilities::Modality::Text)
+                        }
+                    }
+                }
+            }
+            ModelMessageView::Tool(_, result) => {
+                for content in &result.content {
+                    match content {
+                        ToolResultContent::Image(_) => {
+                            require(crate::model::capabilities::Modality::Image)
+                        }
+                        ToolResultContent::File(_) => {
+                            require(crate::model::capabilities::Modality::File)
+                        }
+                        ToolResultContent::Text(_) | ToolResultContent::Json { .. } => {
+                            require(crate::model::capabilities::Modality::Text);
+                        }
+                    }
+                }
+            }
+            // Every request-only context item is a runtime-authored textual
+            // narration. It never carries image/file semantics or a
+            // canonical identity.
+            ModelMessageView::RequestOnly(_) => require(crate::model::capabilities::Modality::Text),
+        }
+    }
+}

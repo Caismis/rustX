@@ -104,6 +104,7 @@ mod capability;
 pub(crate) use capability::exercise_skill_catalog_without_environments;
 #[cfg(target_os = "linux")]
 mod context;
+pub mod durable;
 #[cfg(target_os = "linux")]
 mod extensions;
 #[cfg(target_os = "linux")]

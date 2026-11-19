@@ -319,6 +319,7 @@ pub(crate) struct ToolPhysicalSettlementPause {
 
 impl ToolPhysicalSettlementPause {
     /// Creates the pause and its observation/release handles.
+    #[cfg(target_os = "linux")]
     #[must_use]
     pub(crate) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
         let (reached, reached_rx) = watch::channel(false);
@@ -641,6 +642,7 @@ impl AgentExecution<'_> {
 
     /// Installs the deterministic physical-result settlement pause.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_tool_physical_settlement_pause(
         &mut self,
         pause: ToolPhysicalSettlementPause,

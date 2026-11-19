@@ -20,7 +20,8 @@ pub(crate) mod cache;
 pub(crate) mod correlation;
 pub mod openai;
 #[cfg(feature = "issue-387-profile")]
-pub(crate) mod profile;
+#[cfg(feature = "issue-387-profile")]
+pub(crate) use rustx_types::model::adapter::profile;
 pub(crate) mod proposal;
 pub(crate) use rustx_types::model::adapter::retry;
 pub mod structured;

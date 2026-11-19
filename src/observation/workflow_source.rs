@@ -220,7 +220,7 @@ mod tests {
                 next_offset: Some(32),
             }
         );
-        assert!(crate::observation::bounded::bounded_bytes(&header, 786_432).is_some());
+        assert!(rustx_types::observation::bounded::bounded_bytes(&header, 786_432).is_some());
         assert_eq!(
             serde_json::to_value(&source).unwrap(),
             serde_json::to_value(&*original).unwrap()

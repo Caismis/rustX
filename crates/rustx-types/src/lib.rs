@@ -15,6 +15,7 @@ pub mod toml_authoring;
 pub mod model {
     pub mod auxiliary;
     pub mod capabilities;
+    pub mod catalog;
     pub mod deadline;
     pub mod error;
     pub mod event;
@@ -30,7 +31,10 @@ pub mod model {
     pub mod projected;
     pub mod replay;
     pub mod request_params;
+    pub mod selected_input;
+    pub mod session;
     pub mod snapshot;
+    pub mod structured;
     pub mod transformations;
     pub mod types;
     pub mod uploads;
@@ -39,6 +43,9 @@ pub mod model {
         pub use stream::{
             ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
         };
+        pub mod correlation;
+        #[cfg(feature = "issue-387-profile")]
+        pub mod profile;
         pub mod response_budget;
         pub mod retry;
         pub mod transport;
@@ -60,14 +67,17 @@ pub mod message {
 }
 
 pub mod tools {
+    pub mod background;
     pub mod deadline;
     pub mod invocation;
     pub mod limits;
     pub mod python;
     pub mod session_files;
+    pub mod todo;
     pub mod types;
 
     pub mod native {
+        pub mod file_ops;
         pub mod bash {
             pub mod text;
         }
@@ -96,6 +106,7 @@ pub mod capabilities {
     pub mod availability;
     pub mod error;
     pub mod selected;
+    pub mod selection;
     pub mod source;
     pub use source::ToolSourceId;
 }
@@ -142,12 +153,19 @@ pub mod local_runtime {
 pub mod context {
     pub mod assembly;
     pub mod checkpoint;
+    pub mod compaction_metadata;
+    pub mod contribution;
+    pub mod engine;
+    pub mod error;
     pub mod occupancy;
     pub mod resources;
+    pub mod status;
     pub mod system_prompt;
+    pub mod tokens;
 }
 
 pub mod goal;
+pub mod goal_lifecycle;
 
 pub mod runtime {
     pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
@@ -156,6 +174,7 @@ pub mod runtime {
     pub mod cancellation;
     pub mod configuration_commit;
     pub mod continuation;
+    pub mod interaction;
     pub mod monotonic;
     pub mod process_supervision;
     pub mod process_wait;

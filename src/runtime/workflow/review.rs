@@ -6,24 +6,11 @@
 //! content, whose options are its actions. The chosen action is the exit the
 //! run takes; `timeout` is taken when nobody answers in time. It acquires no
 //! filesystem lease and certifies no workspace state.
-use super::{
-    Deserialize, Serialize, Value, WorkflowNodeInstance, WorkflowPort, WorkflowRunError,
-    WorkflowRuntime,
-};
+use super::{Value, WorkflowNodeInstance, WorkflowPort, WorkflowRunError, WorkflowRuntime};
 use crate::events::review::ReviewSpecification;
 use crate::runtime::interaction::{InteractionOutcome, InteractionResponse};
 
-/// The exit taken when nobody answers within the node's timeout.
-pub const REVIEW_TIMEOUT_PORT: &str = "timeout";
-pub const MAX_REVIEW_ACTIONS: usize = crate::events::interaction::MAX_CHOICE_OPTIONS;
-
-/// One button the person may press, and the exit it takes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowReviewAction {
-    pub id: String,
-    pub title: String,
-}
+pub use rustx_workflow::review::{MAX_REVIEW_ACTIONS, REVIEW_TIMEOUT_PORT, WorkflowReviewAction};
 
 /// `action` is the chosen action's ID, or `timeout`; `content` is what the
 /// person was shown.

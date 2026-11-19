@@ -62,3 +62,65 @@ pub enum ModelRequestOwner {
         ordinal: u32,
     },
 }
+
+/// Test fixtures shared by the types crate's own suites and downstream crates
+/// that enable `test-fixtures`.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod tests {
+    /// The canonical text-only invocation configuration of an adapter test.
+    #[must_use]
+    pub fn invocation_for(
+        protocol: crate::model::types::ModelProtocol,
+        model: &str,
+    ) -> crate::model::invocation_config::ModelInvocationConfig {
+        let chat_reasoning_replay = (protocol
+            == crate::model::types::ModelProtocol::OpenAiChatCompletions)
+            .then_some(crate::model::capabilities::ChatReasoningReplay::Omit);
+        crate::model::invocation_config::ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
+            model: model.to_owned(),
+            protocol,
+            max_output_tokens: 512,
+            request_params: crate::model::request_params::RequestParams::new(),
+            capabilities: crate::model::capabilities::ModelCapabilities::text_only(),
+            compat: crate::model::capabilities::ModelCompat {
+                chat_reasoning_replay,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// A canonical user-only request for the given protocol.
+    #[must_use]
+    pub fn simple_request(
+        protocol: crate::model::types::ModelProtocol,
+        model: &str,
+        prompt: &str,
+    ) -> crate::model::types::ModelRequest {
+        use crate::message::content::TextBlock;
+        use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+        use crate::runtime::identity::MessageId;
+        crate::model::types::ModelRequest {
+            response_schema: None,
+            response_byte_limit: None,
+            continuation_source: None,
+            images: std::collections::BTreeMap::new(),
+            invocation: invocation_for(protocol, model),
+            messages: vec![crate::model::input::ModelInputMessage::Canonical(
+                MessageBlock::User(UserMessageBlock {
+                    id: MessageId::new("msg-user-1"),
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: prompt.to_owned(),
+                    })],
+                    source: UserSource::Human,
+                    kind: crate::message::types::InboundKind::Message,
+                    timestamp: None,
+                }),
+            )]
+            .into(),
+            tools: Vec::new(),
+            effective_system_prompt: String::new(),
+            continuation: None,
+        }
+    }
+}

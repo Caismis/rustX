@@ -1,0 +1,621 @@
+//! Finite turn outlines captured on their original native J/provenance rows.
+use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::observation::turn::{ObservedTurn, ObservedTurnIdentity, ObservedTurnPage};
+use crate::sqlite::statements::FixedStatements;
+use rustx_types::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use rustx_types::runtime::identity::{AttemptId, ConversationId};
+use serde::{Deserialize, Serialize};
+const SAFE: u64 = rustx_types::observation::content::CONTENT_SAFE_INTEGER_MAX;
+#[derive(Serialize, Deserialize)]
+struct Layout {
+    turn: ObservedTurn,
+    last_response: String,
+    settled: bool,
+}
+fn encode(value: &impl Serialize) -> Result<Vec<u8>, ConversationStoreError> {
+    rustx_types::observation::bounded::bounded_bytes(value, 16_384)
+        .ok_or_else(|| storage("turn display header exceeds bound"))
+}
+fn identity(
+    conversation: &ConversationId,
+    attempt: &AttemptId,
+    source: crate::observation::turn::AttemptIdentitySource,
+) -> ObservedTurnIdentity {
+    ObservedTurnIdentity {
+        conversation_id: conversation.clone(),
+        attempt_id: (attempt.as_str().len() <= 512).then(|| attempt.clone()),
+        attempt_id_source: (attempt.as_str().len() > 512).then_some(source),
+    }
+}
+pub fn required(event: &RuntimeEventEnvelope) -> bool {
+    event.attempt_id.is_some()
+        && matches!(
+            event.event,
+            RuntimeEvent::AttemptStarted { .. }
+                | RuntimeEvent::InboundTurnAdopted { .. }
+                | RuntimeEvent::AssistantMessageCommitted { .. }
+                | RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+                | RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptTimedOut { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+        )
+}
+#[derive(Default)]
+pub struct Prepared {
+    pub header: Option<Vec<u8>>,
+    pub anchor: Option<u64>,
+    pub ordinal: Option<u64>,
+    pub prompt: Option<Vec<u8>>,
+}
+pub fn event(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    statistics: Option<&super::observation_statistics::Prepared>,
+) -> Result<(), ConversationStoreError> {
+    let prepared = prepare(connection, event, statistics, None)?;
+    if let Some(bytes) = prepared.header {
+        if let Some(ordinal) = prepared.ordinal {
+            connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3,observation_turn_ordinal=?4 WHERE sequence=?1",params![event.sequence,bytes,prepared.anchor,ordinal]).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+        } else if prepared.anchor.is_some() {
+            connection.execute_cached("UPDATE events SET observation_turn_header=?2,observation_turn_anchor=?3 WHERE sequence=?1",params![event.sequence,bytes,prepared.anchor]).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+        } else {
+            connection
+                .execute(
+                    "UPDATE events SET observation_turn_header=?2 WHERE sequence=?1",
+                    params![event.sequence, bytes],
+                )
+                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+#[allow(clippy::too_many_lines)] // One finite Turn transition prepares its independently stored fields.
+pub fn prepare(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    statistics: Option<&super::observation_statistics::Prepared>,
+    pending: Option<&super::append_facts::PendingEvent<'_>>,
+) -> Result<Prepared, ConversationStoreError> {
+    let mut prepared = Prepared::default();
+    if let RuntimeEvent::InboundTurnAdopted { message_ids, .. } = &event.event {
+        let prompt = adoption_prompt(connection, message_ids)?;
+        if pending.is_none() {
+            connection.execute_cached("UPDATE events SET observation_turn_prompt=?2,observation_turn_prompt_positive=?3 WHERE sequence=?1",params![event.sequence,prompt.as_bytes(),!prompt.is_empty()]).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+        }
+        prepared.prompt = Some(prompt.into_bytes());
+    }
+    if !required(event) {
+        return Ok(prepared);
+    }
+    let attempt = event
+        .attempt_id
+        .as_ref()
+        .ok_or_else(|| storage("turn owner absent"))?;
+    let start = if pending.is_some() && matches!(event.event, RuntimeEvent::AttemptStarted { .. }) {
+        Some(event.sequence)
+    } else {
+        connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND event_kind='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?
+    };
+    let Some(start) = start else {
+        prepared.header = Some(b"null".to_vec());
+        return Ok(prepared);
+    };
+    let mut state = if start == event.sequence {
+        start_layout(connection, event, attempt, statistics, pending.is_some())?
+    } else {
+        layout(connection, start, event.sequence.saturating_sub(1))?
+    };
+    // The start layout already reads the prompt at this exact cut. Later
+    // events may add an adopted prompt and must check the stored source again.
+    if start != event.sequence
+        && (matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. })
+            || state.turn.prompt.is_empty())
+    {
+        state.turn.prompt = prompt(connection, attempt, start, event.sequence)?;
+        if pending.is_some()
+            && state.turn.prompt.is_empty()
+            && let Some(prompt) = &prepared.prompt
+        {
+            state.turn.prompt = String::from_utf8(prompt.clone())
+                .map_err(|_| storage("turn prompt encoding unavailable"))?;
+        }
+    }
+    if let RuntimeEvent::AssistantMessageCommitted { .. } = &event.event {
+        let position: Option<u64> = if let Some(pending) = pending {
+            pending.assistant_ledger
+        } else {
+            connection
+                .query_row_cached(
+                    "SELECT observation_assistant_ledger FROM events WHERE sequence=?1",
+                    [event.sequence],
+                    |row| row.get(0),
+                )
+                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
+        };
+        let position = position.ok_or_else(|| storage("turn canonical position unavailable"))?;
+        let preview = preview(connection, position, 120)?;
+        if !preview.is_empty() {
+            state.last_response = preview;
+        }
+        let cursor: Option<u64> = connection
+            .query_row_cached(
+                "SELECT native_transcript FROM message_ledger WHERE position=?1",
+                [position],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        if let Some(cursor) = cursor {
+            state.turn.cursor = Some(
+                state
+                    .turn
+                    .cursor
+                    .map_or(crate::TranscriptCursor::new(cursor), |old| {
+                        old.min(crate::TranscriptCursor::new(cursor))
+                    }),
+            );
+        }
+    }
+    if matches!(
+        event.event,
+        RuntimeEvent::AttemptCompleted { .. }
+            | RuntimeEvent::AttemptFailed { .. }
+            | RuntimeEvent::AttemptCancelled { .. }
+            | RuntimeEvent::AttemptTimedOut { .. }
+            | RuntimeEvent::AttemptLimitExceeded { .. }
+    ) {
+        state.settled = true;
+        if state.turn.cursor.is_none() {
+            let cursor: Option<u64> = if let Some(pending) = pending {
+                pending.transcript_cursor.map(crate::TranscriptCursor::get)
+            } else {
+                connection
+                    .query_row(
+                        "SELECT observation_transcript FROM events WHERE sequence=?1",
+                        [event.sequence],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
+            };
+            state.turn.cursor = cursor.map(crate::TranscriptCursor::new);
+        }
+    }
+    if state.settled {
+        state.turn.response = state.last_response.clone();
+    }
+    prepared.header = Some(encode(&state)?);
+    prepared.anchor = Some(start);
+    prepared.ordinal = (start == event.sequence).then_some(state.turn.ordinal);
+    Ok(prepared)
+}
+
+fn start_layout(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    attempt: &AttemptId,
+    statistics: Option<&super::observation_statistics::Prepared>,
+    pending: bool,
+) -> Result<Layout, ConversationStoreError> {
+    let ordinal = if pending {
+        statistics
+            .and_then(|statistics| statistics.statistics.as_ref())
+            .ok_or_else(|| storage("native statistics header unavailable"))?
+            .value
+            .turns
+    } else {
+        super::observation_statistics::read(connection, event.sequence)?.turns
+    };
+    if ordinal == 0 || ordinal > SAFE {
+        return Err(storage("turn ordinal exceeds protocol range"));
+    }
+    Ok(Layout {
+        turn: ObservedTurn {
+            id: identity(
+                &event.conversation_id,
+                attempt,
+                super::observation_identity::journal(event.sequence, attempt)?,
+            ),
+            ordinal,
+            cursor: None,
+            prompt: prompt(connection, attempt, event.sequence, event.sequence)?,
+            response: String::new(),
+        },
+        last_response: String::new(),
+        settled: false,
+    })
+}
+fn layout(
+    connection: &Connection,
+    start: u64,
+    through: u64,
+) -> Result<Layout, ConversationStoreError> {
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT observation_turn_header FROM events INDEXED BY events_observation_turn_anchor_idx WHERE observation_turn_anchor=?1 AND observation_turn_header IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![start,through],|row|row.get(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    serde_json::from_slice(&bytes.ok_or_else(|| storage("turn display header unavailable"))?)
+        .map_err(|_| storage("turn display header corrupt"))
+}
+fn adoption_prompt(
+    connection: &Connection,
+    ids: &[rustx_types::runtime::identity::MessageId],
+) -> Result<String, ConversationStoreError> {
+    let mut selected = String::new();
+    for id in ids {
+        let header = super::observation::message(connection, id)?
+            .ok_or_else(|| storage("turn input header unavailable"))?;
+        if header.opening_prompt {
+            let position = header
+                .ledger_position
+                .ok_or_else(|| storage("turn input position unavailable"))?;
+            selected = preview(connection, position, 50)?;
+            if !selected.is_empty() {
+                break;
+            }
+        }
+    }
+    Ok(selected)
+}
+
+// Each owner contributes only its earliest positive prompt. Comparing two
+// scalar sequence winners avoids sorting every adopted prompt in the attempt.
+pub const TURN_PROMPT_SQL: &str = concat!("SELECT observation_turn_prompt FROM events WHERE sequence=(SELECT min(sequence) FROM (
+    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 ORDER BY sequence LIMIT 1) AS sequence
+    UNION ALL
+    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_key IS NULL AND sequence>?3 AND sequence<?4 ORDER BY sequence LIMIT 1)))");
+
+pub const TURN_PROMPT_HOLES_SQL: &str = concat!(
+    "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_key = ",
+    crate::sqlite::event_owner_key::attempt_parameter!("?2"),
+    " AND sequence<=?1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_key IS NULL AND sequence>?3 AND sequence<?4 AND sequence<=?1)"
+);
+
+fn prompt(
+    connection: &Connection,
+    attempt: &AttemptId,
+    start: u64,
+    through: u64,
+) -> Result<String, ConversationStoreError> {
+    #[cfg(any(test, feature = "test-hooks"))]
+    PROMPT_READS.with(|count| count.set(count.get() + 1));
+    let previous: u64 = connection
+        .query_row_cached(
+            concat!(
+                "SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE ",
+                rustx_types::sql!("event_kind"),
+                "=x'0002'",
+                " AND sequence<?1"
+            ),
+            [start],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    let missing: bool = connection
+        .query_row_cached(
+            TURN_PROMPT_HOLES_SQL,
+            params![through, attempt.as_str(), previous, start],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    if missing {
+        return Err(storage("turn input display source unavailable"));
+    }
+    let selected: Option<Vec<u8>> = connection
+        .query_row_cached(
+            TURN_PROMPT_SQL,
+            params![attempt.as_str(), through, previous, start],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    selected
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|_| storage("turn prompt encoding unavailable"))
+        .map(Option::unwrap_or_default)
+}
+pub fn preview(
+    connection: &Connection,
+    position: u64,
+    limit: usize,
+) -> Result<String, ConversationStoreError> {
+    let mut blocks = Vec::with_capacity(66);
+    let key = format!("ledger:{position}");
+    for kind in ["text", "refusal"] {
+        let mut statement=connection.prepare_cached("SELECT h.block_index,substr(f.bytes,1,?3),f.readable_end FROM observation_block_headers h INDEXED BY observation_block_ledger_kind_idx JOIN content_frontiers f ON f.source_kind='canonical' AND f.source_id=?4 AND f.block_index=h.block_index AND f.representation='t' AND f.revision=1 WHERE h.ledger_position=?1 AND json_extract(h.header_json,'$.kind')=?2 ORDER BY h.block_index LIMIT 33").map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+        for row in statement
+            .query_map(
+                params![
+                    position,
+                    kind,
+                    limit * 8,
+                    super::content::keys::read(connection, "canonical", &key)?
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, u64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
+        {
+            blocks.push(row.map_err(|error| storage(error.to_string()))?);
+        }
+    }
+    blocks.sort_unstable_by_key(|(index, _, _)| *index);
+    let mut text = String::new();
+    let mut unread = blocks.len() > 32;
+    for (_, bytes, end) in blocks.into_iter().take(32) {
+        if text.chars().count() >= limit * 2 {
+            unread = true;
+            break;
+        }
+        let valid = match std::str::from_utf8(&bytes) {
+            Ok(text) => text,
+            Err(error) => std::str::from_utf8(&bytes[..error.valid_up_to()])
+                .map_err(|_| storage("turn preview UTF-8 unavailable"))?,
+        };
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.extend(valid.chars().take(limit * 2));
+        if end > bytes.len() as u64 || valid.chars().count() > limit * 2 {
+            unread = true;
+            break;
+        }
+    }
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    Ok(if normalized.chars().count() > limit - 1 {
+        format!(
+            "{}…",
+            normalized
+                .chars()
+                .take(limit - 1)
+                .collect::<String>()
+                .trim_end()
+        )
+    } else if unread {
+        format!("{normalized}…")
+    } else {
+        normalized
+    })
+}
+pub fn seed(
+    connection: &Connection,
+    seed: &crate::LineageSeed,
+) -> Result<(), ConversationStoreError> {
+    for (ordinal, turn) in seed.turns().iter().enumerate() {
+        let ordinal = u64::try_from(ordinal).map_err(|_| storage("turn ordinal exhausted"))?;
+        let display_ordinal = ordinal
+            .checked_add(1)
+            .filter(|value| *value <= SAFE)
+            .ok_or_else(|| storage("turn ordinal exceeds protocol range"))?;
+        let bytes: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT observation_members FROM inherited_turn_provenance WHERE ordinal=?1",
+                [ordinal],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        let members = super::observation_members::decode(
+            &bytes.ok_or_else(|| storage("inherited turn members unavailable"))?,
+        )
+        .map_err(|_| storage("inherited turn members corrupt"))?;
+        let cursor = if let Some(cursor) = members.first_cursor {
+            Some(cursor)
+        } else {
+            connection.query_row("SELECT position FROM transcript_entries WHERE native_reference_kind='inherited_turn' AND native_reference_id=?1",[ordinal.to_string()],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::TranscriptCursor::new)
+        };
+        let mut prompt = String::new();
+        let inputs = turn.prompt_message_id.iter().chain(
+            seed.completed_responses()
+                .iter()
+                .filter(|response| {
+                    response.origin.conversation_id == turn.id.conversation_id
+                        && response.origin.attempt_id == turn.id.attempt_id
+                        && response
+                            .process_message_ids
+                            .iter()
+                            .any(|id| turn.process_message_ids.contains(id))
+                })
+                .filter_map(|response| response.retry_message_id.as_ref()),
+        );
+        for id in inputs {
+            let header = super::observation::message(connection, id)?
+                .ok_or_else(|| storage("inherited turn input header unavailable"))?;
+            if header.opening_prompt {
+                prompt = preview(connection, canonical_position(connection, id)?, 50)?;
+                if !prompt.is_empty() {
+                    break;
+                }
+            }
+        }
+        let mut response = String::new();
+        if turn.outcome != crate::reading::InheritedTurnOutcome::IncompleteAtCut {
+            for id in turn.process_message_ids.iter().rev() {
+                response = preview(connection, canonical_position(connection, id)?, 120)?;
+                if !response.is_empty() {
+                    break;
+                }
+            }
+        }
+        let header = ObservedTurn {
+            id: identity(
+                &turn.id.conversation_id,
+                &turn.id.attempt_id,
+                super::observation_identity::inherited(
+                    connection,
+                    crate::observation::turn::InheritedAttemptIdentityKind::Turn,
+                    ordinal,
+                )?,
+            ),
+            ordinal: display_ordinal,
+            cursor,
+            prompt,
+            response,
+        };
+        super::provenance::write_turn_header(
+            connection,
+            i64::try_from(ordinal).map_err(|_| storage("turn ordinal exhausted"))?,
+            super::provenance::TurnHeaderKind::Observed,
+            &header,
+        )?;
+    }
+    Ok(())
+}
+fn canonical_position(
+    connection: &Connection,
+    id: &rustx_types::runtime::identity::MessageId,
+) -> Result<u64, ConversationStoreError> {
+    connection
+        .query_row_cached(
+            "SELECT position FROM message_ledger WHERE message_id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            crate::sqlite::sqlite_error(&error, "native turn canonical position unavailable")
+        })
+}
+pub fn inherited(
+    connection: &Connection,
+    ordinal: u64,
+) -> Result<ObservedTurn, ConversationStoreError> {
+    let header: ObservedTurn = super::provenance::read_turn_header(
+        connection,
+        i64::try_from(ordinal).map_err(|_| storage("turn ordinal exhausted"))?,
+        super::provenance::TurnHeaderKind::Observed,
+    )?;
+    if header.ordinal != ordinal + 1 {
+        return Err(storage("inherited turn display ordinal differs"));
+    }
+    super::provenance::validate_turn_cursor(connection, header.cursor)?;
+    Ok(header)
+}
+fn validate_header(header: &ObservedTurn) -> Result<(), ConversationStoreError> {
+    if header.ordinal == 0
+        || header.ordinal > SAFE
+        || (header.id.attempt_id.is_none() && header.id.attempt_id_source.is_none())
+        || rustx_types::observation::bounded::bounded_bytes(header, 8192).is_none()
+    {
+        return Err(storage("invalid finite turn display"));
+    }
+    Ok(())
+}
+pub fn selected(
+    connection: &Connection,
+    conversation: &ConversationId,
+    cut: &crate::reading::ConversationReadCut,
+    ordinal: u64,
+) -> Result<ObservedTurn, ConversationStoreError> {
+    let actual = super::reading::cut(connection, conversation)?;
+    if !cut.reconstructible_from(&actual) {
+        return Err(ConversationStoreError::ObservationCutExpired);
+    }
+    if ordinal == 0 || ordinal > SAFE {
+        return Err(ConversationStoreError::InvalidContentRange);
+    }
+    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (2,3,6,7) AND sequence<=?1)",[cut.journal],|row|row.get(0)).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    if missing {
+        return Err(storage("native turn display source unavailable"));
+    }
+    let total = super::observation_statistics::read(connection, cut.journal)?.turns;
+    if ordinal > total {
+        return Err(ConversationStoreError::InvalidReference(
+            "turn ordinal beyond captured outline".into(),
+        ));
+    }
+    let (initialized,base):(bool,Option<u64>)=connection.query_row("SELECT bootstrap_initialized,(SELECT turn_count FROM bootstrap_identity WHERE id=1) FROM rustx_store WHERE id=1",[],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    let base = base
+        .or((!initialized).then_some(0))
+        .ok_or_else(|| storage("native turn bootstrap evidence unavailable"))?;
+    if u64::try_from(super::provenance::turn_header_count(connection)?)
+        .map_err(|_| storage("negative inherited turn count"))?
+        != base
+    {
+        return Err(storage(
+            "inherited turn count differs from native bootstrap",
+        ));
+    }
+    let mut header = if ordinal <= base {
+        inherited(connection, ordinal - 1)?
+    } else {
+        let start:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_turn_ordinal_idx WHERE observation_turn_ordinal=?1 AND observation_turn_ordinal IS NOT NULL AND observation_kind='attempt_started' AND sequence<=?2",params![ordinal,cut.journal],|row|row.get(0)).map_err(|error|crate::sqlite::sqlite_error(&error,"native turn ordinal source unavailable"))?;
+        layout(connection, start, cut.journal)?.turn
+    };
+    validate_header(&header)?;
+    if header
+        .cursor
+        .is_some_and(|cursor| cursor.get() > cut.transcript)
+    {
+        header.cursor = None;
+    }
+    Ok(header)
+}
+pub fn page(
+    connection: &Connection,
+    conversation: &ConversationId,
+    offset: Option<u64>,
+    limit: usize,
+) -> Result<ObservedTurnPage, ConversationStoreError> {
+    if offset.is_some_and(|value| value > SAFE) {
+        return Err(ConversationStoreError::InvalidContentRange);
+    }
+    if limit == 0 || limit > 64 {
+        return Err(ConversationStoreError::InvalidContentRange);
+    }
+    let cut = super::reading::cut(connection, conversation)?;
+    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (2,3,6,7) AND sequence<=?1)",[cut.journal],|row|row.get(0)).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    if missing {
+        return Err(storage("native turn display source unavailable"));
+    }
+    let total = super::observation_statistics::read(connection, cut.journal)?.turns;
+    let last = total.saturating_sub(1) / limit as u64 * limit as u64;
+    let offset = offset.unwrap_or(last).min(last);
+    if offset > SAFE {
+        return Err(ConversationStoreError::InvalidContentRange);
+    }
+    let end = offset
+        .checked_add(limit as u64)
+        .ok_or(ConversationStoreError::InvalidContentRange)?
+        .min(total);
+    let mut turns = Vec::with_capacity(limit);
+    for rank in offset..end {
+        turns.push(selected(connection, conversation, &cut, rank + 1)?);
+    }
+    let page = ObservedTurnPage {
+        cut,
+        total,
+        offset,
+        turns,
+    };
+    if rustx_types::observation::bounded::bounded_bytes(&page, 786_432).is_none() {
+        return Err(storage("turn page exceeds bounded reply"));
+    }
+    Ok(page)
+}
+pub fn by_identity(
+    connection: &Connection,
+    conversation: &ConversationId,
+    cut: &crate::reading::ConversationReadCut,
+    id: &crate::reading::ConversationTurnId,
+) -> Result<ObservedTurn, ConversationStoreError> {
+    let local:Option<u64>=connection.query_row(concat!("SELECT observation_turn_ordinal FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND conversation_id=?2 AND event_kind='attempt_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),id.conversation_id.as_str(),cut.journal],|row|row.get(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
+    let ordinal = if let Some(ordinal) = local {
+        ordinal
+    } else {
+        let inherited:u64=connection.query_row("SELECT ordinal FROM inherited_turn_provenance INDEXED BY inherited_turn_identity_idx WHERE json_extract(payload,'$.id.conversation_id')=?1 AND json_extract(payload,'$.id.attempt_id')=?2",params![id.conversation_id.as_str(),id.attempt_id.as_str()],|row|row.get(0)).map_err(|_|ConversationStoreError::InvalidReference("turn absent from this conversation".into()))?;
+        inherited
+            .checked_add(1)
+            .ok_or(ConversationStoreError::InvalidContentRange)?
+    };
+    selected(connection, conversation, cut, ordinal)
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    static PROMPT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn take_prompt_reads() -> usize {
+    PROMPT_READS.with(|count| count.replace(0))
+}

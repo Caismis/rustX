@@ -257,7 +257,8 @@ impl AgentExecution<'_> {
                     .request_context_ids
                     .contains(&contribution.message_id)
                 {
-                    contribution.observe(
+                    crate::context::contribution::observe_contribution(
+                        contribution,
                         observer,
                         &self.request.attempt_id,
                         self.turn,

@@ -4714,9 +4714,11 @@ dependencies = [
  "rustx-bounded-file",
  "rustx-bounded-json",
  "rustx-conversation",
+ "rustx-durable",
  "rustx-identity",
  "rustx-publication",
  "rustx-types",
+ "rustx-workflow",
  "schemars",
  "serde",
  "serde_json",
@@ -4775,6 +4777,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustx-durable"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "futures-util",
+ "imbl",
+ "libc",
+ "nix",
+ "rmp-serde",
+ "rusqlite",
+ "rustx-bounded-file",
+ "rustx-bounded-json",
+ "rustx-conversation",
+ "rustx-identity",
+ "rustx-publication",
+ "rustx-types",
+ "rustx-workflow",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
+ "strum 0.27.2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "rustx-identity"
 version = "0.1.0"
 dependencies = [
@@ -4810,6 +4844,7 @@ dependencies = [
  "http",
  "httpdate",
  "ignore",
+ "imbl",
  "jsonschema",
  "jsonwebtoken",
  "libc",
@@ -4838,6 +4873,22 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.22.27",
  "url",
+]
+
+[[package]]
+name = "rustx-workflow"
+version = "0.1.0"
+dependencies = [
+ "imbl",
+ "rustx-bounded-file",
+ "rustx-bounded-json",
+ "rustx-identity",
+ "rustx-types",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
 ]
 
 [[package]]

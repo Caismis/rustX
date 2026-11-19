@@ -8,7 +8,6 @@ use crate::context::{
     PostToolBatchOpportunity,
 };
 use crate::conversation::ConversationState;
-use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::InboxStore;
 use crate::durable::JournalStore;
@@ -234,7 +233,7 @@ fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
         "history pressure must not erase the current Goal or its CAS controls"
     );
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             &checkpoint,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -5123,7 +5122,7 @@ fn t20_replay_byte_budget_covers_every_event_and_evicts_in_cursor_order() {
     );
     assert!(projection.replay_bytes <= RUNTIME_CLIENT_REPLAY_BYTES);
     assert!(projection.replay.iter().all(|(_, event)| {
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             event,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
         )
@@ -5236,7 +5235,7 @@ fn t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges() {
         "complete replacement preserves all cut, domain, identity, frontier, and settlement fields"
     );
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             event,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -6569,7 +6568,7 @@ fn t15_many_small_message_pages_advance_under_both_native_budgets() {
     let checkpoint = projection.checkpoint_candidate().unwrap();
     assert!(checkpoint.snapshot.messages.len() <= 32);
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             &checkpoint,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -6583,7 +6582,7 @@ fn t15_many_small_message_pages_advance_under_both_native_budgets() {
             .unwrap();
         assert!(page.items.len() <= 32);
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &page,
                 crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
