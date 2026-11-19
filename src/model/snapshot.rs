@@ -20,26 +20,11 @@ use crate::model::input::{
 use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::{
-    AuxiliaryCallId, CapabilityRevision, MessageId, PublicationStreamId, RequestId,
-};
+use crate::runtime::identity::{CapabilityRevision, MessageId, PublicationStreamId, RequestId};
 use crate::tools::types::ModelToolDefinition;
 pub use rustx_types::model::snapshot::RequestIdentity;
 
-/// Ownership of one actual model request; identity grants no execution permission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ModelRequestOwner {
-    /// A primary request owned by an Agent attempt.
-    Agent { identity: RequestIdentity },
-    /// One physical request within a logical auxiliary call.
-    Auxiliary {
-        call_id: AuxiliaryCallId,
-        /// Zero is the initial request. Physical retries have distinct request
-        /// identities and advance this ordinal within the same auxiliary call.
-        ordinal: u32,
-    },
-}
+pub use rustx_types::model::snapshot::ModelRequestOwner;
 
 pub use crate::context::contribution::ContributionStart;
 
