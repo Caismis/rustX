@@ -12,6 +12,7 @@ pub mod package_io;
 pub mod toml_authoring;
 
 pub mod model {
+    pub mod auxiliary;
     pub mod capabilities;
     pub mod deadline;
     pub mod error;

@@ -38,7 +38,7 @@ pub const AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX: usize = 16_384;
 /// Generation timing uses the common observation-safe millisecond domain.
 pub const AUXILIARY_GENERATION_MS_MAX: u64 = 9_007_199_254_740_991;
 
-pub(crate) fn generation_is_bounded(evidence: &GenerationEvidence) -> bool {
+pub fn generation_is_bounded(evidence: &GenerationEvidence) -> bool {
     [
         evidence.dispatch_after_start_ms,
         evidence.first_output_ms,

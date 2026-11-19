@@ -12,7 +12,7 @@
 pub mod adapter;
 pub mod assembly;
 pub mod authoring;
-pub mod auxiliary;
+pub use rustx_types::model::auxiliary;
 pub mod catalog;
 mod compat;
 pub use rustx_types::model::deadline;
