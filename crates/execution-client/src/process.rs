@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -244,9 +245,12 @@ impl Operations {
     /// descriptor is the Client's own — never the Server's view.
     pub(crate) fn new(admission: Admission) -> io::Result<Self> {
         let revoke = ProcessSignal::new();
+        let root = PackageDirectory::open(&admission.workspace)?;
+        let root_meta = std::fs::File::from(root.descriptor().try_clone()?).metadata()?;
         let python = Arc::new(
             rustx_execution_client::workspace_python::WorkspacePython::new(
                 admission.workspace.clone(),
+                (root_meta.dev(), root_meta.ino()),
                 revoke.child(),
             ),
         );
@@ -254,7 +258,7 @@ impl Operations {
             inner: Arc::new(Mutex::new(Inner {
                 records: BTreeMap::new(),
             })),
-            root: PackageDirectory::open(&admission.workspace)?,
+            root,
             workspace: admission.workspace.clone(),
             admission,
             revoke,
@@ -692,7 +696,10 @@ impl Operations {
         let cwd_fd = operation.cwd.descriptor().try_clone();
         let cwd_path = self.workspace.join(&spec.cwd);
         drop(inner);
-        if matches!(&spec.program, ProcessProgram::Shell { .. }) && self.python.scheduled() {
+        // A configured runtime may have loaded before its remote Client
+        // connected. An authorized Shell START can request the same readiness
+        // work again; it does not wait for it or affect argv-only commands.
+        if matches!(&spec.program, ProcessProgram::Shell { .. }) {
             self.schedule_workspace_python();
         }
         // The runtime handle comes first: a stopped runtime fails before

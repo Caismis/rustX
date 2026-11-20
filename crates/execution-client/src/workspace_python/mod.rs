@@ -180,6 +180,7 @@ struct Owner {
     flights: Mutex<HashMap<PathBuf, Arc<Flight>>>,
     permits: tokio::sync::Semaphore,
     shutdown: rustx_process_supervisor::signal::ProcessSignal,
+    workspace_identity: Option<(u64, u64)>,
     #[cfg(test)]
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     #[cfg(test)]
@@ -214,11 +215,19 @@ pub struct WorkspacePython {
 }
 
 impl WorkspacePython {
-    /// Creates an owner with the binding's physical revocation signal.
+    /// Creates an owner with the binding's opened directory identity and
+    /// physical revocation signal.
     #[must_use]
-    pub fn new(root: PathBuf, shutdown: rustx_process_supervisor::signal::ProcessSignal) -> Self {
+    pub fn new(
+        root: PathBuf,
+        workspace_identity: (u64, u64),
+        shutdown: rustx_process_supervisor::signal::ProcessSignal,
+    ) -> Self {
         Self {
-            owner: Owner::production(shutdown),
+            owner: Owner {
+                workspace_identity: Some(workspace_identity),
+                ..Owner::production(shutdown)
+            },
             permit: Arc::new(tokio::sync::Semaphore::new(1)),
             scheduled: AtomicBool::new(false),
             root,

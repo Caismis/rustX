@@ -14,7 +14,7 @@ use super::{
 };
 use futures_util::future::BoxFuture;
 use pep440_rs::Version;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -2364,6 +2364,30 @@ fn cached_guard_deletion_and_mode_changes_select_a_verified_replacement() {
     assert_guard_rejected(&run_bash(&entries, "python3"));
     assert_guard_rejected(&run_bash(&entries, "/usr/bin/env python3"));
     assert!(run_bash(&entries, "ls /bin/sh >/dev/null").status.success());
+}
+
+#[tokio::test]
+async fn binding_refuses_a_workspace_replaced_before_preparation() {
+    let parent = workspace();
+    let root = parent.path().join("workspace");
+    std::fs::create_dir(&root).unwrap();
+    let original = std::fs::metadata(&root).unwrap();
+    let bin = workspace();
+    write_executable(&bin.path().join("uv"), "#!/bin/sh\nexit 0\n");
+    let probe = Arc::new(Scripted::new("0.10.2"));
+    let mut owner = Owner::for_test(probe.clone(), Some(host_for(bin.path())), None, None);
+    owner.workspace_identity = Some((original.dev(), original.ino()));
+
+    std::fs::rename(&root, parent.path().join("previous-workspace")).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    assert_eq!(
+        owner.observe(&root).diagnostic,
+        "the bound workspace directory changed"
+    );
+    owner.prepare(root.clone()).await;
+    assert!(probe.calls.lock().unwrap().is_empty());
+    assert!(owner.records.lock().unwrap().is_empty());
+    assert!(!root.join(".venv").exists());
 }
 
 #[tokio::test]

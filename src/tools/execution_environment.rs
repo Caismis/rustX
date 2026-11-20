@@ -76,14 +76,6 @@ impl std::fmt::Debug for ExecutionHost {
 }
 
 impl ExecutionHost {
-    pub(crate) fn entries(&self) -> &BTreeMap<String, String> {
-        &self.entries
-    }
-
-    pub(crate) fn closed(&self) -> Option<&'static str> {
-        self.closed
-    }
-
     fn from_unicode(
         entries: BTreeMap<String, String>,
         omitted_non_unicode: u32,

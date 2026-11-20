@@ -40,6 +40,7 @@ impl Owner {
             flights: Mutex::new(HashMap::new()),
             permits: tokio::sync::Semaphore::new(EXTERNAL_PERMITS),
             shutdown,
+            workspace_identity: None,
             #[cfg(test)]
             tasks: Mutex::new(Vec::new()),
             #[cfg(test)]
@@ -89,13 +90,26 @@ impl Owner {
 
     pub(super) fn current_record(&self, root: &Path) -> Option<Record> {
         let root = root.canonicalize().ok()?;
-        let generation = generation_of(&root);
+        let generation = self.admitted_generation(&root)?;
         self.records
             .lock()
             .expect("workspace python records")
             .get(&root)
             .filter(|record| Self::current(record, &generation))
             .cloned()
+    }
+
+    fn admitted_generation(&self, root: &Path) -> Option<Generation> {
+        if let Some(identity) = self.workspace_identity {
+            let meta = std::fs::symlink_metadata(root).ok()?;
+            if !meta.is_dir() || (meta.dev(), meta.ino()) != identity {
+                return None;
+            }
+        }
+        let generation = generation_of(root);
+        self.workspace_identity
+            .is_none_or(|identity| identity == (generation.root_dev, generation.root_ino))
+            .then_some(generation)
     }
 
     fn current(record: &Record, generation: &Generation) -> bool {
@@ -132,7 +146,9 @@ impl Owner {
         let Ok(canonical) = std::fs::canonicalize(root) else {
             return guarded("the workspace directory is unavailable");
         };
-        let generation = generation_of(&canonical);
+        let Some(generation) = self.admitted_generation(&canonical) else {
+            return guarded("the bound workspace directory changed");
+        };
         let record = self
             .records
             .lock()
@@ -256,7 +272,9 @@ impl Owner {
         if self.shutdown.is_cancelled() {
             return;
         }
-        let generation = generation_of(root);
+        let Some(generation) = self.admitted_generation(root) else {
+            return;
+        };
         let lock = match acquire_lock(
             root,
             self.before_lock(),
