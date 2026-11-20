@@ -25,10 +25,10 @@ use std::time::Duration;
 use base64::Engine as _;
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::process::{
-    InputOutcome, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION, MAX_PROCESS_DATA_BYTES,
-    MAX_PROCESS_OUTPUT_BYTES, OperationId, OperationState, ProcessOperationKey, ProcessProgram,
-    ProcessReply, ProcessRequest, ProcessSpec, ProcessStdin, ProcessStream, PtySpec,
-    SettledDisposition, SettledSnapshot, SpecFingerprint, SpecRefusal,
+    BashCaptureResult, InputOutcome, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION,
+    MAX_PROCESS_DATA_BYTES, MAX_PROCESS_OUTPUT_BYTES, OperationId, OperationState,
+    ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest, ProcessSpec, ProcessStdin,
+    ProcessStream, PtySpec, SettledDisposition, SettledSnapshot, SpecFingerprint, SpecRefusal,
 };
 use rustx_execution_protocol::{Admission, DecimalU64, ProcessCancelDisposition};
 use rustx_process_supervisor::invocation::ProgramInvocation;
@@ -37,6 +37,7 @@ use rustx_process_supervisor::process_runner::{
 };
 use rustx_process_supervisor::signal::ProcessSignal;
 
+use crate::bash_capture::{Capture, CaptureFile, Captures};
 use crate::terminal::Terminal;
 
 /// The bounded ordered segment journal of one operation — a metadata
@@ -180,6 +181,8 @@ struct Operation {
     receipts: BTreeMap<u64, InputOutcome>,
     cancel: ProcessSignal,
     witness: Option<ProcessWitness>,
+    bash_file: Option<Arc<CaptureFile>>,
+    bash_result: Option<BashCaptureResult>,
 }
 
 /// A record after an exact `ReleaseOutput` consumed the journal: the
@@ -191,6 +194,7 @@ struct Operation {
 struct Minimal {
     fingerprint: Option<SpecFingerprint>,
     snapshot: SettledSnapshot,
+    bash_file: Option<(String, Arc<CaptureFile>)>,
 }
 
 enum Record {
@@ -215,6 +219,7 @@ pub(crate) struct Operations {
     revoke: ProcessSignal,
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
     workers: Arc<WorkerCount>,
+    captures: Arc<Captures>,
     /// Test-only START holds, each owned by exactly one operation id.
     #[cfg(test)]
     start_holds:
@@ -224,6 +229,13 @@ pub(crate) struct Operations {
 struct WorkerCount {
     live: Mutex<usize>,
     drained: Condvar,
+}
+
+fn registered_capture(op: &Operation) -> Option<(String, Arc<CaptureFile>)> {
+    let ProcessProgram::Shell { conversation, .. } = &op.spec.program else {
+        return None;
+    };
+    Some((conversation.clone(), op.bash_file.as_ref()?.clone()))
 }
 
 impl Operations {
@@ -244,6 +256,7 @@ impl Operations {
                     .enable_all()
                     .build()?,
             )),
+            captures: Arc::new(Captures::new()),
             workers: Arc::new(WorkerCount {
                 live: Mutex::new(0),
                 drained: Condvar::new(),
@@ -295,6 +308,7 @@ impl Operations {
                         if matches!(operation.state, OperationState::Registered) {
                             let minimal = Minimal {
                                 fingerprint: Some(operation.fingerprint),
+                                bash_file: registered_capture(operation),
                                 snapshot: SettledSnapshot {
                                     disposition: SettledDisposition::Cancelled,
                                     exit_code: None,
@@ -332,6 +346,7 @@ impl Operations {
                     key.operation,
                     Record::Minimal(Minimal {
                         fingerprint: None,
+                        bash_file: None,
                         snapshot: SettledSnapshot {
                             disposition: SettledDisposition::Cancelled,
                             exit_code: None,
@@ -356,7 +371,28 @@ impl Operations {
                 key,
                 spec,
                 fingerprint,
-            } => self.register(key, spec, fingerprint),
+            } => self.register(key, spec, fingerprint, false),
+            ProcessRequest::RegisterAgentBash {
+                key,
+                spec,
+                fingerprint,
+            } => self.register(key, spec, fingerprint, true),
+            ProcessRequest::BashCapture { key } => self.bash_capture(key),
+            ProcessRequest::BashOutputTail { key, conversation } => {
+                match self
+                    .bash_file(&key, &conversation)
+                    .and_then(|file| file.tail().ok())
+                {
+                    Some((text, truncated)) => ProcessReply::BashOutputTail {
+                        key,
+                        text,
+                        truncated,
+                    },
+                    None => ProcessReply::Unknown { key },
+                }
+            }
+
+            ProcessRequest::DiscardBashOutput { key } => self.discard_bash_output(key),
             ProcessRequest::Start { key } => self.start(key),
             ProcessRequest::Query { key } => self.query(key),
             ProcessRequest::OutputPage {
@@ -384,11 +420,13 @@ impl Operations {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // One admission, replay, and capacity transaction.
     fn register(
         &self,
         key: ProcessOperationKey,
         spec: ProcessSpec,
         fingerprint: SpecFingerprint,
+        agent_bash: bool,
     ) -> ProcessReply {
         if !self.own_key(&key) {
             return ProcessReply::Unknown { key };
@@ -399,10 +437,10 @@ impl Operations {
         if let Err(reason) = spec.validate() {
             return ProcessReply::Refused { key, reason };
         }
-        if matches!(spec.program, ProcessProgram::Shell(_)) {
+        if matches!(&spec.program, ProcessProgram::Shell { .. }) != agent_bash {
             return ProcessReply::Refused {
                 key,
-                reason: SpecRefusal::ShellReserved,
+                reason: SpecRefusal::ProgramNotAuthorized,
             };
         }
         // The cwd descends from the retained workspace root at
@@ -461,6 +499,25 @@ impl Operations {
                 reason: SpecRefusal::TombstonesSaturated,
             };
         }
+        let bash_file = if matches!(
+            &spec.program,
+            ProcessProgram::Shell {
+                live_output: true,
+                ..
+            }
+        ) {
+            match self.captures.create(key.operation) {
+                Ok(file) => Some(file),
+                Err(_) => {
+                    return ProcessReply::Refused {
+                        key,
+                        reason: SpecRefusal::BashCaptureUnavailable,
+                    };
+                }
+            }
+        } else {
+            None
+        };
         let input = (spec.stdin == ProcessStdin::Streamed || spec.pty.is_some())
             .then(|| tokio::sync::mpsc::channel::<InputEvent>(INPUT_QUEUE_DEPTH));
         let (input_tx, input_rx) = match input {
@@ -482,6 +539,8 @@ impl Operations {
                 receipts: BTreeMap::new(),
                 cancel: ProcessSignal::new(),
                 witness: None,
+                bash_file,
+                bash_result: None,
             })),
         );
         ProcessReply::Registered { key }
@@ -562,6 +621,9 @@ impl Operations {
         let workers = Arc::clone(&self.workers);
         let workspace = self.workspace.clone();
         let control = self.run_control(&key);
+        let capture = matches!(&spec.program, ProcessProgram::Shell { .. })
+            .then(|| Capture::new(operation.bash_file.clone()));
+        let captures = self.captures.clone();
         let cwd_fd = operation.cwd.descriptor().try_clone();
         let cwd_path = self.workspace.join(&spec.cwd);
         drop(inner);
@@ -597,7 +659,7 @@ impl Operations {
             let _count = WorkerGuard(workers);
             run_operation(
                 inner_arc, cwd_fd, cwd_path, workspace, worker_key, spec, signal, revoke, input_rx,
-                control,
+                control, capture, captures,
             )
             .await;
         });
@@ -829,6 +891,13 @@ impl Operations {
             return ProcessReply::Unknown { key };
         }
         let mut inner = self.inner.lock().expect("operation registry");
+        if let Some(Record::Minimal(minimal)) = inner.records.get(&key.operation) {
+            return if final_sequence == minimal.snapshot.final_sequence {
+                ProcessReply::OutputReleased { key }
+            } else {
+                ProcessReply::Conflict { key }
+            };
+        }
         let Some(Record::Full(op)) = inner.records.get(&key.operation) else {
             return ProcessReply::Unknown { key };
         };
@@ -845,14 +914,76 @@ impl Operations {
             return ProcessReply::Conflict { key };
         }
         let fingerprint = op.fingerprint;
+        let bash_file = registered_capture(op);
         inner.records.insert(
             key.operation,
             Record::Minimal(Minimal {
                 fingerprint: Some(fingerprint),
                 snapshot,
+                bash_file,
             }),
         );
         ProcessReply::OutputReleased { key }
+    }
+
+    fn discard_bash_output(&self, key: ProcessOperationKey) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let file = {
+            let mut inner = self.inner.lock().expect("operation registry");
+            match inner.records.get_mut(&key.operation) {
+                Some(Record::Minimal(minimal)) => minimal.bash_file.take(),
+                Some(Record::Full(_)) => return ProcessReply::Conflict { key },
+                None => return ProcessReply::Unknown { key },
+            }
+        };
+        drop(file);
+        ProcessReply::OutputReleased { key }
+    }
+
+    fn bash_capture(&self, key: ProcessOperationKey) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let inner = self.inner.lock().expect("operation registry");
+        match inner.records.get(&key.operation) {
+            Some(Record::Full(op)) if matches!(op.spec.program, ProcessProgram::Shell { .. }) => {
+                if matches!(op.state, OperationState::Settled(_)) {
+                    ProcessReply::BashCapture {
+                        key,
+                        capture: op.bash_result.clone(),
+                    }
+                } else {
+                    ProcessReply::Conflict { key }
+                }
+            }
+            _ => ProcessReply::Unknown { key },
+        }
+    }
+
+    pub(crate) fn bash_file(
+        &self,
+        key: &ProcessOperationKey,
+        owner: &str,
+    ) -> Option<Arc<CaptureFile>> {
+        if !self.own_key(key) {
+            return None;
+        }
+        let inner = self.inner.lock().expect("operation registry");
+        let (conversation, file) = match inner.records.get(&key.operation)? {
+            Record::Full(op) => {
+                let ProcessProgram::Shell { conversation, .. } = &op.spec.program else {
+                    return None;
+                };
+                (conversation, op.bash_file.as_ref()?)
+            }
+            Record::Minimal(minimal) => {
+                let (conversation, file) = minimal.bash_file.as_ref()?;
+                (conversation, file)
+            }
+        };
+        (conversation == owner).then(|| file.clone())
     }
 
     /// Fences every operation: the generation authority cancels all
@@ -967,11 +1098,31 @@ fn command_environment(workspace: &Path, spec: &ProcessSpec) -> Vec<(String, Str
         ("LANG".to_owned(), "C.UTF-8".to_owned()),
         ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
     ];
+    let is_shell = matches!(spec.program, ProcessProgram::Shell { .. });
     for (key, value) in &spec.env {
-        if let Some(value) = value
-            && !entries.iter().any(|(existing, _)| existing == key)
+        if is_shell && matches!(key.as_str(), "BASH_ENV" | "ENV" | "SHELLOPTS" | "BASHOPTS") {
+            continue;
+        }
+        if is_shell
+            && (key.starts_with("BASH_FUNC_")
+                || key.starts_with("RUSTX_TEST_")
+                || key.starts_with("RUSTX_SUPERVISOR_")
+                || key.starts_with("RUSTX_INTERACTIVE_")
+                || matches!(
+                    key.as_str(),
+                    "RUSTX_COMMAND_ENVIRONMENT_FILE" | "RUSTX_PHYSICAL_CONTINUATION"
+                ))
         {
-            entries.push((key.clone(), value.clone()));
+            continue;
+        }
+        if let Some(value) = value {
+            if let Some((_, existing)) = entries.iter_mut().find(|(name, _)| name == key) {
+                if is_shell {
+                    existing.clone_from(value);
+                }
+            } else {
+                entries.push((key.clone(), value.clone()));
+            }
         }
     }
     entries.retain(|(key, _)| !is_runtime_owned_git_key(key));
@@ -1006,6 +1157,8 @@ async fn run_operation(
     revoke: ProcessSignal,
     mut input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
     control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
+    mut capture: Option<Capture>,
+    captures: Arc<Captures>,
 ) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -1040,15 +1193,15 @@ async fn run_operation(
     } else {
         None
     };
-    let ProcessProgram::Argv(argv) = spec.program.clone() else {
-        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
-        return;
+    let (command, argv) = match &spec.program {
+        ProcessProgram::Argv(argv) => (argv.join(" "), Some(argv.clone())),
+        ProcessProgram::Shell { command, .. } => (command.clone(), None),
     };
     let command_spec = SupervisedCommandSpec {
-        command: argv.join(" "),
+        command,
         cwd: cwd_path,
         command_environment: command_environment(&workspace, &spec),
-        timeout: Some(Duration::from_millis(spec.timeout_ms)),
+        timeout: (spec.timeout_ms != 0).then(|| Duration::from_millis(spec.timeout_ms)),
         cancellation: signal.clone(),
     };
     let invocation = ProgramInvocation {
@@ -1152,8 +1305,19 @@ async fn run_operation(
             }
             result = async { stdout.as_mut().expect("stdout").read(&mut stdout_buf).await }, if !stdout_done => {
                 match result {
-                    Ok(0) => stdout_done = true,
-                    Ok(n) => push(&inner, &key, ProcessStream::Stdout, &stdout_buf[..n]),
+                    Ok(0) => {
+                        stdout_done = true;
+                        if let Some(capture) = &mut capture {
+                            capture.push(ProcessStream::Stdout, None, &captures, key.operation).await;
+                        }
+                    }
+                    Ok(n) => {
+                        let bytes = &stdout_buf[..n];
+                        if let Some(capture) = &mut capture {
+                            capture.push(ProcessStream::Stdout, Some(bytes), &captures, key.operation).await;
+                        }
+                        push(&inner, &key, ProcessStream::Stdout, bytes);
+                    }
                     Err(_) => {
                         stdout_done = true;
                         output_failed = true;
@@ -1162,8 +1326,23 @@ async fn run_operation(
             }
             result = async { stderr.as_mut().expect("stderr").read(&mut stderr_buf).await }, if !stderr_done => {
                 match result {
-                    Ok(0) | Err(_) => stderr_done = true,
-                    Ok(n) => push(&inner, &key, ProcessStream::Stderr, &stderr_buf[..n]),
+                    Ok(0) => {
+                        stderr_done = true;
+                        if let Some(capture) = &mut capture {
+                            capture.push(ProcessStream::Stderr, None, &captures, key.operation).await;
+                        }
+                    }
+                    Err(_) => {
+                        stderr_done = true;
+                        output_failed = true;
+                    }
+                    Ok(n) => {
+                        let bytes = &stderr_buf[..n];
+                        if let Some(capture) = &mut capture {
+                            capture.push(ProcessStream::Stderr, Some(bytes), &captures, key.operation).await;
+                        }
+                        push(&inner, &key, ProcessStream::Stderr, bytes);
+                    }
                 }
             }
             result = async { terminal.as_ref().expect("terminal").read(&mut terminal_buf).await }, if !terminal_done => {
@@ -1269,12 +1448,29 @@ async fn run_operation(
         settle_outcome(&inner, &key, SettledDisposition::Unknown, None);
         return;
     };
+    if let Some(capture) = capture {
+        use std::os::unix::process::ExitStatusExt as _;
+        let signal = termination.exit_status.and_then(|status| status.signal());
+        let (result, file, complete) =
+            capture.finish(!output_failed, witness.start_crossed(), signal);
+        output_failed |= !complete;
+        let mut guard = inner.lock().expect("operation registry");
+        if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
+            op.bash_file = file;
+            op.bash_result = Some(result);
+        }
+    }
     let exit_code = termination.exit_status.and_then(|status| status.code());
     let disposition = match &termination.intent {
         ProcessOutcomeIntent::Completed if output_failed => SettledDisposition::Failed,
         ProcessOutcomeIntent::Completed => SettledDisposition::Known,
         ProcessOutcomeIntent::TimedOut => SettledDisposition::TimedOut,
         ProcessOutcomeIntent::Cancelled => SettledDisposition::Cancelled,
+        ProcessOutcomeIntent::ProcessControlFailed(_)
+            if matches!(spec.program, ProcessProgram::Shell { .. }) && witness.start_crossed() =>
+        {
+            SettledDisposition::Unknown
+        }
         ProcessOutcomeIntent::ProcessControlFailed(_) => SettledDisposition::Failed,
     };
     settle_outcome(&inner, &key, disposition, exit_code);
@@ -1343,7 +1539,16 @@ fn push(inner: &Mutex<Inner>, key: &ProcessOperationKey, stream: ProcessStream, 
     let mut guard = inner.lock().expect("operation registry");
     if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
         let cap = op.spec.output_cap;
-        op.journal.push(stream, bytes, cap);
+        if op.spec.capture
+            && (!matches!(op.spec.program, ProcessProgram::Shell { .. })
+                || stream == ProcessStream::Stdout)
+        {
+            op.journal.push(stream, bytes, cap);
+        } else {
+            let stats = op.journal.stream(stream);
+            stats.total += bytes.len() as u64;
+            stats.truncated |= !bytes.is_empty();
+        }
     }
 }
 
@@ -1626,6 +1831,107 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert!(!dir.path().join("spawned").exists());
         assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn agent_bash_has_separate_registration_and_a_client_owned_start_gate() {
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(&dir.path().canonicalize().unwrap());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut bash = spec(&["/bin/true"]);
+        bash.program = ProcessProgram::Shell {
+            command: "printf x >> shell-start-count; exec sleep 600".into(),
+            conversation: "conv-start-gate".into(),
+            live_output: true,
+        };
+        bash.timeout_ms = 0;
+        let marker = dir.path().join("shell-start-count");
+        assert_eq!(
+            register(&ops, &key, &bash),
+            ProcessReply::Refused {
+                key: key.clone(),
+                reason: SpecRefusal::ProgramNotAuthorized
+            },
+        );
+        assert!(!marker.exists());
+        let register = ProcessRequest::RegisterAgentBash {
+            key: key.clone(),
+            spec: bash.clone(),
+            fingerprint: bash.fingerprint(),
+        };
+        for _ in 0..2 {
+            assert_eq!(
+                ops.dispatch(register.clone()),
+                ProcessReply::Registered { key: key.clone() }
+            );
+        }
+        let mut conflicting = bash.clone();
+        let ProcessProgram::Shell { conversation, .. } = &mut conflicting.program else {
+            unreachable!();
+        };
+        *conversation = "another-conversation".into();
+        assert_eq!(
+            ops.dispatch(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: conflicting.fingerprint(),
+                spec: conflicting,
+            }),
+            ProcessReply::Conflict { key: key.clone() },
+        );
+        assert!(ops.bash_file(&key, "conv-start-gate").is_some());
+        assert!(ops.bash_file(&key, "another-conversation").is_none());
+        let hold = arm_start_hold(&ops, &key);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(hold.await_entered());
+        assert!(!marker.exists());
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        hold.release();
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Cancelled);
+        assert_eq!(snapshot.stdout_total.get(), 0);
+        assert_eq!(snapshot.stderr_total.get(), 0);
+        assert_eq!(snapshot.final_sequence.get(), 0);
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::BashCapture { key: key.clone() }),
+            ProcessReply::BashCapture {
+                capture: Some(BashCaptureResult { started: false, .. }),
+                ..
+            }
+        ));
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: snapshot.final_sequence,
+            }),
+            ProcessReply::OutputReleased { key: key.clone() },
+        );
+        assert!(ops.bash_file(&key, "conv-start-gate").is_some());
+        assert_eq!(
+            ops.dispatch(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+            ProcessReply::OutputReleased { key: key.clone() },
+        );
+        assert!(ops.bash_file(&key, "conv-start-gate").is_none());
+        assert_eq!(
+            ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+            ProcessReply::State {
+                key,
+                state: OperationState::Settled(snapshot)
+            },
+        );
+        ops.shutdown().unwrap();
+        assert!(!marker.exists(), "no business START was executed");
     }
 
     /// The barrier-gated race at the physical START boundary: the hold

@@ -134,13 +134,39 @@ async fn run_grep(
         pattern: input.pattern,
         glob: input.glob,
     };
-    let result = match scope.search(&root, spec, &context.cancellation).await {
+    let result = if let Some(operation) = crate::tools::native::bash_operation_at(&root) {
+        let conversation = context.conversation_id.as_str().to_owned();
+        scope
+            .inspect_bash_output(
+                operation,
+                move |key| rustx_execution_protocol::ClientRequest::SearchBashOutput {
+                    key,
+                    conversation,
+                    spec,
+                },
+                &context.cancellation,
+            )
+            .await
+            .map(|page| match page {
+                rustx_execution_server::BashOutputPage::Search(search) => search,
+                rustx_execution_server::BashOutputPage::Lines(_) => {
+                    unreachable!("validated Bash Grep reply")
+                }
+            })
+    } else {
+        scope.search(&root, spec, &context.cancellation).await
+    };
+    let result = match result {
         Ok(result) => result,
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
             return cancelled_result(context.cancellation.reason());
         }
         Err(error) => return failed_result(search_failure(&root, &error)),
     };
+    project_search(result, limit)
+}
+
+fn project_search(result: rustx_execution_server::SearchResult, limit: u64) -> ToolExecutionResult {
     // A truly empty result — no records and no overflow — is the plain
     // no-match text. A byte-limited page can hold context rows with zero
     // selected matches, or overflow before the first record at all:

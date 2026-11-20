@@ -97,6 +97,11 @@ pub async fn bind_invocation_mutation_target(
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "write/edit invocation is missing a path".to_owned())?;
     let interpreted = interpret_path(workspace.root(), requested);
+    if crate::tools::native::bash_operation_at(&interpreted).is_some() {
+        return Err(format!(
+            "the Bash continuation path {requested:?} is read-only"
+        ));
+    }
     tool_output
         .ensure_model_mutation_allowed(&interpreted)
         .map_err(|error| error.to_string())?;

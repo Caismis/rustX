@@ -59,6 +59,7 @@ pub mod identity;
 pub mod invocation;
 #[cfg(unix)]
 pub mod nested_containment;
+pub mod output_text;
 #[cfg(unix)]
 pub mod process_runner;
 pub mod process_supervision;

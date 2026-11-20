@@ -56,28 +56,19 @@ and directory-page readers —
   Client share exactly one implementation. No Agent, cancellation,
   store, or process dependency.
 - `rustx-execution-client` (`crates/execution-client`): the physical
-  Execution Client binary `rustx-execution-client`. Its only production
-  dependencies are the protocol crate, `rustx-confined-fs`, and `nix`;
-  it has no dependency on `rustx` or on the canonical store/model.
+  Execution Client binary `rustx-execution-client`. Its runtime dependencies
+  include the protocol and transport crates, descriptor-relative filesystem
+  and document readers, and the physical process supervisor. The production
+  dependency tree excludes the Agent Server, canonical store and model adapters.
 - The main Agent Server remains the existing `rustx` package; its
   `package_io` module and environment file readers are thin wrappers
   over `rustx-confined-fs`, preserving every existing semantic.
 
-These layers perform authenticated negotiation, binding arbitration,
-local bootstrap, and six physical operations — the bounded
-revision-checked range read, entry metadata, bounded directory
-pages, the two-phase conditional write, the bounded
-logical-text page, and the whitelisted structured-document
-page. There is no production
-dispatch beyond them,
-no process spawn of business work, and no remote
-transport; none may exist until the gates below exist. Nothing claims
-unimplemented I/O: a runtime Hello advertises `Capability::Connection`,
-`Capability::ReadRange`, `Capability::DirectoryMetadata`,
-`Capability::ConditionalWrite`, `Capability::ReadLines`, and
-`Capability::DocumentPages`, exactly
-what the Client implements, never
-`Files`.
+The implemented Client supports authenticated local and WebSocket binding,
+bounded file queries, conditional writes and edits, and supervised process
+execution. Its negotiated capabilities name the individual services the
+Client provides. A connection does not grant the reserved umbrella
+`Files`, `Python`, `StdioMcp`, `ContentTransfer`, or `ManagedOutput` capabilities.
 
 ### Identities
 
@@ -1048,7 +1039,7 @@ envelope.
   (`crates/execution-protocol/fixtures/save-envelopes.json`). The real Client
   does not advertise managed output and answers every save message with
   `Unavailable { code: capability-unavailable }`, touching no path,
-  allocation, or queue. No Host path, storage, or Native Bash capture is
+  allocation, or queue. No Host path or optional-save storage is
   implemented here.
 - No MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
@@ -1087,10 +1078,30 @@ envelope.
   `InputReceipt`; a stale sequence is never reapplied and an
   ambiguous write is never retried. The Client holds at most four
   concurrent operations per Session plus a bounded tombstone budget.
-  The native Agent Bash path is *not* migrated: it still executes
-  inside the Server process, and its foreground/background capture
-  gap is unchanged — `command/exec` is the only consumer of this
-  boundary so far.
+  Native Agent Bash uses a separate `RegisterAgentBash` message and
+  negotiates `AgentBash` on the same authenticated binding. Ordinary
+  `Register` refuses a shell spec. The shell spec freezes the command,
+  cwd, configured environment, timeout, Conversation owner, live
+  capture choice, and raw stdout budget as one fingerprint. Timeout zero
+  permits an adopted Bash job to keep its lifecycle; argv commands
+  still require a physical timeout.
+- Agent Bash registers its Client-owned capture before accepting a
+  background job. A promoted invocation keeps the same operation and
+  locator. Direct foreground capture allocates on the first combined
+  preview overflow. Capture produces separate 16 KiB stdout, stderr
+  and combined previews. Each stream is decoded incrementally before
+  multiplexing. Complete native captures have a 64 MiB file bound
+  and at most 32 live/published files occupy a binding at once, so the
+  per-binding disk data ceiling is 2 GiB. Storage failures distinguish
+  a readable prefix from unavailable output. Releasing the process
+  journal retains published capture until disposal or binding shutdown.
+- The absolute Bash continuation identifier is scoped to the owning
+  Conversation and Client binding. Native Read and Grep send a typed
+  query to that Client, and the Client opens its own retained capture.
+  The locator does not authorize a workspace write or disclose the
+  Client's physical scratch path. UI job-output tails are bounded by the
+  same preview limit. This capture capability is independent of the
+  optional `Save` contract.
 - No readiness reporting exists; no file/config/MCP/Python readiness is
   implied by a live connection.
 - No Client instance replacement, generation increment, or death-cleanup
@@ -1329,8 +1340,11 @@ command is `ExecutionUnavailable`. The launcher gives the Client a
 private `tmpfs` TMPDIR and `--dev /dev` (a plain `--ro-bind / /` leaves
 `/dev` `nodev`, so the supervisor's `/dev/null` open fails), with the
 staged `bash-supervisor` beside it. This proves the App Server's argv
-`command/exec` path only — native Agent Bash is not migrated and is not
-covered by this proof.
+`command/exec` path. The same script also runs the Agent tool-plane
+fixture `background_live_output_is_readable_while_running_and_reused_at_settlement`
+with an independent Linux mount view. The fixture uses the native tools
+and the real Client to prove the file write, read, running Bash
+continuation, and its complete terminal read.
 The process layer adds its own evidence inside the Client crate
 (`process::tests`, real spawns through the staged `bash-supervisor`
 sibling): foreign-key refusal before lookup, `/bin/pwd` observed in a
@@ -1358,7 +1372,7 @@ execution) and the first T29 implementation evidence (UI-direct
 commands create no Attempt; disconnect cleans only the issuing
 connection's operations); the process kernel's independent build and
 the supervisor-helper staging are a further T24 fragment, with Agent
-Bash still Server-side as documented above.
+Server retains canonical Bash settlement and projection.
 T03/T24/T28's connection-singularity,
 dependency-boundary, and cross-instance rejection portions and T42's
 bounded-read portion have their first coverage here; the remainder of

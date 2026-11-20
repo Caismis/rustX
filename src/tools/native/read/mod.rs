@@ -114,16 +114,28 @@ async fn run_read(
     // writer wait under the absolute page deadline, and the blocking
     // exchange awaited to physical settlement even when cancellation
     // wins — a cancelled read never detaches the wire.
-    let page = match scope
-        .read_page(
-            &target,
-            input.offset(),
-            input.limit,
-            format.is_some(),
-            &context.cancellation,
-        )
-        .await
-    {
+    let page = if let Some(operation) = crate::tools::native::bash_operation_at(&target) {
+        scope
+            .read_bash_output(
+                operation,
+                context.conversation_id.as_str().to_owned(),
+                input.offset(),
+                input.limit,
+                &context.cancellation,
+            )
+            .await
+    } else {
+        scope
+            .read_page(
+                &target,
+                input.offset(),
+                input.limit,
+                format.is_some(),
+                &context.cancellation,
+            )
+            .await
+    };
+    let page = match page {
         Ok(page) => page,
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
             return cancelled_result(context.cancellation.reason());
@@ -203,13 +215,18 @@ fn project_page(page: &rustx_confined_fs::TextPage, input: &ReadInput) -> ToolEx
             ));
         }
         rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes } => {
-            return success_text(
+            let size = format_size(bytes);
+            let target = std::path::Path::new(&input.path);
+            let text = if crate::tools::native::bash_operation_at(target).is_some() {
+                format!("[Line {offset} is {size}, exceeds 50.0KB limit]")
+            } else {
                 format!(
-                    "[Line {offset} is {}, exceeds 50.0KB limit. Use bash: sed -n '{offset}p' {} | head -c {}]",
-                    format_size(bytes),
-                    input.path,
-                    NATIVE_FILE_TOOL_MAX_BYTES
-                ),
+                    "[Line {offset} is {size}, exceeds 50.0KB limit. Use bash: sed -n '{offset}p' {} | head -c {}]",
+                    input.path, NATIVE_FILE_TOOL_MAX_BYTES
+                )
+            };
+            return success_text(
+                text,
                 Some(TruncationState {
                     truncated: true,
                     original_bytes: Some(page.original_bytes),

@@ -46,6 +46,15 @@ pub const MAX_PROCESS_ENV_NAME_BYTES: usize = 256;
 /// Maximum retained output per stream — the capture cap.
 pub const MAX_PROCESS_OUTPUT_BYTES: usize = 256 * 1024;
 
+/// Maximum bytes in each Agent Bash preview.
+pub const BASH_PREVIEW_BYTES: usize = 16 * 1024;
+
+/// Maximum bytes retained in a Bash continuation.
+pub const MAX_BASH_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Maximum live and published Bash output files for one Client binding.
+pub const MAX_BASH_CAPTURES: usize = 32;
+
 /// Maximum bytes of one raw output/stdin data message.
 pub const MAX_PROCESS_DATA_BYTES: usize = 64 * 1024;
 
@@ -132,15 +141,22 @@ pub struct ProcessOperationKey {
     pub operation: OperationId,
 }
 
-/// What the process executes. `Shell` is reserved for a later Agent
-/// consumer; the product command path today carries `Argv` only.
+/// What the process executes. Shell commands require Agent Bash registration.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProcessProgram {
     /// An argv vector executed directly — no shell interpretation.
     Argv(Vec<String>),
-    /// A shell command line — reserved; not dispatchable in v1 product.
-    Shell(String),
+    /// A command interpreted by the supervised, non-interactive Bash shell.
+    Shell {
+        /// The command interpreted by Bash.
+        command: String,
+        /// The Server-owned Conversation authorized to read the capture.
+        conversation: String,
+        /// Reserve readable output at registration, for background execution
+        /// and foreground invocations eligible for promotion.
+        live_output: bool,
+    },
 }
 
 impl fmt::Debug for ProcessProgram {
@@ -150,7 +166,7 @@ impl fmt::Debug for ProcessProgram {
                 "kind",
                 &match self {
                     Self::Argv(_) => "argv",
-                    Self::Shell(_) => "shell",
+                    Self::Shell { .. } => "shell",
                 },
             )
             .field("len", &self.encoded_len())
@@ -162,7 +178,7 @@ impl ProcessProgram {
     fn encoded_len(&self) -> usize {
         match self {
             Self::Argv(argv) => argv.iter().map(String::len).sum::<usize>() + argv.len(),
-            Self::Shell(command) => command.len(),
+            Self::Shell { command, .. } => command.len(),
         }
     }
 }
@@ -202,7 +218,7 @@ pub struct ProcessSpec {
     pub program: ProcessProgram,
     /// Authorized environment overrides, sorted; `None` unsets.
     pub env: BTreeMap<String, Option<String>>,
-    /// Wall-clock timeout in milliseconds.
+    /// Wall-clock timeout in milliseconds. Zero means no physical deadline for Agent Bash.
     pub timeout_ms: u64,
     /// PTY allocation, when the operation is a terminal.
     pub pty: Option<PtySpec>,
@@ -255,11 +271,16 @@ pub enum SpecRefusal {
     /// `output_cap` exceeds [`MAX_PROCESS_OUTPUT_BYTES`].
     #[error("output cap exceeds bound")]
     OutputCapTooLarge,
-    /// A `Shell` program was presented to a dispatch path that only
-    /// executes `Argv` today.
-    #[error("shell program is reserved, not dispatchable")]
-    ShellReserved,
-    /// `timeout_ms` is zero or exceeds [`MAX_PROCESS_TIMEOUT_MS`].
+    /// The Conversation identity is missing or malformed.
+    #[error("invalid Agent Bash Conversation identity")]
+    InvalidConversation,
+    /// The Client could not reserve the live capture.
+    #[error("live Bash output storage unavailable")]
+    BashCaptureUnavailable,
+    /// The registration kind does not authorize the requested program.
+    #[error("program is not authorized for this registration kind")]
+    ProgramNotAuthorized,
+    /// The timeout exceeds [`MAX_PROCESS_TIMEOUT_MS`], or argv has no deadline.
     #[error("timeout out of bounds")]
     InvalidTimeout,
     /// PTY geometry is zero or exceeds [`MAX_PTY_ROWS_COLS`].
@@ -324,9 +345,15 @@ impl ProcessSpec {
                     Self::field(&mut hash, 5, arg.as_bytes());
                 }
             }
-            ProcessProgram::Shell(command) => {
+            ProcessProgram::Shell {
+                command,
+                conversation,
+                live_output,
+            } => {
                 Self::field(&mut hash, 2, b"shell");
                 Self::field(&mut hash, 5, command.as_bytes());
+                Self::field(&mut hash, 16, conversation.as_bytes());
+                Self::field(&mut hash, 17, &[u8::from(*live_output)]);
             }
         }
         Self::field(
@@ -402,7 +429,9 @@ impl ProcessSpec {
         if self.output_cap > u32::try_from(MAX_PROCESS_OUTPUT_BYTES).unwrap_or(u32::MAX) {
             return Err(SpecRefusal::OutputCapTooLarge);
         }
-        if self.timeout_ms == 0 || self.timeout_ms > MAX_PROCESS_TIMEOUT_MS {
+        if self.timeout_ms > MAX_PROCESS_TIMEOUT_MS
+            || (self.timeout_ms == 0 && matches!(self.program, ProcessProgram::Argv(_)))
+        {
             return Err(SpecRefusal::InvalidTimeout);
         }
         if let Some(pty) = self.pty
@@ -419,7 +448,25 @@ impl ProcessSpec {
                     return Err(SpecRefusal::InvalidArgv);
                 }
             }
-            ProcessProgram::Shell(command) => {
+            ProcessProgram::Shell {
+                command,
+                conversation,
+                ..
+            } => {
+                if conversation.is_empty()
+                    || conversation.len() > 64
+                    || !conversation
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                {
+                    return Err(SpecRefusal::InvalidConversation);
+                }
+                if self.pty.is_some() || self.stdin != ProcessStdin::Closed {
+                    return Err(SpecRefusal::UnsupportedMode);
+                }
+                if command.len() > MAX_PROCESS_ARGV_BYTES {
+                    return Err(SpecRefusal::ArgsTooLarge);
+                }
                 if command.is_empty() || command.contains('\0') {
                     return Err(SpecRefusal::InvalidArgv);
                 }
@@ -512,6 +559,42 @@ pub enum ProcessStream {
     Stderr,
 }
 
+/// A bounded terminal projection of the physical Bash capture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BashCaptureResult {
+    /// Separate decoded stdout preview.
+    pub stdout: String,
+    /// Separate decoded stderr preview.
+    pub stderr: String,
+    /// Interleaved decoded output preview.
+    pub combined: String,
+    /// True when at least one preview omitted text.
+    pub truncated: bool,
+    /// Size of the complete logical output when known.
+    pub total: Option<DecimalU64>,
+    /// State of the managed continuation.
+    pub output: BashCaptureState,
+    /// The Client supervisor witnessed its physical START grant.
+    pub started: bool,
+    /// A natural signal termination, when a numeric signal was observed.
+    pub signal: Option<i32>,
+}
+
+/// Availability and completeness of the Client-owned continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BashCaptureState {
+    /// All text fits the previews.
+    None,
+    /// The full logical output was stored continuously.
+    Complete,
+    /// A readable initial part survives a capture failure.
+    Partial,
+    /// The capture failed and there is no readable output to advertise.
+    Unavailable,
+}
+
 /// One Server→Client data-lane process request. Every request carries
 /// the complete [`ProcessOperationKey`] — hard-equality gated; RPC and
 /// connection ids never participate. Cancellation for a live operation
@@ -530,6 +613,34 @@ pub enum ProcessRequest {
         spec: ProcessSpec,
         /// The canonical parameter fingerprint.
         fingerprint: SpecFingerprint,
+    },
+    /// Register an authorized Agent Bash invocation. This internal entry
+    /// point requires the Agent Bash capability. App Server command/exec
+    /// sends only the argv registration above.
+    RegisterAgentBash {
+        /// The complete operation identity the Server assigned.
+        key: ProcessOperationKey,
+        /// The immutable shell launch parameters.
+        spec: ProcessSpec,
+        /// The canonical parameter fingerprint.
+        fingerprint: SpecFingerprint,
+    },
+    /// Fetch the bounded preview after the Bash operation settles.
+    BashCapture {
+        /// The operation whose capture is requested.
+        key: ProcessOperationKey,
+    },
+    /// Read the bounded tail of a live Agent Bash capture.
+    BashOutputTail {
+        /// The operation whose live output is requested.
+        key: ProcessOperationKey,
+        /// The authorized Conversation.
+        conversation: String,
+    },
+    /// Delete the retained continuation of a settled Bash operation.
+    DiscardBashOutput {
+        /// The operation that owns the output.
+        key: ProcessOperationKey,
     },
     /// Admit START for the keyed `Registered` operation. The reply is a
     /// verified state snapshot — `Running` only when physical START was
@@ -616,6 +727,10 @@ impl ProcessRequest {
     pub fn key(&self) -> &ProcessOperationKey {
         match self {
             Self::Register { key, .. }
+            | Self::RegisterAgentBash { key, .. }
+            | Self::DiscardBashOutput { key }
+            | Self::BashCapture { key }
+            | Self::BashOutputTail { key, .. }
             | Self::Start { key }
             | Self::Query { key }
             | Self::OutputPage { key, .. }
@@ -734,6 +849,22 @@ pub enum ProcessReply {
         /// The exact supplied key.
         key: ProcessOperationKey,
     },
+    /// The requested Bash capture has settled.
+    BashCapture {
+        /// The exact supplied key.
+        key: ProcessOperationKey,
+        /// The bounded capture, absent for a pre-START terminal.
+        capture: Option<BashCaptureResult>,
+    },
+    /// The requested live Bash output tail.
+    BashOutputTail {
+        /// The exact supplied key.
+        key: ProcessOperationKey,
+        /// The UTF-8 text retained within the preview bound.
+        text: String,
+        /// The capture started before the first returned byte.
+        truncated: bool,
+    },
     /// The bounded schema refused a registration before allocation.
     Refused {
         /// The exact supplied key.
@@ -759,6 +890,8 @@ impl ProcessReply {
             | Self::InputAccepted { key, .. }
             | Self::InputReceipt { key, .. }
             | Self::OutputReleased { key }
+            | Self::BashCapture { key, .. }
+            | Self::BashOutputTail { key, .. }
             | Self::Refused { key, .. } => key,
         }
     }

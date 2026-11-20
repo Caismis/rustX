@@ -2,6 +2,14 @@
 
 This is the implementation/evidence ledger for [#576](https://github.com/Caismis/rustX/issues/576), not a second test registry. Cargo discovery and the [lane checker](../examples/check_test_lanes.rs) are authoritative for test execution. The [ADR](execution-protocol.md) owns the wire contract, frozen research revisions, and T01-T73 phase index. "Partial" below means that the named proof does not cover the whole PR1 requirement.
 
+The PR baseline for the Agent Bash work was `feat/576-execution-boundary`
+at `54eade136bd16200bcb1b73e24dd5bd3c6c08c54`, with PR #580 targeting
+`main` at `50d0e5728851143b42dfa70f53458eb4f3ebf0b7`. Its
+[CI run](https://github.com/Caismis/rustX/actions/runs/44690282490)
+failed in the Rust FAST core. The local foreground/background output test
+attempted a native Read with no admitted Client. Merge verification failed
+and the FULL jobs were skipped.
+
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
 ## Phase-one gates
@@ -35,6 +43,59 @@ The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platfor
 | T44 | Minimal reservation before browsing, no unbound access or unrelated startup | `an_unbound_workspace_argument_never_connects`; `workspace-host.test.ts` proves folder registration schedules no Python; standalone Server test leaves stale preparation handoff untouched | Partial; product picker still needs Session authorization before browsing |
 | T54 | Candidate/sequence/offset integrity, late and mixed identities rejected | `app_server::host_upload` verifier and slot refusals (gap, out-of-order, conflict, foreign candidate on every step, late, duplicate-outside-window) tested; candidate identity requires connection and subscription incarnations | Partial; contract and verifier tests; no receiver or live Host subscription binding (#578) |
 | T55 | Final encoded size including envelope and escaping | Host envelope golden fixtures (`host-upload-fixtures.json`/`.ts`) typecheck against the generated `HostUploadEnvelope`; `transport` frame cap governs the wire | Partial; no Host envelope boundary tests over the transport; raw record pre-parse bound pending |
+
+## Native Agent Bash evidence
+
+The Agent production registration sends a distinct shell registration to the
+Session's Execution Client. The client registers the operation and, for an
+explicit background call or a promotion candidate, creates its live capture
+before the Server may commit background ownership. Server admission, the
+Client's START grant, and canonical results remain separate facts. Shell
+registration requires the Agent Bash capability. UI `command/exec` keeps
+its argv contract.
+
+The normal Client owns stdout/stderr decoding, preview capture, the bounded
+continuation file, and physical cancellation and settlement. Read/Grep and
+job-output tail queries use the exact Session binding and Conversation owner.
+The Bash registration no longer installs a Server-local process or capture
+executor. The explicit supervisor diagnostic fixtures remain available to
+regression tests.
+
+- **T02 / T42.** `background_live_output_is_readable_while_running_and_reused_at_settlement`
+  runs the native Write/Read/Bash/Grep route against the real Client. Set
+  `RUSTX_MOUNT_VIEW_PROOF=1` through `test-support/prove_execution_mount_view.sh`
+  to use the Linux private mount view. The FIFO holds the business process
+  while Read and Grep inspect its committed prefix. The final locator
+  returns the complete ordered output. A foreign Conversation cannot open it.
+- **T05 / T26.** `agent_bash_has_separate_registration_and_a_client_owned_start_gate`
+  asserts the wrong registration kind is refused, a conflicting identity
+  cannot mutate the spec, the held START cancellation produces zero bytes
+  and zero business marker, and release/discard remove the captured output
+  without authorizing a retry.
+- **T06.** `client_bash_reversed_settlement_keeps_canonical_order` gates the
+  first real Client process on the second's confirmed settlement. It
+  checks one START marker per operation, two scripted model requests,
+  original call order in the transcript, and one final attempt terminal.
+- **T55.** `host_upload_framing_counts_the_encoded_envelope` feeds the real
+  JSONL record reader an upload envelope with base64, Unicode, JSON-escaped
+  controls and exact one-mebibyte framing. An otherwise parseable record
+  one byte over the cap is rejected by the record reader. The future
+  Host receiver remains assigned to #578.
+
+Local Linux evidence from this slice includes 43 Client unit tests, 40
+bootstrap tests and a separate successful run of the opt-in range mount
+proof. The 29 native Bash integration tests pass. The isolated native tool
+fixture, Root settlement-order fixture, JobWait unload/replacement proof
+and Host framing test each pass. The initial isolation attempt exposed a
+test-fixture bug. Bubblewrap's parent-death signal fired when the setup
+thread exited. The fixture now retains that thread through Client cleanup.
+Only the run with the repaired fixture is counted as Agent mount evidence.
+
+The Bash migration does not close T04, T11, T18, T29, or T44.
+The Root scheduling fixture covers one part of T06.
+Subagent child IPC still needs binding routing. The missing full
+environment services, WorkspaceChanges physical capture, Workspace Python
+readiness and isolated UI detach/saturation scenario remain #576 work.
 
 ## Measurement record
 
@@ -85,6 +146,68 @@ the wire: a range-read comparison would measure different work.
 
 Before changing selection or buffering algorithms, retain `a24cbf6e6` as the read-only comparison revision. Do not equate selecting a byte range with selecting lines or matches. Use the same release toolchain/profile, host, private roots and file generator for both variants. Record the generator seed, file byte lengths, offsets, UTF-8/escaping distribution and expected selected bytes. Use growing inputs and a fixed selected result, including near EOF. Count bytes at the Client file reader and complete encoded frames in both directions (including prefix), not just decoded result size. Count requests, not syscalls. Record Server and Client peak memory separately, data/control high-water marks and elapsed time per repetition. Report unsupported baseline operations as not comparable. No before/after delta or end-to-end performance result has yet been measured.
 
+### Paired read probe during Agent Bash development
+
+Collected with the debug Client binary
+`aa8215bb65f78dcdb514b8a8a1b465f917c1da00fb3a1deeef44b4c6f7b713cb`
+on Linux 7.0.0-43-generic x86_64. Each row is three iterations, one data RPC
+per iteration. The paired control lane is live. TX/RX report data frames
+including framing. Peak memory includes Client startup.
+
+| Operation | Source bytes | Selected bytes | TX / RX bytes | Client peak KiB | Median ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ReadLines | 1,048,589 | 13 | 97 / 262 | 20,856 | 8.76 |
+| ReadLines | 8,388,621 | 13 | 98 / 263 | 20,648 | 67.50 |
+| ReadLines | 67,108,877 | 13 | 99 / 265 | 20,600 | 492.58 |
+| Grep | 1,048,589 | 25 | 149 / 130 | 23,744 | 3.32 |
+| Grep | 8,388,621 | 26 | 149 / 131 | 23,880 | 30.15 |
+| Grep | 67,108,877 | 27 | 149 / 132 | 23,928 | 244.48 |
+
+The measurement peer is Python. It cannot establish product Server RSS,
+write throughput, Bash start-to-completion latency or output queue high-water
+marks. The historical pre-pairing results use a different transport and Client
+build and cannot establish a regression delta.
+
+### Bash capture and standalone Server probes
+
+Three Linux debug samples per size used the same measuring peer and the
+staged Client
+`862519c865c5ce4d30e9c0fbab9f69acf464caf88f057ed3dc02bf0eb7506830`.
+The command emitted fixed 32-byte lines through pipes. The peer queried
+operation state every 2 ms, verified the Client's exact final stdout count,
+requested the bounded previews, released the raw journal and read a
+single continuation line. RPC and encoded byte counts cover registration
+through that line query. Timings include process launch, capture and the
+poll interval. Throughput is captured MiB divided by observed START-to-
+settlement duration.
+
+| Output | RPCs | Data TX / RX bytes | Client startup median | First running observed | Settlement median | Capture MiB/s | Client peak KiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 MiB | 19 | 4,425 / 38,406 | 4.72 ms | 6.58 ms | 30.26 ms | 33.04 | 21,584 |
+| 8 MiB | 27–28 | 6,090–6,298 / 40,215–40,441 | 4.30 ms | 6.58 ms | 47.50 ms | 168.42 | 21,852 |
+
+The settled raw journal cursor was zero for every sample. The raw journal
+was disabled for these calls. This does not measure supervisor pipe
+occupancy or the highest data/control queue occupancy under contention.
+
+The standalone debug Server
+`c29ca24ee8699c67d8df9d3402d60f35c1e8bfe7ff7beccbe82347c7ca602099`
+ran in a directory containing only the Server executable, with a private
+empty HOME/runtime root and no children observed after initialization.
+One JSONL initialize RPC sent/received 191/351 bytes, with 487.73 ms
+median startup and 92,540 KiB maximum Server VmHWM across three launches.
+This cold management-only Server measurement is separate from the
+Client-only Bash capture probe. The Bash path at the PR baseline has
+no equivalent Server/Client split to serve as a paired regression baseline.
+A 1 MiB deterministic binary workspace write on the same Client used
+one BeginWrite, 16 chunks and one CommitWrite. The 18 data RPCs sent
+1,399,365 bytes and received 1,220 bytes including framing. Three runs
+measured a 26.67 ms median through the verified commit (37.50 MiB/s)
+and 21,648 KiB maximum Client VmHWM. Each published file matched the
+input byte for byte. Measurements exclude fixture creation and verification
+reads. Agent Server memory during execution and queue high-water
+telemetry remain unmeasured.
+
 ## Final-head gate
 
 Record local commands, actual head SHA, Actions checkout SHA, required Linux/macOS jobs, explicit skips and the final `full-verification` / Merge verification URL here before requesting final review. No final-head verification is claimed by this initial ledger.
@@ -118,8 +241,7 @@ Record local commands, actual head SHA, Actions checkout SHA, required Linux/mac
   `a_saturated_control_lane_refuses_a_cancel_explicitly_and_delivers_it_once_a_slot_frees`.
 - Pending: a product-level test driving a saturated control lane through a
   real UI command (the saturation is covered at the control handle only);
-  the Client-side ambient `RUSTX_TEST_SUPERVISION_TRACE` read in production
-  `Operations::new` is still present and remains pending.
+  the separate Client trace-authority fix is recorded below.
 
 ## Supervisor trace authority removed (Execution Client)
 
@@ -158,4 +280,4 @@ Record local commands, actual head SHA, Actions checkout SHA, required Linux/mac
   and `a_reservation_requiring_managed_output_is_rejected_by_the_real_client`
   (`crates/execution-client/tests/bootstrap.rs`).
 - Not implemented and not advertised: Client storage, Host integration,
-  readability probing against real storage, and Native Bash capture.
+  readability probing against real optional-save storage.

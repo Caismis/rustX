@@ -8,12 +8,12 @@ use std::sync::{Arc, Mutex};
 
 use tokio::io::AsyncReadExt;
 
-use super::text::IncrementalUtf8Decoder;
 use crate::tools::managed_output::ManagedToolOutput;
 pub(super) use crate::tools::output::{
     BackgroundOutputCapture, ForegroundOutputCapture as SpillCapture,
     TextPreviewCapture as PreviewCapture,
 };
+use rustx_process_supervisor::output_text::IncrementalUtf8Decoder;
 
 /// The test-only seam that holds one output reader task open after EOF until
 /// the bounded settlement path force-finalizes it.

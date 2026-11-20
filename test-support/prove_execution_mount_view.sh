@@ -1,10 +1,10 @@
 #!/bin/sh
-# Manual opt-in evidence for the Linux distinct-mount-view read (a read-only
-# T02 fragment of the execution-boundary plan), at both implemented layers:
+# Linux distinct-mount-view proofs for the execution boundary (T02/T42):
 #
 #   test-support/prove_execution_mount_view.sh
 #
-# It exports RUSTX_MOUNT_VIEW_PROOF=1 and runs exactly the #[ignore]d proofs:
+# It exports RUSTX_MOUNT_VIEW_PROOF=1, runs the two opt-in App Server
+# and Client proofs, and repeats the Agent tool-plane test with isolation:
 #
 #  - `range_read_from_private_mount_view` spawns the real
 #    rustx-execution-client under
@@ -40,8 +40,11 @@
 #    result, the Server-only decoy stays unreachable, and an unbound Session's
 #    command is refused as ExecutionUnavailable. The launcher is a fixture
 #    artifact only; production resolves the sibling executable directly and
-#    has no override. This proves the App Server's command/exec argv path only,
-#    not native Agent Bash.
+#    has no override. This proves the App Server command/exec argv path.
+#
+#  - The background Bash continuation test runs native Write, Read, Bash and
+#    Grep in the Client view. A FIFO holds the operation while Read/Grep
+#    inspect the committed prefix. The final output uses the same locator.
 #
 # The product proof runs only against the real prepared artifacts — the
 # process harness plus its metadata-verified sibling Execution Client — so
@@ -62,3 +65,6 @@ cargo test -p rustx-execution-client --locked \
 cargo test -p rustx --all-features --locked \
     --test process app_server::explicit_composition_reads_from_client_mount_namespace \
     -- --exact --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    tools::background::tests::background_live_output_is_readable_while_running_and_reused_at_settlement \
+    -- --exact --nocapture

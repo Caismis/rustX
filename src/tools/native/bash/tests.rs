@@ -1,4 +1,4 @@
-use super::{BashTestControl, BashTool, NAME};
+use super::{BashTestControl, FixtureBashTool, NAME};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
@@ -103,7 +103,7 @@ async fn run_with_control(
     workspace: Workspace,
     timeout_seconds: Option<u64>,
 ) -> ToolExecutionResult {
-    let tool = BashTool::with_test_control(control);
+    let tool = FixtureBashTool::with_test_control(control);
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
         stdout_capture: None,
@@ -1606,12 +1606,12 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
     assert_eq!(
         control.recorded_signals(),
         vec![
-            super::executor::RecordedSignal {
+            super::fixture::RecordedSignal {
                 pgid: anchor_pid,
                 signal: "SIGTERM",
                 emitted: false
             },
-            super::executor::RecordedSignal {
+            super::fixture::RecordedSignal {
                 pgid: anchor_pid,
                 signal: "SIGKILL",
                 emitted: true

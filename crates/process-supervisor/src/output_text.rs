@@ -24,6 +24,117 @@
 //! exactly like [`String::from_utf8_lossy`], and an incomplete sequence
 //! held at end-of-stream flushes to U+FFFD at [`IncrementalUtf8Decoder::finish`].
 
+/// A bounded deterministic UTF-8 preview of one logical textual result.
+///
+/// The preview keeps the complete prefix while the result is within the
+/// bound. Once the bound is crossed it retains a deterministic head/tail
+/// projection with an explicit byte-count marker. The capture never stores an
+/// arbitrary complete result in memory after the foreground spill starts.
+#[derive(Clone, Debug)]
+pub struct TextPreviewCapture {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    total: u64,
+    limit: usize,
+}
+
+impl TextPreviewCapture {
+    /// Creates a preview with the supplied byte bound.
+    pub fn new(limit: usize) -> Self {
+        Self {
+            head: Vec::new(),
+            tail: Vec::new(),
+            total: 0,
+            limit,
+        }
+    }
+
+    /// Adds one already UTF-8-decoded fragment.
+    pub fn push(&mut self, text: &str) {
+        let bytes = text.as_bytes();
+        self.total = self.total.saturating_add(bytes.len() as u64);
+        let half = self.limit / 2;
+        if self.head.len() < self.limit {
+            let take = (self.limit - self.head.len()).min(bytes.len());
+            self.head.extend_from_slice(&bytes[..take]);
+        }
+        if bytes.len() >= half {
+            self.tail.clear();
+            self.tail.extend_from_slice(&bytes[bytes.len() - half..]);
+        } else {
+            self.tail.extend_from_slice(bytes);
+            let overflow = self.tail.len().saturating_sub(half);
+            if overflow > 0 {
+                self.tail.drain(..overflow);
+            }
+        }
+    }
+
+    /// Returns the deterministic preview and whether it crossed the bound.
+    pub fn finish(self) -> (String, bool) {
+        let bound = self.limit;
+        self.finish_within(bound)
+    }
+
+    /// Returns the deterministic preview within `bound` and whether the
+    /// observed text crossed it. `bound` must not exceed the construction
+    /// bound: the retained head/tail suffices for any bound up to it.
+    pub fn finish_within(self, bound: usize) -> (String, bool) {
+        debug_assert!(bound <= self.limit);
+        if self.total <= bound as u64 {
+            let text = String::from_utf8(self.head).expect("the retained preview is decoded text");
+            return (text, false);
+        }
+        let marker = format!("\n...[truncated {} bytes]...\n", self.total - bound as u64);
+        let content = bound.saturating_sub(marker.len());
+        if content == 0 {
+            let mut marker = marker;
+            marker.truncate(bound);
+            return (marker, true);
+        }
+        let head_end = floor_char_boundary(&self.head, self.head.len().min(content / 2));
+        let head = &self.head[..head_end];
+        let tail_keep = content - head.len();
+        let tail_start = ceil_char_boundary(&self.tail, self.tail.len().saturating_sub(tail_keep));
+        let mut out = Vec::with_capacity(bound);
+        out.extend_from_slice(head);
+        out.extend_from_slice(marker.as_bytes());
+        out.extend_from_slice(&self.tail[tail_start..]);
+        (
+            String::from_utf8(out).expect("the bounded preview is decoded text"),
+            true,
+        )
+    }
+
+    /// The first scalar of the observed text, when the capture is non-empty.
+    ///
+    /// The retained head always starts at the first byte, so this is exact
+    /// even after truncation.
+    pub fn first_char(&self) -> Option<char> {
+        let width = match self.head.first()? {
+            0x00..=0x7f => 1,
+            0xc0..=0xdf => 2,
+            0xe0..=0xef => 3,
+            _ => 4,
+        };
+        std::str::from_utf8(self.head.get(..width)?)
+            .ok()?
+            .chars()
+            .next()
+    }
+
+    /// Configured preview byte limit.
+    #[must_use]
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// The complete logical byte count observed by the capture.
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+}
+
 /// One incremental UTF-8 decoder of one output stream.
 ///
 /// The decoder preserves decoder state across read chunks: an incomplete
@@ -32,7 +143,7 @@
 /// split across arbitrary read boundaries decodes exactly once, at the
 /// chunk boundary where its final byte arrives.
 #[derive(Debug, Default)]
-pub(super) struct IncrementalUtf8Decoder {
+pub struct IncrementalUtf8Decoder {
     /// The held incomplete trailing sequence; at most three bytes.
     pending: Vec<u8>,
 }
@@ -41,7 +152,7 @@ impl IncrementalUtf8Decoder {
     /// Decodes one read chunk, returning the decoded text. An incomplete
     /// trailing sequence is held for the next chunk; invalid sequences
     /// decode to U+FFFD.
-    pub(super) fn push(&mut self, bytes: &[u8]) -> String {
+    pub fn push(&mut self, bytes: &[u8]) -> String {
         if bytes.is_empty() {
             return String::new();
         }
@@ -52,7 +163,7 @@ impl IncrementalUtf8Decoder {
 
     /// Flushes the decoder at end-of-stream: an incomplete held sequence
     /// decodes deterministically to U+FFFD.
-    pub(super) fn finish(&mut self) -> String {
+    pub fn finish(&mut self) -> String {
         let pending = std::mem::take(&mut self.pending);
         if pending.is_empty() {
             return String::new();
@@ -95,6 +206,20 @@ impl IncrementalUtf8Decoder {
             }
         }
     }
+}
+
+fn floor_char_boundary(text: &[u8], mut index: usize) -> usize {
+    while index > 0 && std::str::from_utf8(&text[..index]).is_err() {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(text: &[u8], mut index: usize) -> usize {
+    while index < text.len() && std::str::from_utf8(&text[index..]).is_err() {
+        index += 1;
+    }
+    index
 }
 
 #[cfg(test)]

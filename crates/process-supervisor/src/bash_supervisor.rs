@@ -1103,9 +1103,16 @@ fn standalone_invocation(shell_command: &str) -> Result<(Command, Option<std::fs
     if (metadata.dev(), metadata.ino()) != invocation.cwd_identity {
         return Err("command directory identity changed".into());
     }
-    let (program, arguments) = invocation.argv.split_first().ok_or("empty command argv")?;
-    let mut command = Command::new(program);
-    command.args(arguments);
+    let mut command = if let Some(argv) = invocation.argv {
+        let (program, arguments) = argv.split_first().ok_or("empty command argv")?;
+        let mut command = Command::new(program);
+        command.args(arguments);
+        command
+    } else {
+        let mut command = Command::new("/bin/bash");
+        command.arg("-c").arg(shell_command);
+        command
+    };
     if let Some(path) = invocation.terminal {
         let terminal = std::fs::OpenOptions::new()
             .read(true)

@@ -1114,11 +1114,14 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
 #[must_use]
 pub fn model_selectable_native_fixture() -> NativeFixture {
     use rustx::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
-    native_fixture_with(
+    native_fixture_inner(
         Vec::new(),
         rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
         )),
+        &rustx::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(rustx::context::AgentStatusConfig::default()),
+        true,
     )
 }
 
@@ -1202,6 +1205,9 @@ fn native_fixture_inner(
     let dir = tempfile::tempdir().expect("temporary workspace");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
+    let workspace_root = workspace_root
+        .canonicalize()
+        .expect("fixture workspace identity");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).expect("artifact directory");
     let conversation_id =

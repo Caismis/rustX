@@ -15,7 +15,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use super::environment::{PreparedCommand, ToolEnvironment};
+use super::environment::ToolEnvironment;
 use super::workspace::Workspace;
 use super::workspace_python::{self, PythonSelection};
 
@@ -241,29 +241,14 @@ fn excluded_from_bootstrap(key: &str) -> bool {
         || key.starts_with("RUSTX_TEST_")
 }
 
-/// Freezes native Bash before approval. The returned value is an invocation clone.
-pub(crate) fn freeze_bash(base: &ToolEnvironment, workspace: &Workspace) -> ToolEnvironment {
-    let selection = workspace_python::observe(workspace.root());
-    match compose(current().as_ref(), base, &selection) {
-        Ok(entries) => base
-            .clone()
-            .with_prepared_command(PreparedCommand::Entries(Arc::new(entries))),
-        Err(reason) => base
-            .clone()
-            .with_prepared_command(PreparedCommand::Closed(reason)),
-    }
-}
-
 /// Resolves the command environment the Bash supervisor will apply.
 pub(crate) fn command_entries(
     environment: &ToolEnvironment,
     workspace: &Workspace,
 ) -> Result<Vec<(String, String)>, String> {
+    #[cfg(test)]
     if let Some(prepared) = environment.prepared_command() {
-        return match prepared {
-            PreparedCommand::Entries(entries) => Ok(entries.as_ref().clone()),
-            PreparedCommand::Closed(reason) => Err((*reason).to_owned()),
-        };
+        return Ok(prepared.0.as_ref().clone());
     }
     let selection = workspace_python::observe(workspace.root());
     compose(current().as_ref(), environment, &selection).map_err(str::to_owned)
@@ -365,7 +350,7 @@ mod tests {
     use super::{
         PYTHON_ACTIVATION, command_entries, compose, excluded_after_overrides, host_from_entries,
     };
-    use crate::tools::environment::{PreparedCommand, ToolEnvironment};
+    use crate::tools::environment::ToolEnvironment;
     use crate::tools::workspace::Workspace;
     use crate::tools::workspace_python::PythonSelection;
     use std::path::PathBuf;
@@ -522,8 +507,9 @@ mod tests {
             ("HOME".to_owned(), "/users/ada".to_owned()),
             ("PATH".to_owned(), "/frozen/bin".to_owned()),
         ];
-        let environment = ToolEnvironment::new()
-            .with_prepared_command(PreparedCommand::Entries(Arc::new(frozen.clone())));
+        let environment = ToolEnvironment::new().with_prepared_command(
+            crate::tools::environment::PreparedCommand(Arc::new(frozen.clone())),
+        );
         let entries = command_entries(&environment, &workspace).expect("entries");
         assert_eq!(entries, frozen);
         assert!(!format!("{environment:?}").contains("/users/ada"));

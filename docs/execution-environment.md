@@ -1,32 +1,17 @@
 # Native execution environment
 
-Native Agent Bash, Workflow Bash, and Subagent Bash inherit the environment of
-the host process that launched rustX. The Workspace supplies the working
-directory. It does not replace `HOME`.
+Native Agent Bash uses the authorized Session binding for its Client-side
+working directory. The Server passes only the admitted configuration entries.
+The Client sets the command baseline (`PATH`, workspace `HOME` and UTF-8 locale),
+applies user and Workspace `[environment]` overrides, strips shell startup and
+supervisor controls, and applies the runtime-owned Git execution defaults.
+The local composition launches the Client with an empty environment and
+delivers its binding credential separately from command configuration.
 
-The composition order is:
-
-1. The captured host environment.
-2. User and Workspace `[environment]` overrides, including `PATH`, `HOME`,
-   `LANG`, and `LC_ALL`.
-3. Removal of shell startup controls (`BASH_ENV`, `ENV`, `SHELLOPTS`,
-   `BASHOPTS`, and exported Bash functions) and rustX supervisor control
-   variables. Overrides cannot put those keys back.
-4. Workspace Python selection.
-5. Runtime-owned Git execution defaults. `GIT_CONFIG_COUNT`, indexed
-   `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*`, `GIT_CONFIG_PARAMETERS`,
-   `GIT_PAGER`, and `GIT_EDITOR` cannot be configured as ordinary overrides.
-   Inherited values in this namespace are replaced for native Bash and Python
-   bootstrap as well as excluded subprocesses. These defaults control common
-   helper behavior; Git commands still require normal permission admission.
-
-`PATH` or `HOME` values that are not Unicode fail that composition. Other
-non-Unicode host values are omitted because the supervisor receives the
-command environment as JSON in an owner-only private snapshot. The native
-process owner retains the snapshot through physical settlement; only its path
-is passed to the supervisors, avoiding per-string OS environment limits. An authorized command can still read ordinary
-credentials that were already in the host environment. This is not an
-operating-system sandbox.
+The Client's Bash environment does not yet consume the Workspace Python
+readiness result documented below. The Server-side Workspace Python owner
+still schedules preparation, so readiness and physical Python selection
+remain an EXEC-01 gap. Managed Python migration remains assigned to #577.
 
 ## Workspace Python
 

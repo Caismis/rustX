@@ -458,6 +458,8 @@ pub enum Capability {
     BoundedSearch,
     /// Managed processes under Server-assigned `OperationId`s.
     Process,
+    /// Registration for authorized native Agent Bash commands.
+    AgentBash,
     /// Workspace `uv` and Managed Python fingerprint environments.
     Python,
     /// Client-hosted stdio MCP sessions.
@@ -985,6 +987,26 @@ pub enum ClientRequest {
     /// One managed-process operation request — register, start, query,
     /// ordered output paging, stdin, resize, close, release.
     Process(crate::process::ProcessRequest),
+    /// Read lines of a Client-owned Bash continuation.
+    ReadBashOutput {
+        /// The operation under the current binding.
+        key: crate::process::ProcessOperationKey,
+        /// The Conversation making the read.
+        conversation: String,
+        /// One-based line offset.
+        offset: DecimalU64,
+        /// Optional positive line limit.
+        limit: Option<DecimalU64>,
+    },
+    /// Search one Client-owned Bash continuation.
+    SearchBashOutput {
+        /// The operation under the current binding.
+        key: crate::process::ProcessOperationKey,
+        /// The Conversation making the search.
+        conversation: String,
+        /// The bounded search parameters.
+        spec: SearchSpec,
+    },
     /// One optional-save request. The real Client answers `Unavailable`.
     Save(crate::save::SaveRequest),
     /// A bounded revision-checked range read under the binding workspace.

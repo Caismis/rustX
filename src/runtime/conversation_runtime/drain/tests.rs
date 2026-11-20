@@ -2216,7 +2216,7 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
 async fn runtime_shutdown_waits_for_foreground_process_terminality() {
     use crate::runtime::types::ConversationLifecycleState;
     use crate::tools::executor::ToolRegistry;
-    use crate::tools::native::{BashTestControl, BashTool};
+    use crate::tools::native::{BashTestControl, FixtureBashTool};
     use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     use rustx_process_supervisor::process_runner::RunnerLifecycleHook;
 
@@ -2248,7 +2248,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
     registry
         .register(
             definition.clone(),
-            Arc::new(BashTool::with_test_control(control.clone())),
+            Arc::new(FixtureBashTool::with_test_control(control.clone())),
         )
         .expect("test Bash registration");
     let call_id = crate::runtime::identity::ToolCallId::new("call-m9c-process");

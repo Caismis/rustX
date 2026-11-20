@@ -1662,6 +1662,14 @@ pub struct DirectoryListing {
     pub next_offset: Option<u32>,
 }
 
+/// The result of one bounded Bash continuation query.
+pub enum BashOutputPage {
+    /// A checked logical-text page.
+    Lines(LinesPage),
+    /// A checked search page.
+    Search(SearchResult),
+}
+
 /// A verified logical-text page reply from the Client.
 ///
 /// The page's shown text, line and byte accounting, end reason, and
@@ -2078,6 +2086,20 @@ impl LocalConnection {
         request: &rustx_execution_protocol::process::ProcessRequest,
         deadline: Instant,
     ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        self.process_admitted(request, deadline, || Ok(()))
+    }
+
+    /// One process exchange with a cancellation gate immediately before send.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::process_until`], or the gate's refusal.
+    pub fn process_admitted(
+        &mut self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -2090,12 +2112,22 @@ impl LocalConnection {
                 "peer admitted no process capability",
             ));
         }
+        if matches!(
+            request,
+            rustx_execution_protocol::process::ProcessRequest::RegisterAgentBash { .. }
+        ) && !self.capabilities.contains(&Capability::AgentBash)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no Agent Bash capability",
+            ));
+        }
         process_reply::validate_request(request)
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         let ClientReply::Process(reply) = self.exchange_admitted(
             &ClientRequest::Process(request.clone()),
             Some(deadline),
-            || Ok(()),
+            admit,
             || (),
         )?
         else {
@@ -2107,6 +2139,51 @@ impl LocalConnection {
         process_reply::validate(request, &reply)
             .map_err(|message| self.retire(io::Error::new(io::ErrorKind::InvalidData, message)))?;
         Ok(reply)
+    }
+
+    /// Run one bounded Read or Grep over the authorized Bash continuation.
+    ///
+    /// # Errors
+    ///
+    /// Returns capability, cancellation, transport or typed read/search errors.
+    pub fn inspect_bash_output(
+        &mut self,
+        request: &ClientRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<BashOutputPage> {
+        if !self.capabilities.contains(&Capability::AgentBash) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no Agent Bash capability",
+            ));
+        }
+        if !matches!(
+            request,
+            ClientRequest::ReadBashOutput { .. }
+                | ClientRequest::SearchBashOutput {
+                    spec: SearchSpec::Grep { .. },
+                    ..
+                }
+        ) {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let reply = self.exchange_admitted(request, Some(deadline), admit, || ())?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        match request {
+            ClientRequest::ReadBashOutput { offset, limit, .. } => self
+                .validate_lines(offset.get(), limit.map(DecimalU64::get), None, &reply)
+                .map(BashOutputPage::Lines),
+            ClientRequest::SearchBashOutput {
+                spec: SearchSpec::Grep { context, limit, .. },
+                ..
+            } => self
+                .validate_search(false, *context, *limit, &reply)
+                .map(BashOutputPage::Search),
+            _ => unreachable!("Bash output exchange must name Read or Grep"),
+        }
     }
 
     /// Verifies a `Range` reply against the request before trusting it. Any

@@ -392,6 +392,36 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    pub(crate) fn process_key(
+        &self,
+        operation: rustx_execution_protocol::process::OperationId,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessOperationKey> {
+        let admission = self.admission().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Session execution unavailable: no admitted Execution Client",
+            )
+        })?;
+        Ok(rustx_execution_protocol::process::ProcessOperationKey {
+            incarnation: admission.server_incarnation,
+            session: admission.session.clone(),
+            instance: admission.instance.clone(),
+            generation: admission.generation,
+            operation,
+        })
+    }
+
+    pub(crate) fn agent_process(
+        &self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        self.with_connection(None, false, |connection| {
+            connection.process_admitted(request, deadline, admit)
+        })
+    }
+
     /// One bounded, revision-checked range read through the admitted
     /// Client — the first dispatch path on the endpoint.
     ///
@@ -897,7 +927,7 @@ impl LocalExecutionEndpoint {
 
     /// Fences the binding and shuts its sockets without taking the data lock:
     /// a wedged exchange fails on its own read, and the pair cannot be reused.
-    fn cut_pair(&self) {
+    pub(crate) fn cut_pair(&self) {
         self.binding.fence().shutdown();
     }
 
@@ -1168,7 +1198,7 @@ impl SessionExecutionScope {
     /// lookup, never a claim. An absent, preparing, fenced, or dropped
     /// endpoint is `NotConnected`; the scope itself is never proof of
     /// admission.
-    fn endpoint(&self) -> io::Result<Arc<LocalExecutionEndpoint>> {
+    pub(crate) fn endpoint(&self) -> io::Result<Arc<LocalExecutionEndpoint>> {
         let unavailable = || {
             io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -1177,6 +1207,60 @@ impl SessionExecutionScope {
         };
         let registry = self.registry.upgrade().ok_or_else(unavailable)?;
         registry.endpoint(&self.session).map_err(|_| unavailable())
+    }
+
+    pub(crate) async fn read_bash_output(
+        &self,
+        operation: crate::tools::native::BashOutputLocator,
+        conversation: String,
+        offset: u64,
+        limit: Option<u64>,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_confined_fs::TextPage> {
+        self.inspect_bash_output(
+            operation,
+            move |key| rustx_execution_protocol::ClientRequest::ReadBashOutput {
+                key,
+                conversation,
+                offset: offset.into(),
+                limit: limit.map(Into::into),
+            },
+            cancellation,
+        )
+        .await
+        .map(|page| match page {
+            rustx_execution_server::BashOutputPage::Lines(lines) => project_lines(lines).1,
+            rustx_execution_server::BashOutputPage::Search(_) => {
+                unreachable!("validated Bash Read reply")
+            }
+        })
+    }
+
+    pub(crate) async fn inspect_bash_output(
+        &self,
+        operation: crate::tools::native::BashOutputLocator,
+        request: impl FnOnce(
+            rustx_execution_protocol::process::ProcessOperationKey,
+        ) -> rustx_execution_protocol::ClientRequest
+        + Send
+        + 'static,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_execution_server::BashOutputPage> {
+        self.dispatch_data(
+            cancellation,
+            move |endpoint, data, writer, deadline, cancellation| {
+                let _writer = writer;
+                let key = operation.key_for(&endpoint)?;
+                endpoint.with_connection(Some(data), true, |connection| {
+                    connection.inspect_bash_output(&request(key), deadline, move || {
+                        cancellation
+                            .with_active(|| ())
+                            .ok_or_else(cancelled_before_dispatch)
+                    })
+                })
+            },
+        )
+        .await
     }
 
     /// One bounded logical-text page of `path` through the Session's

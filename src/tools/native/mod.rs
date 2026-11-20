@@ -53,6 +53,10 @@ mod ask_user;
 mod bash;
 pub(crate) use bash::NAME as BASH_TOOL_NAME;
 pub(crate) use bash::handoff::drive_private_bash;
+pub(crate) use bash::{
+    BashOutputLocator, PreparedBash, discard_private_output as discard_private_bash_output,
+    operation_at as bash_operation_at,
+};
 mod edit;
 mod glob;
 mod goal;
@@ -83,9 +87,11 @@ mod workflow;
 #[cfg(test)]
 pub(crate) use workflow::test_executor as test_workflow_executor;
 mod write;
+#[cfg(test)]
+pub(crate) use write::WriteTool;
 
 #[cfg(test)]
-pub(crate) use bash::{BashTestControl, BashTool};
+pub(crate) use bash::{BashTestControl, FixtureBashTool};
 #[cfg(test)]
 pub(crate) use grep::GrepTool;
 #[cfg(test)]

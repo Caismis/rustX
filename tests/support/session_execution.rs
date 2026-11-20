@@ -70,6 +70,23 @@ pub struct ExecutionFixture {
     /// The private runtime/home root the controller and manager state
     /// live under, declared last so handles drop first.
     _temporary: tempfile::TempDir,
+    _mount_parent: Option<MountParent>,
+}
+
+/// Bubblewrap's parent-death signal follows the thread that spawned it.
+/// Retain that thread until the fixture has killed and reaped its Client.
+struct MountParent {
+    lifetime: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for MountParent {
+    fn drop(&mut self) {
+        drop(self.lifetime.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// Kills and reaps the child on drop, unconditionally: an orderly exit
@@ -98,18 +115,43 @@ impl ExecutionFixture {
     /// fixture receives is not always the one the binding must reserve).
     #[must_use]
     pub fn new(workspace: &Path) -> Self {
+        Self::with_mount_view(workspace, None)
+    }
+
+    /// Runs the real Client with a private Linux bind mount over the logical workspace.
+    #[must_use]
+    pub fn with_mount_view(workspace: &Path, physical: Option<&Path>) -> Self {
         let workspace = std::fs::canonicalize(workspace).expect("fixture workspace root");
-        std::thread::Builder::new()
-            .name("execution-fixture".to_owned())
-            .spawn(move || Self::setup(&workspace))
-            .expect("execution fixture setup thread")
-            .join()
-            .expect("execution fixture setup panicked")
+        let setup = std::thread::Builder::new().name("execution-fixture".to_owned());
+        let Some(physical) = physical.map(Path::to_path_buf) else {
+            return setup
+                .spawn(move || Self::setup(&workspace, None))
+                .expect("execution fixture setup thread")
+                .join()
+                .expect("execution fixture setup panicked");
+        };
+        let (ready, fixture) = std::sync::mpsc::sync_channel(0);
+        let (lifetime, release) = std::sync::mpsc::channel::<()>();
+        let thread = setup
+            .spawn(move || {
+                if ready.send(Self::setup(&workspace, Some(&physical))).is_ok() {
+                    let _ = release.recv();
+                }
+            })
+            .expect("mount fixture setup thread");
+        let fixture = fixture.recv().expect("mount fixture setup panicked");
+        Self {
+            _mount_parent: Some(MountParent {
+                lifetime: Some(lifetime),
+                thread: Some(thread),
+            }),
+            ..fixture
+        }
     }
 
     /// The async setup, run on a dedicated current-thread runtime so the
     /// synchronous constructor stays usable inside any async test.
-    fn setup(workspace: &Path) -> Self {
+    fn setup(workspace: &Path, physical: Option<&Path>) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -149,9 +191,22 @@ impl ExecutionFixture {
                 .reserve_local_execution(&session.id)
                 .await
                 .expect("reserved local execution");
-            let mut child = ChildGuard(
+            let mut command = if let Some(physical) = physical {
+                let scratch = temporary.path().join("scratch");
+                std::fs::create_dir(&scratch).expect("Client scratch mount point");
+                let mut command = Command::new("/usr/bin/bwrap");
+                command.args(["--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--bind"])
+                    .arg(physical)
+                    .arg(workspace)
+                    .arg("--tmpfs").arg(&scratch)
+                    .arg("--setenv").arg("TMPDIR").arg(&scratch)
+                    .arg("--").arg(staged_client());
+                command
+            } else {
                 Command::new(staged_client())
-                    .env_clear()
+            };
+            let mut child = ChildGuard(
+                command.env_clear()
                     .current_dir("/")
                     .arg("--binding-file")
                     .arg(endpoint.bootstrap_path())
@@ -216,6 +271,7 @@ impl ExecutionFixture {
                 _child: child,
                 _manager: manager,
                 _temporary: temporary,
+                _mount_parent: None,
             }
         })
     }

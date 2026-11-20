@@ -399,12 +399,11 @@ impl ConversationToolRuntime {
         conversation_id: ConversationId,
         config: ConversationRuntimeConfig,
     ) -> Result<Self, ConversationRuntimeError> {
-        let mut workspace =
-            Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
-        // The Session's execution route binds to the canonical workspace
-        // once here — before the runtime, and therefore this workspace, is
-        // published. A `None` scope is a deliberately unbound route.
-        workspace.bind_execution_scope(config.execution_scope.clone());
+        let workspace = match config.execution_scope.clone() {
+            Some(scope) => Workspace::for_session(&config.workspace_root, scope),
+            None => Workspace::new(&config.workspace_root),
+        }
+        .map_err(ConversationRuntimeError::Workspace)?;
         if let Some(root) = &config.lifecycle {
             for path in [
                 config.artifacts_dir.clone(),

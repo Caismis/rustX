@@ -37,7 +37,7 @@ pub(super) fn validate(request: &ProcessRequest, reply: &ProcessReply) -> Result
     }
     match (request, reply) {
         (
-            ProcessRequest::Register { .. },
+            ProcessRequest::Register { .. } | ProcessRequest::RegisterAgentBash { .. },
             ProcessReply::Registered { .. }
             | ProcessReply::Conflict { .. }
             | ProcessReply::Unknown { .. }
@@ -65,11 +65,24 @@ pub(super) fn validate(request: &ProcessRequest, reply: &ProcessReply) -> Result
             | ProcessReply::Unknown { .. },
         )
         | (
-            ProcessRequest::ReleaseOutput { .. },
+            ProcessRequest::ReleaseOutput { .. } | ProcessRequest::DiscardBashOutput { .. },
             ProcessReply::OutputReleased { .. }
             | ProcessReply::Conflict { .. }
             | ProcessReply::Unknown { .. },
+        )
+        | (ProcessRequest::BashOutputTail { .. }, ProcessReply::Unknown { .. })
+        | (
+            ProcessRequest::BashCapture { .. },
+            ProcessReply::Unknown { .. } | ProcessReply::Conflict { .. },
         ) => Ok(()),
+        (ProcessRequest::BashOutputTail { .. }, ProcessReply::BashOutputTail { text, .. })
+            if text.len() <= rustx_execution_protocol::process::BASH_PREVIEW_BYTES =>
+        {
+            Ok(())
+        }
+        (ProcessRequest::BashCapture { .. }, ProcessReply::BashCapture { capture, .. }) => {
+            validate_bash_capture(capture.as_ref())
+        }
         (
             ProcessRequest::OutputPage {
                 cursor, max_bytes, ..
@@ -113,6 +126,32 @@ pub(super) fn validate(request: &ProcessRequest, reply: &ProcessReply) -> Result
         ) => echoes(*sequence, *echoed),
         _ => Err("process reply variant does not answer its request"),
     }
+}
+
+fn validate_bash_capture(
+    capture: Option<&rustx_execution_protocol::process::BashCaptureResult>,
+) -> Result<(), &'static str> {
+    use rustx_execution_protocol::process::{BASH_PREVIEW_BYTES, BashCaptureState};
+    let Some(capture) = capture else {
+        return Ok(());
+    };
+    if [&capture.stdout, &capture.stderr, &capture.combined]
+        .into_iter()
+        .any(|text| text.len() > BASH_PREVIEW_BYTES)
+    {
+        return Err("Bash preview exceeds its bound");
+    }
+    if capture.total.is_none()
+        != matches!(
+            capture.output,
+            BashCaptureState::Partial | BashCaptureState::Unavailable
+        )
+        || (capture.total.is_none() && !capture.truncated)
+        || capture.signal.is_some_and(|signal| signal <= 0)
+    {
+        return Err("Bash capture completeness is inconsistent");
+    }
+    Ok(())
 }
 
 fn echoes(expected: DecimalU64, echoed: DecimalU64) -> Result<(), &'static str> {

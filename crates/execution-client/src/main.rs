@@ -51,6 +51,7 @@ use rustx_execution_protocol::{
 };
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
+mod bash_capture;
 mod mutation;
 mod process;
 mod search;
@@ -198,6 +199,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::DocumentPages,
             Capability::BoundedSearch,
             Capability::Process,
+            Capability::AgentBash,
         ]),
         credential: bootstrap.credential,
     };
@@ -593,6 +595,7 @@ fn save_unavailable() -> ClientReply {
     })
 }
 
+#[allow(clippy::too_many_lines)] // The typed one-request/one-reply dispatch loop.
 fn serve(
     channel: &mut RecordChannel,
     root: &PackageDirectory,
@@ -614,6 +617,46 @@ fn serve(
             ClientRequest::Ping => ClientReply::Pong,
             ClientRequest::Process(process_request) => {
                 ClientReply::Process(operations.dispatch(process_request))
+            }
+            ClientRequest::ReadBashOutput {
+                key,
+                conversation,
+                offset,
+                limit,
+            } => operations
+                .bash_file(&key, &conversation)
+                .and_then(|file| {
+                    file.read(|root, name| read_lines(root, name, offset, limit, None))
+                })
+                .unwrap_or(ClientReply::Error {
+                    kind: ReadError::NotFound,
+                }),
+            ClientRequest::SearchBashOutput {
+                key,
+                conversation,
+                spec,
+            } => {
+                if matches!(spec, rustx_execution_protocol::SearchSpec::Grep { .. }) {
+                    operations
+                        .bash_file(&key, &conversation)
+                        .and_then(|file| {
+                            file.read(|root, name| {
+                                search::search(
+                                    root,
+                                    name,
+                                    &spec,
+                                    std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
+                                )
+                            })
+                        })
+                        .unwrap_or(ClientReply::Error {
+                            kind: ReadError::NotFound,
+                        })
+                } else {
+                    ClientReply::Error {
+                        kind: ReadError::Invalid,
+                    }
+                }
             }
             // The Client does not advertise managed output: a save message is
             // refused before any path, allocation, or queue is touched.

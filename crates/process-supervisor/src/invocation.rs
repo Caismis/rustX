@@ -15,7 +15,8 @@ use std::path::PathBuf;
 /// without shell parsing and retain the same process-tree settlement owner.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProgramInvocation {
-    pub argv: Vec<String>,
+    /// Direct executable and arguments. Shell invocations carry no argv.
+    pub argv: Option<Vec<String>>,
     pub stdin_socket: Option<PathBuf>,
     pub terminal: Option<PathBuf>,
     pub cwd_identity: (u64, u64),

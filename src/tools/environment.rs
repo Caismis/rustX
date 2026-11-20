@@ -44,24 +44,16 @@ fn is_runtime_owned_git_key(key: &str) -> bool {
         || key.starts_with("GIT_CONFIG_VALUE_")
 }
 
-/// A command environment frozen for one native Bash invocation.
-///
-/// Debug output reports only the entry count. Values stay on the invocation
-/// clone and are not written to journals or model context by this type.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) enum PreparedCommand {
-    /// The exact environment the supervisor will apply.
-    Entries(std::sync::Arc<Vec<(String, String)>>),
-    /// A bounded composition failure; never proceed with an unguarded host PATH.
-    Closed(&'static str),
-}
+pub(crate) struct PreparedCommand(pub std::sync::Arc<Vec<(String, String)>>);
 
+#[cfg(test)]
 impl std::fmt::Debug for PreparedCommand {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Entries(entries) => write!(formatter, "Entries({} redacted)", entries.len()),
-            Self::Closed(reason) => write!(formatter, "Closed({reason})"),
-        }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PreparedCommand")
+            .field(&self.0.len())
+            .finish()
     }
 }
 
@@ -105,7 +97,7 @@ impl std::error::Error for ToolEnvironmentError {}
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolEnvironment {
     authorized: Vec<(String, String)>,
-    /// Set only on a per-invocation clone, never on the shared capability snapshot.
+    #[cfg(test)]
     prepared: Option<PreparedCommand>,
     /// Test-only interpreter locations outside the baseline `PATH`.
     /// Production Skill and capability preparation never populate this.
@@ -120,6 +112,7 @@ impl ToolEnvironment {
     pub fn new() -> Self {
         Self {
             authorized: Vec::new(),
+            #[cfg(test)]
             prepared: None,
             #[cfg(test)]
             path_prefixes: Vec::new(),
@@ -183,6 +176,7 @@ impl ToolEnvironment {
         }
         Ok(Self {
             authorized: sorted.into_iter().collect(),
+            #[cfg(test)]
             prepared: None,
             #[cfg(test)]
             path_prefixes: Vec::new(),
@@ -191,11 +185,13 @@ impl ToolEnvironment {
 
     /// Attaches a frozen Bash command environment to this invocation clone.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn with_prepared_command(mut self, prepared: PreparedCommand) -> Self {
         self.prepared = Some(prepared);
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn prepared_command(&self) -> Option<&PreparedCommand> {
         self.prepared.as_ref()
     }
@@ -717,7 +713,7 @@ mod tests {
                 ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
             ]
         );
-        let frozen = environment.with_prepared_command(super::PreparedCommand::Entries(
+        let frozen = environment.with_prepared_command(super::PreparedCommand(
             std::sync::Arc::new(vec![("SECRET_TOKEN".to_owned(), "super-secret".to_owned())]),
         ));
         assert!(!format!("{frozen:?}").contains("super-secret"));

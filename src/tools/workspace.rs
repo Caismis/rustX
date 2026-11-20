@@ -90,6 +90,24 @@ impl Workspace {
         })
     }
 
+    /// Constructs a Session workspace from its catalog path without opening
+    /// that path in the Server filesystem.
+    pub(crate) fn for_session(
+        root: &Path,
+        scope: SessionExecutionScope,
+    ) -> Result<Self, WorkspaceError> {
+        if !rustx_execution_protocol::is_normalized_absolute_path(root) {
+            return Err(WorkspaceError::RootUnavailable(
+                root.to_path_buf(),
+                "the Session workspace must be a normalized absolute path".into(),
+            ));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            execution_scope: Some(scope),
+        })
+    }
+
     /// The canonical workspace root.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -101,6 +119,7 @@ impl Workspace {
     /// Called by the conversation runtime composition before the runtime
     /// is published; there is no post-construction mutation path and no
     /// caller outside the crate can attach a route.
+    #[cfg(test)]
     pub(crate) fn bind_execution_scope(&mut self, scope: Option<SessionExecutionScope>) {
         self.execution_scope = scope;
     }
