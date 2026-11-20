@@ -202,3 +202,7 @@ pub mod scheduler {
 pub mod workspace_changes {
     pub mod capture;
 }
+
+// Cache-experiment warm-run marker: touching rustx-types forces recompilation
+// of this crate and its dependents while leaving registry deps untouched —
+// measures workspace-crate invalidation cost vs full dep rebuild.
