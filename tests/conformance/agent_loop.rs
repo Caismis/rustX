@@ -3030,7 +3030,15 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     let (_, outcome) = driver.settle().await;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-        "{outcome:?}"
+        "{outcome:?}; canonical tool outcomes: {:?}",
+        driver
+            .canonical_history()
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::Tool(tool) => Some((&tool.tool_call_id, &tool.result.status)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
     );
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 2);

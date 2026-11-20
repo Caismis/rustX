@@ -1528,16 +1528,13 @@ fn client_applied_control_wins_before_file_publication() {
         }
         let error = connection
             .commit_prepared(&prepared, None, &|| Ok(()), &|| {
-                commit_count.set(commit_count.get() + 1)
+                commit_count.set(commit_count.get() + 1);
             })
             .unwrap_err();
         assert_eq!(commit_count.get(), 1);
         assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-        assert!(
-            error
-                .get_ref()
-                .is_some_and(|error| error.is::<rustx_execution_server::CommitCancelled>())
-        );
+        let receipt = error.get_ref().expect("typed cancellation receipt");
+        assert!(receipt.is::<rustx_execution_server::CommitCancelled>());
         assert!(fs::read_dir(&rig.workspace_path).unwrap().next().is_none());
 
         connection.close();

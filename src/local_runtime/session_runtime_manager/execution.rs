@@ -1220,6 +1220,11 @@ pub struct SessionExecutionScope {
     registry: Weak<SessionExecutionRegistry>,
 }
 
+enum DataCapacity {
+    Immediate,
+    WaitForSlot,
+}
+
 impl SessionExecutionScope {
     /// The Session's published endpoint, resolved at dispatch time — a
     /// lookup, never a claim. An absent, preparing, fenced, or dropped
@@ -1275,6 +1280,7 @@ impl SessionExecutionScope {
     ) -> io::Result<rustx_execution_server::BashOutputPage> {
         self.dispatch_data(
             cancellation,
+            DataCapacity::Immediate,
             move |endpoint, data, writer, deadline, cancellation| {
                 let _writer = writer;
                 let key = operation.key_for(&endpoint)?;
@@ -1316,7 +1322,7 @@ impl SessionExecutionScope {
     /// # Errors
     ///
     /// Returns `NotConnected` when the Session has no live endpoint,
-    /// `WouldBlock` while the shared data budget is full,
+    /// `WouldBlock` for an immediate request when the shared data budget is full,
     /// `io::ErrorKind::Interrupted` when cancellation wins any cut,
     /// `io::ErrorKind::TimedOut` when the absolute deadline lapses, and
     /// the endpoint's own gating and typed-exchange errors otherwise —
@@ -1333,6 +1339,7 @@ impl SessionExecutionScope {
         let worker_path = path.to_path_buf();
         self.dispatch_data(
             cancellation,
+            DataCapacity::Immediate,
             move |endpoint, data, writer, deadline, worker_cancellation| {
                 #[cfg(test)]
                 let admit_path = worker_path.clone();
@@ -1397,6 +1404,9 @@ impl SessionExecutionScope {
         let worker_path = path.to_path_buf();
         self.dispatch_data(
             cancellation,
+            // An accepted image batch can exceed the eight wire slots.
+            // Wait before acquiring a slot or reading any image bytes.
+            DataCapacity::WaitForSlot,
             move |endpoint, data, writer, deadline, worker_cancellation| {
                 endpoint.image_bytes_admitted(
                     &worker_path,
@@ -1432,6 +1442,7 @@ impl SessionExecutionScope {
         let worker_root = root.to_path_buf();
         self.dispatch_data(
             cancellation,
+            DataCapacity::Immediate,
             move |endpoint, data, writer, deadline, worker_cancellation| {
                 endpoint.search_admitted(
                     &worker_root,
@@ -1476,6 +1487,7 @@ impl SessionExecutionScope {
         let worker_path = path.to_path_buf();
         self.dispatch_data(
             cancellation,
+            DataCapacity::Immediate,
             move |endpoint, data, writer, deadline, worker_cancellation| {
                 let admit = move || {
                     worker_cancellation
@@ -1519,6 +1531,7 @@ impl SessionExecutionScope {
         let worker_path = path.to_path_buf();
         self.dispatch_data(
             cancellation,
+            DataCapacity::Immediate,
             move |endpoint, data, writer, deadline, worker_cancellation| {
                 let admit = move || {
                     worker_cancellation
@@ -1641,6 +1654,7 @@ impl SessionExecutionScope {
         let result = self
             .dispatch_data(
                 cancellation,
+                DataCapacity::Immediate,
                 move |endpoint, data, writer, deadline, worker_cancellation| {
                     endpoint.abort_prepared_admitted(
                         &prepared,
@@ -1692,6 +1706,7 @@ impl SessionExecutionScope {
     async fn dispatch_data<T: Send + 'static>(
         &self,
         cancel: &ExecutionCancellation,
+        capacity: DataCapacity,
         work: impl FnOnce(
             Arc<LocalExecutionEndpoint>,
             OwnedSemaphorePermit,
@@ -1706,14 +1721,28 @@ impl SessionExecutionScope {
             return Err(cancelled_before_dispatch());
         }
         let endpoint = self.endpoint()?;
-        let data = endpoint
-            .data_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
-            })?;
         let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let data = match capacity {
+            DataCapacity::Immediate => {
+                endpoint
+                    .data_slots
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
+                    })?
+            }
+            DataCapacity::WaitForSlot => tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(cancelled_before_dispatch()),
+                permit = tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    endpoint.data_slots.clone().acquire_owned(),
+                ) => permit
+                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "execution data slot request timed out"))?
+                    .map_err(|_| io::Error::other("execution data slots are closed"))?,
+            },
+        };
         // Only admitted work waits, and the wait never parks a blocking
         // worker: cancellation wins ties; an elapsed deadline is an
         // honest timeout, not a release.

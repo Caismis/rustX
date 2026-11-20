@@ -111,6 +111,14 @@ passed the eight targeted process tests covering the prior seven Linux
 FAST failures and the new enrollment path. The two-process file commit
 test also passed both control decisions. The complete conformance suite
 has to be rerun on that code before a full result can be recorded.
+The next targeted run exposed that a large accepted image batch could
+exhaust all eight Client data slots before the remaining images are sent.
+Image reads now wait for a slot under the existing absolute deadline and
+cancellation, before allocating file bytes or sending a request. Transport
+capacity and four-range verification remain unchanged. All six affected
+provider conformance cases pass, including the 17-image batch and the two
+provider request count it already asserts. The three Workflow repair cases
+still depend on the separate Subagent process's Session routing.
 
 The remaining #576 production work has these owners.
 
