@@ -4035,7 +4035,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "b9adeda7a274a9a8f808c48ed0c221ba4f021dba557031c8fce16c214f68dba6"
+      "local_sha256": "c31fc317aeace82d7412379a85a8613b760e04b053395536b6856a7ec0fab551"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -8601,7 +8601,7 @@
       "upstream": "packages/client/ui-session-panel/src/client/SessionPanel.tsx",
       "destination": "web-console/src/app/agent/SessionPanel.tsx",
       "classification": "B",
-      "treatment": "Chat-view floating/docked Session panel aside with dock probe, overlay dismissal, focus return, and Background jobs section, adapted from ui-session-panel SessionPanel.tsx.",
+      "treatment": "Chat-view floating/docked Session panel aside with dock probe, overlay dismissal, focus return, Environment working-directory and Background jobs sections, adapted from ui-session-panel SessionPanel.tsx.",
       "upstream_sha256": "c07b734ed701784c0144e764c191da9a2584a57498c28bbdb9c3e8d14a191ef0",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
@@ -8610,11 +8610,12 @@
         "../../presentation/primitives/keyboard-composition",
         "./BackgroundJobs",
         "./SessionPanel.module.css",
+        "./WorkingDirectory",
         "./session-panel-state",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c93add7946ed1b14c839686221582046386a80726314d4b2161a05c03fc7ca47"
+      "local_sha256": "d03425120cfb36f6be0fbe94952b23203ca39d6fb5791076ef2c44da7c593592"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
@@ -8627,6 +8628,41 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "local_sha256": "37976c2a358b05d204cd98c589250e714a75c814566400203dca80e76f696e42"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/ProjectRow.tsx",
+      "destination": "web-console/src/app/agent/WorkingDirectory.tsx",
+      "classification": "B",
+      "treatment": "Environment working-directory row adapted from ui-session-panel ProjectRow.tsx: canonical per-session cwd read from the catalog row, view summary, or session settings projections; basename with muted truncating parent and focus-revealed tooltip carrying the full path. Cordis slot registration, context menu targets, and Harness projection hooks are excluded; rustX has no directory menu surface.",
+      "upstream_sha256": "f92214c56777d5d08bec55a2e681eddfb54b14c0818770e74c2d0435b3617edc",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../client/app-server",
+        "../../client/selectors",
+        "../../locale/react",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/icons",
+        "./WorkingDirectory.module.css"
+      ],
+      "excluded_dependencies": [
+        "Cordis slot registry and context-menu targets",
+        "Harness session/workspace/host projection hooks",
+        "directory context menu actions"
+      ],
+      "local_sha256": "aebe74b478521098f5e7190a6170127185f42e31ebadec9efe8f8439aa1913e6"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/ProjectRow.module.css",
+      "destination": "web-console/src/app/agent/WorkingDirectory.module.css",
+      "classification": "B",
+      "treatment": "Session panel working-directory row name/parent truncation geometry and focus ring adapted from ui-session-panel ProjectRow.module.css.",
+      "upstream_sha256": "641ecc7095c1fe4cca4eeee8e5354014ede5bfe3505ae9bdd25020f356583006",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "c949583838d8b889fadf46c3611610ea06f7558cafbf47f6f0be88fa82c0abcf"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/recent-views.ts",

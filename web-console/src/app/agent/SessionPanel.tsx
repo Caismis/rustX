@@ -4,6 +4,7 @@ import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { observeComposition } from '../../presentation/primitives/keyboard-composition';
 import { BackgroundJobs } from './BackgroundJobs';
+import { WorkingDirectory } from './WorkingDirectory';
 import { panelElementId, presentationOf, toggleElementId, useSessionPanelState } from './session-panel-state';
 import css from './SessionPanel.module.css';
 
@@ -83,6 +84,7 @@ export function SessionPanel({ client, sessionId }: { client: AppServerClient; s
   useOverlayDismissal(panel, presentation === 'overlay', toggleId, dismissOverlay);
   const focus = useFocusReturn(!shown, toggleId);
 
+  const environmentTitleId = `${panelElementId(sessionId)}-environment`;
   const sectionTitleId = `${panelElementId(sessionId)}-background-jobs`;
 
   return (
@@ -98,6 +100,16 @@ export function SessionPanel({ client, sessionId }: { client: AppServerClient; s
           onBlur={focus.onBlur}
           data-session-panel={presentation}
         >
+          <section className={css.section} aria-labelledby={environmentTitleId} data-session-panel-section="environment">
+            <div className={css.head}>
+              <h2 id={environmentTitleId} className={css.title}>{tx('common:activity.environment')}</h2>
+            </div>
+            <div className={css.body}>
+              <div data-slot="">
+                <WorkingDirectory client={client} sessionId={sessionId} />
+              </div>
+            </div>
+          </section>
           <section className={css.section} aria-labelledby={sectionTitleId} data-session-panel-section="background-jobs">
             <div className={css.head}>
               <h2 id={sectionTitleId} className={css.title}>{tx('common:activity.background-jobs')}</h2>

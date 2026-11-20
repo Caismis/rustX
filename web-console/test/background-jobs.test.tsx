@@ -52,6 +52,52 @@ it('keeps Session panel toggle present without jobs and shows blue dot only when
   } finally { server.client.disconnect(); }
 });
 
+it('shows the session working directory above background jobs, even with zero jobs', async () => {
+  const server = new Server();
+  try {
+    server.snapshots.set('A', { ...snapshot(), jobs: [] });
+    await server.attached('A');
+    renderPanel(server, 'A', true);
+    fireEvent.click(toggleButton());
+    const panel = document.querySelector('[data-session-panel]') as HTMLElement;
+    expect(panel).toBeTruthy();
+    const environment = panel.querySelector('[data-session-panel-section="environment"]') as HTMLElement;
+    expect(within(environment).getByRole('heading', { name: 'Environment', level: 2 })).toBeTruthy();
+    const row = environment.querySelector('[data-session-panel-project]') as HTMLElement;
+    expect(row.textContent).toContain('A');
+    expect(row.textContent).toContain('/workspace');
+    const folder = row.querySelector<HTMLElement>('[tabindex="0"]') as HTMLElement;
+    fireEvent.focus(folder);
+    const tip = within(panel).getByRole('tooltip');
+    expect(tip.textContent).toContain('Working folder');
+    expect(tip.textContent).toContain('/workspace/A');
+    const jobs = panel.querySelector('[data-session-panel-section="background-jobs"]') as HTMLElement;
+    expect(jobs.querySelector('[data-slot]')?.childElementCount).toBe(0);
+    const order = [...panel.querySelectorAll('[data-session-panel-section]')].map(el => el.getAttribute('data-session-panel-section'));
+    expect(order).toEqual(['environment', 'background-jobs']);
+  } finally { server.client.disconnect(); }
+});
+
+it('splits a Windows working directory into name and parent and keeps the native path in the tooltip', async () => {
+  const server = new Server();
+  try {
+    server.summaries.set('A', { cwd: 'D:\\work\\app' });
+    server.snapshots.set('A', { ...snapshot(), jobs: [] });
+    await server.attached('A');
+    renderPanel(server, 'A', true);
+    fireEvent.click(toggleButton());
+    const panel = document.querySelector('[data-session-panel]') as HTMLElement;
+    const row = panel.querySelector('[data-session-panel-project]') as HTMLElement;
+    const folder = row.querySelector<HTMLElement>('[tabindex="0"]') as HTMLElement;
+    const parts = folder.querySelectorAll('span');
+    expect(parts[0]?.textContent).toBe('app');
+    expect(parts[1]?.textContent).toBe('D:\\work');
+    fireEvent.focus(folder);
+    const tip = within(panel).getByRole('tooltip');
+    expect(tip.textContent).toContain('D:\\work\\app');
+  } finally { server.client.disconnect(); }
+});
+
 it('docks automatically when probe fits, flips pinned storage, and marks toggle unavailable outside Chat view', async () => {
   let probeCallback: ResizeObserverCallback | undefined;
   let observedElement: Element | undefined;
