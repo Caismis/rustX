@@ -1300,7 +1300,17 @@ serve the marker bytes and the source stamp from the Client's mount
 view, the listing shows the marker and never the Server-side decoy,
 the decoy read is `EnvironmentResourceNotFound` with no Server-local
 fallback, and the Server's own view keeps the marker `NotFound` and
-the decoy intact before and after.
+the decoy intact before and after. The same proof also runs a bound
+foreground `command/exec` (`/bin/bash -c 'cat marker; printf client >
+process-marker'`) through the Client's view: it exits `0`, its stdout is
+the rewritten marker, the result file exists only in the physical
+directory, and the Server's view keeps it absent. An unbound Session's
+command is `ExecutionUnavailable`. The launcher gives the Client a
+private `tmpfs` TMPDIR and `--dev /dev` (a plain `--ro-bind / /` leaves
+`/dev` `nodev`, so the supervisor's `/dev/null` open fails), with the
+staged `bash-supervisor` beside it. This proves the App Server's argv
+`command/exec` path only — native Agent Bash is not migrated and is not
+covered by this proof.
 The process layer adds its own evidence inside the Client crate
 (`process::tests`, real spawns through the staged `bash-supervisor`
 sibling): foreign-key refusal before lookup, `/bin/pwd` observed in a

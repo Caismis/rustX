@@ -19,13 +19,29 @@
 #  - `explicit_composition_reads_from_client_mount_namespace` runs the real
 #    two-process App Server composition, where a test-only sibling shell
 #    launcher inside the fixture's private bin directory wraps the staged
-#    Client in the same bwrap layout. Product fs/readFile, fs/getMetadata
-#    and fs/readDirectory calls serve the marker from the Client's private
-#    mount view while the Server's own view of the same absolute workspace
-#    path proves the marker stays NotFound and the Server-only decoy stays
-#    unreachable, before and after. The launcher is a fixture artifact
-#    only; production resolves the sibling executable directly and has no
-#    override.
+#    Client in the same bwrap layout:
+#
+#      bwrap --ro-bind / / --dev /dev --bind <physical> <workspace> --tmpfs <bin>/tmp
+#
+#    with TMPDIR=<bin>/tmp so the Client's own scratch is a private tmpfs
+#    outside the workspace: host /tmp and the bootstrap socket stay as the
+#    Server sees them. `--dev /dev` supplies usable device nodes: a plain
+#    `--ro-bind / /` leaves /dev nodev, and the supervisor's `/dev/null`
+#    stdin open fails with EACCES. A tmpfs is required because the staging tree may sit
+#    on a filesystem without POSIX permissions, and the supervisor's
+#    owner-only environment-snapshot check must hold. The staged `bash-supervisor`
+#    sits beside the Client as in production. Product fs/readFile,
+#    fs/getMetadata, fs/readDirectory and fs/writeFile calls serve the marker
+#    from the Client's private mount view, and a foreground `command/exec`
+#    for the bound Session runs `/bin/bash -c 'cat marker; printf client >
+#    process-marker'` there: its output is the rewritten marker, and the
+#    result file exists only in the physical directory. The Server's own view
+#    of the same absolute workspace path stays NotFound for the marker and the
+#    result, the Server-only decoy stays unreachable, and an unbound Session's
+#    command is refused as ExecutionUnavailable. The launcher is a fixture
+#    artifact only; production resolves the sibling executable directly and
+#    has no override. This proves the App Server's command/exec argv path only,
+#    not native Agent Bash.
 #
 # The product proof runs only against the real prepared artifacts — the
 # process harness plus its metadata-verified sibling Execution Client — so

@@ -1284,17 +1284,33 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             "staged Execution Client is absent: {staged:?}"
         );
         stage_binary(bin, "client-real", &staged);
+        // The Client's own sibling supervisor, staged beside it exactly as
+        // the production executable boundary resolves it.
+        let supervisor = std::env::current_exe()
+            .unwrap()
+            .with_file_name("bash-supervisor");
+        assert!(
+            supervisor.is_file(),
+            "staged bash-supervisor is absent: {supervisor:?}"
+        );
+        stage_binary(bin, "bash-supervisor", &supervisor);
         let physical = bin.join("physical");
         std::fs::create_dir(&physical).unwrap();
         let marker = b"mount-view proof marker";
         std::fs::write(physical.join("marker"), marker).unwrap();
+        // The Client's writable scratch: a private tmpfs at its own path,
+        // outside the workspace and the bootstrap — the host /tmp and the
+        // bootstrap socket stay exactly as the Server sees them. A tmpfs is
+        // required: the owner-only snapshot check needs POSIX permissions.
+        let scratch = bin.join("tmp");
+        std::fs::create_dir(&scratch).unwrap();
         // The test-only launcher: `$4` is the Server's explicit trusted
         // `--workspace` value; the real Client still rechecks it byte for
         // byte against the bootstrap record.
         let launcher = bin.join("rustx-execution-client");
         std::fs::write(
             &launcher,
-            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --bind \"$bin/physical\" \"$4\" -- \"$bin/client-real\" \"$@\"\n",
+            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexport TMPDIR=\"$bin/tmp\"\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind \"$bin/physical\" \"$4\" --tmpfs \"$bin/tmp\" -- \"$bin/client-real\" \"$@\"\n",
         )
         .unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1492,6 +1508,91 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             std::io::ErrorKind::NotFound
         );
         assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        // A foreground `command/exec` for the bound Session runs inside the
+        // Client's mount view: it reads the rewritten marker the Server can
+        // never see and writes a result only the physical directory holds.
+        let MethodResult::CommandExec { result: exec } = result(
+            &client,
+            Method::CommandExec(rustx::app_server::command::ExecParams {
+                session_id: f.sessions[0].clone(),
+                command: vec![
+                    "/bin/bash".into(),
+                    "-c".into(),
+                    "cat marker; printf client > process-marker".into(),
+                ],
+                cwd: workspace.display().to_string(),
+                env: std::collections::BTreeMap::new(),
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                timeout_ms: None,
+                size: None,
+            }),
+        )
+        .await
+        else {
+            panic!("command/exec through the Client's mount view")
+        };
+        let decode = |text: &str| {
+            String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(text).unwrap())
+                .into_owned()
+        };
+        assert_eq!(
+            exec.exit_code,
+            Some(0),
+            "status {:?}; stdout {:?}; stderr {:?}",
+            exec.status,
+            decode(&exec.stdout_base64),
+            decode(&exec.stderr_base64)
+        );
+        assert_eq!(
+            exec.status,
+            rustx::app_server::command::ExecStatus::Completed
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&exec.stdout_base64)
+                .unwrap(),
+            rewritten
+        );
+        assert_eq!(
+            std::fs::read(physical.join("process-marker")).unwrap(),
+            b"client"
+        );
+        assert_eq!(
+            std::fs::metadata(workspace.join("process-marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        // A Session that never bound a Client cannot run a command either.
+        let Response::Failure(failure) = rpc(
+            &client,
+            13,
+            Method::CommandExec(rustx::app_server::command::ExecParams {
+                session_id: SessionId::new("ses_00000000-0000-7000-8000-000000000099"),
+                command: vec!["/bin/true".into()],
+                cwd: workspace.display().to_string(),
+                env: std::collections::BTreeMap::new(),
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                timeout_ms: None,
+                size: None,
+            }),
+        )
+        .await
+        else {
+            panic!("an unbound Session's command must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
 
         client.close().await;
         terminate(&child);
