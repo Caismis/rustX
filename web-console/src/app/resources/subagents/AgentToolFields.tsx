@@ -89,17 +89,23 @@ function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: 
   const options = new Map<string, { name: string; description?: string }>(discovered?.map(tool => [tool.name, tool]));
   for (const tool of exact) if (!options.has(tool)) options.set(tool, { name: tool });
 
-  return <div className={css.toolServer}>
+  return <section className={css.toolServer} aria-label={name}>
     <div className={css.toolServerHead}>
-      <McpIcon />
-      <strong>{name}</strong>
+      <div className={css.toolServerIdentity}>
+        <span className={css.toolServerIcon} aria-hidden="true"><McpIcon /></span>
+        <div>
+          <h3>{name}</h3>
+          {all ? <p>{tx('resources:subagents.mcp-includes-new-tools')}</p>
+            : options.size > 0 && <p>{tx('resources:subagents.mcp-selected-count', { selected: exact.length, total: options.size })}</p>}
+        </div>
+      </div>
       <div className={css.toolSwitch}>
         <span>{tx('resources:subagents.all-mcp-tools')}</span>
         <Switch label={tx('resources:subagents.all-mcp-tools-for', { p0: name })} checked={all}
           onChange={checked => change(checked ? 'all' : undefined)} />
       </div>
     </div>
-    {options.size > 0 && <ResourceChoices label={tx('resources:subagents.mcp-tool-list', { p0: name })}
+    {options.size > 0 && <ResourceChoices compactTools label={tx('resources:subagents.mcp-tool-list', { p0: name })}
       options={[...options.values()]} selected={exact} change={checked => change(checked.length ? checked : undefined)} />}
     {failed ? <div className={css.toolStatus}>
       <p role="status">{tx('resources:subagents.mcp-tools-failed')}</p>
@@ -107,7 +113,7 @@ function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: 
         onClick={() => setAttempt(value => value + 1)}>{tx('resources:subagents.retry-mcp-tools')}</Button>
     </div> : !current && loadMcpTools ? <div className={css.toolStatus}><p role="status">{tx('resources:subagents.loading-mcp-tools')}</p></div>
       : discovered?.length === 0 && <div className={css.toolStatus}><p>{tx('resources:subagents.mcp-empty')}</p></div>}
-  </div>;
+  </section>;
 }
 
 /** Already authored Managed Python selections still use their native source

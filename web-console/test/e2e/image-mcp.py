@@ -8,6 +8,7 @@ import sys
 import time
 
 PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+LONG_DESCRIPTION = "Describe the image and its context, including framing, orientation, lighting, and relevant accessibility details. " * 5
 for line in sys.stdin:
     request = json.loads(line)
     if "id" not in request:
@@ -19,6 +20,8 @@ for line in sys.stdin:
         result = {"protocolVersion": request["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "native-image-fixture", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": [{"name": "render_image", "description": "Produce a deterministic one-pixel PNG", "inputSchema": {"type": "object", "properties": {}}}]}
+        if sys.argv[2:] == ["long-description"]:
+            result["tools"].append({"name": "describe_image", "description": LONG_DESCRIPTION.strip(), "inputSchema": {"type": "object", "properties": {}}})
     elif method == "tools/call":
         result = {"content": [{"type": "image", "data": PNG, "mimeType": "image/png"}]}
     elif method == "ping":

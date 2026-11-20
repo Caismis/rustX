@@ -109,17 +109,29 @@
 .form .featureGroup legend { margin-bottom: 2px; }
 .form .nativeTools > fieldset {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 124px), 1fr));
-  gap: 2px 8px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 127px), 1fr));
+  gap: 6px;
 }
 .form .nativeTools label {
   gap: 8px;
   min-width: 0;
-  min-height: 32px;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
   overflow-wrap: anywhere;
   color: var(--dsw-alias-label-primary);
+  cursor: pointer;
 }
-.nativeTools input { flex: none; margin: 0; }
+.form .nativeTools label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 6%, var(--dsw-alias-bg-layer-2));
+}
+.nativeTools input, .toolChoiceLabel input { flex: none; margin: 0; }
+.nativeTools label:has(input:disabled) { cursor: default; }
 .form .choiceGroup { display: grid; gap: 8px; min-width: 0; }
 .form .choiceGroup p { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 .scopedChoices { min-width: 0; }
@@ -130,18 +142,71 @@
   font-size: 12px;
   line-height: 18px;
 }
-.serverList { min-width: 0; }
+.serverList { display: grid; gap: 8px; min-width: 0; }
 .toolServer {
   min-width: 0;
-  padding-block: 6px;
-  border-top: .5px solid var(--dsw-alias-border-l2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
 }
-.toolServerHead { flex-wrap: wrap; min-height: 32px; }
-.toolServerHead svg { flex: none; color: var(--dsw-alias-label-secondary); }
-.toolServerHead strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
+.toolServerHead { flex-wrap: wrap; justify-content: space-between; padding: 9px 12px; }
+.toolServerIdentity { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; overflow-wrap: anywhere; }
+.toolServerIcon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  block-size: 28px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+.toolServerIdentity h3 { margin: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; line-height: 18px; }
+.toolServer > .resourceList, .toolServer > .toolStatus { border-top: 1px solid var(--dsw-alias-border-l2); }
+.toolServer > .resourceList > .filter { margin: 8px 12px; }
 .toolSwitch { margin-inline-start: auto; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .toolStatus { min-height: 30px; }
+.toolServer > .toolStatus { padding: 5px 12px; }
 .resourceList { min-width: 0; }
+.toolChoiceList { display: grid; min-width: 0; max-block-size: 300px; overflow: auto; overscroll-behavior: contain; }
+.toolChoiceList:has([data-expanded]) { max-block-size: none; }
+.toolChoiceRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; min-width: 0; }
+.toolChoiceRow + .toolChoiceRow { border-top: 1px solid var(--dsw-alias-border-l2); }
+.form .toolChoiceLabel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.form .toolChoiceLabel:has(> input[type=checkbox]) { align-items: start; }
+.toolChoiceLabel input { margin-top: 2px; }
+.toolChoiceLabel:has(input:disabled) { cursor: default; }
+.toolChoiceText { display: grid; gap: 1px; min-width: 0; }
+.toolChoiceName { color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 12px; font-weight: 550; line-height: 18px; overflow-wrap: anywhere; }
+.toolChoiceDescription { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 17px; }
+.toolChoiceRow[data-expanded] .toolChoiceDescription { white-space: pre-wrap; overflow-wrap: anywhere; }
+.toolChoiceDetails {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: 5px 0 0;
+  margin-inline-end: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+.toolChoiceDetails[aria-expanded=true] svg { transform: rotate(180deg); }
+.toolChoiceDetails:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
+@media (hover: hover) {
+  .form .nativeTools label:hover, .toolChoiceRow:hover, .toolChoiceDetails:hover { background: var(--dsw-alias-interactive-bg-hover); }
+}
 .resourceChoices {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
