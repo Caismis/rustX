@@ -1,5 +1,6 @@
 import { Fragment, lazy, useMemo, useRef } from 'react';
 import { MarkdownText } from './MarkdownText';
+import type { MarkdownFileMentions } from './FileLinks';
 import { parseExpress, type ExpressNode, type ExpressSurface } from './a2ui-express';
 import { ExpressCard } from './ExpressCard';
 import { ExpressGeneration } from './ExpressGeneration';
@@ -70,7 +71,7 @@ function expressParts(source: string, streaming: boolean, cache: Map<string, Exp
   return parts;
 }
 
-export function AssistantMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export function AssistantMarkdown({ text, streaming = false, fileMentions }: { text: string; streaming?: boolean; fileMentions?: MarkdownFileMentions }) {
   const cache = useRef(new Map<string, ExpressSurface | null>());
   const parts = useMemo(() => expressParts(text, streaming, cache.current), [text, streaming]);
   return <>{parts.map((part, index) => <Fragment key={part.start}>
@@ -80,6 +81,6 @@ export function AssistantMarkdown({ text, streaming = false }: { text: string; s
           ? <PlaygroundExpress key={part.source} source={part.source} fallback={part.text} tree={part.tree} streaming={streaming}/>
           : part.tree && <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>}
       </ExpressGeneration>
-      : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
+      : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1} fileMentions={fileMentions}/>}
   </Fragment>)}</>;
 }

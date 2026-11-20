@@ -13,8 +13,9 @@ import { useTranslation } from '../../locale/react';
  * full parse self-heals it.
  */
 
-import { memo, useMemo, useRef } from 'react'
+import { memo, useContext, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
+import { FileMentionsContext, type MarkdownFileMentions } from './FileLinks.tsx'
 import { IncrementalMarkdownParser } from './incremental.ts'
 import { parseGfm, parseGfmWithMath } from './parse.ts'
 import {
@@ -32,6 +33,7 @@ export type { MarkdownCodeLabels, MarkdownLabels } from './render.tsx'
 function renderSettled(
   text: string,
   labels: MarkdownLabels,
+  fileMentions?: MarkdownFileMentions,
 ): ReactNode[] {
   const root = parseGfmWithMath(text)
   const targets = createReferenceTargets()
@@ -39,6 +41,7 @@ function renderSettled(
   const context: MarkdownRenderContext = {
     streaming: false,
     labels,
+    fileMentions,
     targets,
     footnoteOrder: [],
     footnoteCounts: new Map(),
@@ -151,13 +154,16 @@ class StreamingRenderer {
  * identity discards the streaming render cache mid-message.
  * Raw HTML stays literal, links are protocol-allowlisted, and images render alt text.
  */
-export const MarkdownText = memo(function MarkdownText({ text, streaming = false, labels: suppliedLabels, variant = 'normal' }: {
+export const MarkdownText = memo(function MarkdownText({ text, streaming = false, labels: suppliedLabels, fileMentions: suppliedFileMentions, variant = 'normal' }: {
   text: string
   variant?: 'normal' | 'compact'
   streaming?: boolean
   labels?: MarkdownLabels
+  fileMentions?: MarkdownFileMentions
 }) {
   const tx = useTranslation();
+  const contextFileMentions = useContext(FileMentionsContext);
+  const fileMentions = suppliedFileMentions ?? contextFileMentions;
   const defaults = useMemo<MarkdownLabels>(() => ({ code: { copyLabel: tx('common:markdown.copy-code'), copiedLabel: tx('common:markdown.copied') }, footnotes: tx('common:markdown.footnotes') }), [tx]);
   const labels = suppliedLabels ?? defaults;
   const streamRef = useRef<StreamingRenderer | null>(null)
@@ -165,13 +171,13 @@ export const MarkdownText = memo(function MarkdownText({ text, streaming = false
   const children = useMemo(() => {
     if (!streaming) {
       streamRef.current = null
-      return renderSettled(text, labels)
+      return renderSettled(text, labels, fileMentions)
     }
     if (streamRef.current === null || streamLabelsRef.current !== labels) {
       streamRef.current = new StreamingRenderer(labels)
       streamLabelsRef.current = labels
     }
     return streamRef.current.render(text)
-  }, [text, streaming, labels])
+  }, [text, streaming, labels, fileMentions])
   return <div className={`${css.markdown} ${variant === 'compact' ? css.compact : ''}`} data-markdown-variant={variant}>{children}</div>
 })

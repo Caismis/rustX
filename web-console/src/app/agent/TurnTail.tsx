@@ -72,8 +72,10 @@ export function TurnTail({ text, response, onHistorical, disabled, lineageSwitch
       {response.retry_locator && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
       <Tooltip label={tx(forking ? 'common:session-product.forking' : 'agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} aria-busy={forking || undefined} disabled={disabled || forking} onClick={() => onHistorical('fork', response)}>{forking ? <StateDot state="ongoing"/> : <IconBranchOutline16/>}</button></Tooltip>
     </>}
-    {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
-    <MessageTime time={response.completed_at}/>
+    <span className={css.endInfo}>
+      {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
+      <MessageTime time={response.completed_at}/>
+    </span>
   </div>;
-  return children ? <div className={css.root}>{children}{actions}</div> : actions;
+  return children ? <div className={css.root} data-chat-flow-kind="turn-tail">{children}{actions}</div> : <div className={css.root} data-chat-flow-kind="turn-tail">{actions}</div>;
 }

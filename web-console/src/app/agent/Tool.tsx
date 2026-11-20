@@ -47,7 +47,10 @@ export function Tool({ tool: original, messageId }: { tool: ForegroundToolExecut
   const readImage = view.variant === 'image';
   const imageName = readImageName(view.path);
   const title = readImage ? tx('tools:tool-card.read-image') : tool.tool_id === 'tool-todo' ? tx('tools:todo.title') : view.title;
-  const openPath = readImage && openFile && view.path && !['failure', 'cancelled', 'uncertain'].includes(view.state) ? () => openFile({ path: view.path! }) : undefined;
+  const fileTool = view.variant === 'image' || view.variant === 'read' || view.variant === 'write' || view.variant === 'edit';
+  const openPath = fileTool && openFile && view.path && !['failure', 'cancelled', 'uncertain'].includes(view.state)
+    ? () => openFile(view.filePathLine !== undefined ? { path: view.path!, line: view.filePathLine } : { path: view.path! })
+    : undefined;
   const summary = readImage && view.path === view.summary ? imageName ?? view.summary : view.summary;
   return <ToolCard disclosure={disclosure ? { open, toggle: () => { if (!open) input.expand(); disclosure.toggle(key); } } : undefined}
     onExpand={input.expand} onOpenPath={openPath}

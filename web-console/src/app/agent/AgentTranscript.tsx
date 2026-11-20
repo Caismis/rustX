@@ -18,7 +18,7 @@ import { turnPresentation } from '../../bindings/turn-presentation';
 import { compactionPlacement } from '../../bindings/compaction-placement';
 import { approvalProcessEntries, isFinalTurnDescriptor, isFinalTurnMessage, steeringBoundaries, turnProcesses } from '../../bindings/turn-process';
 import { headStepSeatKey, messageStepKey, stepMemberKey, stepActivity, stepGroups, type StepPiece, type StepMember, type StepMessageHead } from '../../bindings/step-groups';
-import { StepGroup } from '../../presentation/agent/StepGroup';
+import { StepGroup, type StepActivity } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
@@ -48,6 +48,8 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { AssistantMarkdown } from '../../presentation/markdown/AssistantMarkdown';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
+import { FileLinks, FileMentionsContext, producedFileMentions, type MarkdownFileMentions } from '../../presentation/markdown/FileLinks';
+import { useSearchableHidden } from '../../presentation/agent/searchable-hidden';
 import type { PublicationHead } from '../../client/publication-heads';
 import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v80';
 import { UserMessageEditor, UserMessageVersions, type UserMessageVersionLabels } from './UserMessageVersions';
@@ -62,12 +64,15 @@ const hasInlineBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type =
   ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
   : entry.item.type === 'configuration_applied' ? hasConfigurationChangeRow(entry.item.change)
     : entry.item.type !== 'message' || entry.item.message.role !== 'tool' && !isContextInjection(entry.item.message);
-function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bodyHidden, message, tools, actions, editor, blocks, streaming, reasoningHidden, other }: {
-  id: string; hidden?: boolean; owner?: string; turnOwner?: string; reveal?: string; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
+const noopReveal = () => {};
+function MessageSeat({ id, hidden, owner, turnOwner, reveal, onReveal, prefix, suffix, bodyHidden, message, tools, actions, editor, blocks, streaming, reasoningHidden, other }: {
+  id: string; hidden?: boolean; owner?: string; turnOwner?: string; reveal?: string; onReveal?: () => void; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
   message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; editor?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
 }) {
-  return <div className={css.flow} hidden={hidden} data-chat-anchor-key={id} data-chat-turn-owner={turnOwner} data-turn-process-owner={owner} data-response-reveal={reveal}>
-    {prefix}<div className={css.flow} hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} editor={editor} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
+  const seatRef = useSearchableHidden(!!hidden, onReveal ?? noopReveal);
+  const bodyRef = useSearchableHidden(!!bodyHidden, onReveal ?? noopReveal);
+  return <div ref={seatRef} className={css.flow} data-chat-anchor-key={id} data-chat-turn-owner={turnOwner} data-turn-process-owner={owner} data-response-reveal={reveal}>
+    {prefix}<div ref={bodyRef} className={css.flow}>{message ? <Message message={message} tools={tools} actions={actions} editor={editor} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
 export interface RequestFeedback {
@@ -89,6 +94,7 @@ function withProcessSpacing(rows: (FlowRow | null)[]) {
 export function AgentTranscript({ snapshot, history, accepted = [], publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, userMessageHistory, editedMessage, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'|'inbound'>>; history?: TranscriptCache; accepted?: readonly Submission[]; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; userMessageHistory?: UserMessageHistory; editedMessage?: ResponseRetry['edited']; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
+  const openFile = useContext(FileLinks);
   const isUser = (message: MessageBlock) => isUserBubble(message, receiver?.parent_agent_id);
   const messageControlsDisabled = !userMessageHistory || !!historicalDisabled || !lineageSwitchSafe;
   const { edit, open, setText, cancel } = useUserMessageEdit(messageControlsDisabled);
@@ -199,12 +205,49 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const requestFeedback = suppliedFeedback ?? noFeedback;
   const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
   const turnOrdinals = new Map<string, number>();
+  const turnMentionMap = new Map<string, Set<string>>();
+  const recordMention = (turnKey: string, path?: string) => {
+    if (!path) return;
+    let set = turnMentionMap.get(turnKey);
+    if (!set) { set = new Set(); turnMentionMap.set(turnKey, set); }
+    set.add(path);
+  };
   for (const entry of entries) {
     const owner = entry.turn_process ?? entry.completed_response?.origin ?? (entry.item.type === 'attempt_terminal' ? entry.item.turn : undefined);
     if (!owner) continue;
     const key = attemptOwnerKey(owner);
     if (!turnOrdinals.has(key)) turnOrdinals.set(key, turnOrdinals.size + 1);
+    for (const tool of entry.tool_calls ?? []) {
+      const card = toolCard(tool);
+      if ((card.variant === 'write' || card.variant === 'edit') && card.state === 'success') recordMention(key, card.path);
+    }
   }
+  for (const descriptor of descriptors) {
+    const owner = descriptor.turn_process ?? descriptor.completed_response?.origin;
+    if (!owner) continue;
+    const key = attemptOwnerKey(owner);
+    for (const tool of descriptor.tool_calls) {
+      const card = toolCard(tool);
+      if ((card.variant === 'write' || card.variant === 'edit') && card.state === 'success') recordMention(key, card.path);
+    }
+  }
+  for (const [key, turn] of deliveries) {
+    for (const batch of turn.batches) {
+      for (const item of batch.deliveries ?? []) recordMention(key, item.file.path);
+      for (const item of batch.head?.items ?? []) recordMention(key, item.file?.path);
+    }
+  }
+  const turnMentions = new Map<string, MarkdownFileMentions>();
+  if (openFile) {
+    const openLabel = (path: string) => tx('artifacts:changes.open-file-aria', { name: path.split(/[/\\]/).pop() || path });
+    for (const [key, paths] of turnMentionMap) {
+      if (paths.size > 0) turnMentions.set(key, producedFileMentions([...paths], openFile, openLabel));
+    }
+  }
+  const withTurnMentions = (turnKey: string | undefined, content: ReactNode) => {
+    const mentions = turnKey ? turnMentions.get(turnKey) : undefined;
+    return mentions ? <FileMentionsContext.Provider value={mentions}>{content}</FileMentionsContext.Provider> : content;
+  };
   const deliveredTurns = new Set<string>();
   const deliveryTail = (key: string, before?: string, owner?: {conversation_id:string;attempt_id?:string|null}) => {
     const turn = deliveries.get(key);
@@ -225,6 +268,18 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const toggleSteps = (keys: readonly string[]) => setStepsOpen(previous => {
     const next = new Set(previous), open = keys.some(key => previous.has(key));
     for (const key of keys) { if (open) next.delete(key); else next.add(key); }
+    return next;
+  });
+  const openSteps = (keys: readonly string[]) => setStepsOpen(previous => {
+    if (keys.every(key => previous.has(key))) return previous;
+    const next = new Set(previous);
+    for (const key of keys) next.add(key);
+    return next;
+  });
+  const revealTurn = (key: string) => setExpanded(previous => {
+    if (previous.has(key)) return previous;
+    const next = new Set(previous);
+    next.add(key);
     return next;
   });
 
@@ -321,8 +376,8 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => history?.window || tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => sameToolOccurrence(live, tool) && (tool.metadata_ref == null || live.metadata_ref == null || live.metadata_ref.conversation_id === tool.metadata_ref.conversation_id)) ?? tool);
   const liveGroup = (tools: readonly ForegroundToolExecution[], reasoning?: string) => {
     const active = tools.filter(tool => tool.state.type !== 'settled').at(-1);
-    const kind = active ? stepActivity(active.name) : 'thinking';
-    return { activityTitle: tx(`agent:step-process.live.${kind}`), detail: transcriptMode === 'standard' ? (active ? toolCard(active).summary : reasoning?.split('\n').find(line => line.trim())) : undefined };
+    const kind: StepActivity | 'thinking' = active ? stepActivity(active.name) : 'thinking';
+    return { running: true, liveActivity: kind, activityTitle: tx(`agent:step-process.live.${kind}`), detail: transcriptMode === 'standard' ? (active ? toolCard(active).summary : reasoning?.split('\n').find(line => line.trim())) : undefined };
   };
   // Publication audits are frozen released output, not diagnostic cards. Empty
   // failed requests (including overflow before compaction) have no Chat body.
@@ -359,6 +414,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     return <div className={css.flowItem} hidden={!processOpen} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} open={keys.some(key => stepsOpen.has(key))}
       direct={verbose || !groupedLive && (!entry || entry.turn_process?.outcome === 'running')}
       {...(!entry && snapshot.attempt?.phase.type === 'running' || entry?.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(memberTools), piece.group.members.flatMap(member => 'head' in member ? (member.head.blocks ?? (member.head.message.role === 'assistant' ? member.head.message.content : [])).filter(block => block.type === 'reasoning').map(block => block.text ?? '') : member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
+      onReveal={() => openSteps(keys)}
       onToggle={() => toggleSteps(keys)}>
       {piece.group.members.map(member => <div key={'head' in member ? 'message:' + member.head.message.id : entryIdentity(member.entry)}>{'head' in member ? headBody(member.head, member.blocks) : member.blocks && member.entry.item.type === 'message'
         ? <Message message={member.entry.item.message} include={member.blocks} tools={toolsOf(member.entry)}/> : audit(member.entry)}</div>)}
@@ -383,6 +439,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       return <div className={css.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={key}>
         {segment.process ? <StepGroup id={key} counts={[]} open={stepsOpen.has(key)} direct={!groupedLive}
           {...(streaming ? liveGroup(tools, blocks.filter((block,index)=>segment.indices.includes('block_index' in block ? block.block_index : index)&&block.type==='reasoning').map(block=>'text' in block ? block.text ?? '' : '').at(-1)) : {})}
+          onReveal={()=>openSteps([key])}
           onToggle={()=>toggleSteps([key])}><div key={'message:' + value.id}>{message}</div></StepGroup> : message}
       </div>;
     });
@@ -497,7 +554,10 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       other={<UserMessage actions={<div className={tailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>}/></div>;
   };
   return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
-    {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
+    {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>
+      <span aria-hidden={history.loading || undefined} className={history.loading ? css.historyHidden : undefined}>{tx('agent:agent-transcript.load-earlier')}</span>
+      <span aria-hidden={!history.loading || undefined} className={history.loading ? undefined : css.historyHidden}>{tx('agent:agent-transcript.loading-earlier')}</span>
+    </button></div>}
     {history?.error && <p role="alert">{history.error}</p>}
     {withProcessSpacing(nodes.map(node => {
       if (node.kind === 'descriptor') {
@@ -506,10 +566,11 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         const user = descriptor.role === 'user' && descriptor.kind === 'message'
           ? controls(descriptor.locator, descriptor.identity
             ? { type: 'by_message_id', message_id: descriptor.identity } : undefined) : {};
+        const descriptorTurnKey = descriptor.turn_process ? attemptOwnerKey(descriptor.turn_process) : descriptor.completed_response ? attemptOwnerKey(descriptor.completed_response.origin) : undefined;
         return <section className={`${css.flowItem} ${css.flow}`} data-chat-group-part={descriptor.completed_response || isFinalTurnDescriptor(descriptor) ? 'response' : undefined} key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
           {descriptorOwner(descriptor)}
           {requestFeedback.messages.get(descriptor.identity ?? (descriptor.locator.type === 'by_message_id' ? descriptor.locator.message_id : ''))}
-          {!collapsed && <DescriptorContent descriptor={descriptor} editor={user.editor} actions={user.actions && <div className={tailCss.actions} data-clock="start">{user.actions}</div>}/>}
+          {!collapsed && withTurnMentions(descriptorTurnKey, <DescriptorContent descriptor={descriptor} editor={user.editor} actions={user.actions && <div className={tailCss.actions} data-clock="start">{user.actions}</div>}/>)}
           {descriptorResponse(descriptor)}
           {!collapsed && descriptor.tool_calls.map(tool=><Tool key={`${canonicalLocatorKey(tool.occurrence.locator)}:${tool.block_index}`} tool={tool}/>)}
           {invocationPanels(descriptor.turn_process, descriptor.tool_calls)}
@@ -529,10 +590,11 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         if (!panels.length && grouped?.length === 0 && !requestFeedback?.messages.has(message.id) && !descriptor?.completed_response) return null;
         const childUser = !!receiver && isUser(message);
         const response = message.role === 'assistant' && (grouped ? grouped.some(piece => piece.kind === 'reply') : (head.blocks ?? message.content).some(block => block.type === 'text' || block.type === 'refusal'));
+        const headTurnKey = head.owner ? attemptOwnerKey(head.owner) : descriptor?.turn_process ? attemptOwnerKey(descriptor.turn_process) : undefined;
         return <div className={`${css.flowItem} ${css.flow}`} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={isUser(message) ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
           prefix={<>{requestFeedback?.messages.get(message.id)}{descriptor && descriptorOwner(descriptor)}</>}
           bodyHidden={descriptor && descriptorCollapsed(descriptor)} message={message.role !== 'assistant' ? message : undefined} tools={tools} {...((childUser || userMessageHistory || editedMessage) && userControls(message))}
-          other={message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(message,head.blocks ?? message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/>{panels}</div>;
+          other={message.role === 'assistant' ? withTurnMentions(headTurnKey, grouped ? pieces(undefined, grouped, true, head) : messageSegments(message, head.blocks ?? message.content, tools)) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/>{panels}</div>;
       }
       if (node.kind === 'streaming') {
         const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
@@ -593,7 +655,9 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       const headerOnly = entrySeat && !processOpen && !final && !feedback && !requestFeedback.attempts.has(key!) && !visibleStatus;
       const lastStatus = statusRows.filter(row => !row.hidden).at(-1);
       const trailingHeader = !runPanels.length && (lastStatus ? lastStatus.header && lastStatus.bodyHidden : headerOnly);
-      return <div className={`${css.flowItem} ${css.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-steering-batch={batch} data-chat-flow-kind={batch ? 'steering' : entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} data-chat-trailing-process={trailingHeader || undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
+      const turnKey = key ?? (entry.turn_process ? attemptOwnerKey(entry.turn_process) : entry.completed_response ? attemptOwnerKey(entry.completed_response.origin) : undefined);
+      const seatContent = reply ?? (stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry)));
+      return <div className={`${css.flowItem} ${css.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-steering-batch={batch} data-chat-flow-kind={batch ? 'steering' : entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} data-chat-trailing-process={trailingHeader || undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} onReveal={key ? () => revealTurn(key) : undefined} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
         prefix={<>
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && firstHeader(attemptOwnerKey(entry.completed_response.origin)) && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
@@ -602,7 +666,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
         {...(entry.item.type === 'message' && userControls(entry.item.message))}
         tools={toolsOf(entry)}
-        other={reply ?? (stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry)))}
+        other={withTurnMentions(turnKey, seatContent)}
         suffix={<>{statusRows.map(({ status, owner, header, bodyHidden, hidden }) => {
           // Keep the native anchor, while sharing its exact completed Attempt's
           // disclosure. Never borrow the adjacent row's ownership for a status.

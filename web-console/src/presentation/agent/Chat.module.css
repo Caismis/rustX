@@ -109,8 +109,32 @@
 }
 
 .column > .running { margin-top: 12px; }
+.running[data-holding] {
+  visibility: hidden;
+  opacity: 0;
+}
+.column > [data-chat-flow-kind="turn-tail"] + .running {
+  display: none;
+}
 .column > [data-chat-steering-batch="start"]:not([hidden]) { margin-top: calc(44px + var(--dsh-content-font-delta, 0px)); }
 .column > [data-chat-steering-batch="member"]:not([hidden]) { margin-top: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  :where(.column > .flowItem[data-chat-flow-kind="steering"]) + .running {
+    animation: running-enters-slot 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .runningDivider {
+    transition: opacity 160ms ease;
+  }
+}
+@keyframes running-enters-slot {
+  from {
+    opacity: 0;
+    translate: 0 calc(-44px - var(--dsh-content-font-delta, 0px));
+  }
+  40% {
+    opacity: 1;
+  }
+}
 .column > :nth-last-child(2 of :not([hidden]):not(:empty)):is(.flowItem:not([data-chat-flow-kind="user"], [data-chat-flow-kind="steering"])) ~ .running > .runningDivider {
   opacity: 1;
 }
@@ -203,11 +227,15 @@
 }
 
 .older {
+  overflow-anchor: none;
   display: flex;
   justify-content: center;
 }
 
 .older button {
+  display: grid;
+  line-height: 18px;
+  white-space: nowrap;
   border: none;
   border-radius: var(--dsw-radius-sm);
   padding: 4px 12px;
@@ -217,9 +245,21 @@
   cursor: pointer;
 }
 
+.older button > span {
+  grid-area: 1 / 1;
+}
+
+.historyHidden {
+  visibility: hidden;
+}
+
 .older button:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+.turnSpacer {
+  height: 0;
 }
 
 /* Back-to-bottom: zero-height sticky slot so the control does not extend

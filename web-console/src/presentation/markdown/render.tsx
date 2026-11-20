@@ -4,7 +4,8 @@
  * KaTeX runs with trust disabled. Unknown AST node kinds render nothing.
  */
 
-import { FileLink } from './FileLinks';
+import { FileLink, type MarkdownFileMentions } from './FileLinks';
+import { LinkIconMedium, classifyLinkPath } from '../primitives/LinkIcon';
 import { DocumentImage, DocumentLink } from './DocumentResources';
 import { Fragment, createElement } from 'react'
 import type { Key, ReactNode } from 'react'
@@ -97,6 +98,10 @@ export interface MarkdownRenderContext {
   readonly labels: MarkdownLabels
   /** Inside a blockquote's children: tables there always fill the quote's width. */
   readonly inBlockquote?: boolean
+  /** Inline-code file mentions; absent wherever no opener vocabulary exists. */
+  readonly fileMentions?: MarkdownFileMentions | undefined
+  /** Inside an anchor's children: interactive mentions must not nest there. */
+  readonly inLink?: boolean
   /** Reference targets visible to this pass. */
   readonly targets: ReferenceTargets
   /** Footnote identifiers in first-reference order; a footnote's number is its 1-based index here. */
@@ -210,6 +215,23 @@ function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderConte
       // path, and query render unchanged.
       const href = inlineCodeHttpUrl(value)
       if (href !== undefined) return <code key={key}>{renderSafeLink(href, [value], 'link')}</code>
+      const mention = context.streaming || context.inLink === true ? undefined : context.fileMentions?.resolve(value)
+      if (mention !== undefined) {
+        return (
+          <code key={key}>
+            <button
+              type="button"
+              className={css.fileMention}
+              title={mention.title}
+              aria-label={mention.label}
+              onClick={mention.open}
+            >
+              <LinkIconMedium kind={classifyLinkPath(value)} className={css.linkIcon} />
+              {value}
+            </button>
+          </code>
+        )
+      }
       return <code key={key}>{value}</code>
     }
     case 'html':
@@ -229,7 +251,7 @@ function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderConte
     case 'table':
       return renderTable(node, key, context)
     case 'link':
-      return renderAnchor(node.url, renderChildren(node.children, context), key, context.streaming)
+      return renderAnchor(node.url, renderChildren(node.children, { ...context, inLink: true }), key, context.streaming)
     case 'linkReference':
       return renderLinkReference(node, key, context)
     case 'image':
@@ -467,7 +489,7 @@ function renderLinkReference(
     // not an anchor, so mentions inside it stay live.
     return <Fragment key={key}>{'['}{renderChildren(node.children, context)}{referenceSuffix(node)}</Fragment>
   }
-  const rendered = renderChildren(node.children, context)
+  const rendered = renderChildren(node.children, { ...context, inLink: true })
   return renderAnchor(definition.url, rendered, key, context.streaming)
 }
 

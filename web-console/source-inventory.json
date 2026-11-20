@@ -1280,7 +1280,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "c78c6210d4dc14ab9ac473aa084141a3e129490cd7c196e62c387bb433ba46f9",
+      "local_sha256": "20b278f9fd91434eba59461abeefe9318d361735e6bc4d45b227f087db209644",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -1639,7 +1639,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0833eac6a2d0adaf810e5f04d89d5d3f0dd5237777086d9363865ce695f1e67d",
+      "local_sha256": "2ec5615613211de0c726050a663089e4cae5d7e697439f9a169e974e75cf2ab9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
@@ -1665,6 +1665,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
+        "../markdown/CodeBlock",
         "../primitives/DiffBlock",
         "../primitives/DisclosureRow",
         "../primitives/ReadBlock",
@@ -1672,9 +1673,11 @@
         "../primitives/TerminalBlock",
         "../primitives/TextShimmer",
         "../primitives/icons",
+        "./ExitCodeBadge",
         "./Tool.module.css",
         "./ToolDetails",
         "./ToolTree.module.css",
+        "clsx",
         "react"
       ],
       "excluded_dependencies": [
@@ -1683,7 +1686,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "c9eb7f48e58807bf741ba09adeae7b7092b57dde7d9e53c2d674957bdfbb5066",
+      "local_sha256": "002e85de462d28d2ff62e2eba108692338cad219f7f9abd67f40e7d549348387",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -1993,6 +1996,7 @@
       "upstream_sha256": "d8c6aa23232aa4a76339c49c02df5888f5530a7a1bbb417ef14a42a1e41d5d94",
       "retained_dependencies": [
         "../../locale/react",
+        "./FileLinks.tsx",
         "./MarkdownText.module.css",
         "./incremental.ts",
         "./parse.ts",
@@ -2006,7 +2010,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "5d9e2f6b5c0289f10a261494e686ff3a6b2b1c56a51859673034bd19bafb7d06"
+      "local_sha256": "ebc5278cf87464f09379698947036116961e130b30739a57750eb505b13c22c1"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
@@ -2133,6 +2137,7 @@
       "treatment": "adapted",
       "upstream_sha256": "3576c16a37846a55f215562d15df9394cf5761fc46eae8f89fdcea8420f09d3d",
       "retained_dependencies": [
+        "../primitives/LinkIcon",
         "./CodeBlock.tsx",
         "./DocumentResources",
         "./FileLinks",
@@ -2151,7 +2156,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fc78b1c505f4f84da504af1f19d0a2b2f20203d360b98dd65721e1105b406313"
+      "local_sha256": "8e05c2a000c2446c5f06928c9940a2a4fead9eb4244f01159120a8547c5b5053"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
@@ -3434,7 +3439,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "aad6516706a77e3f0b219a1c6ea0948b128ad4a26514b0b49f75fae42470c06f"
+      "local_sha256": "8a2ca27642530cc62772f1c188c44147a5da3d062b11b1290a4fde117020fb2a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3474,7 +3479,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f59d80a6deaefda610490c88df41150c2e34c3394934c86179375c958c075bbf"
+      "local_sha256": "cdf6f310a25f723b4778b7febbc3f1493b4c873096f7666c7e106411a4a86fb6"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -4469,13 +4474,16 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
+        "../primitives/TextShimmer",
         "../primitives/icons",
         "./StepGroup.module.css",
+        "./searchable-hidden",
+        "./use-process-scroll",
         "clsx",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "e3905fc83c91117b6112733c54234aab472d00c9b56ea189d5a66f0b2d251c8d"
+      "local_sha256": "fa9ca7cecc22d35d39e22608ca4d1ac1f69346082b7082b317d0cba8612e65f7"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
@@ -6312,7 +6320,7 @@
         "./file-link",
         "react"
       ],
-      "local_sha256": "bfaf8390bd5cb36acbd3a2b78972e183e82f11c6f2553224d8c2c4377c4d8ac2"
+      "local_sha256": "9d4e67edaaa47059b875b36ecd35482d48ee2d2b0407bcacfc8f1aad2195ae74"
     },
     {
       "upstream": "packages/client/ui-primitives/src/LinkIcon.tsx",
@@ -6495,7 +6503,7 @@
       "excluded_dependencies": [
         "Harness Session store and slot contracts"
       ],
-      "local_sha256": "ce2058013adaa706761202a70b0a32a0794a366d33482c12be5f4668c97439e0"
+      "local_sha256": "d31034a7901a49958bce4f438488f46d133630411a13961df575204c2827d7a0"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

@@ -24,6 +24,7 @@
 
 @media (max-width: 480px) { .actions { gap: 4px; } .action { width: 36px; height: 36px; } }
 .time { color: var(--dsw-alias-label-tertiary); font-size: var(--dsh-content-font-size-secondary, 13px); white-space: nowrap; }
+.endInfo { display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin-left: 8px; color: var(--dsw-alias-label-tertiary); }
 
 @media (prefers-reduced-motion: reduce) { .actions { transition: none !important; } }
 .root { display: flex; flex-direction: column; gap: 16px; min-width: 0; }

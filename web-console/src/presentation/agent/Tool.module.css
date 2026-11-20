@@ -97,6 +97,26 @@
   transform: translateY(0.5px);
 }
 
+.row[aria-expanded='true'] .diffAdded {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+@media (hover: hover) {
+  .row:hover .diffAdded {
+    color: var(--dsw-alias-state-success-primary);
+  }
+}
+
+.row[aria-expanded='true'] .diffRemoved {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+@media (hover: hover) {
+  .row:hover .diffRemoved {
+    color: var(--dsw-alias-state-error-primary);
+  }
+}
+
 /* File-tool path: same type as .summary, with a persistent link affordance.
    Dotted dimmed underline: visible enough to say "clickable", light enough
    that a long path doesn't read as one heavy rule under the row. Shrink-to-fit
@@ -116,9 +136,9 @@
   text-align: left;
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
-  color: var(--dsw-alias-label-secondary);
+  color: inherit;
   text-decoration: underline dotted;
-  text-decoration-color: var(--dsw-alias-label-tertiary);
+  text-decoration-color: currentColor;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -138,6 +158,17 @@
 .bodyWrap {
   display: flex;
   flex-direction: column;
+}
+
+.detailsBodyWrap {
+  position: relative;
+}
+
+.detailsBodyWrap .inspectButton {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  margin: 0;
 }
 
 /* Hover-revealed jump to the trajectory record: a small pill in real flow
