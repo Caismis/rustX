@@ -36,9 +36,7 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
   const foreground = !!context?.compaction_in_progress && !operations.some(operation => operation.status.operation_id === progress?.operation_id);
   const joinedRequest = foreground && facts.request && ['submitting', 'uncertain'].includes(facts.request.status)
     && context?.manual_compaction?.request_id === facts.request.requestId && !context.manual_compaction.released;
-  const duplicateFailure = visible.some(({ status }) => status.phase === 'failed' && status.diagnostic === context?.compaction_error);
-  const manualContext = context && { ...context, compaction_in_progress: false,
-    compaction_error: duplicateFailure ? undefined : context.compaction_error };
+  const manualContext = context && { ...context, compaction_in_progress: false };
   const pendingRequest = facts.request?.status === 'submitting' || facts.request?.status === 'uncertain';
   const presentation = foreground && (joinedRequest || !pendingRequest) ? undefined : compactionPresentation(manualContext, facts.request);
   const head = context?.projection_head;

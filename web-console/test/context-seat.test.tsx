@@ -49,20 +49,34 @@ it('shows each competing operation once and does not turn repeated chunk progres
   expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
 });
 
-it('does not animate cold historical work or duplicate its typed failure using an unscoped diagnostic', async () => {
+it('does not animate cold historical work and shows its typed failure once', async () => {
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   await observe({ ...base, compaction_operations: [operation('generating', false)] });
   expect(screen.getByRole('status').textContent).toContain('no longer active');
   expect(view.container.querySelector('[data-shimmer]')).toBeNull();
   const failed = operation('failed', false);
   failed.status.diagnostic = 'Exact independent failure';
-  await observe({ ...base, compaction_error: failed.status.diagnostic, compaction_operations: [failed] });
+  await observe({ ...base, compaction_operations: [failed] });
   expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
   expect(view.container.querySelectorAll('button')).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: 'Context summary · Context summary failed' }));
   expect(screen.getByRole('status').textContent).toContain('Exact independent failure');
   expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
 });
+it('shows distinct foreground and background failures even when their diagnostics match', async () => {
+  const diagnostic = 'Summary generation failed';
+  const background = operation('failed', false);
+  background.status.diagnostic = diagnostic;
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  await observe({ ...base, compaction_operations: [background], compaction_in_progress: true,
+    compaction_progress: { operation_id: 'foreground-operation', mode: 'overflow', accepted_fragments: 0, source_ranges: [], generation: null } });
+  expect(view.container.querySelector('[data-compaction-foreground]')?.getAttribute('data-compaction-operation')).toBe('foreground-operation');
+  await observe({ ...base, compaction_operations: [background], compaction_error: diagnostic });
+  fireEvent.click(screen.getByRole('button', { name: 'Context summary · Context summary failed' }));
+  fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
+  expect(screen.getAllByText(diagnostic)).toHaveLength(2);
+});
+
 it.each([null, 'Exact pre-commit failure'])('exact native release frees only A while its RPC remains held: %s', async error => {
   server.held.add('context/compact');
   server.handlers.set('context/compact', () => (compactReceipt(base)));
