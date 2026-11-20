@@ -71,13 +71,13 @@ target/debug/rustx app-server \
   --runtime-root /absolute/path/runtime \
   --listen stdio \
   --local-execution-session ses_01900000-0000-7000-8000-000000000001 \
-  --local-execution-workspace /independently/trusted/workspace
+  --local-execution-workspace /authorized/workspace
 ```
 
 These flags launch exactly one Client for the named Session. Supplying only
 `--local-execution-workspace` first enrolls a minimal Session under a
 configured environment root. Bare `app-server` discovers and spawns
-nothing. The trusted workspace path is validated lexically and must match
+nothing. The authorized Workspace path is validated lexically and must match
 the Session's reserved binding byte for byte. The Client executable is the
 `rustx-execution-client` built beside the `rustx` binary; it is never
 resolved from PATH or HOME. The child runs with an empty environment,
