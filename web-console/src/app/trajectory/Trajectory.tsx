@@ -3,7 +3,7 @@ import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { traceInspectionHead, type TraceCache } from '../../client/trace';
+import { originalTraceId, traceInspectionHead, type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { WorkflowNodeReadInspector, TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
@@ -55,7 +55,8 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
   const [workflowExpansion, setWorkflowExpansion] = useState<{ epoch: number; ids: ReadonlySet<string> }>({ epoch: cache.epoch, ids: new Set() });
   const openedWorkflows = useMemo(() => workflowExpansion.epoch === cache.epoch ? workflowExpansion.ids : new Set<string>(), [workflowExpansion, cache.epoch]);
   const [selection, setSelection] = useState<TrajectorySelection | undefined>(() => {
-    const item = cache.selection ? preferredItem(trajectoryItems(tx, projectTrajectory(tx, cache.page.records)), cache.selection.id) : undefined;
+    const initialRecords = [...(cache.lineageRecords ?? []), ...cache.page.records];
+    const item = cache.selection ? preferredItem(trajectoryItems(tx, projectTrajectory(tx, initialRecords)), cache.selection.id) : undefined;
     return item ? selectionOf(item) : undefined;
   });
   const [focus, setFocus] = useState<{ epoch: number; ids: ReadonlySet<string>; range: TrajectoryTimeRange; revision: string } | null>(null);
@@ -68,7 +69,7 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
   const focusedDisplay = useRef<string | undefined>(undefined);
   const [pendingFocus, setPendingFocus] = useState<string | undefined>(() => selection?.display_key);
   const context = useTraceContexts(cache, selection?.owner_record_id);
-  const records = useMemo(() => [...(cache.lineageRecords ?? []), ...context.records], [cache.lineageRecords, context.records]);
+  const records = useMemo(() => [...(context.lineageRecords ?? []), ...context.records], [context.lineageRecords, context.records]);
   const historyCursor = cache.lineageCursor === undefined ? cache.page.next_cursor : cache.page.next_cursor ?? cache.lineageCursor;
   const projection = useMemo(() => projectTrajectory(tx, records), [tx, records]);
   const allItems = useMemo(() => trajectoryItems(tx, projection, historyCursor), [tx, projection, historyCursor]);
@@ -201,7 +202,7 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
     const cut = completeLoaded?.cut ?? cacheCut ?? loaded?.cut;
     const detailPage = cache.details[root.id]?.page;
     const detailHead = cut && detailPage && JSON.stringify(detailPage.read_cut) === JSON.stringify(cut)
-      ? traceInspectionHead(detailPage, root.id)
+      ? traceInspectionHead(detailPage, originalTraceId(root.id))
       : undefined;
     const workflow = detailHead?.content.type === 'workflow' ? detailHead.content : undefined;
     runCanvas?.openRunCanvas({

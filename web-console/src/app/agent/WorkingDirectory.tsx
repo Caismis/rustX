@@ -22,9 +22,9 @@ export function WorkingDirectory({ client, sessionId }: { client: AppServerClien
   const tx = useTranslation();
   const cwd = useClientSelector(client, state =>
     state.sessions.find(row => row.id === sessionId)?.cwd
-    ?? state.views[sessionId]?.summary?.cwd
-    ?? state.views[sessionId]?.settings?.cwd);
-  if (cwd === undefined) return null;
+    || state.views[sessionId]?.summary?.cwd
+    || state.views[sessionId]?.settings?.cwd);
+  if (!cwd) return null;
   const { directory, name } = pathPartsOf(cwd);
   const parent = ROOT.test(directory) ? directory : directory.replace(/[/\\]+$/, '');
   return (

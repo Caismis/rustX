@@ -56,7 +56,7 @@ export function ResourceChoices({ label, options, selected, change, compactTools
   const matching = term ? options.filter(({ name, description }) =>
     name.toLowerCase().includes(term) || description?.toLowerCase().includes(term)) : options;
   const checked = new Set(selected);
-  const update = (name: string, include: boolean) => change(include ? [...selected, name] : selected.filter(id => id !== name));
+  const update = (name: string, include: boolean) => change(include ? (checked.has(name) ? [...selected] : [...selected, name]) : selected.filter(id => id !== name));
   return <div className={css.resourceList} role="group" aria-label={label}>
     {searchable && <div className={css.filter}>
       <IconSearchOutline16 />

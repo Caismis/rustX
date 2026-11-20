@@ -372,6 +372,43 @@ fn t10_t12_t19_trace_definition_missing_and_ambiguous_catalogs_never_become_abse
     );
 }
 #[test]
+fn lineage_trace_inspection_keeps_only_the_retained_adoption_members() {
+    use crate::observation::{content::CanonicalContentLocator, trace::TraceKind};
+    use crate::runtime_client::trace::{TraceInspectionContent, TraceProjection};
+
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.accept_inbound(draft("retained input")).unwrap();
+    let next = store.accept_inbound(draft("edited input")).unwrap();
+    let adopted = store.adopt_pending_batch(next.sequence, None).unwrap();
+    let sequence = adopted.adoption.unwrap().sequence;
+    let cut = store.observation_prefix_cut(1).unwrap();
+    assert_eq!(cut.read.journal, sequence);
+
+    let trace = TraceProjection::at_cut(&store, &cut).unwrap();
+    let page = trace.page(None, 32).unwrap();
+    let record = page
+        .records
+        .iter()
+        .find(|record| record.kind == TraceKind::User)
+        .unwrap();
+    assert_eq!(record.collections.len(), 1);
+    assert_eq!(record.collections[0].domain, "messages.ledger:1.blocks");
+
+    let anchor = trace.inspection_anchor(sequence).unwrap();
+    let head = trace.inspection_head(&anchor).unwrap();
+    let TraceInspectionContent::Messages { page } = head.content else {
+        panic!("expected message inspection");
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.next_offset, None);
+    assert_eq!(
+        page.items[0].locator,
+        CanonicalContentLocator::ByLedgerPosition { position: 1 },
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // rustfmt now formats this former include! fragment
 fn t08_t12_t15_t19_trace_adoption_advances_and_validates_only_selected_native_members() {
     let store = store();

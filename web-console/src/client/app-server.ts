@@ -415,7 +415,7 @@ export class AppServerClient {
     // model/cancellation continuations only update already-reserved Session rows.
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
-    this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority();
+    this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority(); this.traces.disconnect();
     this.inputAcknowledgements.clear();
     this.statusNotifications.clear();
     this.publish({ threadStatusSynchronized:false, authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,

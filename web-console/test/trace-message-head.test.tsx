@@ -42,9 +42,10 @@ it('message continuation keeps native ordinals and displays the complete batch w
  await screen.findByText('ORIGINAL_PREVIEW_18');expect(screen.getByText('ORIGINAL_PREVIEW_0')).toBeTruthy();expect(screen.queryByRole('combobox')).toBeNull();
  expect(reader.page.mock.calls.map(args=>args.slice(0,3))).toEqual([[original,'trace.records.295.detail.messages',8],[original,'trace.records.295.detail.messages',16]]);
 });
+const blocks = (position: number) => ({ domain: `messages.ledger:${position}.blocks`, total: '1', revision: '1', loaded: '0', next_offset: '0' });
 it.each([true, false])('switches an adopted input outside the first trace page (inline ID: %s)', async inlineId => {
   const original = cut(), reader = direct(original);
-  const native = { ...record(), message_id: 'message-0' };
+  const native = { ...record(), message_id: 'message-0', collections: [blocks(1), blocks(2)] };
   const version = (index: number): SessionMessageVersion => ({
     node_id: 'current', conversation_id: original.conversation_id, boundary: row(index).locator,
     message_id: index === 0 || inlineId ? row(index).identity : undefined, surface_revision: '20',
@@ -57,8 +58,13 @@ it.each([true, false])('switches an adopted input outside the first trace page (
   }));
   render(<TrajectoryInspector {...props(native)} facet="overview" detailPage={head(original)} detailReader={reader.reader}
     messageHistory={{ switchVersion, versions }} />);
-  const item = await screen.findByRole('listitem');
-  expect(within(item).getByText('ORIGINAL_PREVIEW_18')).toBeTruthy();
+  const item = await waitFor(() => {
+    const items = screen.getAllByRole('listitem');
+    const match = items.find(el => within(el).queryByText('ORIGINAL_PREVIEW_18'));
+    expect(items).toHaveLength(2);
+    expect(match).toBeTruthy();
+    return match!;
+  });
   expect(within(item).getByRole('status').textContent).toBe('1/2');
   fireEvent.click(within(item).getByRole('button', { name: 'Switch to next message version' }));
   expect(switchVersion).toHaveBeenCalledExactlyOnceWith(next);
@@ -125,8 +131,7 @@ it('a complete small canonical block preserves its original opaque JSON formatti
  reader.content.mockResolvedValue({content_ref:reference,offset:0,data_base64:btoa(raw),end_offset:bytes.length,readable_end:bytes.length,next_offset:null,complete:true});render(<TrajectoryInspector {...props(record())} detailPage={initial} detailReader={reader.reader}/>);await waitFor(()=>expect(document.body.textContent).toContain('18446744073709551615'));expect(document.body.textContent).toContain('1.0000');expect(reader.content.mock.calls[0].slice(0,3)).toEqual([original,reference,0]);expect(reader.value).not.toHaveBeenCalled();
 });
 
-it('shows the ledger pager when one inspected input resolves by ledger position', () => {
-  const native = { ...record(), message_id: null };
+it('shows the ledger pager from canonical block coordinates before opening details and suppresses it for grouped batches', () => {
   const original = cut();
   const current: SessionMessageVersion = {
     boundary: row(0).locator, node_id: 'edited', conversation_id: original.conversation_id, surface_revision: '20',
@@ -134,13 +139,21 @@ it('shows the ledger pager when one inspected input resolves by ledger position'
   const previous = { ...current, node_id: 'original', conversation_id: 'original' };
   const switchVersion = vi.fn();
   const versions = new Map([[canonicalLocatorKey(current.boundary), { current, previous, total: 2, current_index: 1 }]]);
-  const props = { loadEarlier: vi.fn(), onLoadDetail: vi.fn(), onSelect: vi.fn(), messageHistory: { versions, switchVersion } };
-  const cache = { page: { records: [native], next_cursor: null }, epoch: 1, details: {} };
-  const rendered = render(<Trajectory {...props} cache={cache}/>);
-  expect(screen.queryByRole('button', { name: 'Switch to previous message version' })).toBeNull();
-  rendered.rerender(<Trajectory {...props} cache={{ ...cache, details: { [native.id]: { epoch: 1, page: head(original, 'user', 1) } } }}/>);
+  const trajectoryProps = { loadEarlier: vi.fn(), onLoadDetail: vi.fn(), onSelect: vi.fn(), messageHistory: { versions, switchVersion } };
+  // A single adopted input resolves its shared Ledger position directly from
+  // `record.collections`, even with an omitted or inherited ancestor message_id.
+  const single = { ...record(), message_id: null, collections: [blocks(1)] };
+  const rendered = render(<Trajectory {...trajectoryProps} cache={{ page: { records: [single], next_cursor: null }, epoch: 1, details: {} }}/>);
   fireEvent.click(within(screen.getByRole('table', { name: 'Trace ledger' })).getByRole('button', { name: 'Switch to previous message version' }));
-  expect(switchVersion).toHaveBeenCalledWith(previous);
-  rendered.rerender(<Trajectory {...props} cache={{ ...cache, details: { [native.id]: { epoch: 1, page: head(original, 'user', 19) } } }}/>);
+  expect(switchVersion).toHaveBeenCalledExactlyOnceWith(previous);
+  expect(trajectoryProps.onLoadDetail).not.toHaveBeenCalled();
+  // Grouped adoptions carry multiple block frontiers and keep per-message
+  // controls inside the inspector rather than on the summary row.
+  const grouped = { ...record(), message_id: null, collections: [blocks(1), blocks(2)] };
+  rendered.rerender(<Trajectory {...trajectoryProps} cache={{ page: { records: [grouped], next_cursor: null }, epoch: 1, details: { [grouped.id]: { epoch: 1, page: head(original, 'user', 19) } } }}/>);
   expect(screen.queryByRole('button', { name: 'Switch to previous message version' })).toBeNull();
+  // A single-input row that already owns a ledger pager never repeats it in the inspector.
+  rendered.unmount();
+  render(<TrajectoryInspector {...props(single)} facet="overview" detailPage={head(original, 'user', 1)} messageHistory={{ switchVersion, versions }}/>);
+  expect(screen.queryAllByRole('listitem')).toHaveLength(0);
 });

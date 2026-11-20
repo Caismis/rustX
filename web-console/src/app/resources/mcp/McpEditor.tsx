@@ -162,7 +162,21 @@ function Editor({ scope, focus, scopeControl, close, editorDraft, onEditorDraftC
   const review = () => {
     pendingSave.current = false;
     if (pendingImport) setPendingImport({ ...pendingImport, revision: document.revision });
+    const draft = mode === 'form' && !jsonEdit && !pendingImport && unit.draft ? unit.displayed : undefined;
     unit.review();
+    if (draft && authored) {
+      const sameTransport = mcpTransport(draft.definition) === mcpTransport(authored.definition);
+      const { permissions: _permissions, tools: _tools, ...connection } = draft.definition;
+      unit.edit({
+        definition: {
+          ...connection,
+          ...(authored.definition.permissions !== undefined ? { permissions: authored.definition.permissions } : {}),
+          ...(authored.definition.tools !== undefined ? { tools: authored.definition.tools } : {}),
+        },
+        retained_env: sameTransport ? authored.retained_env ?? [] : [],
+        retained_headers: sameTransport ? authored.retained_headers ?? [] : [],
+      });
+    }
   };
   const cancel = () => { discard(); close(); };
   const back = () => {

@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import type { SkillDescriptor, SourceMutation, SourceScope, SourceSettings } from '../../../../protocol/app-server/v80';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
+import { mcpConnectionIdentity } from '../../bindings/mcp';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
@@ -161,6 +162,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const mcpDraftKey = mcpFocus ? JSON.stringify([owner, editorTarget.kind === 'workspace' ? lifetime : 'user', editorSource?.target, mcpFocus.name ?? null]) : undefined;
   const editorConfig = configAuthoring(editorSource, editorTarget.kind);
   const mcpSource = editorTarget.kind === 'user' ? editorSource?.user_mcp : editorSource?.workspace_mcp;
+  const focusedMcp = mcpFocus?.name && mcpSource?.authored && Object.hasOwn(mcpSource.authored, mcpFocus.name)
+    ? mcpSource.authored[mcpFocus.name] : undefined;
   const refresh = () => {
     actor.send({ type: 'REFRESH' });
     if (module === 'skills') setSkillCatalogRefresh(value => value + 1);
@@ -261,9 +264,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             <McpDetail source={editorSource} scope={editorTarget.kind} revision={editorConfig.state === 'structured' ? editorConfig.revision : undefined}
               focus={mcpFocus} onClose={() => focusMcp(undefined)} scopeControl={<span>{editorScopeLabel}</span>}
               loadMcpTools={loadMcpTools}
-              listingAuthority={JSON.stringify([lifetime, transport.generation, mcpSource?.revision])}
-              listingAvailable={visible && editorEditable && !!mcpFocus.name
-                && !!mcpSource?.authored && Object.hasOwn(mcpSource.authored, mcpFocus.name)}
+              listingAuthority={JSON.stringify([lifetime, transport.generation, mcpConnectionIdentity(focusedMcp, mcpSource?.revision)])}
+              listingAvailable={visible && editorEditable && !!focusedMcp}
               editorDraft={mcpDraftKey ? mcpDrafts.current.get(mcpDraftKey)?.draft : undefined}
               onEditorDraftChange={draft => {
                 if (!mcpDraftKey) return;

@@ -19,13 +19,16 @@ export function paddedDomain(lo: number, hi: number, ratio: number): [number, nu
 
 /** "Nice" 1/2/2.5/5×10ⁿ tick values covering [lo, hi], ~5 intervals. */
 export function niceTicks(lo: number, hi: number): number[] {
-  const raw = (hi - lo) / 5 || 1;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return [];
+  const raw = (hi - lo) / 5;
+  if (!Number.isFinite(raw) || raw <= 0) return [];
   const mag = 10 ** Math.floor(Math.log10(raw));
   const norm = raw / mag;
   const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+  if (!Number.isFinite(step) || step <= 0) return [];
   const ticks: number[] = [];
   for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9 && ticks.length < 24; v += step) {
-    ticks.push(Number(v.toPrecision(12)));
+    if (Number.isFinite(v)) ticks.push(Number(v.toPrecision(12)));
   }
   return ticks;
 }

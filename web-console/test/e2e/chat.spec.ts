@@ -169,14 +169,14 @@ test('native history, rich settlement, real image previews, reconnect and native
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-    const retainedLedger = (await ledger.elementHandle())!;
+    const previousTraceTarget = await wire.attachedTarget(id);
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Access token')).toBeHidden();
-    // Connected can still expose the previous attachment's long retained window.
-    // Its replacement first mounts a short head, then assembles native pages.
+    // The retained ledger can stay mounted. The fresh attachment and
+    // subscription prove that the live view has a new native read owner.
     const traceTarget = await wire.attachedTarget(id);
+    expect(sameTarget(traceTarget, previousTraceTarget)).toBe(false);
     await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, traceTarget))).toBe(true);
-    await expect.poll(() => retainedLedger.evaluate(el => el.isConnected)).toBe(false);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });

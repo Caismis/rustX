@@ -122,7 +122,10 @@ export function evaluator(data: Record<string, unknown>, variables: ReadonlyMap<
           let parts = parsedTemplates.get(args.value);
           if (!parts) {
             parts = parseTemplate(args.value);
-            if (parsedTemplates.size >= 32) parsedTemplates.clear();
+            if (parsedTemplates.size >= 128) {
+              const oldest = parsedTemplates.keys().next().value;
+              if (oldest !== undefined) parsedTemplates.delete(oldest);
+            }
             parsedTemplates.set(args.value, parts);
           }
           let result = '';

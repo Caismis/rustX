@@ -7,7 +7,7 @@ import { SessionPanelToggle } from '../src/app/agent/SessionPanelToggle';
 import { SessionPanelProvider } from '../src/app/agent/session-panel-state';
 import { RuntimeFacts } from './runtime-facts';
 import { traceRecord } from './trace-fixture';
-import { Server, snapshot, domainReceipt } from './fixture';
+import { Server, snapshot, domainReceipt, settingsReceipt } from './fixture';
 import { RpcFailure } from '../src/client/errors';
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -96,6 +96,35 @@ it('splits a Windows working directory into name and parent and keeps the native
     const tip = within(panel).getByRole('tooltip');
     expect(tip.textContent).toContain('D:\\work\\app');
   } finally { server.client.disconnect(); }
+});
+
+it('falls through an empty summary cwd to settings cwd and hides the row when all cwd sources are empty', async () => {
+  const fallbackServer = new Server();
+  try {
+    fallbackServer.summaries.set('A', { cwd: '' });
+    fallbackServer.snapshots.set('A', { ...snapshot(), jobs: [] });
+    await fallbackServer.attached('A');
+    const ui = renderPanel(fallbackServer, 'A', true);
+    fireEvent.click(toggleButton());
+    const panel = document.querySelector('[data-session-panel]') as HTMLElement;
+    const row = panel.querySelector('[data-session-panel-project]') as HTMLElement;
+    expect(row.textContent).toContain('A');
+    expect(row.textContent).toContain('/workspace');
+    ui.unmount();
+    localStorage.clear();
+  } finally { fallbackServer.client.disconnect(); }
+
+  const emptyServer = new Server();
+  try {
+    emptyServer.summaries.set('A', { cwd: '' });
+    emptyServer.handlers.set('session/settings', () => settingsReceipt({ cwd: '' }, '0'));
+    emptyServer.snapshots.set('A', { ...snapshot(), jobs: [] });
+    await emptyServer.attached('A');
+    renderPanel(emptyServer, 'A', true);
+    fireEvent.click(toggleButton());
+    const panel = document.querySelector('[data-session-panel]') as HTMLElement;
+    expect(panel.querySelector('[data-session-panel-project]')).toBeNull();
+  } finally { emptyServer.client.disconnect(); }
 });
 
 it('docks automatically when probe fits, flips pinned storage, and marks toggle unavailable outside Chat view', async () => {

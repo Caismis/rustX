@@ -1776,15 +1776,18 @@ impl SqliteConversationStore {
                     super::sqlite_error(&error, format!("lineage prefix provenance: {error}"))
                 })
         };
+        // A canonical entry can exist without a Journal event. Its recorded
+        // frontier is zero, which is distinct from a missing transcript row.
         let retained = journal_at(ledger_through)?
-            .filter(|sequence| *sequence > 0)
             .ok_or_else(|| storage("lineage prefix journal provenance unavailable"))?;
         // Include the previous turn's settlement, which can follow its last
         // Ledger message. For a shared adoption, the Ledger cut filters its
         // members while the Journal cut retains the adoption itself.
         let journal = journal_at(ledger_through + 1)?
             .filter(|sequence| *sequence >= retained)
-            .map_or(retained, |excluded| retained.max(excluded - 1));
+            .map_or(retained, |excluded| {
+                retained.max(excluded.saturating_sub(1))
+            });
         let read = actual.read.clone();
         Ok(crate::durable::observation::ObservationReadCut {
             read: crate::durable::reading::ConversationReadCut {

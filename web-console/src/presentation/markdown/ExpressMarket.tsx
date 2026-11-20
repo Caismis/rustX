@@ -51,7 +51,7 @@ function Sparkline({ values, format }: { values: number[]; format: (value: numbe
   const yAt = (value: number) => range ? r2(5 + (1 - (value - min) / range) * 60) : height / 2;
   const line = values.map((value, index) => `${index === 0 ? 'M' : 'L'}${r2(index * width / (values.length - 1))} ${yAt(value)}`).join(' ');
   const xAt = (index: number) => index * width / (values.length - 1);
-  return <ExpressPlot positions={values.map((_, index) => index / (values.length - 1))}
+  return <ExpressPlot label={tx('interactions:express.price-trend')} positions={values.map((_, index) => index / (values.length - 1))}
     details={index => ({ title: format(values[index]), rows: [] })}>
     {active => <svg className={css.sparkline} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={tx('interactions:express.price-trend')}>
     <defs>
@@ -128,7 +128,9 @@ export function ExpressCandlestick({ props }: Props) {
   const data = ohlc(props.data);
   const title = scalarText(props.title);
   const subtitle = scalarText(props.subtitle);
-  const [lo, hi] = paddedDomain(Math.min(...data.map(candle => candle.low)), Math.max(...data.map(candle => candle.high)), .07);
+  const [lo, hi] = data.length
+    ? paddedDomain(Math.min(...data.map(candle => candle.low)), Math.max(...data.map(candle => candle.high)), .07)
+    : [0, 0];
   const span = hi - lo;
   const last = data.at(-1);
   const firstOpen = data[0]?.open;
@@ -139,7 +141,7 @@ export function ExpressCandlestick({ props }: Props) {
   const width = 680;
   const height = Math.max(150, Math.min(440, toNumber(props.height) ?? 240));
   const left = 57, right = width - 20, top = 14, bottom = height - 26;
-  const step = (right - left) / data.length;
+  const step = data.length ? (right - left) / data.length : 0;
   const candleWidth = Math.min(26, step * .62);
   const xAt = (index: number) => r2(left + (index + .5) * step);
   const yAt = (price: number) => r2(top + (1 - (price - lo) / span) * (bottom - top));
@@ -162,6 +164,7 @@ export function ExpressCandlestick({ props }: Props) {
       </div>}
     </figcaption>
     {last && Number.isFinite(span) && span > 0 ? <ExpressPlot
+      label={title || tx('interactions:express.candlestick-chart')}
       positions={data.map((_, index) => xAt(index) / width)}
       details={index => {
         const candle = data[index];

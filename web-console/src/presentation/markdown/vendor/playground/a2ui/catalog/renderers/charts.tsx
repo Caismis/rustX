@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "../../../../../../../locale/react";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import {
   areaY,
   barX,
@@ -64,19 +64,25 @@ import type { Row } from "./chart-kit";
 const SERIES_FALLBACK = "Value";
 const seriesName = (r: { series?: string }) => r.series ?? SERIES_FALLBACK;
 
-/** Vertical fade per palette slot, referenced as url(#a2-fade-N). */
-const FADES: ChartGradient[] = PALETTE.map((color, i) => ({
-  id: `a2-fade-${i}`,
-  x1: 0,
-  y1: 0,
-  x2: 0,
-  y2: 1,
-  stops: [
-    { offset: 0, color, opacity: 0.34 },
-    { offset: 0.65, color, opacity: 0.08 },
-    { offset: 1, color, opacity: 0 },
-  ],
-}));
+/** Vertical fade per palette slot, scoped to a chart instance so multiple charts never collide. */
+function makeFades(prefix: string): ChartGradient[] {
+  return PALETTE.map((color, i) => ({
+    id: `${prefix}-fade-${i}`,
+    x1: 0,
+    y1: 0,
+    x2: 0,
+    y2: 1,
+    stops: [
+      { offset: 0, color, opacity: 0.34 },
+      { offset: 0.65, color, opacity: 0.08 },
+      { offset: 1, color, opacity: 0 },
+    ],
+  }));
+}
+
+function chartHeight(value: unknown, fallback: number): number {
+  return isNum(value) ? Math.min(640, Math.max(120, value)) : fallback;
+}
 
 const xTicks = {
   ticks: { size: 0, padding: 8 },
@@ -143,6 +149,8 @@ export const chartRenderers: RendererMap<
 > = {
   /* ---------------------------------------------------------- LineChart */
   LineChart: ({ props }) => {
+    const gid = useId().replace(/:/g, "");
+    const fades = useMemo(() => makeFades(gid), [gid]);
     const rows = useMemo(() => cleanRows(props.data), [props.data]);
     const { names, color, legend } = useStableSeries(
       rows,
@@ -165,7 +173,7 @@ export const chartRenderers: RendererMap<
                   x: xOf,
                   y1: 0,
                   y2: "y",
-                  fill: "url(#a2-fade-0)",
+                  fill: `url(#${gid}-fade-0)`,
                   fillOpacity: 1,
                   curve,
                 }),
@@ -198,7 +206,7 @@ export const chartRenderers: RendererMap<
           },
         },
         color,
-        gradients: FADES,
+        gradients: fades,
         theme: THEME,
         focus: single ? "nearest-x" : "group-x",
         maxFocusDistance: Number.POSITIVE_INFINITY,
@@ -216,7 +224,7 @@ export const chartRenderers: RendererMap<
           }),
         },
       });
-    }, [rows, names, color, format, unit, props.curve, props.title]);
+    }, [rows, names, color, fades, gid, format, unit, props.curve, props.title]);
     return (
       <ChartFrame
         title={props.title}
@@ -227,7 +235,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 220}
+            height={chartHeight(props.height, 220)}
             ariaLabel={props.title ?? "Line chart"}
           />
         </Plot>
@@ -238,6 +246,8 @@ export const chartRenderers: RendererMap<
   /* ---------------------------------------------------------- AreaChart */
   AreaChart: ({ props }) => {
     const tx = useTranslation();
+    const gid = useId().replace(/:/g, "");
+    const fades = useMemo(() => makeFades(gid), [gid]);
     const rows = useMemo(() => cleanRows(props.data), [props.data]);
     const { names, color, legend } = useStableSeries(
       rows,
@@ -250,7 +260,7 @@ export const chartRenderers: RendererMap<
         rows.length > 0 && rows.every((r) => typeof r.x === "number");
       const xOf = (r: Row) => (numericX ? r.x : String(r.x));
       const fadeOf = (r: Row) =>
-        `url(#a2-fade-${Math.max(0, names.indexOf(seriesName(r))) % PALETTE.length})`;
+        `url(#${gid}-fade-${Math.max(0, names.indexOf(seriesName(r))) % PALETTE.length})`;
       return defineChart({
         svgAnimation: true,
         marks: stacked
@@ -305,7 +315,7 @@ export const chartRenderers: RendererMap<
           },
         },
         color,
-        gradients: FADES,
+        gradients: fades,
         theme: THEME,
         clip: true,
         focus: "group-x",
@@ -343,7 +353,7 @@ export const chartRenderers: RendererMap<
           },
         },
       });
-    }, [rows, names, color, stacked, format, unit, tx]);
+    }, [rows, names, color, fades, gid, stacked, format, unit, tx]);
     return (
       <ChartFrame
         title={props.title}
@@ -354,7 +364,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 220}
+            height={chartHeight(props.height, 220)}
             ariaLabel={props.title ?? "Area chart"}
           />
         </Plot>
@@ -493,11 +503,12 @@ export const chartRenderers: RendererMap<
       unit,
       props.title,
     ]);
-    const height =
-      props.height ??
-      (horizontal
-        ? Math.max(160, cats.length * (multi && grouped ? 40 : 30) + 40)
-        : 230);
+    const height = chartHeight(
+      props.height,
+      horizontal
+        ? Math.min(640, Math.max(160, cats.length * (multi && grouped ? 40 : 30) + 40))
+        : 230,
+    );
     return (
       <ChartFrame
         title={props.title}
@@ -590,7 +601,7 @@ export const chartRenderers: RendererMap<
         },
       });
     }, [rows, labels, donut, format, unit, tx]);
-    const size = props.height ?? 200;
+    const size = chartHeight(props.height, 200);
     return (
       <ChartFrame
         title={props.title}
@@ -777,7 +788,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 260}
+            height={chartHeight(props.height, 260)}
             ariaLabel={props.title ?? "Scatter chart"}
           />
         </Plot>
@@ -898,8 +909,10 @@ export const chartRenderers: RendererMap<
         },
       });
     }, [rows, xs, ys, min, max, format, unit, tx]);
-    const height =
-      props.height ?? Math.min(320, Math.max(150, ys.length * 30 + 36));
+    const height = chartHeight(
+      props.height,
+      Math.min(320, Math.max(150, ys.length * 30 + 36)),
+    );
     return (
       <ChartFrame
         title={props.title}
@@ -947,6 +960,7 @@ export const chartRenderers: RendererMap<
   /* ---------------------------------------------------------- Sparkline */
   Sparkline: ({ props }) => {
     const tx = useTranslation();
+    const sparkId = `${useId().replace(/:/g, "")}-spark`;
     const values = useMemo(
       () => (Array.isArray(props.values) ? props.values.filter(isNum) : []),
       [props.values],
@@ -974,9 +988,9 @@ export const chartRenderers: RendererMap<
           marks: [
             areaY(rows, {
               x: "i",
-              y1: () => Math.min(...values),
+              y1: () => (values.length ? Math.min(...values) : 0),
               y2: "v",
-              fill: "url(#a2-spark)",
+              fill: `url(#${sparkId})`,
               fillOpacity: 1,
               curve: smoothCurve,
             }),
@@ -1002,7 +1016,7 @@ export const chartRenderers: RendererMap<
           },
           gradients: [
             {
-              id: "a2-spark",
+              id: sparkId,
               x1: 0,
               y1: 0,
               x2: 0,
@@ -1031,7 +1045,7 @@ export const chartRenderers: RendererMap<
             }),
           },
         }),
-      [rows, values, stroke, props.label, tx],
+      [rows, values, stroke, sparkId, props.label, tx],
     );
     const deltaTone =
       tone === "positive"
@@ -1106,7 +1120,7 @@ export const chartRenderers: RendererMap<
       [rows],
     );
     const max =
-      props.max && props.max > 0
+      isNum(props.max) && props.max > 0
         ? props.max
         : Math.max(1, ...rows.map((r) => r.value));
     const definition = useMemo(() => {
@@ -1185,7 +1199,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 280}
+            height={chartHeight(props.height, 280)}
             ariaLabel={props.title ?? "Radar chart"}
           />
         </Plot>
@@ -1221,8 +1235,10 @@ export const chartRenderers: RendererMap<
     const definition = useMemo(() => {
       // Keep doji candles visible: a body never collapses below ~0.6% of the price range.
       const minBody =
-        (Math.max(...rows.map((r) => r.high)) -
-          Math.min(...rows.map((r) => r.low)) || 1) * 0.006;
+        rows.length > 0
+          ? (Math.max(...rows.map((r) => r.high)) -
+              Math.min(...rows.map((r) => r.low)) || 1) * 0.006
+          : 0.006;
       return defineChart({
         svgAnimation: true,
         marks: [
@@ -1329,7 +1345,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 240}
+            height={chartHeight(props.height, 240)}
             ariaLabel={props.title ?? "Candlestick chart"}
           />
         </Plot>
@@ -1454,7 +1470,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 260}
+            height={chartHeight(props.height, 260)}
             ariaLabel={props.title ?? "Treemap"}
           />
         </Plot>
@@ -1612,7 +1628,7 @@ export const chartRenderers: RendererMap<
         <Plot>
           <Chart
             definition={definition}
-            height={props.height ?? 280}
+            height={chartHeight(props.height, 280)}
             ariaLabel={props.title ?? "Sankey chart"}
           />
         </Plot>

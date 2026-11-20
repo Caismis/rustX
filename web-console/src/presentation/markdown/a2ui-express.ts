@@ -153,6 +153,21 @@ function appendChildren(value: ExpressValue, state: Resolution, scope: Scope, de
   }
 }
 
+function unwrapVariable(value: ExpressValue | undefined, state: Resolution, depth: number): ExpressValue | undefined {
+  let current = value;
+  let hops = depth;
+  while (isExpressNode(current, 'variable')) {
+    consume(state, ++hops);
+    current = symbolOf(current, state);
+  }
+  return current;
+}
+
+function isButtonTextArg(value: ExpressValue | undefined): boolean {
+  return typeof value === 'string' || isExpressNode(value, 'path')
+    || (isExpressNode(value, 'call') && Object.hasOwn(functions, value.name));
+}
+
 function resolveNode(value: ExpressValue, state: Resolution, scope: Scope, depth: number): ExpressNode {
   consume(state, depth);
   if (isExpressNode(value, 'variable')) return resolveNode(symbolOf(value, state), state, scope, depth + 1);
@@ -168,8 +183,9 @@ function resolveNode(value: ExpressValue, state: Resolution, scope: Scope, depth
   const kind = call.name as SupportedKind;
   // Playground's Button(label, onClick) and the chat's child/variant/action
   // form share the same rendered action slot.
-  const first = call.args[0];
-  const actionSecond = kind === 'Button' && (typeof first === 'string' || isExpressNode(first, 'path')) && isExpressNode(call.args[1], 'call');
+  const first = kind === 'Button' ? unwrapVariable(call.args[0], state, depth) : undefined;
+  const second = kind === 'Button' ? unwrapVariable(call.args[1], state, depth) : undefined;
+  const actionSecond = kind === 'Button' && isButtonTextArg(first) && isExpressNode(second, 'call');
   const playgroundChart = (kind === 'LineChart' || kind === 'BarChart')
     && (call.args.length >= 6 || Object.hasOwn(call.kwargs, 'data'));
   const chartArgs = ['title', 'subtitle', 'height', 'format', 'unit', 'data'];
@@ -182,10 +198,11 @@ function resolveNode(value: ExpressValue, state: Resolution, scope: Scope, depth
   delete args.id;
   for (const [key, arg] of Object.entries(args)) {
     if (key === 'children' || key === 'child') {
-      if (kind === 'Button' && (typeof arg === 'string' || isExpressNode(arg, 'path'))) props.label = state.resolve(arg, scope);
+      const target = kind === 'Button' ? unwrapVariable(arg, state, depth) : arg;
+      if (kind === 'Button' && isButtonTextArg(target)) props.label = state.resolve(arg, scope);
       else appendChildren(arg, state, scope, depth + 1, children);
     } else if (key === 'action' || key === 'onClick') {
-      const action = callSlot(arg);
+      const action = callSlot(unwrapVariable(arg, state, depth) ?? arg);
       if (action.name === 'Event') {
         const { name, context, userMessage } = argumentsOf(action, ['name', 'context', 'userMessage'], 2);
         if (name === undefined) throw new Error('Expected an Express event name');
@@ -206,13 +223,16 @@ function resolveNode(value: ExpressValue, state: Resolution, scope: Scope, depth
       }
     }
   }
+  const buttonLabel = props.label ?? props.text;
+  const hasButtonLabel = !!scalarText(buttonLabel).trim();
   if ((kind === 'Text' && !Object.hasOwn(args, 'text') && children.length === 0)
-    || (kind === 'Button' && children.length !== 1 && !scalarText(props.label ?? props.text))) {
+    || (kind === 'Button' && children.length !== 1 && !hasButtonLabel)) {
     throw new Error('Missing required Express argument');
   }
   const size = (value: unknown) => Array.isArray(value) ? value.length : 0;
   const { budget } = state;
   if (kind === 'List' || kind === 'KeyValueList' || kind === 'StatGroup') budget.remaining -= size(props.items);
+  if (kind === 'ChoicePicker') budget.remaining -= size(props.options);
   if (kind === 'StockTicker') budget.remaining -= size(props.series) + size(props.stats);
   if (kind === 'CandlestickChart') budget.remaining -= size(props.data) * 3;
   if (kind === 'AreaChart' || playgroundChart) {

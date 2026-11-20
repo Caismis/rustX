@@ -215,9 +215,9 @@ mod lineage;
 mod message_versions;
 mod reads;
 mod settings;
-mod trace_lineage;
 #[cfg(test)]
 mod tests;
+mod trace_lineage;
 mod uploads;
 
 impl SessionController {

@@ -502,11 +502,14 @@ test('uses the Playground interactions for weather, diagrams, tables, and form c
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
-    const action = chat.getByText('Select forecast', { exact: true });
-    await action.evaluate((element: HTMLElement) => element.click());
+    const action = chat.getByRole('button', { name: 'Select forecast', exact: true });
+    await action.evaluate((element: HTMLElement) => {
+      element.click();
+      element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
     await composer.fill('Keep draft');
-    await action.click();
+    await action.press('Enter');
     await expect(chat.getByText('Forecast action confirmed.', { exact: true })).toBeVisible();
     await expect(composer).toHaveValue('Keep draft');
     await page.setViewportSize({ width: 390, height: 900 });

@@ -40,3 +40,16 @@ export function formatNumber(
 export function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
+
+/** Validated HTTPS URL string, else undefined. */
+export function httpsUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!/^https:\/\//i.test(trimmed)) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}

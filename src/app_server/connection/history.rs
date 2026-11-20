@@ -550,6 +550,9 @@ impl AppServerConnection {
                 .await?;
             return Ok((session.clone(), selected, cut.clone()));
         }
+        if cut.revision != 0 {
+            return Err(domain(ErrorData::ReadCutExpired));
+        }
         let source = cut
             .source_cut
             .as_ref()

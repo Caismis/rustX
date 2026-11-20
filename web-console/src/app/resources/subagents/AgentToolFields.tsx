@@ -2,6 +2,7 @@ import type { LoadMcpTools } from '../types';
 import { useEffect, useId, useState } from 'react';
 import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
+import { mcpConnectionIdentity } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { CheckboxList, Selection, nativeTools } from '../../settings/forms/controls';
@@ -43,17 +44,22 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
         // Workspace shadows one of its MCP server definitions.
         const servers = inherited ? Object.keys(source.user_mcp.authored ?? {})
           : mcp.filter(entry => entry.location.scope === owner).map(entry => entry.name);
-        const revision = (owner === 'workspace' ? source.workspace_mcp : source.user_mcp)?.revision;
+        const mcpDocument = owner === 'workspace' ? source.workspace_mcp : source.user_mcp;
         return <ScopedChoices key={owner} owner={owner}>
           {servers.length ? <div className={css.serverList}>
-            {servers.map(name => <McpServerTools key={JSON.stringify([scope, name, revision])}
-              scope={scope} owner={owner} name={name} selected={sourceSelections.get(name)} loadMcpTools={loadMcpTools}
-              change={next => {
-                const sources = new Map(sourceSelections);
-                if (next === undefined) sources.delete(name);
-                else sources.set(name, next);
-                change({ tools: { ...tools, sources: Object.fromEntries(sources) } });
-              }} />)}
+            {servers.map(name => {
+              const authored = mcpDocument?.authored && Object.hasOwn(mcpDocument.authored, name)
+                ? mcpDocument.authored[name] : undefined;
+              const identity = mcpConnectionIdentity(authored, mcpDocument?.revision) ?? mcpDocument?.revision;
+              return <McpServerTools key={JSON.stringify([scope, owner, name, identity])}
+                scope={scope} owner={owner} name={name} selected={sourceSelections.get(name)} loadMcpTools={loadMcpTools}
+                change={next => {
+                  const sources = new Map(sourceSelections);
+                  if (next === undefined) sources.delete(name);
+                  else sources.set(name, next);
+                  change({ tools: { ...tools, sources: Object.fromEntries(sources) } });
+                }} />;
+            })}
           </div> : <p>{tx('resources:subagents.no-mcp-tools')}</p>}
         </ScopedChoices>;
       })}

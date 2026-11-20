@@ -39,7 +39,8 @@ export const feedbackRenderers: RendererMap<
   "Alert" | "Callout" | "Skeleton" | "EmptyState"
 > = {
   Alert: ({ props }) => {
-    const a = ALERT[props.tone ?? "info"];
+    const tone = props.tone;
+    const a = tone && Object.hasOwn(ALERT, tone) ? ALERT[tone] : ALERT.info;
     const Icon = a.icon;
     return (
       <div
@@ -119,7 +120,7 @@ export const feedbackRenderers: RendererMap<
     }
     return (
       <div className="flex w-full flex-col gap-2">
-        {Array.from({ length: props.lines ?? 3 }).map((_, i, arr) => (
+        {Array.from({ length: Math.min(24, props.lines ?? 3) }).map((_, i, arr) => (
           <div
             key={i}
             className="a2-shimmer h-3 rounded"

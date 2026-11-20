@@ -50,13 +50,21 @@ export function supersededHistoryReads(rpc: readonly RequestTiming[]): RequestTi
   const successful = rpc.filter((row): row is CompletedTiming => completed(row) && row.error === undefined);
   const following = successful.filter(attach => attach.method === 'thread/resume' && attach.resultType === 'attached' && attach.target
     && successful.some(checkpoint => checkpoint.method === 'session/checkpoint' && checkpoint.resultType === 'checkpoint'
-      && checkpoint.target === attach.target && attach.end <= checkpoint.start
+      && checkpoint.connection === attach.connection && checkpoint.target === attach.target && attach.end <= checkpoint.start
       && successful.some(subscribe => subscribe.method === 'session/subscribe' && subscribe.resultType === 'subscribed'
-        && subscribe.target === attach.target && checkpoint.end <= subscribe.start)));
+        && subscribe.connection === attach.connection && subscribe.target === attach.target && checkpoint.end <= subscribe.start)));
+  // Switching the selected node may start native preparation before resume
+  // reaches the wire. A current-node preview can lose to that preparation.
+  const switches = successful.filter(row => row.method === 'session/switchNode' && row.resultType === 'session');
   return rpc.filter(history => history.method === 'session/history' && history.historyAt === 'latest' && history.error === 'stale_runtime'
     && history.sessionId && history.nodeId && completed(history)
-    && following.some(attach => attach.sessionId === history.sessionId && attach.nodeId === history.nodeId
-      && history.start < attach.end && attach.start < history.end));
+    && following.some(attach => attach.connection === history.connection && attach.sessionId === history.sessionId
+      && attach.nodeId === history.nodeId && history.start < attach.end
+      && (attach.start < history.end || switches.some(switched => switched.connection === history.connection
+        && switched.sessionId === history.sessionId && switched.nodeId === history.nodeId
+        && switched.end <= history.start
+        && !switches.some(later => later.connection === switched.connection && later.sessionId === switched.sessionId
+          && later.start >= switched.end && later.start < attach.start)))));
 }
 
 /** A standalone head read can expire during a native publication. Count it as

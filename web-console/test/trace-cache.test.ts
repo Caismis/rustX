@@ -616,3 +616,70 @@ it('a disjoint append keeps an in-flight detail read valid', () => {
   const live = refreshTrace(pending,{records:[entry(50)],next_cursor:'before-fifty'});
   expect(completeTraceDetail(live,'trace:1',pending.epoch,detail(1)).details['trace:1']?.detail).toEqual(detail(1));
 });
+
+it('loadLineageTrace retires pending reads across reattachment and skips leading local-only pages', async () => {
+  server = new Server();
+  server.snapshots.set('A', { ...snapshot(), trace: { records: [], next_cursor: null } });
+  await server.attached('A');
+  server.held.add('session/traceHistory');
+  const staleCount = server.requests.filter(row => row.request.method === 'session/traceHistory').length;
+  const staleLoad = server.client.loadLineageTrace('A');
+  const staleRequest = await server.waitFor('session/traceHistory', staleCount + 1);
+  // Release and reattach starts a fresh TraceCache with the same epoch=1.
+  server.held.delete('session/traceHistory');
+  await server.client.release('A');
+  await server.client.attach('A');
+  server.held.add('session/traceHistory');
+  const freshCount = server.requests.filter(row => row.request.method === 'session/traceHistory').length;
+  const freshLoad = server.client.loadLineageTrace('A');
+  const localPageRequest = await server.waitFor('session/traceHistory', freshCount + 1);
+  const staleComposedId = `trace:${(1n << 48n) + 99n}`;
+  const freshComposedId = `trace:${(1n << 48n) + 1n}`;
+  const nextSlotCursor = `trace:${(2n << 48n) + 1n}`;
+  server.socket.success(staleRequest, {
+    type: 'session_trace_history', conversation_id: 'conversation-A',
+    page: { read_cut: { ...rootCut(), revision: '0' }, records: [entry(99, { id: staleComposedId, position: staleComposedId })], next_cursor: null },
+  });
+  await staleLoad;
+  expect(server.client.getSnapshot().views.A.trace?.lineageRecords).toBeUndefined();
+  // First page for empty live head contains only local records; loader must advance to ancestor slot.
+  server.socket.success(localPageRequest, {
+    type: 'session_trace_history', conversation_id: 'conversation-A',
+    page: { read_cut: { ...rootCut(), revision: '0' }, records: [entry(1)], next_cursor: nextSlotCursor },
+  });
+  const ancestorPageRequest = await server.waitFor('session/traceHistory', freshCount + 2);
+  expect(ancestorPageRequest.params).toMatchObject({ before: nextSlotCursor });
+  server.socket.success(ancestorPageRequest, {
+    type: 'session_trace_history', conversation_id: 'conversation-A',
+    page: { read_cut: { ...rootCut(), revision: '0' }, records: [entry(1, { id: freshComposedId, position: freshComposedId })], next_cursor: null },
+  });
+  await freshLoad;
+  const trace = server.client.getSnapshot().views.A.trace!;
+  expect(trace.lineageRecords?.map(record => record.id)).toEqual([freshComposedId]);
+  expect(trace.lineageCursor).toBeNull();
+  expect(trace.loading).toBe(false);
+});
+
+it('loadLineageDetail releases its pending loading marker when admission declines', async () => {
+  server = new Server();
+  const composedId = `trace:${(1n << 48n) + 4n}`;
+  server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(5)], next_cursor: null } });
+  await server.attached('A');
+  let allow = false;
+  server.client.setSessionAdmission(async () => allow ? { current: () => true, validate: async () => true } : false);
+  await server.client.loadTraceDetail('A', composedId);
+  expect(server.client.getSnapshot().views.A.trace?.details[composedId]).toBeUndefined();
+  expect(server.requests.filter(row => row.request.method === 'session/traceHistoryDetail')).toHaveLength(0);
+  allow = true;
+  server.handlers.set('session/traceHistoryDetail', () => ({
+    type: 'session_trace_history_detail', conversation_id: 'conversation-A',
+    page: {
+      read_cut: { ...rootCut(), revision: '0' }, cursor: '0', domain: 'trace.records.4.detail',
+      total: '1', next_offset: null, collections: [],
+      items: [{ offset: '0', identity: 'trace:4', key: null, value: detail(4), deferred: false, body_complete: true, content: [] }],
+    },
+  }));
+  await server.client.loadTraceDetail('A', composedId);
+  expect(server.client.getSnapshot().views.A.trace?.details[composedId]?.detail).toEqual(detail(4));
+  expect(server.requests.filter(row => row.request.method === 'session/traceHistoryDetail')).toHaveLength(1);
+});

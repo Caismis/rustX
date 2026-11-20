@@ -418,11 +418,12 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
 export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
   const tx = useTranslation();
   const shadowed = unit.shadowed;
+  const inheriting = unit.definition === 'inherited' || unit.definition === 'overriding';
   return <>
     {unit.definition === 'inherited' && <p role="status" data-definition-state="inherited">{tx('settings:forms.using-global')}</p>}
     <SettingsNotice text={unit.definition === 'inherited' ? shadowed?.diagnostic : undefined}/>
     {unit.definition === 'overriding' && <p role="status" data-definition-state="overriding">{tx('settings:forms.workspace-customization')}</p>}
-    {!!shadowed?.withheld.length && <p className={css.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
+    {inheriting && !!shadowed?.withheld.length && <p className={css.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
     {unit.unparsed && <p role="status" data-definition-state="authored">{tx('settings:forms.unreadable')}</p>}
   </>;
 }

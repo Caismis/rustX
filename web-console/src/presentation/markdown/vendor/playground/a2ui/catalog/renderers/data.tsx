@@ -63,7 +63,7 @@ import {
   TooltipTrigger,
 } from "../../../components/ui/tooltip";
 import { cn } from "../../../lib/utils";
-import { asArray, formatNumber } from "./format";
+import { asArray, formatNumber, httpsUrl } from "./format";
 import type { RendererMap } from "./types";
 
 /* ---------------------------------------------------------------- tones */
@@ -154,7 +154,7 @@ export const TONE: Record<
 };
 
 export function toneOf(t: unknown, fallback: Tone = "default"): Tone {
-  return typeof t === "string" && t in TONE ? (t as Tone) : fallback;
+  return typeof t === "string" && Object.hasOwn(TONE, t) ? (t as Tone) : fallback;
 }
 
 /** Guess a tone from a status word, for badge-formatted table cells. */
@@ -190,7 +190,7 @@ export function iconFor(name?: string): LucideIcon | undefined {
     .filter(Boolean)
     .map((s) => s[0].toUpperCase() + s.slice(1))
     .join("");
-  return (icons as Record<string, LucideIcon>)[key];
+  return Object.hasOwn(icons, key) ? (icons as Record<string, LucideIcon>)[key] : undefined;
 }
 
 function str(v: unknown): string {
@@ -395,11 +395,10 @@ function formatCell(
   if (value == null || value === "")
     return <span className="text-muted-foreground/50">-</span>;
   switch (format) {
-    case "number":
-      return formatNumber(
-        typeof value === "number" ? value : num(value, NaN),
-        "number",
-      );
+    case "number": {
+      const n = typeof value === "number" ? value : num(value, NaN);
+      return Number.isFinite(n) ? formatNumber(n, "number") : str(value);
+    }
     case "currency":
       return typeof value === "number"
         ? formatNumber(value, "currency")
@@ -552,6 +551,13 @@ function DataTableView({
                   return (
                     <TableHead
                       key={header.id}
+                      aria-sort={
+                        sorted === "asc"
+                          ? "ascending"
+                          : sorted === "desc"
+                            ? "descending"
+                            : "none"
+                      }
                       className={cn(
                         "h-9 bg-black/[0.015] dark:bg-white/[0.015] px-4 text-[11.5px] font-medium text-muted-foreground",
                         right && "text-right",
@@ -806,13 +812,14 @@ export const dataRenderers: RendererMap<DataKeys> = {
     const name = str(props.name) || "Unknown";
     const size = props.size ?? "md";
     const hue = hueOf(name);
+    const image = httpsUrl(props.image);
     return (
       <div className="a2-enter flex min-w-0 items-center gap-2.5">
         <Avatar
           size={size === "md" ? "default" : size}
           className={cn(size === "lg" && "size-11")}
         >
-          {props.image ? <AvatarImage src={props.image} alt={name} /> : null}
+          {image ? <AvatarImage src={image} alt={name} /> : null}
           <AvatarFallback
             className={cn(
               "a2-avatar-tint font-medium",
@@ -874,12 +881,13 @@ export const dataRenderers: RendererMap<DataKeys> = {
             {shown.map((p, i) => {
               const name = str(p.name) || "Guest";
               const hue = hueOf(name);
+              const image = httpsUrl(p.image);
               return (
                 <Tooltip key={`${name}-${i}`}>
                   <TooltipTrigger asChild>
                     <Avatar className="size-8 ring-2 transition-transform hover:z-10 hover:-translate-y-0.5">
-                      {p.image ? (
-                        <AvatarImage src={p.image} alt={name} />
+                      {image ? (
+                        <AvatarImage src={image} alt={name} />
                       ) : null}
                       <AvatarFallback
                         className="a2-avatar-tint text-[11px] font-medium"
@@ -910,13 +918,16 @@ export const dataRenderers: RendererMap<DataKeys> = {
   },
 
   DataTable: ({ props }) => {
-    const columns = useMemo(
-      () =>
-        asArray<Col>(props.columns)
-          .filter((c) => isObj(c) && typeof c.key === "string")
-          .map((c) => ({ ...c, label: str(c.label) || c.key })),
-      [props.columns],
-    );
+    const columns = useMemo(() => {
+      const seen = new Set<string>();
+      const out: Col[] = [];
+      for (const c of asArray<Col>(props.columns)) {
+        if (!isObj(c) || typeof c.key !== "string" || seen.has(c.key)) continue;
+        seen.add(c.key);
+        out.push({ ...c, label: str(c.label) || c.key });
+      }
+      return out;
+    }, [props.columns]);
     const raw = props.rows;
     const rows = useMemo(() => {
       const list = asArray<Row>(raw).filter(ok);

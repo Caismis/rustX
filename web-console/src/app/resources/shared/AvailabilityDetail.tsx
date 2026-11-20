@@ -1,10 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
-import { useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import type { SourceSettings, SourceScope, SourceToolSelection, WorkflowToolChoice } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
 import { toolSourceId } from '../../settings/capability';
-import { UnitForm } from '../../settings/forms/bridge';
+import { UnitForm, UnitReset } from '../../settings/forms/bridge';
 import { ConfigUnavailable } from '../../settings/forms/ConfigUnavailable';
 import { Selection } from '../../settings/forms/controls';
 import { Choice } from '../../settings/primitives/aria';
@@ -38,7 +38,9 @@ function ToolChoices({ label, value, change, tools }: {
   label: string; value: SourceToolSelection; change: (value: SourceToolSelection) => void; tools: readonly WorkflowToolChoice[];
 }) {
   const tx = useTranslation();
+  const resets = useContext(UnitReset);
   const [choosingExact, setChoosingExact] = useState(false);
+  useEffect(() => { setChoosingExact(false); }, [resets]);
   const selected = Array.isArray(value) ? value : [];
   const mode = value === 'all' ? 'all' : selected.length || choosingExact ? 'exact' : 'none';
   const options = new Map(tools.map(({ name, description }) => [name, { name, description }]));
@@ -61,7 +63,8 @@ function ToolChoices({ label, value, change, tools }: {
       }} />
     {mode === 'exact' && <div className={subagentsCss.form}>
       <ResourceChoices label={tx('resources:subagents.mcp-tool-list', { p0: label })}
-        options={[...options.values()]} selected={selected} change={change} />
+        options={[...options.values()]} selected={selected}
+        change={next => { setChoosingExact(true); change(next); }} />
     </div>}
     {mode === 'all' && <p className={settingsCss.hint}>{tx('resources:mcp.all-tools')}</p>}
   </>;

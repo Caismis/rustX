@@ -258,6 +258,13 @@ pub(crate) fn field_page(
     offset: u64,
     limit: usize,
 ) -> Result<CheckpointPage, RuntimeClientError> {
+    let alias = match path.first().map(String::as_str) {
+        Some("previous_system_prompt") => {
+            Some(("effective_system_prompt", "previous_system_prompt"))
+        }
+        Some("previous_tools") => Some(("tools", "previous_tools")),
+        _ => None,
+    };
     let (store, request, through, path) = request_field_source(store, cut, sequence, path)?;
     let source = store
         .request_field_page_at(request, through, &path, offset, limit)
@@ -269,10 +276,19 @@ pub(crate) fn field_page(
         .enumerate()
         .map(|(index, field)| {
             collections.extend(field.collections.into_iter().map(|mut frontier| {
-                frontier.domain = format!(
-                    "trace.records.{sequence}.detail.request.{}",
-                    frontier.domain
-                );
+                let relative = match alias {
+                    Some((target, requested)) if frontier.domain == target => requested.to_owned(),
+                    Some((target, requested))
+                        if frontier
+                            .domain
+                            .strip_prefix(target)
+                            .is_some_and(|rest| rest.starts_with('.')) =>
+                    {
+                        format!("{requested}{}", &frontier.domain[target.len()..])
+                    }
+                    _ => frontier.domain,
+                };
+                frontier.domain = format!("trace.records.{sequence}.detail.request.{relative}");
                 frontier
             }));
             CheckpointPageItem {

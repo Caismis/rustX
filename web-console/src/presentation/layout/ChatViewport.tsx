@@ -5,14 +5,13 @@ import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
-interface SavedReading { following: boolean; reading?: ReadingPosition }
 const FOLLOW_THRESHOLD = 25;
 const SCROLL_SAMPLE_MS = 500;
 const SCROLL_MEMORY_LIMIT = 200;
 /** Detached reading survives the selected-only mount lifecycle, like Harness's
- * per-session ChatScrollPosition map and ZCode's scroll memory. A saved
- * position is presentation state only; native history owners are unchanged. */
-const scrollMemory = new Map<string, SavedReading>();
+ * per-session ChatScrollPosition map and ZCode's scroll memory. Following views
+ * store no entry; a saved position is presentation state only. */
+const scrollMemory = new Map<string, ReadingPosition>();
 /** A Turn reads from its prompt. The native anchor is the Turn's first owned
  * row (process or response), so a jump lands on the user prompt rows that
  * immediately open it. Otherwise the first Turn hides the conversation start. */
@@ -53,6 +52,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private scrollSample?: ReturnType<typeof setTimeout>;
   private deferredScrollSample = false;
   private pendingReading?: ReadingPosition;
+  private pendingFollowing?: boolean;
   private reading?: ReadingPosition;
   private pendingRestore?: ReadingPosition;
   private following = true;
@@ -188,6 +188,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.retireNavigation();
       this.pendingRestore = undefined;
       this.pendingReading = position ?? this.position();
+      this.pendingFollowing = Math.abs(floor - top) <= FOLLOW_THRESHOLD;
       if (top > previous && Math.abs(floor - top) < 1) {
         this.cancelScrollSample();
         this.following = true; this.reading = undefined;
@@ -202,6 +203,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     this.scrollSample = undefined;
     this.deferredScrollSample = false;
     this.pendingReading = undefined;
+    this.pendingFollowing = undefined;
   };
   private sampleScroll = () => {
     if (this.scrollSample === undefined) return;
@@ -248,18 +250,36 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
         this.navigation = { intent, anchor, current }; this.markLayoutDirty(); return true;
       } };
   };
+  private saveMemory(key?: string) {
+    if (!key) return;
+    // Refs may already be detached during unmount; the maintained reading
+    // position and pending gesture capture the freshest semantic state.
+    const following = this.scrollSample !== undefined && this.pendingFollowing !== undefined
+      ? this.pendingFollowing : this.following;
+    const reading = following ? undefined : this.pendingReading ?? this.reading;
+    scrollMemory.delete(key);
+    if (!reading) return;
+    if (scrollMemory.size >= SCROLL_MEMORY_LIMIT) scrollMemory.delete(scrollMemory.keys().next().value!);
+    scrollMemory.set(key, reading);
+  }
+  private restoreMemory(key?: string): boolean {
+    const saved = key === undefined ? undefined : scrollMemory.get(key);
+    if (!saved) return false;
+    scrollMemory.delete(key!);
+    scrollMemory.set(key!, saved);
+    this.following = false;
+    this.reading = saved;
+    this.pendingRestore = saved;
+    return true;
+  }
   componentDidMount() {
     this.mounted = true;
     const scroller = this.scroller()!;
     // A resident session scroller can retain the previous view's position.
     // Its initial offset is layout state, not a new reader gesture.
     this.writtenTop = scroller.scrollTop;
-    const saved = this.props.memoryKey === undefined ? undefined : scrollMemory.get(this.props.memoryKey);
-    if (saved && !saved.following && saved.reading) {
-      this.following = false;
-      this.reading = saved.reading;
-      this.pendingRestore = saved.reading;
-      if (!this.state.detached) this.setState({ detached: true });
+    if (this.restoreMemory(this.props.memoryKey) && !this.state.detached) {
+      this.setState({ detached: true });
     }
     scroller.addEventListener('scroll', this.onScroll);
     scroller.addEventListener('scrollend', this.sampleScroll);
@@ -292,12 +312,15 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition; top?: number; floor?: number }) {
     if (this.scroller()?.closest('[hidden]')) return;
     if (_previous.resetKey !== this.props.resetKey) {
+      const sameMemory = _previous.memoryKey === this.props.memoryKey;
+      if (!sameMemory) this.saveMemory(_previous.memoryKey);
       this.cancelScrollSample();
       this.retireNavigation();
       this.pendingRestore = undefined;
       this.following = true; this.reading = undefined;
       this.writtenTop = this.scroller()?.scrollTop ?? 0;
-      if (this.state.detached) this.setState({ detached: false });
+      const restored = !sameMemory && this.restoreMemory(this.props.memoryKey);
+      if (this.state.detached !== restored) this.setState({ detached: restored });
       this.commitLayout(); return;
     }
     // Preserve movement that occurred before React touched the DOM, even if
@@ -319,14 +342,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     }
   }
   componentWillUnmount() {
-    const key = this.props.memoryKey;
-    if (key) {
-      if (scrollMemory.size >= SCROLL_MEMORY_LIMIT) scrollMemory.delete(scrollMemory.keys().next().value!);
-      // Refs may already be detached here; the maintained reading position is
-      // the freshest semantic capture, including an unsampled reader gesture.
-      const reading = this.following ? undefined : this.pendingReading ?? this.reading;
-      scrollMemory.set(key, { following: this.following, ...(reading ? { reading } : {}) });
-    }
+    this.saveMemory(this.props.memoryKey);
     this.scroller()?.querySelector('[data-composer-seat]')?.removeAttribute('data-sticky-overflow');
     this.scroller()?.removeEventListener('scroll', this.onScroll);
     this.scroller()?.removeEventListener('scrollend', this.sampleScroll);

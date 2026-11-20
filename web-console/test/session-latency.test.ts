@@ -172,6 +172,19 @@ describe('latency evidence for a cold preview superseded by attachment', () => {
     rows[3] = { ...rows[3], target: rows[1].target, start: 210, end: 220 };
     expect(supersededHistoryReads(rows)).toEqual([rows[0]]);
   });
+
+  it('proves early preparation by the exact switch receipt before a non-overlapping resume', () => {
+    const rows = evidence().map(row => ({ ...row, connection: 1 }));
+    rows[0] = { ...rows[0], start: 13, end: 16 };
+    const switched = { ...rows[0], method: 'session/switchNode', resultType: 'session', start: 5, end: 12, error: undefined };
+    expect(supersededHistoryReads(rows)).toEqual([]);
+    expect(supersededHistoryReads([...rows, switched])).toEqual([rows[0]]);
+    expect(supersededHistoryReads([...rows, { ...switched, nodeId: 'node-b' }])).toEqual([]);
+    expect(supersededHistoryReads([...rows, { ...switched, connection: 2 }])).toEqual([]);
+    expect(supersededHistoryReads([...rows, switched, { ...switched, start: 17, end: 19, nodeId: 'node-b' }])).toEqual([]);
+    rows[2].connection = 2;
+    expect(supersededHistoryReads([...rows, switched])).toEqual([]);
+  });
 });
 
 describe('latency evidence for recovered native status capture', () => {

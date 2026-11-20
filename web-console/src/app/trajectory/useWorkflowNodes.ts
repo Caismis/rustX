@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { validateCanonicalInspectionPage } from '../../../../protocol/app-server/trace-inspection';
-import type { TraceCache } from '../../client/trace';
+import { isComposedTraceId, type TraceCache } from '../../client/trace';
 import type { TraceRecord } from '../../../../protocol/app-server/v80';
 import { workflowCollection, type WorkflowNodes, type WorkflowTraceNode } from './workflow';
 
@@ -8,36 +8,42 @@ import { workflowCollection, type WorkflowNodes, type WorkflowTraceNode } from '
 export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[], opened: ReadonlySet<string>) {
   const [retries, setRetries] = useState<Record<string, number>>({});
   const selected = roots.filter(root => opened.has(root.id));
-  const keys = selected.map(root => [root.id, JSON.stringify([cache.epoch, root.id, cache.readCuts?.[root.id], workflowCollection(root), retries[root.id] ?? 0])] as const);
+  const cutOf = (root: TraceRecord) => isComposedTraceId(root.id) ? cache.details[root.id]?.page?.read_cut : cache.readCuts?.[root.id];
+  const readerOf = (root: TraceRecord) => isComposedTraceId(root.id) ? cache.details[root.id]?.reader : cache.fields;
+  const keys = selected.map(root => [root.id, JSON.stringify([cache.epoch, root.id, cutOf(root), workflowCollection(root), retries[root.id] ?? 0])] as const);
   const signature = JSON.stringify(keys), reader = cache.fields;
-  const latest = useRef({ signature, reader }); latest.current = { signature, reader };
+  const readers = new Map(selected.map(root => [root.id, readerOf(root)] as const));
+  const latest = useRef({ signature, reader, readers }); latest.current = { signature, reader, readers };
   const [state, setState] = useState<Record<string, { key: string; epoch: number; value: WorkflowNodes }>>({});
   useEffect(() => {
     let mounted = true;
-    const current = () => mounted && latest.current.signature === signature && latest.current.reader === reader;
+    const current = (rootId: string, rootReader: ReturnType<typeof readerOf>) =>
+      mounted && latest.current.signature === signature && latest.current.readers.get(rootId) === rootReader;
     setState(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => selected.some(root => root.id === id))));
     for (const root of selected) {
       const key = keys.find(([id]) => id === root.id)![1], entry = state[root.id];
-      const previous = entry?.epoch === cache.epoch && entry.value.reader === reader ? entry : undefined;
-      if (previous?.key === key && !previous.value.error && !previous.value.loading && previous.value.reader === reader) continue;
-      const cut = cache.readCuts?.[root.id], collection = workflowCollection(root);
-      if (!reader || !cut || !collection) continue;
+      const rootReader = readers.get(root.id);
+      const previous = entry?.epoch === cache.epoch && entry.value.reader === rootReader ? entry : undefined;
+      if (previous?.key === key && !previous.value.error && !previous.value.loading && previous.value.reader === rootReader) continue;
+      const cut = cutOf(root), collection = workflowCollection(root);
+      if (!rootReader || !cut || !collection) continue;
+      const owns = () => current(root.id, rootReader);
       const publish = (nodes: WorkflowTraceNode[], loading: boolean, error?: string) => {
-        if (current()) setState(old => ({ ...old, [root.id]: { key, epoch: cache.epoch, value: { root, nodes, cut, reader, loading, error } } }));
+        if (owns()) setState(old => ({ ...old, [root.id]: { key, epoch: cache.epoch, value: { root, nodes, cut, reader: rootReader, loading, error } } }));
       };
       const retain = (loading: boolean, error?: string) => {
         if (!previous) { publish([], loading, error); return; }
         // A refresh keeps the complete admitted snapshot and its own sources.
         // An old node's selectors must never be read at the replacement cut.
-        if (current()) setState(old => ({ ...old, [root.id]: { key, epoch: cache.epoch, value: { ...previous.value, loading, error } } }));
+        if (owns()) setState(old => ({ ...old, [root.id]: { key, epoch: cache.epoch, value: { ...previous.value, loading, error } } }));
       };
       void (async () => {
         const nodes: WorkflowTraceNode[] = [], ids = new Set<string>();
         let offset: number | null = collection.total === '0' ? null : 0;
         retain(offset !== null);
         while (offset !== null) {
-          const page = await reader.page(cut, collection.domain, offset, current);
-          if (!current()) return;
+          const page = await rootReader.page(cut, collection.domain, offset, owns);
+          if (!owns()) return;
           if (page.domain !== collection.domain || JSON.stringify(page.read_cut) !== JSON.stringify(cut) || page.total !== collection.total) throw Error('Original Workflow node page changed.');
           validateCanonicalInspectionPage(page, offset, collection.total, true);
           for (const item of page.items) {
@@ -53,11 +59,11 @@ export function useWorkflowNodes(cache: TraceCache, roots: readonly TraceRecord[
       })().catch(error => retain(false, String(error).slice(0, 512)));
     }
     return () => { mounted = false; };
-  }, [signature, reader]);
+  }, [signature, reader, cache.details]);
   const nodes = useMemo(() => new Map(selected.flatMap(root => {
     const value = state[root.id]?.epoch === cache.epoch ? state[root.id]?.value : undefined;
-    return value && value.reader === reader ? [[root.id, value] as const] : [];
-  })), [state, signature, reader]);
+    return value && value.reader === readers.get(root.id) ? [[root.id, value] as const] : [];
+  })), [state, signature, reader, cache.details]);
   return { nodes, retry: (id: string) => {
     // A retired error control cannot request work from a replacement reader.
     if (latest.current.signature !== signature || latest.current.reader !== reader || !nodes.get(id)?.error) return;

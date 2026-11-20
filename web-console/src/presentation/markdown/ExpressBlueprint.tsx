@@ -37,7 +37,12 @@ function blueprint(components: Map<string, Component>): Part | undefined {
       }
       parents.delete(id);
     }
-    return { id, component: node?.component, height: typeof node?.height === 'number' ? node.height : undefined, children };
+    return {
+      id,
+      component: node?.component,
+      height: typeof node?.height === 'number' && Number.isFinite(node.height) ? node.height : undefined,
+      children,
+    };
   }
   return visit('root', 0);
 }
@@ -72,7 +77,11 @@ export default function ExpressBlueprint({ source }: { source: string }) {
   const reader = useRef<ReturnType<typeof openDraft> | undefined>(undefined);
   const [tree, setTree] = useState<Part>();
   useEffect(() => {
-    if (deferred.length > MAX_SOURCE_LENGTH) return;
+    if (deferred.length > MAX_SOURCE_LENGTH) {
+      reader.current = undefined;
+      setTree(undefined);
+      return;
+    }
     let draft = reader.current;
     if (!draft || !deferred.startsWith(draft.source)) {
       draft = openDraft();

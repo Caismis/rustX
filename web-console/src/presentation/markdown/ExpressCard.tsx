@@ -11,9 +11,13 @@ import css from './ExpressCard.module.css';
 export const ExpressEventContext = createContext<((message: string) => void) | undefined>(undefined);
 
 function LocalControl({ kind, props, children, bound, onChange }: ExpressControlProps & { bound: boolean }) {
-  const [value, setValue] = useState(props.value);
+  const [state, setState] = useState(() => ({ initial: props.value, value: props.value }));
+  if (!bound && !Object.is(props.value, state.initial)) {
+    setState({ initial: props.value, value: props.value });
+  }
+  const value = Object.is(props.value, state.initial) ? state.value : props.value;
   return <ExpressControl kind={kind} props={bound ? props : { ...props, value }}
-    onChange={bound ? onChange : setValue}>{children}</ExpressControl>;
+    onChange={bound ? onChange : next => setState(prev => ({ ...prev, value: next }))}>{children}</ExpressControl>;
 }
 
 function stringList(value: unknown): string[] | undefined {
@@ -22,7 +26,11 @@ function stringList(value: unknown): string[] | undefined {
 
 export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; streaming: boolean }) {
   const send = useContext(ExpressEventContext);
-  const [{ root, data }, setModel] = useState(() => ({ root: surface.root, data: surface.data }));
+  const [model, setModel] = useState(() => ({ surface, root: surface.root, data: surface.data }));
+  if (model.surface !== surface) {
+    setModel({ surface, root: surface.root, data: surface.data });
+  }
+  const { root, data } = model.surface === surface ? model : { root: surface.root, data: surface.data };
 
   function renderNode(node: ExpressNode, index: number): ReactNode {
     const { props } = node;
@@ -44,11 +52,11 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
         const description = scalarText(props.description ?? props.subtitle);
         const title = scalarText(props.title ?? props.text);
         return <section key={index} className={css.Column}>
-          <header className={css.sectionHeader}>
+          {(eyebrow || title || description) && <header className={css.sectionHeader}>
             {eyebrow && <span className={css.text} data-variant="label">{eyebrow}</span>}
-            <Heading className={css.text}>{title}</Heading>
+            {title && <Heading className={css.text}>{title}</Heading>}
             {description && <p className={css.text} data-variant="description">{description}</p>}
-          </header>
+          </header>}
           {node.children.map(renderNode)}
         </section>;
       }
@@ -65,7 +73,8 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
       }
       case 'Icon': {
         const name = scalarText(props.name);
-        return <span key={index} aria-label={scalarText(props.label) || undefined}><BundledIcon name={name.startsWith('lucide:') ? name : `lucide:${name.replaceAll('_', '-')}`} size={20} fallback={null}/></span>;
+        const label = scalarText(props.label);
+        return <span key={index} role={label ? 'img' : undefined} aria-label={label || undefined} aria-hidden={label ? undefined : true}><BundledIcon name={name.startsWith('lucide:') ? name : `lucide:${name.replaceAll('_', '-')}`} size={20} fallback={null}/></span>;
       }
       case 'Table':
       case 'LineChart':
@@ -98,15 +107,16 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
         const path = node.bindings?.value;
         return <LocalControl key={index} kind={node.kind} props={props} bound={!!path}
           onChange={value => path && setModel(previous => {
-            const model = writeBinding(previous.data, path, value);
-            const tree = surface.render(model);
-            return tree ? { root: tree, data: model } : previous;
+            const base = previous.surface === surface ? previous.data : surface.data;
+            const nextData = writeBinding(base, path, value);
+            const tree = surface.render(nextData);
+            return tree ? { surface, root: tree, data: nextData } : previous;
           })}>
           {node.children.map(renderNode)}
         </LocalControl>;
       }
       default: {
-        const gap = typeof props.gap === 'number' ? Math.max(0, Math.min(16, props.gap)) * 4 : undefined;
+        const gap = typeof props.gap === 'number' && Number.isFinite(props.gap) ? Math.max(0, Math.min(16, props.gap)) * 4 : undefined;
         return <div key={index} className={css[node.kind]} data-align={scalarText(props.align)}
           data-justify={scalarText(props.justify)} style={gap === undefined ? undefined : { gap }}>
           {node.children.map(renderNode)}

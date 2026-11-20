@@ -98,18 +98,67 @@ it('Diff resolves a predecessor outside the loaded window through native immutab
  const previous=traceRecord(2);previous.request!.request_id='previous-request';
  const priorDetail=requestDetail(2);priorDetail.request!.effective_system_prompt.text='OUTSIDE_WINDOW_PRIOR';
  const prior=nativeTraceFixture(previous,priorDetail,cut),pageHandler=server.handlers.get('conversation/checkpointPage')!,valueHandler=server.handlers.get('conversation/checkpointValueRead')!;
+ const previousPromptDomain='trace.records.4.detail.request.previous_system_prompt';
+ const nativePromptDomain='trace.records.2.detail.request.effective_system_prompt';
  server.handlers.set('conversation/checkpointPage',request=>{
   if(request.method!=='conversation/checkpointPage')throw Error('page');
   const p=request.params;
-  if(p.domain==='trace.records')return {type:'checkpoint_page',page:{read_cut:p.cut,cursor:p.cut.revision,domain:p.domain,total:'2',next_offset:p.offset===0?'3':null,collections:[],items:p.offset===0?[{offset:'4',identity:row.id,value:row,deferred:false,content:[]}]:[{offset:'2',identity:previous.id,value:previous,deferred:false,content:[]}]}};
-  return p.domain.startsWith('trace.records.2.')?{type:'checkpoint_page',page:prior.original.page(p.cut,p.domain,p.offset,()=>true)}:pageHandler(request);
+  if(p.domain===previousPromptDomain)return {type:'checkpoint_page',page:{...prior.original.page(p.cut,nativePromptDomain,p.offset,()=>true),domain:p.domain}};
+  return pageHandler(request);
  });
- server.handlers.set('conversation/checkpointValueRead',request=>request.method==='conversation/checkpointValueRead'&&request.params.domain.startsWith('trace.records.2.')?{type:'checkpoint_value_chunk',chunk:prior.original.value(request.params.cut,request.params,request.params.offset,()=>true)}:valueHandler(request));
+ server.handlers.set('conversation/checkpointValueRead',request=>request.method==='conversation/checkpointValueRead'&&request.params.domain===previousPromptDomain
+  ?{type:'checkpoint_value_chunk',chunk:{...prior.original.value(request.params.cut,{...request.params,domain:nativePromptDomain},request.params.offset,()=>true),domain:request.params.domain}}
+  :valueHandler(request));
  render(<Trajectory cache={cache} loadEarlier={earlier} onSelect={()=>{}} onLoadDetail={()=>{}}/>);
  fireEvent.click(document.querySelector('[data-display-type="SystemPromptCell"][data-owner="trace:4"]')!);fireEvent.click(screen.getByRole('tab',{name:'Diff'}));
  await screen.findByText('-OUTSIDE_WINDOW_PRIOR');
  expect(earlier).not.toHaveBeenCalled();expect(screen.queryByRole('alert')).toBeNull();
- expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage'&&row.request.params.domain==='trace.records').map(row=>row.request.params)).toEqual([expect.objectContaining({cut,offset:0}),expect.objectContaining({cut,offset:3})]);
+ expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage'&&row.request.params.domain==='trace.records')).toHaveLength(0);
+ expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage'&&row.request.params.domain===previousPromptDomain).map(row=>row.request.params)).toEqual([expect.objectContaining({cut,offset:0})]);
+});
+it('Diff on an inherited composed request uses its own predecessor aliases instead of local record sequences',async()=>{
+ const cut={...checkpoint(snapshot()).read_cut,revision:'0',through:'7'};
+ const composedId=`trace:${(1n<<48n)+4n}`;
+ const composed=traceRecord(4,{id:composedId,position:composedId});
+ composed.request!.system_prompt.state='changed';
+ composed.request!.tool_catalog='changed';
+ composed.request!.predecessor={availability:'available',request_id:'shared-prior',request_id_source:null};
+ const localColliding=traceRecord(2);
+ localColliding.request!.request_id='shared-prior';
+ const priorDetail=requestDetail(2);
+ priorDetail.request!.effective_system_prompt.text='ANCESTOR_PRIOR_PROMPT';
+ const currentDetail=requestDetail(4);
+ currentDetail.request!.effective_system_prompt.text='ANCESTOR_CURRENT_PROMPT';
+ currentDetail.request!.tools[0].description.text='UPDATED_LINEAGE_TOOL';
+ const prior=nativeTraceFixture(traceRecord(2),priorDetail,cut);
+ const current=nativeTraceFixture(traceRecord(4),currentDetail,cut);
+ const requestedDomains:string[]=[];
+ const reader={
+  page:async(...[c,domain,offset,owns]:Parameters<typeof current.original.page>)=>{
+   requestedDomains.push(domain);
+   if(domain.startsWith('trace.records.2.'))throw Error('Must not read local sequence for composed record');
+   if(domain==='trace.records.4.detail.request.previous_system_prompt')return {...prior.original.page(c,'trace.records.2.detail.request.effective_system_prompt',offset,owns),domain};
+   if(domain==='trace.records.4.detail.request.previous_tools')return {...prior.original.page(c,'trace.records.2.detail.request.tools',offset,owns),domain};
+   return current.original.page(c,domain,offset,owns);
+  },
+  value:async(...[c,field,offset,owns]:Parameters<typeof current.original.value>)=>{
+   if(field.domain.startsWith('trace.records.2.'))throw Error('Must not read local sequence for composed record');
+   if(field.domain==='trace.records.4.detail.request.previous_system_prompt')return {...prior.original.value(c,{...field,domain:'trace.records.2.detail.request.effective_system_prompt'},offset,owns),domain:field.domain};
+   if(field.domain==='trace.records.4.detail.request.previous_tools')return {...prior.original.value(c,{...field,domain:'trace.records.2.detail.request.tools'},offset,owns),domain:field.domain};
+   return current.original.value(c,field,offset,owns);
+  },
+  content:async(...args:Parameters<typeof current.original.content>)=>current.original.content(...args),
+ };
+ const cache={epoch:1,page:{records:[localColliding],next_cursor:null},lineageRecords:[composed],lineageCursor:null,selection:composed,details:{[composedId]:{epoch:1,page:descriptor(cut),reader}}};
+ render(<Trajectory cache={cache} loadEarlier={()=>{}} onSelect={()=>{}} onLoadDetail={()=>{}}/>);
+ fireEvent.click(document.querySelector(`[data-display-type="SystemPromptCell"][data-owner="${composedId}"]`)!);
+ fireEvent.click(screen.getByRole('tab',{name:'Diff'}));
+ await screen.findByText('-ANCESTOR_PRIOR_PROMPT');
+ await screen.findByText('+ANCESTOR_CURRENT_PROMPT');
+ await screen.findByText(/\+.*UPDATED_LINEAGE_TOOL/);
+ expect(requestedDomains.some(domain=>domain.startsWith('trace.records.2.'))).toBe(false);
+ expect(requestedDomains).toContain('trace.records.4.detail.request.previous_system_prompt');
+ expect(requestedDomains).toContain('trace.records.4.detail.request.previous_tools');
 });
 it('Tool-only changes open Diff and include full uncalled description and schema changes',async()=>{
  const {server,cut}=await root(),earlier=traceRecord(2),current=record();current.request!.predecessor={availability:'available',request_id:earlier.request!.request_id};current.request!.tool_catalog='changed';current.request!.system_prompt.state='unchanged';

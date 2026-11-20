@@ -135,7 +135,9 @@ export const shadcnOwn: Partial<RendererMap<Own>> = {
   ),
   StatGroup: ({ props }) => (
     <div className="grid w-full min-w-0 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
-      {asArray<Record<string, unknown>>(props.items).map((it, i) => (
+      {asArray<Record<string, unknown>>(props.items)
+        .filter((it) => !!it && typeof it === "object" && !Array.isArray(it))
+        .map((it, i) => (
         <ShadcnCard key={i} className="gap-2 py-4">
           <span className="text-sm text-muted-foreground">{str(it.label)}</span>
           <span className="text-2xl font-semibold tabular-nums">
@@ -154,7 +156,9 @@ export const shadcnOwn: Partial<RendererMap<Own>> = {
       <dl className="flex flex-col">
         {asArray<{ label?: string; value?: unknown; hint?: string }>(
           props.items,
-        ).map((it, i) => (
+        )
+          .filter((it) => !!it && typeof it === "object" && !Array.isArray(it))
+          .map((it, i) => (
           <div
             key={i}
             className="flex items-baseline justify-between gap-4 border-b py-2 text-sm last:border-b-0"
@@ -220,18 +224,25 @@ export const shadcnOwn: Partial<RendererMap<Own>> = {
       </AlertDescription>
     </Alert>
   ),
-  Progress: ({ props }) => (
-    <div className="flex w-full min-w-0 flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2 text-sm">
-        <span className="font-medium">{props.label}</span>
-        <span className="tabular-nums text-muted-foreground">
-          {Math.round(props.value)}%
-        </span>
+  Progress: ({ props }) => {
+    const raw =
+      typeof props.value === "number" && Number.isFinite(props.value)
+        ? props.value
+        : 0;
+    const value = Math.max(0, Math.min(100, raw));
+    return (
+      <div className="flex w-full min-w-0 flex-col gap-2">
+        <div className="flex items-baseline justify-between gap-2 text-sm">
+          <span className="font-medium">{props.label}</span>
+          <span className="tabular-nums text-muted-foreground">
+            {Math.round(value)}%
+          </span>
+        </div>
+        <Progress value={value} />
+        {props.caption ? (
+          <span className="text-xs text-muted-foreground">{props.caption}</span>
+        ) : null}
       </div>
-      <Progress value={Math.max(0, Math.min(100, props.value))} />
-      {props.caption ? (
-        <span className="text-xs text-muted-foreground">{props.caption}</span>
-      ) : null}
-    </div>
-  ),
+    );
+  },
 };

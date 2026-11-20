@@ -101,8 +101,11 @@ function isNumericColumn(rows: readonly Record<string, unknown>[], column: strin
 function DataTable({ title, columns, rows }: { title?: string; columns: string[]; rows: readonly Record<string, unknown>[] }) {
   const tx = useTranslation();
   const numeric = useMemo(() => new Set(columns.filter(column => isNumericColumn(rows, column))), [columns, rows]);
+  const scrollable = columns.length >= 4;
   return (
-    <div className={css.tableScroll} tabIndex={columns.length >= 4 ? 0 : undefined}>
+    <div className={css.tableScroll} tabIndex={scrollable ? 0 : undefined}
+      role={scrollable ? 'region' : undefined}
+      aria-label={scrollable ? (title || tx('interactions:express.table')) : undefined}>
       <table data-slot="table" aria-label={title ? undefined : tx('interactions:express.table')}>
         {title !== undefined && title !== '' && <caption className={css.caption}>{title}</caption>}
         {columns.length > 0 && (
@@ -283,7 +286,7 @@ function ExpressChart({ kind, title, rows, x, y, seriesLabels, subtitle, height,
     const description = tx('interactions:express.chart-summary', { series: seriesNames, count });
 
     body = (
-      <ExpressPlot positions={model.entries.map((entry, index) => xAt(index, entry) / CHART_W)}
+      <ExpressPlot label={title || kindLabel} positions={model.entries.map((entry, index) => xAt(index, entry) / CHART_W)}
         details={index => ({
           title: model.entries[index].xText,
           rows: model.series.flatMap(item => {
@@ -431,22 +434,26 @@ export function ExpressVisualization(props: ExpressVisualizationProps) {
 
 export function PlaygroundChart({ kind, props }: { kind: ChartKind; props: Record<string, unknown> }) {
   const tx = useTranslation();
-  const rows = new Map<string | number, Record<string, unknown>>();
-  const labels = new Map<string, string>();
-  if (Array.isArray(props.data)) {
-    for (const item of props.data) {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-      const { x, y, series } = item;
-      if ((typeof x !== 'string' && toNumber(x) === null) || toNumber(y) === null) continue;
-      const name = typeof series === 'string' ? series : undefined;
-      const key = name === undefined ? 'default' : `series:${name}`;
-      labels.set(key, name ?? tx('interactions:express.value'));
-      const row = rows.get(x) ?? Object.assign(Object.create(null), { x });
-      row[key] = y;
-      rows.set(x, row);
+  const valueLabel = tx('interactions:express.value');
+  const pivoted = useMemo(() => {
+    const rows = new Map<string | number, Record<string, unknown>>();
+    const labels = new Map<string, string>();
+    if (Array.isArray(props.data)) {
+      for (const item of props.data) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+        const { x, y, series } = item;
+        if ((typeof x !== 'string' && toNumber(x) === null) || toNumber(y) === null) continue;
+        const name = typeof series === 'string' ? series : undefined;
+        const key = name === undefined ? 'default' : `series:${name}`;
+        labels.set(key, name ?? valueLabel);
+        const row = rows.get(x) ?? Object.assign(Object.create(null), { x });
+        row[key] = y;
+        rows.set(x, row);
+      }
     }
-  }
-  return <ExpressChart kind={kind} rows={[...rows.values()]} x="x" y={[...labels.keys()]} seriesLabels={labels}
+    return { rows: [...rows.values()], y: [...labels.keys()], labels };
+  }, [props.data, valueLabel]);
+  return <ExpressChart kind={kind} rows={pivoted.rows} x="x" y={pivoted.y} seriesLabels={pivoted.labels}
     title={typeof props.title === 'string' ? props.title : undefined}
     subtitle={typeof props.subtitle === 'string' ? props.subtitle : undefined}
     height={toNumber(props.height) ?? undefined} format={typeof props.format === 'string' ? props.format : undefined}

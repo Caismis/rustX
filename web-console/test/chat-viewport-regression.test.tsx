@@ -221,3 +221,48 @@ it('positions the arriving cold transcript synchronously instead of painting the
   expect(port.scrollTop).toBe(8900);
   expect(frames.size).toBe(0);
 });
+it('saves and restores an unsampled upward scroll gesture across remounts', () => {
+  const first = memoryFixture('session-unsampled-up');
+  expect(first.port.scrollTop).toBe(1900);
+  act(() => { first.port.scrollTop = 900; first.port.dispatchEvent(new Event('scroll')); });
+  first.view.unmount();
+  const second = memoryFixture('session-unsampled-up');
+  expect(second.port.scrollTop).toBe(900);
+  expect(second.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+});
+it('treats an unsampled scroll back inside the tail threshold as following across remounts', () => {
+  const first = memoryFixture('session-unsampled-tail');
+  act(() => { first.port.scrollTop = 900; first.port.dispatchEvent(new Event('scroll')); first.port.dispatchEvent(new Event('scrollend')); });
+  paint();
+  act(() => { first.port.scrollTop = 1885; first.port.dispatchEvent(new Event('scroll')); });
+  first.view.unmount();
+  const second = memoryFixture('session-unsampled-tail');
+  expect(second.port.scrollTop).toBe(1900);
+  expect(second.view.queryByRole('button', { name: 'Latest' })).toBeNull();
+});
+it('preserves detached scroll across resetKey and memoryKey switches without unmounting', () => {
+  const tree = (resetKey: string, memoryKey: string) => <div data-testid="port" data-conversation-scroll>
+    <ChatViewport resetKey={resetKey} memoryKey={memoryKey} latestLabel="Latest"><div>History</div></ChatViewport>
+  </div>;
+  const view = render(tree('s:c1', 's:c1'));
+  const port = view.getByTestId('port');
+  Object.defineProperties(port, { scrollHeight: { get: () => 2000 }, clientHeight: { get: () => 100 } });
+  paint();
+  expect(port.scrollTop).toBe(1900);
+  act(() => { port.scrollTop = 900; port.dispatchEvent(new Event('scroll')); port.dispatchEvent(new Event('scrollend')); });
+  paint();
+  expect(view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+
+  view.rerender(tree('s:c2', 's:c2'));
+  expect(port.scrollTop).toBe(1900);
+  expect(view.queryByRole('button', { name: 'Latest' })).toBeNull();
+
+  view.rerender(tree('s:c1', 's:c1'));
+  expect(port.scrollTop).toBe(900);
+  expect(view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+
+  // A same-memoryKey resetKey change still resets to tail following.
+  view.rerender(tree('s:c1:replay', 's:c1'));
+  expect(port.scrollTop).toBe(1900);
+  expect(view.queryByRole('button', { name: 'Latest' })).toBeNull();
+});

@@ -9,15 +9,11 @@ import { playgroundParser } from './playground-parser';
 import catalog from './vendor/playground/catalog.json';
 import { playgroundUI } from './vendor/playground/ui';
 import { shadcnTheme } from './vendor/playground/design-systems/theme';
+import { httpsUrl } from './vendor/playground/a2ui/catalog/renderers/format';
 import css from './ExpressCard.module.css';
 
 const inlineTarget = 'chat';
 const openLink = '__rustx_open_https_link';
-
-function https(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !/^https:\/\//i.test(value.trim())) return undefined;
-  try { return new URL(value).href; } catch { return undefined; }
-}
 
 function guard(value: unknown, depth = 0): unknown {
   if (depth > 96) throw new Error('Playground surface nesting limit exceeded');
@@ -39,16 +35,18 @@ export function createSurface(source: string) {
   try {
     const body = source.trim().replace(/^<a2ui>\s*/, '').replace(/\s*<\/a2ui>$/, '');
     const operations = playgroundParser.compile(body).filter(operation => !('callRendererFunction' in operation));
-    const created = operations.find(operation => 'createSurface' in operation);
-    if (!created?.createSurface) return undefined;
-    const { surfaceId } = created.createSurface;
+    const createdOps = operations.filter(operation => 'createSurface' in operation);
+    if (createdOps.length !== 1 || !createdOps[0]?.createSurface) return undefined;
+    const { surfaceId } = createdOps[0].createSurface;
     const content = GenerativeUISurfaceContentSchema.parse({
       surfaceId, catalogId: catalog.catalogId, target: inlineTarget, operations: guard(operations), status: 'ready', rejected: [],
     });
     const manager = new GenerativeUISurfaceManager(playgroundUI);
     manager.ingest('inline', undefined, content);
     const surface = manager.getSurface('inline', surfaceId);
-    if (!surface) return undefined;
+    if (!surface || surface.failed || surface.clientRejected.length > 0 || !surface.model.componentsModel.get('root')) {
+      return undefined;
+    }
     return { manager, surface };
   } catch {
     return undefined;
@@ -71,11 +69,15 @@ export default function PlaygroundExpress({ source, fallback, tree, streaming }:
     forwardEvent: async ({ name, userMessage, context }) => {
       if (activation.current?.isTrusted && !streaming) {
         if (name === openLink) {
-          const url = https(context.url);
+          const url = httpsUrl(context && typeof context === 'object' ? context.url : undefined);
           if (url) window.open(url, '_blank', 'noopener,noreferrer');
         } else if (send) {
-          const text = userMessage?.trim() || (Object.keys(context).length ? name + '\n' + JSON.stringify(context) : name);
-          if (text.length <= 16384) send(text);
+          const trimmedName = typeof name === 'string' ? name.trim() : '';
+          const message = typeof userMessage === 'string' ? userMessage.trim() : '';
+          const payload = context && typeof context === 'object' && !Array.isArray(context) && Object.keys(context).length > 0
+            ? context : undefined;
+          const text = message || (trimmedName ? (payload ? trimmedName + '\n' + JSON.stringify(payload) : trimmedName) : '');
+          if (text && text.length <= 16384) send(text);
         }
       }
       return { ok: true, result: undefined };
@@ -84,13 +86,16 @@ export default function PlaygroundExpress({ source, fallback, tree, streaming }:
   }), [send, streaming, view]);
 
   if (!view || !runtime) return tree ? <ExpressCard surface={tree} streaming={streaming}/> : <MarkdownText text={fallback}/>;
+  function activate(nativeEvent: Event) {
+    if (!nativeEvent.isTrusted) return;
+    activation.current = nativeEvent;
+    setTimeout(() => { if (activation.current === nativeEvent) activation.current = undefined; }, 0);
+  }
   return <div className={`${css.surface} rustx-playground`} data-a2ui-express="" data-a2ui-catalog="playground" data-ds="shadcn"
-    onClickCapture={event => {
-      const input = event.nativeEvent;
-      if (input.isTrusted) {
-        activation.current = input;
-        setTimeout(() => { if (activation.current === input) activation.current = undefined; }, 0);
-      }
+    onClickCapture={({ nativeEvent }) => activate(nativeEvent)}
+    onKeyDownCapture={({ nativeEvent, key, repeat, target }) => {
+      if (!repeat && (key === 'Enter' || key === ' ') && target instanceof Element &&
+        target.matches('div[data-a2ui-input][role="button"], div[data-a2ui-entity-card][role="link"]')) activate(nativeEvent);
     }}>
     <GenerativeUIRuntimeContext value={runtime}><SurfaceView surface={view.surface}/></GenerativeUIRuntimeContext>
   </div>;

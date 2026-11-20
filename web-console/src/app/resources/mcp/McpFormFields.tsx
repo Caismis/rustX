@@ -47,7 +47,18 @@ export function McpFormFields({ value, change, invalidFields, validity, identity
     <div className={css.top}>{identity}
       <div className={css.short}><Choice label={tx('settings:mcp.type')} value={http ? 'http' : 'stdio'} disabled={disabled}
         options={[[ 'stdio', tx('settings:mcp.stdio') ],[ 'http', 'HTTP' ]]}
-        onChange={next => { if (next !== (http ? 'http' : 'stdio')) change({definition:next === 'http' ? {type:'http',url:''} : {type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}); }}/></div>
+        onChange={next => {
+          if (next === (http ? 'http' : 'stdio')) return;
+          const rules = {
+            ...(definition.permissions !== undefined ? { permissions: definition.permissions } : {}),
+            ...(definition.tools !== undefined ? { tools: definition.tools } : {}),
+          };
+          change({
+            definition: next === 'http' ? { type: 'http', url: '', ...rules } : { type: 'stdio', command: '', args: [], ...rules },
+            retained_env: [],
+            retained_headers: [],
+          });
+        }}/></div>
     </div>
     <fieldset className={css.formBody} disabled={disabled}>
       {http ? <label>{tx('settings:mcp.url')}<input value={definition.url ?? ''} placeholder={tx('settings:mcp.url-placeholder')} onChange={event => patch({url:event.target.value})}/></label>

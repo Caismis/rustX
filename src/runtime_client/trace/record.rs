@@ -105,10 +105,15 @@ impl TraceProjection<'_> {
                 first_ledger_positions,
                 ..
             } => {
-                for position in first_ledger_positions {
+                let cut = self.cut()?;
+                for position in first_ledger_positions
+                    .iter()
+                    .copied()
+                    .filter(|position| *position <= cut.ledger_through)
+                {
                     let canonical = self
                         .store
-                        .observation_trace_canonical_summary(self.cut()?, *position)?;
+                        .observation_trace_canonical_summary(cut, position)?;
                     if facts.preview.is_none() {
                         facts.preview = canonical.preview;
                     }

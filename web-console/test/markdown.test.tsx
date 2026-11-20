@@ -56,3 +56,9 @@ it('shows a pending inline view while reading Express and interleaves the result
   expect(view.queryByRole('status')).toBeNull();
   expect(view.container.textContent).toMatch(/Market summary.*Sales42.*Settled state.*Closing note/s);
 });
+
+it('renders case-insensitive Express fences as inline views', () => {
+  const view = render(<AssistantMarkdown text={'```A2UI\nroot = Text("Inline view")\n```'}/>);
+  expect(view.getByText('Inline view')).toBeTruthy();
+  expect(view.container.querySelector('pre')).toBeNull();
+});

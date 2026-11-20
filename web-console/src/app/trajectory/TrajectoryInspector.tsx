@@ -629,7 +629,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     return <Json value={nodeContent.values[field]} label={tx(field === 'input' ? 'trajectory:tab.payload' : 'trajectory:tab.result')} preview={preview}/>;
   };
   const predecessor=record.request?.predecessor;
-  const previous=predecessor?.availability==='available'?records.find(row=>row.request&&(predecessor.request_id!=null?row.request.request_id===predecessor.request_id:predecessor.request_id_source!=null&&row.request.request_id_source!=null&&traceFieldKey(predecessor.request_id_source)===traceFieldKey(row.request.request_id_source))):undefined;
+  const previous=!isComposedTraceId(record.id)&&predecessor?.availability==='available'?records.find(row=>row.request&&(predecessor.request_id!=null?row.request.request_id===predecessor.request_id:predecessor.request_id_source!=null&&row.request.request_id_source!=null&&traceFieldKey(predecessor.request_id_source)===traceFieldKey(row.request.request_id_source))):undefined;
   const previousSequence=previous&&!isComposedTraceId(previous.id)&&/^trace:(0|[1-9][0-9]*)$/.exec(previous.id)?.[1];
   const previousDomain=previousSequence?`trace.records.${previousSequence}.detail.request.effective_system_prompt`:undefined;
   const native = useTraceContent(detailPage, detailReader, inspection, item, active, previousDomain);

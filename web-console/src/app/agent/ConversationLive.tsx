@@ -204,8 +204,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     && !view.retrying && !view.readingPreview && !!view.trace && view.trace.page.next_cursor == null;
   const prefixReady = !needsPrefix || view?.trace?.lineageCursor !== undefined || !!view?.trace?.error;
   useEffect(() => {
-    if (needsPrefix && !prefixReady && sessionId) void client.loadLineageTrace(sessionId);
-  }, [client, sessionId, needsPrefix, prefixReady, view?.trace?.epoch, view?.conversation_id]);
+    if (needsPrefix && !prefixReady && !view?.trace?.loading && sessionId) void client.loadLineageTrace(sessionId);
+  }, [client, sessionId, needsPrefix, prefixReady, view?.trace?.loading, view?.trace?.epoch, view?.conversation_id]);
   const currentLedger = mode === 'trajectory' && view?.trace ? <Trajectory key={view.conversation_id} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}
         messageHistory={switchVersion && !view.readingPreview && !view.retrying ? { versions, switchVersion, disabled: view.disabled || !view.safe || historicalPending } : undefined}/> : undefined;
   const owner = JSON.stringify([sessionId, mode, readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, client.getSnapshot().generation]);

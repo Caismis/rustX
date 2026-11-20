@@ -90,8 +90,9 @@ async function observeLatency(page: Page) {
               }
               if (row.method === 'session/switchNode' && reply.result.session) {
                 const targetSession = row.target ? JSON.parse(row.target)[0] : undefined;
+                row.sessionId = reply.result.session.id ?? row.sessionId ?? targetSession;
                 rememberConversation(
-                  reply.result.session.id ?? row.sessionId ?? targetSession,
+                  row.sessionId,
                   reply.result.session.active_node ?? row.nodeId,
                   reply.result.session.active_conversation_id,
                 );

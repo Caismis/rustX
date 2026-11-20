@@ -6,7 +6,8 @@ export interface PlotDetails {
   rows: readonly { label: string; value: string; color?: string; emphasis?: boolean }[];
 }
 
-export function ExpressPlot({ positions, details, children }: {
+export function ExpressPlot({ label, positions, details, children }: {
+  label?: string;
   positions: readonly number[];
   details: (index: number) => PlotDetails;
   children: (index?: number) => ReactNode;
@@ -44,7 +45,7 @@ export function ExpressPlot({ positions, details, children }: {
     event.preventDefault();
   }
 
-  return <div className={css.plot} tabIndex={0} aria-describedby={tooltip ? id : undefined}
+  return <div className={css.plot} tabIndex={0} role={label ? 'group' : undefined} aria-label={label} aria-describedby={tooltip ? id : undefined}
     onPointerMove={event => { if (event.pointerType !== 'touch') pointAt(event); }}
     onPointerDown={event => { if (event.pointerType === 'touch') pointAt(event); }}
     onPointerLeave={event => { if (event.pointerType !== 'touch') setFocus(undefined); }}

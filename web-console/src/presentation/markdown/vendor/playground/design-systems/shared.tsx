@@ -8,7 +8,7 @@
 import type { MouseEvent, ReactNode } from "react";
 import { useGenerativeUIAccessibility } from "@copilotkit/react-core/v2/generative-ui";
 import { iconFor } from "../a2ui/catalog/renderers/data";
-import { formatNumber } from "../a2ui/catalog/renderers/format";
+import { formatNumber, httpsUrl } from "../a2ui/catalog/renderers/format";
 
 export const str = (v: unknown): string =>
   v == null || typeof v === "object" ? "" : String(v);
@@ -72,8 +72,8 @@ export function pressButton(
   if (props.submit && event.currentTarget.form !== null) return;
   const href = typeof props.href === "string" ? props.href.trim() : "";
   if (href) {
-    if (/^https:\/\//i.test(href))
-      window.open(href, "_blank", "noopener,noreferrer");
+    const safe = httpsUrl(href);
+    if (safe) window.open(safe, "_blank", "noopener,noreferrer");
     return;
   }
   if (typeof props.copy === "string" && props.copy) {

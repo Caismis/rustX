@@ -14,16 +14,19 @@ function needsPlayground(node: ExpressNode): boolean {
 }
 
 function expressParts(source: string, streaming: boolean, cache: Map<string, ExpressSurface | null>): Part[] {
-  if (!source.includes('<a2ui>') && !source.includes('a2ui')) return [{ start: 0, text: source }];
+  if (!/a2ui/i.test(source)) return [{ start: 0, text: source }];
   const parts: Part[] = [];
   let consumed = 0;
   let fence: { marker: string; start: number; body: number; language: string } | undefined;
-  let tag: number | undefined;
+  let tag: { start: number; body: number } | undefined;
   function append(start: number, end: number, body: string) {
     let tree = cache.get(body);
     if (tree === undefined) {
       tree = parseExpress(body);
-      if (cache.size >= 8) cache.clear();
+      if (cache.size >= 64) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
       cache.set(body, tree);
     }
     if (consumed < start) parts.push({ start: consumed, text: source.slice(consumed, start) });
@@ -37,7 +40,7 @@ function expressParts(source: string, streaming: boolean, cache: Map<string, Exp
     const end = line.index + line[0].length;
     if (tag !== undefined) {
       if (text.trim() === '</a2ui>') {
-        append(tag, end, source.slice(tag, end));
+        append(tag.start, end, source.slice(tag.start, end));
         tag = undefined;
       }
       continue;
@@ -46,20 +49,20 @@ function expressParts(source: string, streaming: boolean, cache: Map<string, Exp
     if (fence) {
       if (marker && marker[1][0] === fence.marker[0] && marker[1].length >= fence.marker.length && !marker[2].trim()) {
         const body = source.slice(fence.body, line.index).trim();
-        if (fence.language === 'a2ui' || (body.startsWith('<a2ui>') && body.endsWith('</a2ui>'))) append(fence.start, end, body);
+        if (fence.language.toLowerCase() === 'a2ui' || (body.startsWith('<a2ui>') && body.endsWith('</a2ui>'))) append(fence.start, end, body);
         fence = undefined;
       }
-    } else if (marker) {
+    } else if (marker && (marker[1][0] === '~' || !marker[2].includes('`'))) {
       fence = { marker: marker[1], language: marker[2].trim(), start: line.index, body: end };
     } else if (/^ {0,3}<a2ui>$/.test(text)) {
-      tag = line.index;
+      tag = { start: line.index, body: end };
     }
   }
-  const openFence = fence && (fence.language === 'a2ui' || source.slice(fence.body).trimStart().startsWith('<a2ui>'));
-  const pending = tag ?? (openFence ? fence?.start : undefined);
+  const openFence = fence && (fence.language.toLowerCase() === 'a2ui' || source.slice(fence.body).trimStart().startsWith('<a2ui>'));
+  const pending = tag?.start ?? (openFence ? fence?.start : undefined);
   if (streaming && pending !== undefined) {
     if (consumed < pending) parts.push({ start: consumed, text: source.slice(consumed, pending) });
-    const body = tag === undefined ? source.slice(fence?.body ?? pending) : source.slice(tag + '<a2ui>'.length);
+    const body = tag === undefined ? source.slice(fence?.body ?? pending) : source.slice(tag.body);
     parts.push({ start: pending, text: '', draft: body.replace(/^\s*<a2ui>\s*/, '') });
     return parts;
   }
@@ -72,7 +75,7 @@ export function AssistantMarkdown({ text, streaming = false }: { text: string; s
   const parts = useMemo(() => expressParts(text, streaming, cache.current), [text, streaming]);
   return <>{parts.map((part, index) => <Fragment key={part.start}>
     {part.draft !== undefined || part.source || part.tree
-      ? <ExpressGeneration live={streaming} draft={part.draft}>
+      ? <ExpressGeneration live={streaming} draft={part.draft} contentKey={part.source ?? (part.tree ? part.text : undefined)}>
         {part.source
           ? <PlaygroundExpress key={part.source} source={part.source} fallback={part.text} tree={part.tree} streaming={streaming}/>
           : part.tree && <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>}

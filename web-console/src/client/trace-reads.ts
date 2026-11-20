@@ -1,7 +1,7 @@
 import { validateObservationCut } from '../../../protocol/app-server/observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, isComposedTraceId, TRACE_PAGE_SIZE, TRACE_REFRESH_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
-import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, CheckpointReadCut, MethodResult, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v80';
 import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OperationAdmission, SessionView } from './contracts';
@@ -232,6 +232,7 @@ export class TraceReads {
   private traceAuthorities = new Map<string, number>();
   supersede(id: string, trace: TraceCache): TraceCache {
     this.traceAuthorities.set(id, (this.traceAuthorities.get(id) ?? 0) + 1);
+    this.lineageLoads.delete(id);
     // Old paging/detail requests may no longer complete. Release their loading
     // markers and reader-owned evidence with the new authority so explicit reads remain available.
     return { ...trace, loading: false, details: Object.fromEntries(
@@ -463,40 +464,62 @@ export class TraceReads {
   }
   /** Source-owned prefix records of this node's committed lineage, fetched
    * through the composed durable read and merged ahead of the live suffix. */
-  private readonly lineageLoads = new Map<string, { epoch: number; work: Promise<void> }>();
+  private readonly lineageLoads = new Map<string, { epoch: number; current: () => boolean; work: Promise<void> }>();
   loadLineageTrace(id: string): Promise<void> {
     const trace = this.port.state().views[id]?.trace;
     if (!trace || trace.page.next_cursor != null || trace.lineageCursor === null) return Promise.resolve();
     const existing = this.lineageLoads.get(id);
-    if (existing?.epoch === trace.epoch) return existing.work;
-    const entry = { epoch: trace.epoch, work: this.fetchLineagePage(id, trace) };
+    if (existing?.epoch === trace.epoch && existing.current()) return existing.work;
+    const observation = this.port.observe(id);
+    if (!observation) return Promise.resolve();
+    const authority = this.traceAuthorities.get(id);
+    const current = () => observation.current()
+      && this.traceAuthorities.get(id) === authority
+      && this.port.state().views[id]?.trace?.epoch === trace.epoch;
+    const entry = { epoch: trace.epoch, current, work: this.fetchLineagePage(id, trace, observation.target, current) };
     this.lineageLoads.set(id, entry);
     return entry.work.finally(() => {
       if (this.lineageLoads.get(id) === entry) this.lineageLoads.delete(id);
     });
   }
-  private async fetchLineagePage(id: string, trace: TraceCache): Promise<void> {
-    const observation = this.port.observe(id);
-    if (!observation) return;
-    const { target } = observation;
-    const authority = this.traceAuthorities.get(id);
+  private async fetchLineagePage(id: string, trace: TraceCache, target: AttachmentTarget, current: () => boolean): Promise<void> {
     const node = this.port.state().views[id]?.nodeId ?? null;
-    const current = () => observation.current()
-      && this.traceAuthorities.get(id) === authority
-      && this.port.state().views[id]?.trace?.epoch === trace.epoch;
-    const before = trace.lineageCursor ?? trace.page.records[0]?.position ?? null;
+    if (!current()) return;
+    this.port.setSession(id, { trace: { ...this.port.state().views[id]!.trace!, loading: true, error: undefined } });
+    let before: string | null = trace.lineageCursor ?? trace.page.records[0]?.position ?? null;
+    const visited = new Set<string>();
     try {
-      const result = await this.port.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before, limit: TRACE_PAGE_SIZE } }, 'session_trace_history', undefined, current);
-      if (!current()) return;
-      if (result.conversation_id !== target.conversation_id) throw new Error('Trace conversation changed.');
-      standaloneTraceCut(result.page, target.conversation_id);
-      const live = this.port.state().views[id]!.trace!;
-      const known = new Set(live.lineageRecords?.map(record => record.id));
-      const added = result.page.records.filter(record => isComposedTraceId(record.id) && !known.has(record.id));
-      if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Historical Trace history did not advance.');
-      this.port.setSession(id, { trace: { ...live, lineageRecords: [...added, ...(live.lineageRecords ?? [])], lineageCursor: result.page.next_cursor ?? null } });
+      while (current()) {
+        if (before != null) {
+          if (visited.has(before)) throw new Error('Historical Trace history did not advance.');
+          visited.add(before);
+        }
+        const result: Extract<MethodResult, { type: 'session_trace_history' }> = await this.port.request(
+          { method: 'session/traceHistory', params: { session_id: id, node_id: node, before, limit: TRACE_PAGE_SIZE } },
+          'session_trace_history', undefined, current);
+        if (!current()) return;
+        if (result.conversation_id !== target.conversation_id) throw new Error('Trace conversation changed.');
+        standaloneTraceCut(result.page, target.conversation_id);
+        const live = this.port.state().views[id]!.trace!;
+        const known = new Set(live.lineageRecords?.map(record => record.id));
+        const added = result.page.records.filter(record => isComposedTraceId(record.id) && !known.has(record.id));
+        const nextCursor = result.page.next_cursor ?? null;
+        if (nextCursor != null && nextCursor === before) throw new Error('Historical Trace history did not advance.');
+        // When the local live head was empty (`before == null`), the first
+        // composed page can contain only node-local records. Step past that
+        // suffix so the inherited ancestor prefix still loads immediately.
+        if (added.length === 0 && nextCursor != null) {
+          before = nextCursor;
+          continue;
+        }
+        this.port.setSession(id, { trace: { ...live, loading: false, lineageRecords: [...added, ...(live.lineageRecords ?? [])], lineageCursor: nextCursor } });
+        return;
+      }
     } catch (error) {
-      if (current()) this.port.setSession(id, { trace: { ...this.port.state().views[id]!.trace!, error: String(error) } });
+      if (current()) this.port.setSession(id, { trace: { ...this.port.state().views[id]!.trace!, loading: false, error: String(error) } });
+    } finally {
+      const live = this.port.state().views[id]?.trace;
+      if (current() && live?.loading) this.port.setSession(id, { trace: { ...live, loading: false } });
     }
   }
   /** Heavy detail of one source-owned prefix record through its owning
@@ -530,12 +553,22 @@ export class TraceReads {
       const fields = this.coldFields(id, node, target.conversation_id, () => observation.current() && this.traceAuthorities.get(id) === authority);
       const reader = page ? bindTraceDetailReader(fields, page, () => observation.current() && this.traceAuthorities.get(id) === authority && this.port.state().views[id]?.trace?.epoch === epoch && this.port.state().views[id]?.trace?.details[record]?.page === page) : undefined;
       this.port.setSession(id, { trace: completeTraceDetail(this.port.state().views[id].trace!, record, epoch, detail, undefined, result.page.items.flatMap(item => item.content), async (ref, offset, ownsView) => {
-        const valid = () => ownsView() && observation.current() && this.traceAuthorities.get(id) === authority && this.port.state().views[id]?.trace?.epoch === epoch;
+        const valid = () => ownsView() && observation.current() && this.traceAuthorities.get(id) === authority
+          && this.port.state().views[id]?.trace?.epoch === epoch
+          && this.port.state().views[id]?.trace?.details[record]?.detail === detail;
         if (!valid()) throw new Error('Trace content view was replaced.');
+        if (ref.conversation_id !== target.conversation_id && ref.conversation_id !== result.page.read_cut.source_cut?.read?.conversation_id) throw new Error('Historical Trace content source changed.');
         return (await this.port.request({ method: 'session/traceContentRead', params: { session_id: id, node_id: node, cut: result.page.read_cut, content_ref: ref, offset, max_bytes: 65536 } }, 'content_chunk', undefined, valid)).chunk;
       }, page, reader) });
     } catch (error) {
       if (current()) this.port.setSession(id, { trace: completeTraceDetail(this.port.state().views[id].trace!, record, epoch, undefined, String(error)) });
+    } finally {
+      const live = this.port.state().views[id]?.trace;
+      if (current() && live?.details[record]?.loading) {
+        const details = { ...live.details };
+        delete details[record];
+        this.port.setSession(id, { trace: { ...live, details } });
+      }
     }
   }
   async projections(id: string, after = '0') {
@@ -554,7 +587,7 @@ export class TraceReads {
     return detail;
   }
   /** Retired observation work keeps no Trace read or authority. */
-  retire(id: string) { this.traceReads.delete(id); this.traceAuthorities.delete(id); this.previewLoads.delete(id); this.traceHeadRecoveries.delete(id); }
+  retire(id: string) { this.traceReads.delete(id); this.traceAuthorities.delete(id); this.previewLoads.delete(id); this.traceHeadRecoveries.delete(id); this.lineageLoads.delete(id); }
   /** A lost connection ends every Trace read and authority. */
-  disconnect() { this.traceReads.clear(); this.traceAuthorities.clear(); this.previewLoads.clear(); this.traceHeadRecoveries.clear(); }
+  disconnect() { this.traceReads.clear(); this.traceAuthorities.clear(); this.previewLoads.clear(); this.traceHeadRecoveries.clear(); this.lineageLoads.clear(); }
 }

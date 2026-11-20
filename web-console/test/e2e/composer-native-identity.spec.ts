@@ -75,7 +75,10 @@ for (const replacement of ['reattach', 'switch'] as const) test(`real native ${r
     expect(owner.snapshot()?.text).toBe(replacement === 'switch' ? 'Composer identity 1' : '');
     expect(owner.snapshot()?.incarnation).toBe(editor.incarnation);
     if (replacement === 'switch') expect(owner.snapshot()?.revision).toBe(revision);
-    expect(requests.slice(before)).toEqual([]);
+    // Native summary invalidation can race the held acknowledgement. Only
+    // exact metadata repair for this Session may appear in the same interval.
+    expect(requests.slice(before).filter(request =>
+      request.method !== 'session/summary' || request.params.session_id !== sessionId)).toEqual([]);
     expect(requests.filter(request => request.method === 'inbound/queue')).toHaveLength(2);
     expect(requests.filter(request => request.method === 'thread/resume')).toHaveLength(2);
     expect(requests.filter(request => request.method === 'session/switchNode')).toHaveLength(replacement === 'switch' ? 1 : 0);

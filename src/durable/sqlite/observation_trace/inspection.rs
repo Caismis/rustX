@@ -198,6 +198,26 @@ pub(in crate::durable::sqlite) fn adoption_page(
             "Trace source is not an original adoption".into(),
         ));
     };
+    // One adoption appends contiguous Ledger positions in the same order as
+    // its member ordinals. The header bounds ordinary paging without scanning
+    // the batch. A cut through the batch must prove its first omitted member.
+    let visible = first_ledger_positions.first().map_or(total, |first| {
+        cut.ledger_through
+            .saturating_add(1)
+            .saturating_sub(*first)
+            .min(total)
+    });
+    if visible < total {
+        let verified: bool = connection.query_row_cached(
+            "SELECT EXISTS(SELECT 1 FROM trace_adoption_members m JOIN message_ledger c ON c.position=m.ledger_position WHERE m.source_sequence=?1 AND m.ordinal=?2 AND m.ledger_position>?3 AND typeof(m.identity_digest)='blob' AND length(m.identity_digest)=32 AND typeof(c.observation_identity_digest)='blob' AND length(c.observation_identity_digest)=32 AND m.identity_digest=c.observation_identity_digest)",
+            params![sequence, visible, cut.ledger_through],
+            |row| row.get(0),
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        if !verified {
+            return Err(storage("original adoption boundary evidence differs"));
+        }
+    }
+    let total = visible;
     if offset > total {
         return Err(ConversationStoreError::InvalidReference(
             "adoption offset exceeds original total".into(),

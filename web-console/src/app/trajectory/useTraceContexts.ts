@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { TraceContextPresentation } from '../../../../protocol/app-server/v80';
+import type { TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v80';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { validateCanonicalInspectionPage } from '../../../../protocol/app-server/trace-inspection';
-import { TRACE_DETAIL_LIMIT, type TraceCache } from '../../client/trace';
+import { isComposedTraceId, TRACE_DETAIL_LIMIT, type TraceCache } from '../../client/trace';
 
 /** Context continuation adds normal ledger rows for the inspected request. */
 export function useTraceContexts(cache: TraceCache, owner?: string) {
-  const record = cache.page.records.find(record => record.id === owner), request = record?.request;
-  const cut = record && cache.readCuts?.[record.id], reader = cache.fields;
+  const cutOf = (record: TraceRecord) => isComposedTraceId(record.id) ? cache.details[record.id]?.page?.read_cut : cache.readCuts?.[record.id];
+  const record = cache.page.records.find(record => record.id === owner)
+    ?? cache.lineageRecords?.find(record => record.id === owner);
+  const request = record?.request;
+  const cut = record && cutOf(record);
+  const reader = record && isComposedTraceId(record.id) ? cache.details[record.id]?.reader : cache.fields;
   const identity = JSON.stringify([cache.epoch, record?.id, cut, request?.context_domain, request?.context_total]);
   const latest = useRef({ identity, reader }); latest.current = { identity, reader };
   const [state, setState] = useState<Record<string, { identity: string; rows?: TraceContextPresentation[]; error?: string }>>({});
@@ -35,10 +39,12 @@ export function useTraceContexts(cache: TraceCache, owner?: string) {
     })().catch(error => { if (current()) publish({ error: String(error).slice(0, 512) }); });
     return () => { mounted = false; };
   }, [identity, reader]);
-  const records = useMemo(() => cache.page.records.map(record => {
+  const apply = (source: readonly TraceRecord[]) => source.map(record => {
     const request = record.request, entry = state[record.id];
-    if (!request || !entry?.rows || entry.identity !== JSON.stringify([cache.epoch, record.id, cache.readCuts?.[record.id], request.context_domain, request.context_total])) return record;
+    if (!request || !entry?.rows || entry.identity !== JSON.stringify([cache.epoch, record.id, cutOf(record), request.context_domain, request.context_total])) return record;
     return { ...record, request: { ...request, context_additions: [...request.context_additions, ...entry.rows], context_next_offset: null } };
-  }), [cache.page.records, cache.epoch, cache.readCuts, state]);
-  return { records, error: loaded?.error };
+  });
+  const records = useMemo(() => apply(cache.page.records), [cache.page.records, cache.epoch, cache.readCuts, cache.details, state]);
+  const lineageRecords = useMemo(() => cache.lineageRecords ? apply(cache.lineageRecords) : undefined, [cache.lineageRecords, cache.epoch, cache.readCuts, cache.details, state]);
+  return { records, lineageRecords, error: loaded?.error };
 }

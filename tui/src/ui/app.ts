@@ -600,7 +600,8 @@ export class RustxTuiApp {
         await host.retryInitialization(sessionId, selectedNode);
         if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       }
-      const resident = previous === undefined && existing?.controlReady && existing.nodeId === selectedNode
+      const resident = previous === undefined && host.attachment(sessionId) === existing
+        && existing?.controlReady && existing.nodeId === selectedNode
         && (selectedThread === undefined || selectedThread === existing.target.conversation_id) ? existing : undefined;
       if (!resident && !changingNode) beginConnecting(selectedNode, selectedThread);
       const next = resident ?? (changingNode

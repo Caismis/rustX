@@ -16,9 +16,11 @@ export function IconPicker({ value, onChange, disabled, className, label, childr
 }) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false);
+  const expanded = open && !disabled;
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   const root = useRef<HTMLDivElement>(null);
   const { refs, floatingStyles } = useFloating<HTMLButtonElement>({
-    open,
+    open: expanded,
     placement: 'bottom-start',
     strategy: 'fixed',
     whileElementsMounted: autoUpdate,
@@ -29,24 +31,24 @@ export function IconPicker({ value, onChange, disabled, className, label, childr
       } })],
   });
   useEffect(() => {
-    if (!open) return;
+    if (!expanded) return;
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
     document.addEventListener('pointerdown', outside);
     return () => document.removeEventListener('pointerdown', outside);
-  }, [open]);
+  }, [expanded]);
   function close() {
     setOpen(false);
     refs.reference.current?.focus({ preventScroll: true });
   }
   return <div ref={root} className={css.anchor}
     // Escape closes the panel first; the enclosing dialog skips a handled key.
-    onKeyDown={event => { if (open && event.key === 'Escape') { event.preventDefault(); close(); } }}>
+    onKeyDown={event => { if (expanded && event.key === 'Escape') { event.preventDefault(); close(); } }}>
     <button ref={refs.setReference} type="button"
-      className={clsx(children && css.tile, className)} aria-haspopup="listbox" aria-expanded={open && !disabled}
+      className={clsx(children && css.tile, className)} aria-haspopup="listbox" aria-expanded={expanded}
       aria-label={label ?? tx('workflows:icon.choose')} title={label ?? tx('workflows:icon.choose')} disabled={disabled} onClick={() => setOpen(value => !value)}>
       {children ?? label}
     </button>
-    {open && !disabled && <div ref={refs.setFloating} style={floatingStyles} className={css.panel}>
+    {expanded && <div ref={refs.setFloating} style={floatingStyles} className={css.panel}>
       <IconGrid value={value} onChange={icon => { onChange(icon); close(); }} />
       {onReset && value && <Button size="sm" className={css.reset} onClick={() => { onReset(); close(); }}>{tx('workflows:icon.reset')}</Button>}
     </div>}

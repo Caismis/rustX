@@ -10,6 +10,7 @@ import { feedbackRenderers } from './a2ui/catalog/renderers/feedback';
 import { inputRenderers } from './a2ui/catalog/renderers/inputs';
 import { layoutRenderers } from './a2ui/catalog/renderers/layout';
 import { mapRenderers } from './a2ui/catalog/renderers/maps';
+import { httpsUrl } from './a2ui/catalog/renderers/format';
 import type { ComponentName } from './a2ui/catalog/definitions';
 import { shadcnOwn, shadcnStandard } from './design-systems/shadcn';
 import type { StandardProps } from './design-systems/shared';
@@ -36,8 +37,14 @@ function standard(name: string, Base: ComponentType<StandardProps>) {
   return (props: StandardProps) => {
     // The standard HtmlView owns an opaque, scriptless sandbox. Restrict
     // its subresources as well, while leaving inline HTML and SVG available.
-    const safe = name === 'HtmlView' && typeof props.html === 'string' ? { ...props, html: csp + props.html } : props;
-    return <span data-a2-type={name} style={{ display: 'contents' }}><Render {...safe}/></span>;
+    const safe = name === 'HtmlView' && typeof props.html === 'string'
+      ? { ...props, html: csp + props.html }
+      : 'href' in props ? { ...props, href: httpsUrl(props.href) } : props;
+    const actions = name === 'EntityCard' && Array.isArray(props.actions)
+      ? { actions: props.actions.map(action => action && typeof action === 'object'
+          ? { ...action, href: httpsUrl(action.href) } : action) }
+      : {};
+    return <span data-a2-type={name} style={{ display: 'contents' }}><Render {...safe} {...actions}/></span>;
   };
 }
 

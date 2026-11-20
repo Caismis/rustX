@@ -74,7 +74,7 @@ function Wireframe({ drawing }: { drawing: Drawing }) {
         {lines.map(({ x, y, w, h }, i) => <path key={i} d={`M${x} ${y + h * .58}h${w}`}/>)}
       </g>
       <g className={css.corners}>
-        {corners.map(([x, y], i) => <rect key={i} x={Math.min(width - 5, Math.max(0, x - 2))} y={y - 2} width="5" height="5" rx="1"/>)}
+        {corners.map(([x, y], i) => <rect key={i} x={Math.min(Math.max(0, width - 5), Math.max(0, x - 2))} y={Math.min(Math.max(0, height - 5), Math.max(0, y - 2))} width="5" height="5" rx="1"/>)}
       </g>
     </svg>
     <span className={css.scan}/>
@@ -92,13 +92,28 @@ function Reveal({ animate, children }: { animate: boolean; children: ReactNode }
     const host = result.current;
     const surface = host?.querySelector('[data-a2ui-express]');
     if (!armed || finished || !host || !surface || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    let lastW = 0;
+    let lastH = 0;
+    let raf = 0;
     const update = () => {
-      if (host.clientWidth && host.clientHeight) setDrawing(measure(surface, host));
+      const w = host.clientWidth;
+      const h = host.clientHeight;
+      if (!w || !h || (w === lastW && h === lastH)) return;
+      lastW = w;
+      lastH = h;
+      setDrawing(measure(surface, host));
     };
     update();
-    const resize = new ResizeObserver(update);
+    if (typeof ResizeObserver === 'undefined') return;
+    const resize = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(update);
+    });
     resize.observe(surface);
-    return () => resize.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      resize.disconnect();
+    };
   }, [armed, finished]);
 
   useEffect(() => {
@@ -116,8 +131,23 @@ function Reveal({ animate, children }: { animate: boolean; children: ReactNode }
   </div>;
 }
 
-export function ExpressGeneration({ live, draft, children }: { live: boolean; draft?: string; children: ReactNode }) {
-  const [beganLive] = useState(live);
-  if (draft !== undefined) return <PendingSurface draft={draft} live/>;
-  return <Suspense fallback={<PendingSurface live={beganLive}/>}><Reveal animate={beganLive}>{children}</Reveal></Suspense>;
+export function ExpressGeneration({ live, draft, contentKey, children }: {
+  live: boolean; draft?: string; contentKey?: string; children: ReactNode;
+}) {
+  const [state, setState] = useState(() => ({
+    pendingLive: draft !== undefined,
+    activeKey: contentKey,
+    animate: live,
+  }));
+  if (draft !== undefined) {
+    if (!state.pendingLive || state.activeKey !== undefined) {
+      setState({ pendingLive: true, activeKey: undefined, animate: true });
+    }
+    return <PendingSurface draft={draft} live/>;
+  }
+  if (contentKey !== state.activeKey) {
+    setState({ pendingLive: false, activeKey: contentKey, animate: live || state.pendingLive });
+  }
+  const animate = contentKey === state.activeKey ? state.animate : live || state.pendingLive;
+  return <Suspense fallback={<PendingSurface live={animate}/>}><Reveal key={contentKey} animate={animate}>{children}</Reveal></Suspense>;
 }
