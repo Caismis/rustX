@@ -174,13 +174,10 @@ jobs:
       # `brew install sccache` cannot reach the ghac backend.
       - name: install sccache
         uses: mozilla-actions/sccache-action@v0.0.9
-      - name: point sccache at the runner-temp disk store
-        run: echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
-      - name: local-disk sccache fallback
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/sccache
-          key: exp-sccache-disk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+      # No local-disk fallback: with SCCACHE_GHA_ENABLED, sccache writes only
+      # to the ghac backend — SCCACHE_DIR would stay empty and actions/cache
+      # would persist nothing. Backend write failures are surfaced via
+      # SCCACHE_ERROR_LOG and the stats step instead.
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
