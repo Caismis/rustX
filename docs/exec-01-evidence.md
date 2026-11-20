@@ -339,6 +339,29 @@ RSS. Grep transferred 149/132 bytes, with a 21.51 ms median and 9,704 KiB
 peak Client RSS. Each probe ran three times. These are descriptive runs
 under different host load and do not estimate a causal performance delta.
 
+The release measurement at `910646ca5f859bc9834cbcd8ea5bf37b0c48fdde`
+recorded 46,336 KiB Server and 9,476 KiB Client peak RSS under load.
+The Server-only process reached 33,716 KiB. Server-only initialization,
+paired Server initialization and Client admission took 10.98, 15.99 and
+27.07 ms respectively. Each measured command released its journal at
+65,536 bytes. The peak wire-visible data in flight was one record.
+
+| Load | Median completion | Throughput | Data RPCs, total | Server to Client bytes | Client to Server bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 20 sequential create-only writes, 64 KiB each | 2.42 ms | 23.44 MiB/s | 40 | 1,750,031 | 4,822 |
+| 20 sequential reads, 64 KiB each | 1.13 ms | 54.35 MiB/s | 20 | 1,980 | 1,752,180 |
+| 5 UI argv commands, emit 1 MiB, retain 64 KiB | 67.11 ms | 14.78 MiB/s | 50 | 15,220 | 451,625 |
+| 5 UI argv commands, emit 8 MiB, retain 64 KiB | 67.50 ms | 118.07 MiB/s | 50 | 15,230 | 451,625 |
+
+Line selection and Grep returned one selected result from 67,108,877
+source bytes. Each used one RPC. Line selection transferred 99/265 bytes
+in a 56.73 ms median with 8,380 KiB Client peak RSS. Grep transferred
+149/132 bytes in an 18.94 ms median with 9,668 KiB peak RSS. Each probe
+was repeated three times. These two Client-only measurements describe
+actual scan cost without charging the synthetic measurement peer to the
+product Server. The queue saturation test is separate from the sampled
+throughput, which is sequential and subject to host load.
+
 The repository environment benchmark also ran successfully with the tree
 mutation candidate. Each workload explicitly composes its measured Session,
 runs five warmups and 20 write/read/watch/argv/unwatch/remove cycles, and
@@ -507,6 +530,20 @@ The Linux Boundary job then reached the external Tools target. Its two
 failures were Skill/Bash fixtures without a Client. Both pass with the
 existing real Session-bound fixture, using their original content and
 success assertions.
+
+At `910646ca5f859bc9834cbcd8ea5bf37b0c48fdde`, formatting, workspace
+all-feature check and strict Clippy, release binary build, generated
+protocol, TypeScript, 15 doctests, five Linux mount cases, and all seven
+external Boundary targets (494 passed and five ignored) passed locally.
+The [CI Boundary job](https://github.com/Caismis/rustX/actions/runs/44757936244/job/136363087961)
+also passed 291 in-crate Boundary tests, all seven external targets,
+and the Client bootstrap and WebSocket tests. Its inventory check
+still sought the moved Python suite in the Server library. The required
+suite now points to the Client's 66 `workspace_python::tests::` cases.
+The local workspace run reached 6,152 passed and 27 ignored before two
+Managed Python setup failures. The catalog warmup timed out; the other
+case hit a PyPI wheel download timeout. Both passed unchanged when
+rerun separately, so the full run remains recorded as failed.
 
 ## Command cancellation, detach, and release (UI-owned `command/exec`)
 

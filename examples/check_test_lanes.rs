@@ -65,8 +65,8 @@ const REQUIREMENTS: &[Requirement] = &[
     Requirement::new(
         Profile::Full,
         Platform::Linux,
-        "lib",
-        "tools::workspace_python::tests::",
+        "rustx-execution-client:lib",
+        "workspace_python::tests::",
     ),
     Requirement::new(
         Profile::Full,
