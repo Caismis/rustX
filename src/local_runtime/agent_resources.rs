@@ -21,6 +21,7 @@ pub(crate) fn parse(text: &str) -> Result<NamedAgentProfileDocument, String> {
         return Err("Agent resource exceeds 1 MiB".into());
     }
     let document: NamedAgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
+    document.validate_presentation()?;
     document.lower()?;
     Ok(document)
 }
@@ -226,6 +227,31 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_agent_icon_round_trips_without_changing_runtime_profile() {
+        let document =
+            parse("icon = 'lucide:shield-check'\ndescription = 'Review changes'").unwrap();
+        assert_eq!(document.icon.as_deref(), Some("lucide:shield-check"));
+        let encoded = crate::toml_authoring::write(&document).unwrap();
+        assert_eq!(parse(&encoded).unwrap(), document);
+        let default = parse("description = 'Review changes'").unwrap();
+        assert_eq!(default.lower().unwrap(), document.lower().unwrap());
+        assert!(
+            !crate::toml_authoring::write(&default)
+                .unwrap()
+                .contains("icon")
+        );
+        for icon in [
+            "https://example.com/icon.svg",
+            "lucide:-shield",
+            "lucide:",
+            "lucide:shield--check",
+        ] {
+            assert!(parse(&format!("icon = '{icon}'")).is_err());
+        }
+    }
+
     #[test]
     fn user_discovery_does_not_read_workspace_overrides() {
         let dir = tempfile::tempdir().unwrap();

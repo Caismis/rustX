@@ -1,4 +1,6 @@
 //! Typed, bounded presentation data. No renderer or runtime state is persisted.
+pub use crate::display_icon::MAX_DISPLAY_ICON_BYTES;
+use crate::display_icon::valid_iconify_id;
 use crate::runtime::workflow::authoring::{WorkflowBlockStep, WorkflowNodeAddress, block_at};
 use crate::runtime::workflow::{WorkflowDefinition, WorkflowNodeDefinition};
 use serde::{Deserialize, Serialize};
@@ -12,7 +14,6 @@ pub const MAX_EDITOR_COORDINATE: f64 = 1_000_000.0;
 pub const MAX_EDITOR_DIMENSION: f64 = 8192.0;
 pub const MAX_DISPLAY_TITLE_BYTES: usize = 128;
 pub const MAX_DISPLAY_DESCRIPTION_BYTES: usize = 1024;
-pub const MAX_DISPLAY_ICON_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -131,16 +132,6 @@ pub struct WorkflowDisplay {
     pub icon: Option<String>,
 }
 
-fn icon_part(part: &str) -> bool {
-    !part.is_empty()
-        && !part.starts_with('-')
-        && !part.ends_with('-')
-        && !part.contains("--")
-        && part
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-
 impl WorkflowDisplay {
     pub(super) fn valid(&self) -> bool {
         !self.title.trim().is_empty()
@@ -149,12 +140,7 @@ impl WorkflowDisplay {
                 .description
                 .as_ref()
                 .is_none_or(|text| text.len() <= MAX_DISPLAY_DESCRIPTION_BYTES)
-            && self.icon.as_ref().is_none_or(|icon| {
-                icon.len() <= MAX_DISPLAY_ICON_BYTES
-                    && icon
-                        .split_once(':')
-                        .is_some_and(|(prefix, name)| icon_part(prefix) && icon_part(name))
-            })
+            && self.icon.as_deref().is_none_or(valid_iconify_id)
     }
 }
 

@@ -213,8 +213,26 @@ agent_profile_document!(
     /// A complete named Agent resource profile.
     NamedAgentProfileDocument,
     crate::runtime::agent_profile::AgentSkillSelection::default,
-    {}
+    {
+        /// Presentation-only Iconify identifier (for example `lucide:shield-check`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(length(max = 128))]
+        pub icon: Option<String>,
+    }
 );
+
+impl NamedAgentProfileDocument {
+    pub(crate) fn validate_presentation(&self) -> Result<(), String> {
+        if self
+            .icon
+            .as_deref()
+            .is_some_and(|icon| !crate::display_icon::valid_iconify_id(icon))
+        {
+            return Err("Agent icon must be an Iconify identifier in prefix:name form".into());
+        }
+        Ok(())
+    }
+}
 
 /// Whether to include the automatically discovered AGENTS.md guidance chain.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

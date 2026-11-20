@@ -8397,6 +8397,7 @@
         "../../../locale/react",
         "../../../presentation/catalog/Catalog.module.css",
         "../../../presentation/primitives/Button",
+        "../../../presentation/primitives/IconPicker",
         "../../../presentation/primitives/Switch",
         "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent.module.css",
@@ -8409,6 +8410,7 @@
         "../../settings/projection",
         "../shared/inventory",
         "../types",
+        "./AgentIcon",
         "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
@@ -8454,7 +8456,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "cf9ba7fbae9af0924bf98bec31cec492c231345357f9d96f1ae8005a5fdfd3e3"
+      "local_sha256": "269d81cf0ffcafcdd964ba5d24e83822422214370ec3451ed44d9f7d2bfe726a"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

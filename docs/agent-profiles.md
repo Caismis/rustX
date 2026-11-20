@@ -21,6 +21,7 @@ builtin = ["read"]
 # .agents/agents/reviewer.toml: a complete independent child profile
 # Omitted model inherits the invoking Attempt's frozen effective model.
 description = "Review changes"
+icon = "lucide:shield-check"
 instructions = "Inspect the diff and report actionable findings."
 skills = ["review-guide"]
 timeout_ms = 120000
@@ -45,6 +46,7 @@ inherit = true
 | `agents` | Root-only delegation allowlist. A nonempty list composes the five Agent controls automatically. |
 | `workflows` | Root-only invocation allowlist. Child runtimes cannot invoke workflows or delegate another Agent. The child editor exposes neither capability. |
 | `description`, `instructions` | Agent prose. Named profiles can include task instructions. Root guidance lives in `AGENTS.md`. |
+| `icon` | Optional named-Agent presentation metadata. The Web Console offers its bundled Lucide icons via Iconify; this does not change routing or execution. |
 | `agents_md` | Whether to include the global and Workspace `AGENTS.md` files. |
 | `timeout_ms` | Named child lifecycle policy only. Root rejects it. Every Agent runs in the shared Session workspace; an authored `worktree` table is refused. |
 

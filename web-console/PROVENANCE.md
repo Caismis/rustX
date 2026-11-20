@@ -28,6 +28,10 @@ into tabs while keeping its existing configuration scopes and single native
 write. Tool and skill discovery starts on opening their tab. No reference
 code or assets were copied.
 
+The editor and catalog share the bundled Iconify/Lucide picker introduced for
+Workflows. The selected identifier is stored in the owning named-Agent TOML as
+presentation metadata; it is not lowered into an Agent runtime profile.
+
 ## MCP tool approvals and the A2UI Playground theme
 
 MCP detail follows the distinction in VS Code's tool and approval settings and

@@ -6,7 +6,8 @@ import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import catalog from '../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../presentation/primitives/Button';
-import { IconAgentPresetOutline16, IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
+import { IconPicker } from '../../../presentation/primitives/IconPicker';
+import { IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
 import { Switch } from '../../../presentation/primitives/Switch';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import { DefinitionNotice, UnitOutcomeNotice, UnitReset, useUnitEditing } from '../../settings/forms/bridge';
@@ -21,6 +22,7 @@ import css from './Subagents.module.css';
 import { AgentToolFields, ManagedToolSelections } from './AgentToolFields';
 import type { LoadMcpTools } from '../types';
 import { AgentSkillFields } from './AgentSkillFields';
+import { AgentIcon } from './AgentIcon';
 
 export type AgentDraft = NamedAgentProfileDocument & { name?: string };
 
@@ -89,7 +91,12 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
       <span aria-current="page">{name ?? title}</span>
     </nav>
     <header className={css.heading}>
-      <span className={`${catalog.fileTile} ${css.editorIcon}`}><IconAgentPresetOutline16 /></span>
+      <IconPicker value={value.icon ?? ''} onChange={icon => update({ icon })}
+        disabled={!editable || busy || !unit.writable} label={tx('resources:subagents.choose-icon')}
+        onReset={() => update({ icon: undefined })}
+        className={`${catalog.fileTile} ${css.editorIcon}`}>
+        <AgentIcon icon={value.icon} size={20} />
+      </IconPicker>
       <div>
         <h1 ref={heading} tabIndex={-1}>{title}</h1>
         <p>{tx(creating ? 'resources:subagents.create-help' : 'resources:subagents.edit-help')}</p>

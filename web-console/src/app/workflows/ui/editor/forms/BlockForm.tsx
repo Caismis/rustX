@@ -3,7 +3,7 @@ import type { ArrayEdit } from '../../../document/fields';
 import { useTranslation } from '../../../../../locale/react';
 import { setWorkflow } from '../../../document/commands';
 import { setDisplay } from '../../../document/presentation';
-import { DEFAULT_WORKFLOW_ICON, IconPicker } from '../../WorkflowIcon';
+import { DEFAULT_WORKFLOW_ICON, WorkflowIconPicker } from '../../WorkflowIcon';
 import { blockField, workflowField } from '../../../document/fields';
 import { blockAt, type BlockPath, type WorkflowDocument } from '../../../document/model';
 import { Section, TextField } from './fields';
@@ -41,7 +41,7 @@ export function BlockForm({ document, block, edit, onSelect, tools, start = fals
         onChange={(description, session) => editDisplay({ description }, session)} />
       <div className={css.field}>
         <span className={css.fieldLabel}>{tx('workflows:inspector.display-icon')}</span>
-        <IconPicker value={display.icon ?? DEFAULT_WORKFLOW_ICON} onChange={icon => editDisplay({ icon })} />
+        <WorkflowIconPicker value={display.icon ?? DEFAULT_WORKFLOW_ICON} onChange={icon => editDisplay({ icon })} />
       </div>
     </Section>}
     {block.length === 0 && <Section title={tx('workflows:inspector.workflow-title')}>

@@ -6,9 +6,10 @@ import type { CatalogView } from '../../../presentation/catalog/CatalogControls'
 import catalog from '../../../presentation/catalog/Catalog.module.css';
 import { CardMenu } from '../../../presentation/catalog/CardMenu';
 import { transferActions } from '../shared/ResourceTransfer';
-import { IconAgentPresetOutline16, IconEditOutline16 } from '../../../presentation/primitives/icons';
+import { IconEditOutline16 } from '../../../presentation/primitives/icons';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
 import { extensionEntries } from '../shared/inventory';
+import { AgentIcon } from './AgentIcon';
 import css from './Subagents.module.css';
 
 export function SubagentList({ source, scope, revision, query, view, group, onOpen, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
@@ -51,7 +52,7 @@ export function SubagentList({ source, scope, revision, query, view, group, onOp
       {entries.map(entry => <li key={entry.name} aria-label={entry.name} className={clsx(catalog.card, css.agentCard, entry.valid === false && catalog.invalidCard)}>
         <div className={catalog.cardHead}>
           <button type="button" className={catalog.cardOpen} aria-label={entry.name} onClick={() => onOpen(entry.name)}>
-            <span className={catalog.fileTile}><IconAgentPresetOutline16 /></span>
+            <span className={catalog.fileTile}><AgentIcon icon={entry.profile?.icon} /></span>
             <span className={catalog.cardName}>
               <span className={catalog.cardTitle}>{entry.name}</span>
               <span className={catalog.cardId}>{model(entry)}</span>
@@ -73,7 +74,7 @@ export function SubagentList({ source, scope, revision, query, view, group, onOp
       <tbody>{entries.map(entry => <tr key={entry.name}>
         <td>
           <button type="button" className={`${catalog.rowOpen} ${css.rowOpen}`} onClick={() => onOpen(entry.name)}>
-            <IconAgentPresetOutline16 /><span>{entry.name}</span>
+            <AgentIcon icon={entry.profile?.icon} /><span>{entry.name}</span>
           </button>
           <span className={css.narrowDescription} data-invalid={entry.valid === false || undefined}>{description(entry)}</span>
         </td>

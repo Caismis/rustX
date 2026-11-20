@@ -25,6 +25,7 @@
   gap: 8px;
   width: 400px;
   max-width: calc(100vw - 24px);
+  box-sizing: border-box;
   padding: 10px;
   border: 0;
   border-radius: var(--dsw-radius-md);
@@ -40,6 +41,7 @@
   font: inherit;
   font-size: 13px;
 }
+.reset { align-self: flex-end; }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));

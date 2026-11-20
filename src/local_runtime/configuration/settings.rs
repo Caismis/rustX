@@ -1525,6 +1525,9 @@ impl UserConfigManager {
                 }
                 SourceMutation::Agent { name, authored, .. } => authored
                     .map(|profile| {
+                        profile
+                            .validate_presentation()
+                            .map_err(|_| SettingsError::Invalid)?;
                         let resolved = profile.lower().map_err(|_| SettingsError::Invalid)?;
                         crate::runtime::subagent::NamedAgentDefinition::new(
                             name,

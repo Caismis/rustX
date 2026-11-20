@@ -31036,6 +31036,14 @@
       "description": "A complete named Agent resource profile.",
       "type": "object",
       "properties": {
+        "icon": {
+          "description": "Presentation-only Iconify identifier (for example `lucide:shield-check`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
         "workflows": {
           "type": "array",
           "items": {

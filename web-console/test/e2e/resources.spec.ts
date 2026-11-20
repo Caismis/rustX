@@ -27,6 +27,74 @@ async function checkCatalogView(scope: Locator, item: Locator) {
   expect(await scope.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
 }
 
+test('subagent icons reuse the offline picker and persist to the owning Workspace', async ({ page }) => {
+  const fixture = await startDogfood();
+  const errors: string[] = [];
+  const remoteIconRequests: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    if (new URL(request.url()).hostname.includes('iconify')) remoteIconRequests.push(request.url());
+  });
+  const workspaceProfiles = join(fixture.workspaceA, '.agents/agents');
+  const workspaceProfile = join(workspaceProfiles, 'icon-reviewer.toml');
+  const globalProfile = join(fixture.directory, 'home/rustx/.agents/agents/icon-reviewer.toml');
+  try {
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page).toHaveTitle(/rustX/);
+    const surface = await openResourceModule(page, 'subagents', 'Workspace A');
+    const create = await newSubagent(surface, 'icon-reviewer');
+    const picker = surface.getByRole('button', { name: 'Choose subagent icon', exact: true });
+    const search = surface.getByRole('searchbox');
+    const save = create.getByRole('button', { name: 'Save New subagent' });
+    await picker.click();
+    await expect(search).toBeFocused();
+    await search.fill('shield-check');
+    await search.press('Enter');
+    await expect(create).toBeVisible();
+    expect(existsSync(workspaceProfile)).toBe(false);
+    await captureEvidence(page, 'subagent-icon-picker-desktop');
+    await surface.getByRole('option', { name: 'shield-check', exact: true }).click();
+    await expect(picker).toBeFocused();
+    await expect(picker.locator('svg.iconify--lucide')).toBeVisible();
+    await save.click();
+    const card = surface.getByRole('listitem', { name: 'icon-reviewer', exact: true });
+    await expect(card.locator('svg.iconify--lucide')).toBeVisible();
+    expect(readFileSync(workspaceProfile, 'utf8')).toMatch(/^icon = ["']lucide:shield-check["']/m);
+    expect(existsSync(globalProfile)).toBe(false);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await surface.getByRole('button', { name: 'List view', exact: true }).click();
+    const row = surface.getByRole('row', { name: /icon-reviewer/ });
+    await expect(row.locator('svg.iconify--lucide')).toBeVisible();
+    await row.getByRole('button', { name: 'icon-reviewer', exact: true }).click();
+    await picker.click();
+    await search.fill('shield-check');
+    await expect(surface.getByRole('option', { name: 'shield-check', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => search.evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      const clip = element.closest('[data-resource-module]')!.getBoundingClientRect();
+      return bounds.left >= clip.left && bounds.right <= Math.min(clip.right, innerWidth)
+        && element === document.elementFromPoint(bounds.left + 4, bounds.top + bounds.height / 2);
+    }), { timeout: 10_000 }).toBe(true);
+    await captureEvidence(page, 'subagent-icon-picker-mobile');
+    await search.press('Escape');
+    await expect(picker).toBeFocused();
+    await picker.click();
+    await surface.getByRole('button', { name: 'Reset icon' }).click();
+    await expect(picker).toBeFocused();
+    await expect(picker.locator('svg.iconify--lucide')).toHaveCount(0);
+    await surface.getByRole('button', { name: 'Save Agent icon-reviewer' }).click();
+    await expect(row.getByRole('button', { name: 'icon-reviewer', exact: true })).toBeVisible();
+    await expect(row.locator('svg.iconify--lucide')).toHaveCount(0);
+    expect(readFileSync(workspaceProfile, 'utf8')).not.toMatch(/^icon\s*=/m);
+    expect(remoteIconRequests).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
 test('skill cards render, edit and upload package display information from the workspace', async ({page}) => {
   const f = await startDogfood();
   const errors: string[] = [];

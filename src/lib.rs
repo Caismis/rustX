@@ -11,6 +11,7 @@ mod bounded_json;
 pub mod capabilities;
 pub mod context;
 pub mod conversation;
+mod display_icon;
 pub mod durable;
 pub mod events;
 pub mod extensions;

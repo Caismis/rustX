@@ -8,7 +8,7 @@ import type { LibraryConfirmation, WorkflowLibraryActor } from '../../machines/l
 import { setDisplay } from '../../document/presentation';
 import { classifyFailure, type WorkflowFailure } from '../../port';
 import { FailureText } from '../notices';
-import { DEFAULT_WORKFLOW_ICON, IconPicker } from '../WorkflowIcon';
+import { DEFAULT_WORKFLOW_ICON, WorkflowIconPicker } from '../WorkflowIcon';
 import css from '../Workflows.module.css';
 import catalog from '../../../../presentation/catalog/Catalog.module.css';
 
@@ -156,7 +156,7 @@ function InfoForm({ confirmation, scopeLabel, library, busy, title: heading, sou
         <section className={css.column}>
           <p className={css.formSection}>{tx('workflows:dialog.for-people')}</p>
           <div className={css.identity}>
-            <IconPicker value={icon} onChange={setIcon} disabled={blocked} className={css.iconTile} />
+            <WorkflowIconPicker value={icon} onChange={setIcon} disabled={blocked} className={css.iconTile} />
             <label className={css.field}>
               <span>{tx('workflows:dialog.title')}</span>
               <input className={css.plain} value={title} autoFocus maxLength={128} disabled={blocked} placeholder={tx('workflows:dialog.title-placeholder')}

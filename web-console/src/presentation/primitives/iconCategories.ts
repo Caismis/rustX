@@ -1,4 +1,4 @@
-/** Workflow-shaped groupings over the bundled Lucide set, which ships none.
+/** Groupings over the bundled Lucide set, which ships none.
  * Names the bundled set lacks are skipped at render time. */
 export const ICON_CATEGORIES = {
   common: ['workflow', 'bot', 'sparkles', 'brain', 'file-text', 'files', 'notebook-pen', 'mail', 'message-square', 'calendar', 'clock',

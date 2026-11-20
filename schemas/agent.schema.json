@@ -453,6 +453,13 @@
       "description": "The bounded model-facing routing description. Empty defaults stay omitted\nin native source projections and complete-resource serialization.",
       "type": "string"
     },
+    "icon": {
+      "description": "Presentation-only Iconify identifier (for example `lucide:shield-check`).",
+      "maxLength": 128,
+      "type": [
+        "string"
+      ]
+    },
     "instructions": {
       "description": "Explicit primary Agent instructions authored as TOML data.",
       "type": "string"

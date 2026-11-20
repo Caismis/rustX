@@ -4,7 +4,7 @@ import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
-import { IconPicker } from '../../workflows/ui/WorkflowIcon';
+import { IconPicker } from '../../../presentation/primitives/IconPicker';
 import { SkillIcon, skillAssetUrl } from './SkillIcon';
 import css from './SkillDisplayDialog.module.css';
 

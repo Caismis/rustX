@@ -10532,6 +10532,10 @@ export interface AppServerPolicy {
  * via the `definition` "NamedAgentProfileDocument".
  */
 export interface NamedAgentProfileDocument {
+  /**
+   * Presentation-only Iconify identifier (for example `lucide:shield-check`).
+   */
+  icon?: string | null;
   workflows?: WorkflowId[];
   /**
    * The bounded model-facing routing description. Empty defaults stay omitted

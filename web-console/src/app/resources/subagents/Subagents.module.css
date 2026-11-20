@@ -16,8 +16,8 @@
 .breadcrumb span { overflow-wrap: anywhere; }
 .breadcrumb svg { flex: none; }
 .heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
-.editorIcon { width: 42px; height: 42px; border-radius: 12px; }
-.editorIcon svg { width: 20px; height: 20px; }
+.heading button.editorIcon { width: 42px; height: 42px; border-radius: 12px; }
+.heading button.editorIcon:disabled { cursor: default; }
 .heading h1 { margin: 0 0 4px; font-size: 24px; font-weight: 500; line-height: 32px; }
 .heading p { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
 .editor .form {
