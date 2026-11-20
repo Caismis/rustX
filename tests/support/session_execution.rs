@@ -187,20 +187,19 @@ impl ExecutionFixture {
             let home = temporary.path().join("home");
             std::fs::create_dir_all(&runtime_root).expect("runtime root");
             std::fs::create_dir_all(home.join("rustx")).expect("home root");
-            let (controller, session) = match session {
-                Some(existing) => existing,
-                None => {
-                    let controller =
-                        SessionController::open(&runtime_root).expect("session controller");
-                    let session = controller
-                        .create_session(SessionPersistentState::from_input(
-                            &SessionConfigInput::new(workspace.to_path_buf()),
-                        ))
-                        .await
-                        .expect("catalog session")
-                        .session;
-                    (controller, session.id)
-                }
+            let (controller, session) = if let Some(existing) = session {
+                existing
+            } else {
+                let controller =
+                    SessionController::open(&runtime_root).expect("session controller");
+                let session = controller
+                    .create_session(SessionPersistentState::from_input(
+                        &SessionConfigInput::new(workspace.to_path_buf()),
+                    ))
+                    .await
+                    .expect("catalog session")
+                    .session;
+                (controller, session.id)
             };
             let user_config = UserConfigManager::new(UserConfigSources {
                 home_directory: home.clone(),
