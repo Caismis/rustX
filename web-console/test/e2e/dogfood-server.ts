@@ -171,8 +171,11 @@ timezone = "UTC"
     const productHostToken = randomBytes(32).toString('base64url');
     const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
     let appErrors = '';
+    let execution: { sessionId: string; workspace: string } | undefined;
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
-      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      const args = ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile];
+      if (execution) args.push('--local-execution-session', execution.sessionId, '--local-execution-workspace', execution.workspace);
+      app = spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
       appIdentity = nativeIdentity(app.pid);
       if (app.pid !== undefined) measurement?.process?.({ role: 'native', pid: app.pid });
       if (measurement) observeMeasurementLines(app, measurement.line);
@@ -195,14 +198,20 @@ timezone = "UTC"
       const restarted = await startApp(endpoint);
       if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
     };
+    const restartApp = async () => {
+      app!.kill('SIGTERM');
+      await exited(app!);
+      await startOnSameEndpoint();
+    };
     return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
-      async restartApp() {
-        app!.kill('SIGTERM');
-        await exited(app!);
-        await startOnSameEndpoint();
+      restartApp,
+      /** Model-tool fixtures enroll the exact Session through trusted startup. */
+      async bindExecution(sessionId: string, workspace: string) {
+        execution = { sessionId, workspace };
+        await restartApp();
       },
       /** Public creation materializes defaults. Seed inherited intent only
        * before the browser connects, with the native owner physically stopped. */

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openEmptySession } from './shell-actions';
+import { connectRemote, createBoundSession, openExistingSession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { transitionFacts } from '../../../protocol/app-server/projection';
 
@@ -15,8 +15,9 @@ test('native child live cuts, independent title, active and file-only resume upl
   let passed = false;
   try {
     await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+    const session = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openExistingSession(page, session);
     await page.getByLabel('Message', { exact: true }).fill('CHILD_CAPABILITIES_PARENT');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await Promise.all([fixture.gate('child-first-0'), fixture.gate('child-first-1')]);
@@ -50,7 +51,9 @@ test('native child live cuts, independent title, active and file-only resume upl
     await expect(child).toHaveAttribute('data-agent-state', 'inactive');
     await expect(child.getByText('Canonical child final report.', { exact: true })).toBeVisible();
     // The in-flight message becomes its single canonical message at settlement.
-    await expect(child.getByText('Live child first chunk. Second live chunk.', { exact: true })).toHaveCount(1);
+    const earlierMessage = child.getByText('Live child first chunk. Second live chunk.', { exact: true });
+    if (!(await earlierMessage.count())) await child.getByRole('button', { name: 'Load earlier', exact: true }).click();
+    await expect(earlierMessage).toHaveCount(1);
     const card = child.locator('[data-delivery-card]').filter({ has: page.locator('[data-presented-name]', { hasText: 'child-report.md' }) }).first();
     await card.getByRole('button', { name: 'Preview child-report.md in sidebar', exact: true }).click();
     const preview = page.getByRole('complementary', { name: 'Previews', exact: true });

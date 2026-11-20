@@ -1,5 +1,5 @@
 import { selectedSessionId, selectedCheckpoint } from './shell-actions';
-import { openEmptySession } from './shell-actions';
+import { createBoundSession, openEmptySession, openExistingSession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import { expectSettled } from './shell-actions';
@@ -10,6 +10,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
 import { AppServerHost } from '../../../tui/src/app-server/host';
+import { readEditor } from '../../../protocol/app-server/editor';
 
 test('Session uploads compose with model Tool IO, fork, source deletion and reload', async ({ page }) => {
   const fixture = await startDogfood('web_upload_conformance');
@@ -23,8 +24,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Access token')).toBeHidden();
   };
-  const submit = async (phase: string) => {
-    await page.getByRole('button', { name: 'Send', exact: true }).click();
+  const approveAndSettle = async (phase: string) => {
     await page.getByRole('button', { name: 'Allow once' }).click();
     await expect(canonical.getByText(`${phase} upload read through native Tool.`, { exact: true })).toBeVisible();
     await expectSettled(page, wire);
@@ -35,8 +35,9 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     return ['acceptance.txt', 'pixel.png'].map(name => { const matches = batches.map(batch => join(root(session), batch, name)).filter(existsSync); expect(matches).toHaveLength(1); return matches[0]; });
   };
   try {
+    const session = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, session);
     await selectedCheckpoint(page, wire);
     await expect(message).toBeEnabled(); const source = await id();
     await message.fill('Use my uploaded files');
@@ -49,7 +50,8 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     const sourcePaths = paths(source);
     expect(readFileSync(sourcePaths[0], 'utf8')).toBe('UPLOAD_NATIVE_SENTINEL');
     expect(readFileSync(sourcePaths[1])).toEqual(png);
-    await submit('Source');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await approveAndSettle('Source');
     // A native receipt, not a browser-constructed ArtifactId, enters inbound/queue.
     const input = wire.requests.find(request => request.method === 'inbound/queue')!.params.content;
     expect(input.filter((block: any) => block.type === 'upload')).toHaveLength(2);
@@ -67,6 +69,20 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.getByRole('dialog', { name: '/fork', exact: true }).getByRole('option', { name: /Use my uploaded files/ }).click();
     await expect(message).toHaveValue('Use my uploaded files');
     const destination = await id(); expect(destination).not.toBe(source);
+    const transition = wire.responses.find(row => row.method === 'thread/fork' && row.result.session.id === destination);
+    expect(transition?.result.editor).toBeTruthy();
+    const locator = transition!.result.editor;
+    const forkInput = await readEditor(locator, async (block_index, offset) => {
+      const request = wire.requests.find(row => row.method === 'session/editorRead'
+        && JSON.stringify(row.params.locator) === JSON.stringify(locator)
+        && row.params.block_index === block_index && row.params.offset === offset);
+      const response = wire.responses.find(row => row.method === 'session/editorRead'
+        && row.id === request?.id && JSON.stringify(row.result.page.locator) === JSON.stringify(locator));
+      if (!response) throw new Error('The Browser did not read a native fork editor page.');
+      return response.result.page;
+    }, () => true);
+    expect(forkInput.filter(block => block.type === 'upload')).toHaveLength(2);
+    expect(forkInput.filter(block => block.type === 'text')).toEqual([{ type: 'text', text: 'Use my uploaded files' }]);
     const destinationPaths = paths(destination);
     expect(readFileSync(destinationPaths[0], 'utf8')).toBe('UPLOAD_NATIVE_SENTINEL');
     expect(readFileSync(destinationPaths[1])).toEqual(png);
@@ -89,7 +105,18 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     expect(existsSync(root(source))).toBe(false);
     for (const path of destinationPaths) expect(existsSync(path)).toBe(true);
     await expect(message).toHaveValue('Use my uploaded files');
-    await submit('Destination');
+    // Trusted startup enrolls one exact Session. Submit the Browser's native
+    // fork pages after switching to the destination's Client.
+    await page.goto('about:blank');
+    await fixture.bindExecution(destination, fixture.workspaceA);
+    await page.goto('/'); await connect();
+    await openExistingSession(page, destination);
+    const submitter = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    try {
+      const attached = await submitter.attach(destination);
+      expect((await attached.submitInbound(forkInput)).messageId).toBeTruthy();
+    } finally { await submitter.shutdown(); }
+    await approveAndSettle('Destination');
     const requests = (await fixture.control('requests')).requests;
     expect(requests).toHaveLength(4);
     const destinationRequest = JSON.stringify(requests[2].body);
@@ -144,10 +171,11 @@ test('32 independent uploads keep their 33rd text block in live and reopened nat
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
+    const session = await createBoundSession(fixture);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await openEmptySession(page, fixture, 'Workspace A'); await selectedCheckpoint(page, wire);
+    await openExistingSession(page, session); await selectedCheckpoint(page, wire);
     const input = page.getByRole('textbox', { name: 'Message', exact: true });
     const chat = page.getByLabel('Canonical conversation');
     await input.fill('Use my uploaded files');

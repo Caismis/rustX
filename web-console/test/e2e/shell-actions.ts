@@ -158,23 +158,40 @@ export async function expectSettled(page: Page, wire: Awaited<ReturnType<typeof 
   await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.attempt?.phase.type).toBe('settled');
 }
 
-/** Native fixture setup for scenarios that begin with an existing empty Session.
- * Creation UX is exercised separately by convergence.spec.ts. This performs the
- * real native create and normal catalog refresh and attachment, without a browser-only ID. */
-export async function openEmptySession(page: Page, fixture: { endpoint: string; token: string; automaticTitles?: boolean; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
+/** Persist an empty native Session before the browser attaches to it. */
+async function createEmptySession(fixture: { endpoint: string; token: string; automaticTitles?: boolean; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
   const { AppServerHost } = await import('../../../tui/src/app-server/host');
   const catalog = await fixture.workspaceHost.host.listWorkspaces();
   const workspace = catalog.workspaces.find(row => row.displayName === label);
   if (!workspace) throw new Error(`Fixture Workspace unavailable: ${label}`);
   const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-  let id: string;
   try {
-    id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id;
+    const id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id;
     // These scenarios test primary execution; a saved native label suppresses
     // independent automatic Title work without hiding any provider request.
     if (!fixture.automaticTitles) await remote.renameSession(id, 'New session');
+    return id;
   }
   finally { await remote.shutdown(); }
+}
+
+export async function openEmptySession(page: Page, fixture: Parameters<typeof createEmptySession>[0], label: string) {
+  const id = await createEmptySession(fixture, label);
+  await openExistingSession(page, id);
+  return id;
+}
+
+/** Enroll a native execution fixture before attaching the browser. */
+export async function createBoundSession(fixture: Parameters<typeof createEmptySession>[0] & {
+  workspaceA: string;
+  bindExecution(sessionId: string, workspace: string): Promise<void>;
+}) {
+  const id = await createEmptySession(fixture, 'Workspace A');
+  await fixture.bindExecution(id, fixture.workspaceA);
+  return id;
+}
+
+export async function openExistingSession(page: Page, id: string) {
   await returnHome(page);
   const expand = page.getByRole('button', { name: 'Home', exact: true, expanded: false });
   const wasCollapsed = await expand.isVisible();
@@ -196,7 +213,6 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
   if (wasCollapsed) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
-  return id;
 }
 
 /** Reach advanced model authoring through the landing page disclosures. */
