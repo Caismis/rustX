@@ -16,6 +16,10 @@ async fn detached_operations_release_without_touching_siblings() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::detached_operations_release_without_touching_siblings()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detach_during_data_and_control_backpressure() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::detach_during_data_and_control_backpressure()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn release_retries_prewire_busy_then_releases() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::release_retries_prewire_busy_then_releases()).await;
 }

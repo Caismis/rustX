@@ -147,7 +147,7 @@ fn context_with_registration(
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
 ) -> crate::runtime::subagent::NativeExecutionContext {
-    context_with_environment(plane, registration, lifecycle, ToolEnvironment::new())
+    context_with_environment(plane, registration, lifecycle, ToolEnvironment::new(), None)
 }
 
 fn context_with_environment(
@@ -155,6 +155,7 @@ fn context_with_environment(
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
     environment: ToolEnvironment,
+    scope: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
 ) -> crate::runtime::subagent::NativeExecutionContext {
     let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
@@ -207,10 +208,15 @@ fn context_with_environment(
     context.native = Some(Arc::new(NativeInvocationServices {
         task: None,
         lifecycle,
-        runtime: crate::tools::runtime::ConversationToolRuntime::new(
+        runtime: crate::tools::runtime::ConversationToolRuntime::from_config(
             plane.conversation_id.clone(),
-            plane.dir.path().join("workspace"),
-            plane.dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig {
+                execution_scope: scope,
+                ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                    plane.dir.path().join("workspace").canonicalize().unwrap(),
+                    plane.dir.path().join("artifacts"),
+                )
+            },
         )
         .unwrap(),
         clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
@@ -1351,6 +1357,7 @@ fn bound_plane(
 ) {
     let workspace = plane.dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
     let execution = crate::session_execution_support::ExecutionFixture::new(&workspace);
     let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
         plane.conversation_id.clone(),

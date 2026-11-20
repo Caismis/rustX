@@ -194,15 +194,24 @@ pub enum Method {
         path: String,
     },
     #[serde(rename = "fs/createDirectory")]
-    FsCreateDirectory { path: String, recursive: bool },
+    FsCreateDirectory {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
+        path: String,
+        recursive: bool,
+    },
     #[serde(rename = "fs/remove")]
     FsRemove {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         recursive: bool,
         force: bool,
     },
     #[serde(rename = "fs/copy")]
     FsCopy {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         #[serde(rename = "sourcePath")]
         source_path: String,
         #[serde(rename = "destinationPath")]

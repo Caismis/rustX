@@ -294,7 +294,7 @@ meaningful domain/boundary/dependency topology:
 | `provider` | one adapter over the in-process `FixtureServer` | request serialization, protocol translation, stream parsing, normalized error mapping, ToolCall acceptance and malformed-tool-proposal classification, capability/context translation at the adapter, opaque request params, opt-in live smoke |
 | `conformance` | the external provider-emulator process | composed Agent Loop / lifecycle / Workflow conformance through the real runtime and a real provider boundary |
 | `durable` | file-backed SQLite | recovery classification, pending-inbound inbox, publication store contract, interaction audit store, transcript history |
-| `process` | the real `rustx` binary / local composition | the public CLI contract (bare help, retired launch grammar rejected without effects), App Server over real stdio and WebSocket processes, composition identity, capability startup isolation, runtime config, committed-example resource composition, the explicit local-execution composition (Session Client launch/admission/drain and `sessionId`-routed file queries — plus the ignored, Linux-only `explicit_composition_reads_from_client_mount_namespace` opt-in proof, run only via `test-support/prove_execution_mount_view.sh` alongside the boundary-layer `range_read_from_private_mount_view`; the process proof runs a bound `command/exec`, and the script separately runs the native Agent Write/Read/Bash/Grep continuation test through an isolated Client mount) |
+| `process` | the real `rustx` binary / local composition | the public CLI contract (bare help, retired launch grammar rejected without effects), App Server over real stdio and WebSocket processes, composition identity, capability startup isolation, runtime config, committed-example resource composition, the explicit local-execution composition (Session Client launch/admission/drain and `sessionId`-routed file queries — plus the ignored, Linux-only `explicit_composition_reads_from_client_mount_namespace` opt-in proof, run only via `test-support/prove_execution_mount_view.sh` alongside the boundary-layer `filesystem_operations_use_the_private_mount_view`; the process proof runs a bound `command/exec`, and the script separately runs the native Agent Write/Read/Bash/Grep continuation test through an isolated Client mount) |
 | `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition under a real App Server parent, the running child's internal read-only inspection socket |
 | `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend, managed `FastMCP` materialization |
 | `cfg3_catalog` | real configuration source files | CFG3 source resolution, shadowing and replacement, native writers' commit races and stale-write refusal, frozen model/provider invocation identity |
@@ -902,6 +902,10 @@ cargo test --test durable --all-features
 
 # The in-crate scripted contract suites only:
 cargo test --lib --all-features scripted_suites::
+
+# UI detach while the real Execution Client has blocked data and full control:
+python3 test-support/prepare_native_tests.py -- cargo test --lib --all-features --locked --no-run
+cargo test --lib --all-features --locked detach_during_data_and_control_backpressure
 
 # The App Server contracts under the manager's private test module:
 cargo test --lib --all-features local_runtime::session_runtime_manager::tests::

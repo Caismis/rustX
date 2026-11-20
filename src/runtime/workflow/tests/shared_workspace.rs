@@ -10,6 +10,9 @@ use super::*;
 
 const IMPLEMENT_FILE: &str = "greeting.txt";
 
+type ExecutionFixture = crate::session_execution_support::ExecutionFixture;
+type NativeContext = crate::runtime::subagent::NativeExecutionContext;
+
 fn empty_object() -> Value {
     schema(json!({}), &[])
 }
@@ -53,7 +56,7 @@ fn files_named(root: &std::path::Path, name: &str) -> Vec<std::path::PathBuf> {
 fn bash_context(
     plane: &WorkflowTestPlane,
     owner: Option<Arc<crate::runtime::interaction::InteractionCoordinator>>,
-) -> crate::runtime::subagent::NativeExecutionContext {
+) -> (NativeContext, ExecutionFixture) {
     let lifecycle = crate::agent::AttemptLifecycle::default().with_pre_tool_policy(Arc::new(
         crate::agent::lifecycle::ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess),
     ));
@@ -61,11 +64,23 @@ fn bash_context(
         Some(owner) => lifecycle.with_native_interaction(owner),
         None => lifecycle,
     };
-    context_with_registration(
+    bound_bash_context(plane, lifecycle, ToolEnvironment::new())
+}
+
+fn bound_bash_context(
+    plane: &WorkflowTestPlane,
+    lifecycle: crate::agent::AttemptLifecycle,
+    environment: ToolEnvironment,
+) -> (NativeContext, ExecutionFixture) {
+    let execution = ExecutionFixture::new(&plane.dir.path().join("workspace"));
+    let context = context_with_environment(
         plane,
         crate::tools::native::test_bash_registration(),
         lifecycle,
-    )
+        environment,
+        Some(execution.scope.clone()),
+    );
+    (context, execution)
 }
 
 fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
@@ -77,9 +92,9 @@ fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
     serde_json::from_value(json!({"description":"Typed code through Bash","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
 }
 
-/// Real Node may be installed outside Bash's baseline PATH. Tests admit that
-/// interpreter through a private path prefix; Skills do not.
-fn code_context(plane: &WorkflowTestPlane) -> crate::runtime::subagent::NativeExecutionContext {
+/// Admit the actual fixture interpreters through the explicit configured
+/// environment sent to the Bash Client.
+fn code_context(plane: &WorkflowTestPlane) -> (NativeContext, ExecutionFixture) {
     let workspace = plane.dir.path().join("workspace");
     let bin = workspace.join(".venv/bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -97,29 +112,33 @@ fn code_context(plane: &WorkflowTestPlane) -> crate::runtime::subagent::NativeEx
         std::os::unix::fs::symlink(executable, bin.join("python3")).unwrap();
         std::os::unix::fs::symlink(executable, bin.join("python")).unwrap();
     }
-    crate::tools::workspace_python::publish_ready_for_test(&workspace);
     let output = std::process::Command::new("node")
         .args(["-p", "process.execPath"])
         .output()
         .expect("Code tests require Node.js");
     assert!(output.status.success());
-    let bin = plane.dir.path().join("node-bin");
-    std::fs::create_dir_all(&bin).unwrap();
+    let node_bin = plane.dir.path().join("node-bin");
+    std::fs::create_dir_all(&node_bin).unwrap();
     std::os::unix::fs::symlink(
         String::from_utf8(output.stdout).unwrap().trim(),
-        bin.join("node"),
+        node_bin.join("node"),
     )
     .unwrap();
-    let environment = ToolEnvironment::new().with_path_prefix(&bin);
+    let path = std::env::join_paths([
+        bin,
+        node_bin,
+        "/usr/local/bin".into(),
+        "/usr/bin".into(),
+        "/bin".into(),
+    ])
+    .unwrap()
+    .into_string()
+    .unwrap();
+    let environment = ToolEnvironment::from_configured(vec![("PATH".into(), path)]).unwrap();
     let lifecycle = crate::agent::AttemptLifecycle::default().with_pre_tool_policy(Arc::new(
         crate::agent::lifecycle::ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess),
     ));
-    context_with_environment(
-        plane,
-        crate::tools::native::test_bash_registration(),
-        lifecycle,
-        environment,
-    )
+    bound_bash_context(plane, lifecycle, environment)
 }
 
 #[tokio::test]
@@ -176,11 +195,12 @@ async function main({message, payload}) {
         );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
+        let (context, _execution) = code_context(&plane);
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
                 ToolCallId::new("typed-code"),
-                code_context(&plane),
+                context,
                 json!({"message":text,"payload":payload}),
                 cancellation,
             )
@@ -235,11 +255,12 @@ function main() {
         );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
+        let (context, _execution) = code_context(&plane);
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
                 ToolCallId::new("large-code-result"),
-                code_context(&plane),
+                context,
                 json!({}),
                 cancellation,
             )
@@ -285,6 +306,7 @@ async fn code_results_over_the_workflow_bound_are_explicitly_rejected() {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
+        let (context, _execution) = code_context(&plane);
         let error = runtime
             .run_test_foreground(
                 Arc::new(
@@ -292,7 +314,7 @@ async fn code_results_over_the_workflow_bound_are_explicitly_rejected() {
                         .unwrap(),
                 ),
                 ToolCallId::new("oversized-code-result"),
-                code_context(&plane),
+                context,
                 json!({}),
                 cancellation,
             )
@@ -337,11 +359,12 @@ function main() {
         );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
+        let (context, _execution) = code_context(&plane);
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
                 ToolCallId::new("code-retry"),
-                code_context(&plane),
+                context,
                 json!({}),
                 cancellation,
             )
@@ -392,11 +415,12 @@ async fn code_wrong_output_types_support_defaults_and_explicit_fail_branches() {
             }
             let runtime = workflow_runtime(&plane);
             let (_, cancellation) = workflow_cancellation();
+            let (context, _execution) = code_context(&plane);
             let output = runtime
                 .run_test_foreground(
                     Arc::new(compile_test(definition).unwrap()),
                     ToolCallId::new("code-handling"),
-                    code_context(&plane),
+                    context,
                     json!({}),
                     cancellation,
                 )
@@ -423,13 +447,14 @@ async fn code_language_errors_stop_without_admitting_the_successor() {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
+        let (context, _execution) = code_context(&plane);
         let definition = code_definition(script, json!({"code_language":language}));
         assert!(
             runtime
                 .run_test_foreground(
                     Arc::new(compile_test(definition).unwrap()),
                     ToolCallId::new("code-error"),
-                    code_context(&plane),
+                    context,
                     json!({}),
                     cancellation
                 )
@@ -451,7 +476,7 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
     let plane = workflow_test_plane(1);
     let workspace = plane.dir.path().join("workspace");
     let mut children = [stage_workflow_child(&plane), stage_workflow_child(&plane)];
-    let context = bash_context(&plane, None);
+    let (context, _execution) = bash_context(&plane, None);
     let passed = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"shared implement/check","timeout_ms":600_000,"block":{
         "input":passed,"nodes": {"workflow_start":{"type":"start"},
@@ -543,7 +568,7 @@ async fn explicit_review_branch_gates_implementation() {
         let plane = workflow_test_plane(1);
         let workspace = plane.dir.path().join("workspace");
         let (owner, _audit, mut published) = owner(&plane);
-        let context = bash_context(&plane, Some(owner.clone()));
+        let (context, _execution) = bash_context(&plane, Some(owner.clone()));
         let definition = serde_json::from_value(json!({"description":"gated implementation","timeout_ms":600_000,"block":{
             "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),"nodes": {"workflow_start":{"type":"start"},
                 "review":review_node(3_600_000),
@@ -618,7 +643,7 @@ async fn rejection_after_a_write_never_rolls_it_back() {
     let plane = workflow_test_plane(1);
     let workspace = plane.dir.path().join("workspace");
     let (owner, _audit, mut published) = owner(&plane);
-    let context = bash_context(&plane, Some(owner.clone()));
+    let (context, _execution) = bash_context(&plane, Some(owner.clone()));
     let mut child = stage_workflow_child(&plane);
     let definition = serde_json::from_value(json!({"description":"post-write review","timeout_ms":600_000,"block":{
         "input":schema(json!({"changed":{"type":"string"}}), &["changed"]),
@@ -675,7 +700,7 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
     let plane = workflow_test_plane(1);
     let workspace = plane.dir.path().join("workspace");
     let (owner, _audit, mut published) = owner(&plane);
-    let context = bash_context(&plane, Some(owner.clone()));
+    let (context, _execution) = bash_context(&plane, Some(owner.clone()));
     let definition = serde_json::from_value(json!({"description":"parallel review","timeout_ms":600_000,"block":{
         "input":schema(json!({"summary":{"type":"string"}}), &["summary"]),
         "nodes": {

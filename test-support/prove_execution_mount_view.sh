@@ -6,10 +6,10 @@
 # It exports RUSTX_MOUNT_VIEW_PROOF=1, runs the two opt-in App Server
 # and Client proofs, and repeats the Agent tool-plane test with isolation:
 #
-#  - `range_read_from_private_mount_view` spawns the real
+#  - `filesystem_operations_use_the_private_mount_view` spawns the real
 #    rustx-execution-client under
 #
-#      bwrap --ro-bind / / --ro-bind <physical_dir> <workspace> --
+#      bwrap --ro-bind / / --bind <physical_dir> <workspace> --
 #
 #    so the same absolute workspace path resolves to a different physical
 #    directory inside the client's mount namespace than the server sees;
@@ -60,7 +60,7 @@ python3 test-support/prepare_native_tests.py -- \
     cargo test --all-features --locked --no-run --lib --test process
 export RUSTX_MOUNT_VIEW_PROOF=1
 cargo test -p rustx-execution-client --locked \
-    --test bootstrap range_read_from_private_mount_view \
+    --test bootstrap filesystem_operations_use_the_private_mount_view \
     -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked \
     --test process app_server::explicit_composition_reads_from_client_mount_namespace \

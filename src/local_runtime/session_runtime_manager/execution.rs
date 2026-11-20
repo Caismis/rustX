@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use rustx_execution_protocol::{
     Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, FileStamp, Generation,
-    MAX_DATA_RECORDS_PER_CONNECTION, Reject, is_normalized_absolute_path,
+    MAX_DATA_RECORDS_PER_CONNECTION, Reject, TreeMutation, is_normalized_absolute_path,
     transport::{LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -565,6 +565,30 @@ impl LocalExecutionEndpoint {
             connection
                 .write_file(&relative, bytes, expected_revision, authorize)
                 .map(project_stamp)
+        })
+    }
+
+    pub(crate) fn mutate_tree(
+        &self,
+        mut mutation: TreeMutation,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.with_connection(None, false, |connection| {
+            let workspace = &connection.admission().workspace;
+            match &mut mutation {
+                TreeMutation::CreateDirectory { path, .. } | TreeMutation::Remove { path, .. } => {
+                    *path = workspace_relative(workspace, path)?;
+                }
+                TreeMutation::Copy {
+                    source,
+                    destination,
+                    ..
+                } => {
+                    *source = workspace_entry(workspace, source)?;
+                    *destination = workspace_relative(workspace, destination)?;
+                }
+            }
+            connection.mutate_tree(mutation, authorize)
         })
     }
 

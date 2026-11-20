@@ -436,6 +436,8 @@ pub enum Capability {
     /// following the leaf, and bounded directory paging, under the
     /// binding workspace.
     DirectoryMetadata,
+    /// Descriptor-relative directory creation, tree removal and tree copy.
+    TreeMutations,
     /// The implemented conditional write: one staged `PrepareWrite` plus a
     /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
     /// private commit kernel under the binding workspace.
@@ -972,6 +974,26 @@ pub struct ControlTurn {
     pub request: Option<ControlRequest>,
 }
 
+/// A filesystem mutation with all paths relative to one admitted workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum TreeMutation {
+    /// Create a directory and optionally its missing ancestors.
+    CreateDirectory { path: PathBuf, recursive: bool },
+    /// Remove an entry. Force permits a missing entry.
+    Remove {
+        path: PathBuf,
+        recursive: bool,
+        force: bool,
+    },
+    /// Copy a file or directory without overwriting an existing entry.
+    Copy {
+        source: PathBuf,
+        destination: PathBuf,
+        recursive: bool,
+    },
+}
+
 /// The Server's one typed request on a live execution connection.
 ///
 /// The Server is the only initiator; the Client answers every request with
@@ -1039,6 +1061,8 @@ pub enum ClientRequest {
         /// The revision the directory must still hold, when checked.
         expected_revision: Option<String>,
     },
+    /// A bounded mutation beneath the admitted workspace.
+    MutateTree(TreeMutation),
     /// First phase of one conditional write: retain the exact named target
     /// under the binding workspace, verify the expected original, and stage
     /// the payload privately. Nothing named by `relative_path` mutates until
@@ -1296,6 +1320,10 @@ pub enum ClientReply {
         /// The index the next page starts at, absent at the end.
         next_offset: Option<u32>,
     },
+    /// The requested tree mutation finished.
+    TreeMutated,
+    /// A change crossed and the tree operation could not settle successfully.
+    TreeOutcomeUnknown,
     /// The verified logical-text page the Client physically scanned.
     Lines {
         /// The source-descriptor stamp of the file the page came from.

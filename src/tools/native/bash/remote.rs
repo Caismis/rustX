@@ -428,6 +428,11 @@ impl RemoteBash {
         capture: &crate::tools::output::BoundedStdoutCapture,
         snapshot: &SettledSnapshot,
     ) -> io::Result<()> {
+        if snapshot.disposition == SettledDisposition::Known
+            && capture.finish_if_overflowed(snapshot.stdout_total.get())
+        {
+            return Ok(());
+        }
         let mut cursor = 0;
         let mut stdout = 0;
         while cursor < snapshot.final_sequence.get() {

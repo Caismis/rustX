@@ -216,34 +216,6 @@ pub async fn prepare_now(root: &Path) {
     owner::global().prepare(canonical).await;
 }
 
-#[cfg(test)]
-pub(crate) fn publish_ready_for_test(root: &Path) {
-    let root = std::fs::canonicalize(root).expect("workspace");
-    let target = root.join(".venv");
-    let bin = target.join("bin");
-    assert!(
-        bin.join("python3").exists(),
-        "a test-ready environment needs python3"
-    );
-    let guard = guard::ensure_guard("Workspace Python is no longer available")
-        .or_else(guard::fallback_guard)
-        .expect("python guard");
-    owner::global()
-        .records
-        .lock()
-        .expect("workspace python records")
-        .insert(
-            root.clone(),
-            Record::Ready {
-                generation: owner::generation_of(&root),
-                bin,
-                virtual_env: target,
-                guard,
-                fixed: None,
-            },
-        );
-}
-
 pub(crate) async fn shutdown() {
     owner::global().stop().await;
 }

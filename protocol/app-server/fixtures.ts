@@ -5096,6 +5096,7 @@ export const fixtures = [
     "id": "environment-8",
     "method": "fs/createDirectory",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/new",
       "recursive": true
     }
@@ -5105,6 +5106,7 @@ export const fixtures = [
     "id": "environment-9",
     "method": "fs/copy",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "sourcePath": "/workspace/file",
       "destinationPath": "/workspace/copy",
       "recursive": false
@@ -5115,6 +5117,7 @@ export const fixtures = [
     "id": "environment-10",
     "method": "fs/remove",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file",
       "recursive": false,
       "force": false

@@ -37,11 +37,6 @@ impl PackageDirectory {
         self.inner.verify()
     }
 
-    /// Detect a physical descendant, including case aliases on native filesystems.
-    pub(crate) fn contains(&self, file: &File) -> std::io::Result<bool> {
-        self.inner.contains(file)
-    }
-
     pub(crate) fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
         self.inner.child(name).map(|inner| Self { inner })
     }
@@ -62,25 +57,6 @@ impl PackageDirectory {
     /// the shared no-follow descent.
     pub(crate) fn descend(&self, relative: &Path) -> std::io::Result<Self> {
         self.inner.descend(relative).map(|inner| Self { inner })
-    }
-
-    /// Retains `leaf` under this directory as a mutation target — the
-    /// shared commit kernel. The target owns a duplicate of this verified
-    /// directory descriptor; the caller's handle is unchanged.
-    pub(crate) fn prepare_write(
-        &self,
-        leaf: &std::ffi::OsStr,
-        expected: Option<&str>,
-    ) -> std::io::Result<rustx_confined_fs::WriteTarget> {
-        rustx_confined_fs::WriteTarget::prepare(
-            self.inner.child(std::ffi::OsStr::new("."))?,
-            leaf,
-            Vec::new(),
-            match expected {
-                Some(revision) => rustx_confined_fs::Expectation::Revision(revision),
-                None => rustx_confined_fs::Expectation::Absent,
-            },
-        )
     }
 
     /// Metadata of `relative` inside this directory — the shared

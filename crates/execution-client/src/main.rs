@@ -56,6 +56,7 @@ mod mutation;
 mod process;
 mod search;
 mod terminal;
+mod tree;
 
 // The document decoder's policy constants and the wire's must be the
 // same values — the decoder crate cannot depend on the protocol crate,
@@ -193,6 +194,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::Connection,
             Capability::ReadRange,
             Capability::DirectoryMetadata,
+            Capability::TreeMutations,
             Capability::ConditionalWrite,
             Capability::ConditionalEdit,
             Capability::ReadLines,
@@ -238,7 +240,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
         data_shutdown,
         operations.clone(),
     );
-    let result = serve(&mut channel, &root, arbitration, &operations);
+    let result = serve(&mut channel, &root, &arbitration, &operations);
     // Teardown: stop the worker first so its lane ends cleanly, then
     // shut the data lane — never exit with a lane still live.
     control.stop();
@@ -599,13 +601,13 @@ fn save_unavailable() -> ClientReply {
 fn serve(
     channel: &mut RecordChannel,
     root: &PackageDirectory,
-    arbitration: std::sync::Arc<mutation::Arbitration>,
+    arbitration: &std::sync::Arc<mutation::Arbitration>,
     operations: &std::sync::Arc<process::Operations>,
 ) -> Result<(), String> {
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
     // private stage — when the owner is dropped at EOF or revoke.
-    let mut writes = mutation::Writes::new(arbitration);
+    let mut writes = mutation::Writes::new(arbitration.clone());
     loop {
         let Some(request) = channel
             .receive_optional::<ClientRequest>(None)
@@ -674,6 +676,7 @@ fn serve(
                 expected_revision.as_deref(),
             ),
             ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
+            ClientRequest::MutateTree(request) => tree::mutate(root, arbitration, &request),
             ClientRequest::ReadDirectory {
                 relative_path,
                 offset,

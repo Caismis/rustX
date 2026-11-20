@@ -1008,15 +1008,19 @@ pub fn tool_runtime_with_store_and_execution(
     store: Option<Arc<dyn ConversationStore>>,
 ) -> ToolRuntimeFixture {
     let mut fixture = tool_runtime_with_store(conversation_id, store.clone());
-    let execution =
-        session_execution::ExecutionFixture::new(&fixture.storage_root().join("workspace"));
+    let workspace = fixture
+        .storage_root()
+        .join("workspace")
+        .canonicalize()
+        .unwrap();
+    let execution = session_execution::ExecutionFixture::new(&workspace);
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         fixture.runtime.conversation_id().clone(),
         rustx::tools::runtime::ConversationRuntimeConfig {
             durable_binding: store.map(rustx::durable::ConversationStoreBinding::new),
             execution_scope: Some(execution.scope.clone()),
             ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                fixture.storage_root().join("workspace"),
+                workspace,
                 fixture.storage_root().join("artifacts"),
             )
         },
@@ -1180,10 +1184,8 @@ pub fn native_fixture_with_extensions(
 /// endpoint, and an admitted staged `rustx-execution-client` child — the
 /// exact production route a Session-loaded conversation composes.
 ///
-/// Native Read has no Server-local filesystem branch, so any fixture that
-/// must serve `read` calls binds this route; fixtures that never dispatch
-/// `read` stay unbound (and honestly unavailable) via
-/// [`native_fixture`].
+/// Fixtures that exercise Session-bound filesystem tools or native Bash
+/// use this route. Other tool tests can compose with [`native_fixture`].
 #[must_use]
 pub fn native_fixture_with_execution(environment: Vec<(String, String)>) -> NativeFixture {
     native_fixture_inner(
@@ -1195,7 +1197,7 @@ pub fn native_fixture_with_execution(environment: Vec<(String, String)>) -> Nati
     )
 }
 
-fn native_fixture_inner(
+pub(crate) fn native_fixture_inner(
     environment: Vec<(String, String)>,
     policies: rustx::tools::native::NativeToolPolicies,
     extensions: &rustx::extensions::NativeAgentExtensions,

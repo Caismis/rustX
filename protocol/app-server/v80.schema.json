@@ -35073,6 +35073,9 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "path": {
                   "type": "string"
                 },
@@ -35082,6 +35085,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "path",
                 "recursive"
               ]
@@ -35102,6 +35106,9 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "path": {
                   "type": "string"
                 },
@@ -35114,6 +35121,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "path",
                 "recursive",
                 "force"
@@ -35135,6 +35143,9 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "sourcePath": {
                   "type": "string"
                 },
@@ -35147,6 +35158,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "sourcePath",
                 "destinationPath",
                 "recursive"

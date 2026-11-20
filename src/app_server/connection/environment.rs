@@ -3,12 +3,14 @@ use super::AppServerConnection;
 use crate::app_server::protocol::{ErrorData, Method, MethodResult, RpcError};
 use crate::app_server::rpc_error::domain;
 use base64::Engine as _;
+use rustx_execution_protocol::TreeMutation;
+
+type ExecutionEndpoint = crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint;
 
 pub(in crate::app_server) fn error(error: std::io::Error) -> RpcError {
     let kind = error.kind();
     if let Some(inner) = error.into_inner()
-        && (inner.is::<crate::local_runtime::environment::files::CommitUnknown>()
-            || inner.is::<rustx_execution_server::WriteOutcomeUnknown>())
+        && inner.is::<rustx_execution_server::WriteOutcomeUnknown>()
     {
         return domain(ErrorData::OutcomeUnknown);
     }
@@ -36,11 +38,7 @@ impl AppServerConnection {
         &self,
         session_id: crate::local_runtime::session::SessionId,
         owner: crate::app_server::host::ServerOperation,
-        query: impl FnOnce(
-            &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
-        ) -> std::io::Result<MethodResult>
-        + Send
-        + 'static,
+        query: impl FnOnce(&ExecutionEndpoint) -> std::io::Result<MethodResult> + Send + 'static,
     ) -> Result<MethodResult, RpcError> {
         let manager = self.host.manager().clone();
         let closed = self.service_events.closed.clone();
@@ -234,116 +232,140 @@ impl AppServerConnection {
                 if bytes.len() > rustx_execution_protocol::MAX_RAW_CHUNK_BYTES {
                     return Err(domain(ErrorData::InvalidParams));
                 }
-                let manager = self.host.manager().clone();
-                let closed = self.service_events.closed.clone();
-                // Detached blocking work retains admission through the
-                // physical commit. Dropping a transport waiter cannot
-                // free its capacity.
-                tokio::task::spawn_blocking(move || {
-                    let _owner = owner;
-                    if closed.is_cancelled() {
-                        return Err(domain(ErrorData::ConnectionClosed));
-                    }
-                    // Non-creating lookup: no endpoint means no admitted
-                    // Client — absence is unavailability, never a
-                    // fallback to Server-local file I/O.
-                    let endpoint = manager
-                        .execution_endpoint(&session_id)
-                        .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
-                    // Logical authorization only: the admitted workspace
-                    // must sit under a configured root, checked before the
-                    // prepare and again inside the commit gate.
-                    let authorized = || {
-                        manager
-                            .process_policy()
-                            .environment_roots
-                            .iter()
-                            .any(|root| endpoint.workspace().starts_with(root))
-                    };
-                    if !authorized() {
-                        return Err(domain(ErrorData::EnvironmentUnauthorized));
-                    }
-                    let metadata = endpoint
+                self.execution_file_mutation(session_id, owner, move |endpoint, authorize| {
+                    endpoint
                         .write_file(
                             std::path::Path::new(&path),
                             &bytes,
                             expected_revision.as_deref(),
-                            |_| {
-                                // The last caller gate, invoked on the
-                                // retained prepared original immediately
-                                // before the commit frame is written:
-                                // the same grant must still cover the
-                                // admitted workspace and the caller must
-                                // still be connected.
-                                if !authorized() {
-                                    return Err(std::io::Error::new(
-                                        std::io::ErrorKind::PermissionDenied,
-                                        "environment root unauthorized",
-                                    ));
-                                }
-                                if closed.is_cancelled() {
-                                    return Err(std::io::Error::new(
-                                        std::io::ErrorKind::ConnectionAborted,
-                                        "connection closed",
-                                    ));
-                                }
-                                Ok(())
-                            },
+                            |_| authorize(),
                         )
-                        .map_err(|io| match io.kind() {
-                            std::io::ErrorKind::NotConnected | std::io::ErrorKind::BrokenPipe => {
-                                domain(ErrorData::ExecutionUnavailable)
-                            }
-                            std::io::ErrorKind::WouldBlock => {
-                                domain(ErrorData::EnvironmentCapacityOrConflict)
-                            }
-                            std::io::ErrorKind::ConnectionAborted => {
-                                domain(ErrorData::ConnectionClosed)
-                            }
-                            _ => error(io),
-                        })?;
-                    // A known-successful write is durable: it is never
-                    // reported as cancelled or rolled back past this point.
-                    Ok(MethodResult::FileMetadata { metadata })
+                        .map(|metadata| MethodResult::FileMetadata { metadata })
                 })
                 .await
-                .map_err(|_| domain(ErrorData::OutcomeUnknown))?
             }
-            method => {
-                let environment = self.host.manager().environment.clone();
-                let closed = self.service_events.closed.clone();
-                // Detached blocking work retains admission through the physical
-                // commit. Dropping a transport waiter cannot free its capacity.
-                tokio::task::spawn_blocking(move || {
-                    let _owner = owner;
-                    if closed.is_cancelled() {
-                        return Err(domain(ErrorData::ConnectionClosed));
-                    }
-                    match method {
-                        Method::FsCreateDirectory { path, recursive } => environment
-                            .create_directory(&path, recursive)
-                            .map(|()| MethodResult::EnvironmentAccepted {}),
-                        Method::FsRemove {
-                            path,
-                            recursive,
-                            force,
-                        } => environment
-                            .remove(&path, recursive, force)
-                            .map(|()| MethodResult::EnvironmentAccepted {}),
-                        Method::FsCopy {
-                            source_path,
-                            destination_path,
-                            recursive,
-                        } => environment
-                            .copy(&source_path, &destination_path, recursive)
-                            .map(|()| MethodResult::EnvironmentAccepted {}),
-                        _ => return Err(domain(ErrorData::InvalidParams)),
-                    }
-                    .map_err(error)
-                })
+            Method::FsCreateDirectory {
+                session_id,
+                path,
+                recursive,
+            } => {
+                self.execution_tree_mutation(
+                    session_id,
+                    owner,
+                    TreeMutation::CreateDirectory {
+                        path: path.into(),
+                        recursive,
+                    },
+                )
                 .await
-                .map_err(|_| domain(ErrorData::OutcomeUnknown))?
             }
+            Method::FsRemove {
+                session_id,
+                path,
+                recursive,
+                force,
+            } => {
+                self.execution_tree_mutation(
+                    session_id,
+                    owner,
+                    TreeMutation::Remove {
+                        path: path.into(),
+                        recursive,
+                        force,
+                    },
+                )
+                .await
+            }
+            Method::FsCopy {
+                session_id,
+                source_path,
+                destination_path,
+                recursive,
+            } => {
+                self.execution_tree_mutation(
+                    session_id,
+                    owner,
+                    TreeMutation::Copy {
+                        source: source_path.into(),
+                        destination: destination_path.into(),
+                        recursive,
+                    },
+                )
+                .await
+            }
+            _ => Err(domain(ErrorData::InvalidParams)),
         }
+    }
+
+    async fn execution_tree_mutation(
+        &self,
+        session_id: crate::local_runtime::session::SessionId,
+        owner: crate::app_server::host::ServerOperation,
+        mutation: TreeMutation,
+    ) -> Result<MethodResult, RpcError> {
+        self.execution_file_mutation(session_id, owner, move |endpoint, authorize| {
+            endpoint.mutate_tree(mutation, authorize)?;
+            Ok(MethodResult::EnvironmentAccepted {})
+        })
+        .await
+    }
+
+    async fn execution_file_mutation(
+        &self,
+        session_id: crate::local_runtime::session::SessionId,
+        owner: crate::app_server::host::ServerOperation,
+        dispatch: impl FnOnce(
+            &ExecutionEndpoint,
+            &dyn Fn() -> std::io::Result<()>,
+        ) -> std::io::Result<MethodResult>
+        + Send
+        + 'static,
+    ) -> Result<MethodResult, RpcError> {
+        use std::io::{Error, ErrorKind};
+        let manager = self.host.manager().clone();
+        let closed = self.service_events.closed.clone();
+        // Retain App Server admission until the physical receipt or an
+        // uncertain outcome, even if the UI drops its response waiter.
+        tokio::task::spawn_blocking(move || {
+            let _owner = owner;
+            if closed.is_cancelled() {
+                return Err(domain(ErrorData::ConnectionClosed));
+            }
+            let endpoint = manager
+                .execution_endpoint(&session_id)
+                .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+            let authorize = || {
+                if !manager
+                    .process_policy()
+                    .environment_roots
+                    .iter()
+                    .any(|root| endpoint.workspace().starts_with(root))
+                {
+                    return Err(Error::new(
+                        ErrorKind::PermissionDenied,
+                        "environment root unauthorized",
+                    ));
+                }
+                if closed.is_cancelled() {
+                    return Err(Error::new(
+                        ErrorKind::ConnectionAborted,
+                        "connection closed",
+                    ));
+                }
+                Ok(())
+            };
+            let map_error = |source: Error| match source.kind() {
+                ErrorKind::NotConnected | ErrorKind::BrokenPipe => {
+                    domain(ErrorData::ExecutionUnavailable)
+                }
+                ErrorKind::WouldBlock => domain(ErrorData::EnvironmentCapacityOrConflict),
+                ErrorKind::ConnectionAborted => domain(ErrorData::ConnectionClosed),
+                _ => error(source),
+            };
+            authorize().map_err(map_error)?;
+            dispatch(&endpoint, &authorize).map_err(map_error)
+        })
+        .await
+        .map_err(|_| domain(ErrorData::OutcomeUnknown))?
     }
 }

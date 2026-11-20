@@ -5,6 +5,7 @@ use base64::Engine as _;
 use std::path::Path;
 use std::sync::Arc;
 pub(crate) mod concurrency;
+pub(crate) mod detach;
 pub(crate) mod review;
 
 fn parameters(fixture: &Fixture, command: &[&str]) -> ExecParams {
@@ -938,12 +939,23 @@ pub(crate) async fn filesystem_scenario() {
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
-    // fs/readFile dispatches through Session A's admitted Execution
-    // Client; the child stays owned until it is reaped at the end.
-    let mut execution = fixture.start_execution(0).await;
     let session_id = fixture.sessions[0].id.clone();
-    // Workspace[1]'s listings dispatch through Session B's own admitted
-    // Client — both children stay owned until they are reaped at the end.
+    let unbound = fixture.workspaces[0].join("unbound");
+    assert_eq!(
+        rejected(
+            &connection,
+            20,
+            Method::FsCreateDirectory {
+                session_id: session_id.clone(),
+                path: unbound.display().to_string(),
+                recursive: true,
+            },
+        )
+        .await,
+        ErrorData::ExecutionUnavailable
+    );
+    assert!(!unbound.exists());
+    let mut execution = fixture.start_execution(0).await;
     let mut execution_b = fixture.start_execution(1).await;
     let session_b = fixture.sessions[1].id.clone();
     let path = fixture.workspaces[0].join("document").display().to_string();
@@ -1046,11 +1058,12 @@ pub(crate) async fn filesystem_scenario() {
             .is_err()
         );
     }
-    let directory = fixture.workspaces[1].join("copy").display().to_string();
+    let directory = fixture.workspaces[0].join("copy").display().to_string();
     call(
         &connection,
         8,
         Method::FsCreateDirectory {
+            session_id: session_id.clone(),
             path: directory.clone(),
             recursive: true,
         },
@@ -1060,6 +1073,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         9,
         Method::FsCopy {
+            session_id: session_id.clone(),
             source_path: path,
             destination_path: format!("{directory}/copy"),
             recursive: false,
@@ -1074,7 +1088,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         10,
         Method::FsReadDirectory {
-            session_id: session_b.clone(),
+            session_id: session_id.clone(),
             path: directory.clone(),
             offset: 0,
             limit: 16,
@@ -1087,26 +1101,40 @@ pub(crate) async fn filesystem_scenario() {
     };
     assert_eq!(page.entries.len(), 1);
     let copied_root = fixture.workspaces[0].join("copied-root");
+    assert_eq!(
+        rejected(
+            &connection,
+            15,
+            Method::FsCopy {
+                session_id: session_b,
+                source_path: directory.clone(),
+                destination_path: fixture.workspaces[1].join("denied").display().to_string(),
+                recursive: true,
+            },
+        )
+        .await,
+        ErrorData::EnvironmentUnauthorized
+    );
+    assert!(!fixture.workspaces[1].join("denied").exists());
     call(
         &connection,
-        15,
+        16,
         Method::FsCopy {
-            source_path: fixture.workspaces[1].display().to_string(),
+            session_id: session_id.clone(),
+            source_path: directory.clone(),
             destination_path: copied_root.display().to_string(),
             recursive: true,
         },
     )
     .await;
-    assert_eq!(
-        std::fs::read(copied_root.join("copy/copy")).unwrap(),
-        b"after"
-    );
+    assert_eq!(std::fs::read(copied_root.join("copy")).unwrap(), b"after");
     let inside = format!("{directory}/recursive-cycle");
     assert_eq!(
         rejected(
             &connection,
-            16,
+            19,
             Method::FsCopy {
+                session_id: session_id.clone(),
                 source_path: directory.clone(),
                 destination_path: inside.clone(),
                 recursive: true
@@ -1120,6 +1148,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         17,
         Method::FsRemove {
+            session_id: session_id.clone(),
             path: copied_root.display().to_string(),
             recursive: true,
             force: false,
@@ -1130,6 +1159,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         18,
         Method::FsRemove {
+            session_id: session_id.clone(),
             path: copied_root.display().to_string(),
             recursive: true,
             force: true,
@@ -1164,8 +1194,22 @@ pub(crate) async fn filesystem_scenario() {
     .await;
     call(
         &connection,
+        21,
+        Method::FsRemove {
+            session_id: session_id.clone(),
+            path: fixture.workspaces[0].join("link").display().to_string(),
+            recursive: true,
+            force: false,
+        },
+    )
+    .await;
+    assert!(!fixture.workspaces[0].join("link").is_symlink());
+    assert_eq!(std::fs::read(outside).unwrap(), b"private");
+    call(
+        &connection,
         13,
         Method::FsRemove {
+            session_id: session_id.clone(),
             path: directory.clone(),
             recursive: true,
             force: false,

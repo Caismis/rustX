@@ -119,6 +119,7 @@ export type Request1 =
   | {
       method: 'fs/createDirectory';
       params: {
+        sessionId: SessionId;
         path: string;
         recursive: boolean;
       };
@@ -126,6 +127,7 @@ export type Request1 =
   | {
       method: 'fs/remove';
       params: {
+        sessionId: SessionId;
         path: string;
         recursive: boolean;
         force: boolean;
@@ -134,6 +136,7 @@ export type Request1 =
   | {
       method: 'fs/copy';
       params: {
+        sessionId: SessionId;
         sourcePath: string;
         destinationPath: string;
         recursive: boolean;

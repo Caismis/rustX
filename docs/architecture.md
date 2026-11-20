@@ -7800,10 +7800,12 @@ loaded visit.
 
 ## Execution Client boundary (Issue #576)
 
-The Agent stays the canonical authority; physical workspace I/O moves behind a
-separate local process boundary, one layer at a time. See the
-[execution-protocol ADR](execution-protocol.md) for the wire contract and
-current layer status.
+The Server owns authorization, the Agent Loop, Session identity and canonical
+results. The Execution Client owns the migrated physical operations in its
+Workspace view. Server admission, Client START or file publication, and
+canonical ToolResult commit are separate events. A missing Client receipt
+leaves the physical outcome unknown. See the [execution-protocol ADR](execution-protocol.md)
+and [EXEC-01 evidence ledger](exec-01-evidence.md).
 
 - `rustx-execution-protocol` owns the typed records, bounded length-prefixed
   framing, the `DeadlineStream` absolute-deadline wrapper shared by the
@@ -7813,7 +7815,8 @@ current layer status.
 - `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
   and typed request dispatch (`Ping`, `ReadRange`, `GetMetadata`,
-  `ReadDirectory`, `ReadLines`, `ReadDocument`, and the
+  `ReadDirectory`, `ReadLines`, `ReadDocument`, `MutateTree`, supervised process
+  commands and the
   `PrepareWrite`/`CommitWrite`/`AbortWrite`
   conditional-write sequence). Binding uniqueness is per
   `Binding`, not per `Session`: each binding admits at most one live
@@ -7827,8 +7830,8 @@ current layer status.
   together, prepared exactly once on a blocking task, and fenced on
   Session delete and process drain. The endpoint's typed surface —
   `admit_local_stream` and serialized `read_range`, `entry_metadata`,
-  `directory_page`, `read_lines`, `read_document`, `write_file`, and
-  `edit_file` exchanges (busy
+  `directory_page`, `read_lines`, `read_document`, `write_file`,
+  `edit_file`, `mutate_tree` and process exchanges (busy
   refusal, lexical workspace
   gate, binding live-check at send time) — is the Session's live
   dispatch owner. The claim is not reachable through
@@ -7837,18 +7840,16 @@ current layer status.
   explicit composer: it claims the endpoint, launches the trusted sibling
   Client (empty environment, sealed stdio, killed-and-reaped on failure
   and at drain) and admits it before transport readiness; bare mode
-  still launches nothing. `fs/readFile`, `fs/getMetadata`,
-  `fs/readDirectory`, and `fs/writeFile` are routed through the
-  endpoint's serialized
-  exchanges (with `sessionId` on the wire and `ExecutionUnavailable`
-  for an uncomposed Session); the remaining filesystem methods stay on
-  their prior paths until their own migrations land.
+  launches no Client. `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
+  `fs/writeFile`, `fs/createDirectory`, `fs/remove` and `fs/copy` require
+  `sessionId` and route through the endpoint. An uncomposed Session returns
+  `ExecutionUnavailable`. The remaining Server-side watcher still uses
+  configured root descriptors.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
-  Its production workspace dependencies are the protocol,
-  `rustx-confined-fs`, and `rustx-document-reader` — never on the root
-  crate, canonical store, or model types (the server appears only as a test
-  dev-dependency). Its `--workspace` is local launch policy checked byte for
+  It uses the protocol, transport, confined filesystem, document decoder,
+  text editor and process supervisor crates. Server appears only as a test
+  dependency. Its `--workspace` is local launch policy checked byte for
   byte against the bootstrap record; the server cannot redirect it.
 - `rustx-confined-fs` holds the proven descriptor-relative primitives factored
   out of the root package I/O — `PackageDirectory`, `FileMetadata`,
@@ -7872,7 +7873,7 @@ current layer status.
   acquisition, and parser-only xberg decode factored out of the native
   Read tool. The root tool and the client both depend on it for exactly
   one parser policy; it depends on neither side.
-- The boundary currently serves eight physical operations: bounded,
+- The boundary serves bounded,
   revision-checked range reads, entry metadata, bounded directory
   pages, the two-phase conditional write, the conditional edit
   (`PrepareEdit` — a retained-descriptor source read plus the shared

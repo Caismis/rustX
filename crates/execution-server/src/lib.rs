@@ -31,7 +31,7 @@ use rustx_execution_protocol::{
     MAX_RAW_CHUNK_BYTES, MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES,
     MAX_TEXT_LINES, MAX_WRITE_BYTES, PROTOCOL_VERSION, PageEntry, PairingNonce, PeerHello,
     ProcessCancelDisposition, ReadError, Reject, SearchSpec, SessionId, TextReplacement,
-    WriteExpectation, is_normalized_absolute_path,
+    TreeMutation, WriteExpectation, is_normalized_absolute_path,
     transport::{
         CONTROL_COMMAND_TIMEOUT, CONTROL_FRAME_TIMEOUT, MAX_CONTROL_COMMANDS, PAGE_REQUEST_TIMEOUT,
         encode_record, write_record,
@@ -2246,6 +2246,44 @@ impl LocalConnection {
             next_offset: (*next_offset).map(DecimalU64::get),
             metadata: metadata.clone(),
         })
+    }
+
+    /// Run one bounded tree mutation, subject to the final pre-wire authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a clean error when the capability is missing, authorization fails,
+    /// or the Client proves no named change. After admission, a transport failure
+    /// or an uncertain reply returns [`WriteOutcomeUnknown`].
+    pub fn mutate_tree(
+        &mut self,
+        mutation: TreeMutation,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        if !self.capabilities.contains(&Capability::TreeMutations) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no tree mutation capability",
+            ));
+        }
+        let admitted = std::cell::Cell::new(false);
+        let reply = self.exchange_admitted(
+            &ClientRequest::MutateTree(mutation),
+            Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            || {
+                authorize()?;
+                admitted.set(true);
+                Ok(())
+            },
+            || (),
+        );
+        match reply {
+            Ok(ClientReply::TreeMutated) => Ok(()),
+            Ok(ClientReply::Error { kind }) => Err(read_error(kind)),
+            Ok(_) => Err(self.retire(io::Error::other(WriteOutcomeUnknown))),
+            Err(_) if admitted.get() => Err(io::Error::other(WriteOutcomeUnknown)),
+            Err(error) => Err(error),
+        }
     }
 
     /// The metadata query: `relative_path` names one entry under the

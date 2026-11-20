@@ -16,7 +16,7 @@ use rustx_execution_protocol::transport::{read_record, write_record};
 use rustx_execution_protocol::{
     BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply, ClientRequest,
     DataHelloReply, EditRefusal, EntryKind, EnvironmentId, Generation, LineEnd,
-    MAX_EDIT_FILE_BYTES, PeerHello, Reject, SessionId, TextReplacement,
+    MAX_EDIT_FILE_BYTES, PeerHello, Reject, SessionId, TextReplacement, TreeMutation,
 };
 use rustx_execution_server::{Binding, BindingPhase, RefusedEdit, Reservation};
 
@@ -1010,7 +1010,7 @@ fn a_foreign_protocol_version_never_connects() {
     assert_never_connected(&rig);
 }
 
-/// T02 proof fragment: one absolute workspace path is read through a
+/// T02 proof fragment: data is read and tree mutations cross through a
 /// physically distinct mount view. Opt-in manual evidence only — run
 /// `test-support/prove_execution_mount_view.sh`, which requires Linux and
 /// bubblewrap and exports `RUSTX_MOUNT_VIEW_PROOF`. Running it any other way
@@ -1018,7 +1018,8 @@ fn a_foreign_protocol_version_never_connects() {
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
-fn range_read_from_private_mount_view() {
+#[allow(clippy::too_many_lines)] // One real namespace owns every asserted side effect.
+fn filesystem_operations_use_the_private_mount_view() {
     assert!(
         std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some(),
         "opt-in proof only: run test-support/prove_execution_mount_view.sh"
@@ -1038,6 +1039,7 @@ fn range_read_from_private_mount_view() {
     let rig = rig_with(BTreeSet::from([
         Capability::Connection,
         Capability::ReadRange,
+        Capability::TreeMutations,
     ]));
     // The marker lives only in the physical directory that the client's
     // private mount view substitutes for the workspace path.
@@ -1045,7 +1047,7 @@ fn range_read_from_private_mount_view() {
     let marker = b"mount-view-proof-marker";
     fs::write(physical.1.join("marker"), marker).unwrap();
 
-    // `bwrap --ro-bind / / --ro-bind <physical> <workspace> -- <client>`:
+    // `bwrap --ro-bind / / --bind <physical> <workspace> -- <client>`:
     // inside the namespace the same absolute workspace path resolves to a
     // different physical directory than the server sees.
     let mut command = Command::new(bwrap);
@@ -1053,7 +1055,7 @@ fn range_read_from_private_mount_view() {
         .arg("--ro-bind")
         .arg("/")
         .arg("/")
-        .arg("--ro-bind")
+        .arg("--bind")
         .arg(&physical.1)
         .arg(&rig.workspace_path)
         .arg("--")
@@ -1086,13 +1088,104 @@ fn range_read_from_private_mount_view() {
     assert_eq!(range.offset, 0);
     assert_eq!(range.next_offset, None);
 
-    // And after the RPC the server's view is unchanged: nothing was created,
-    // the bytes came from the private mount, not from server filesystem I/O.
+    let create = TreeMutation::CreateDirectory {
+        path: "new/nested".into(),
+        recursive: true,
+    };
+    let denied = connection
+        .mutate_tree(create.clone(), || {
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        })
+        .unwrap_err();
+    assert_eq!(denied.kind(), io::ErrorKind::Interrupted);
+    assert!(!physical.1.join("new").exists());
+    connection.mutate_tree(create, || Ok(())).unwrap();
+    connection
+        .mutate_tree(
+            TreeMutation::Copy {
+                source: "marker".into(),
+                destination: "new/nested/copied".into(),
+                recursive: false,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        fs::read(physical.1.join("new/nested/copied")).unwrap(),
+        marker
+    );
+    assert!(!rig.workspace_path.join("new").exists());
+
+    // Remove a symlink without following its target. An absent leaf succeeds
+    // under the explicit force contract.
+    std::os::unix::fs::symlink("../../marker", physical.1.join("new/nested/link")).unwrap();
+    let unlink = TreeMutation::Remove {
+        path: "new/nested/link".into(),
+        recursive: true,
+        force: true,
+    };
+    connection.mutate_tree(unlink.clone(), || Ok(())).unwrap();
+    assert!(!physical.1.join("new/nested/link").is_symlink());
+    connection.mutate_tree(unlink, || Ok(())).unwrap();
+    connection
+        .mutate_tree(
+            TreeMutation::Remove {
+                path: "new".into(),
+                recursive: true,
+                force: false,
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(!physical.1.join("new").exists());
+    assert_eq!(fs::read(physical.1.join("marker")).unwrap(), marker);
+
     assert_eq!(
         fs::metadata(&server_marker).unwrap_err().kind(),
         io::ErrorKind::NotFound
     );
 
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn a_partial_tree_copy_is_reported_unknown_and_retires_the_pair() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::TreeMutations,
+    ]));
+    fs::create_dir(rig.workspace_path.join("source")).unwrap();
+    fs::write(rig.workspace_path.join("source/a"), b"committed child").unwrap();
+    std::os::unix::fs::symlink("a", rig.workspace_path.join("source/b")).unwrap();
+    let mut child = spawn_client(&rig);
+    let mut connection = admit_pair(&rig, &mut child);
+    let error = connection
+        .mutate_tree(
+            TreeMutation::Copy {
+                source: "source".into(),
+                destination: "destination".into(),
+                recursive: true,
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .get_ref()
+            .unwrap()
+            .is::<rustx_execution_server::WriteOutcomeUnknown>()
+    );
+    assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
+    assert_eq!(
+        fs::read(rig.workspace_path.join("destination/a")).unwrap(),
+        b"committed child"
+    );
+    assert!(!rig.workspace_path.join("destination/b").is_symlink());
+    assert_eq!(
+        connection.ping().unwrap_err().kind(),
+        io::ErrorKind::BrokenPipe
+    );
     drop(connection);
     expect_success(&mut child);
 }

@@ -217,6 +217,24 @@ impl Arbitration {
         *self.revoked.read().expect("revoke grant")
     }
 
+    pub(crate) fn check_grant(&self) -> std::io::Result<()> {
+        self.with_grant(|| Ok(()))
+    }
+
+    pub(crate) fn with_grant(
+        &self,
+        crossing: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let grant = self.revoked.read().expect("revoke grant");
+        if *grant {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "execution grant revoked",
+            ));
+        }
+        crossing()
+    }
+
     /// Whether the control worker was asked to stop.
     pub(crate) fn worker_stopped(&self) -> bool {
         *self.stopped.lock().expect("worker stop")

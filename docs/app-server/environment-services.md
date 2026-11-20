@@ -150,7 +150,7 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 | `fs/getMetadata` | Native type, size, identity, revision and optional modification time, served by the Session's admitted Execution Client. |
 | `fs/createDirectory` | One directory or bounded path-wise parent creation. |
 | `fs/remove` | File/link unlink or bounded recursive removal; missing handling is explicit. |
-| `fs/copy` | Authorized source/destination; atomic individual files, bounded recursive trees. |
+| `fs/copy` | Source and destination within one Session's Workspace. Individual files publish atomically, and recursive trees are bounded. |
 | `fs/watch`, `fs/unwatch`, `fs/changed` | Connection-local, non-recursive change hints with resync/retirement facts. |
 | `conversation/changes`, `conversation/changeDiff` | Existing native captured file changes and Diff for the exact attached Conversation. |
 
@@ -166,11 +166,11 @@ counts remain safe JSON integers. Use generated types and wire fixtures.
 Read frames carry at most 64 KiB of decoded file data per range, and one
 write's decoded payload is bounded by the same 64 KiB (the encoded length is
 gated before decoding).
-`fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` carry
-`sessionId` and
-dispatch through that Session's admitted Execution Client — a Session with no
-composed Client fails `ExecutionUnavailable`; copy, remove,
-create-directory, and watch remain on the prior environment path. The write
+`fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, `fs/writeFile`,
+`fs/createDirectory`, `fs/remove` and `fs/copy` carry `sessionId` and dispatch
+through that Session's admitted Execution Client. A Session with no composed
+Client fails `ExecutionUnavailable`. Watch operations still use the Server's
+native observer. The write
 commits through a two-phase prepare/commit: the expected revision is verified
 against the retained target at prepare, the environment-root grant and the
 caller's open state are re-checked immediately before the commit frame, and a
@@ -199,8 +199,11 @@ the target. A failure after publication reports unknown outcome and requires a
 read. External OS writers are not covered by a cross-process transaction: a final
 check and rename are not a filesystem-wide compare-and-swap instruction.
 
-Directory/tree operations can be partial on failure. Re-read source and destination
-before deciding the next action; never automatically replay an uncertain mutation.
+Directory and tree operations acquire the Client's generation grant at each
+physical change. If an operation fails after a change, or the Server loses the
+receipt after admission, it returns `OutcomeUnknown` and retires the pair.
+Recursive operations can leave partial changes. A caller must re-read source and
+destination before deciding the next action.
 Commands, Agent tools and file RPCs can share a Workspace under their own native
 owners, without a whole-Workspace lock or transaction guarantee.
 

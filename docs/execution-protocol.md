@@ -65,7 +65,7 @@ and directory-page readers —
   over `rustx-confined-fs`, preserving every existing semantic.
 
 The implemented Client supports authenticated local and WebSocket binding,
-bounded file queries, conditional writes and edits, and supervised process
+bounded file queries and tree mutations, conditional writes and edits, and supervised process
 execution. Its negotiated capabilities name the individual services the
 Client provides. A connection does not grant the reserved umbrella
 `Files`, `Python`, `StdioMcp`, `ContentTransfer`, or `ManagedOutput` capabilities.
@@ -344,7 +344,7 @@ publishes the trusted-channel bundle:
   commit/abort) — never a raw
   message path. Each first consults the capabilities the peer actually
   advertised in its Hello: a connection that never claimed `ReadRange`,
-  `DirectoryMetadata`, `ConditionalWrite`, `ConditionalEdit`,
+  `DirectoryMetadata`, `TreeMutations`, `ConditionalWrite`, `ConditionalEdit`,
   `ReadLines`, or
   `DocumentPages` gets
   `io::ErrorKind::Unsupported` and
@@ -789,7 +789,7 @@ physical Client:
   verification, and `finish()` restoring blocking mode before the client
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
-  capability set `{Connection, ReadRange, DirectoryMetadata,
+  capability set `{Connection, ReadRange, DirectoryMetadata, TreeMutations,
   ConditionalWrite, ConditionalEdit, ReadLines, DocumentPages,
   BoundedSearch}` — the
   operations this build physically implements — constructed by the
@@ -872,6 +872,23 @@ for their own diagnostics, dispatch the typed spec, and project the
 exact pre-migration truncation notices. There is no Server-local
 traversal and no unbound fallback — an unadmitted Session answers
 `Session execution unavailable`.
+
+### Session-bound tree mutations
+
+`TreeMutations` negotiates one `MutateTree` exchange for directory creation,
+removal, and copy. The Server admits the caller and translates both copy
+paths against the same exact Session Workspace. The Client refuses an
+empty mutation target, interior dot components and no-follow traversal
+violations. Recursive operations have a depth bound of 32 and a total
+visit bound of 4,096 entries. Copies stream at most 256 MiB through the
+confined-fs file publication kernel.
+
+Every successful `mkdirat`, `unlinkat` and file publication crosses under
+the Client's generation grant. Revocation fences later changes. Success
+answers `TreeMutated`. An ordinary error means no named change crossed.
+Partial changes or a failed post-publication check answer
+`TreeOutcomeUnknown`. A lost or invalid receipt after admission also
+returns `OutcomeUnknown` to the App Server caller and retires the pair.
 
 ### Authenticated connection is not readiness (frozen)
 
@@ -1317,10 +1334,10 @@ refusal before connect, revoke-before-read denial, tampered-bundle
 capability refusal, admitted-capability gating (a `Connection`-only peer
 gets `Unsupported` without a request), stream retirement on protocol
 violations, and clean-EOF versus truncated-record exit status. On Linux
-the opt-in `range_read_from_private_mount_view` proof reads the marker
-through a `bwrap` private bind mount of the same absolute workspace path
-while the server side proves the marker stays `NotFound` before and
-after the RPC — a read-only T02 fragment. Its product-entrance
+the opt-in `filesystem_operations_use_the_private_mount_view` proof reads the
+marker through a writable `bwrap` private bind mount of the reserved
+Workspace. It then creates, copies, and removes entries in that view.
+The Server's Workspace path remains empty. Its product-entrance
 counterpart, `explicit_composition_reads_from_client_mount_namespace`
 in the `process` target, composes the real App Server pair with a
 test-only sibling launcher that wraps the staged Client in the same

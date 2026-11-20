@@ -1720,15 +1720,24 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             expected_revision: None,
         },
         Method::FsCreateDirectory {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: "/workspace/new".into(),
             recursive: true,
         },
         Method::FsCopy {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             source_path: path.clone(),
             destination_path: "/workspace/copy".into(),
             recursive: false,
         },
         Method::FsRemove {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path,
             recursive: false,
             force: false,

@@ -40,6 +40,18 @@ impl BoundedStdoutCapture {
         self.0.lock().expect("structured stdout capture").complete = true;
     }
 
+    /// Settle an overflow proved by the completed producer's total byte count.
+    pub(crate) fn finish_if_overflowed(&self, total_bytes: u64) -> bool {
+        let mut state = self.0.lock().expect("structured stdout capture");
+        if total_bytes <= state.limit as u64 {
+            return false;
+        }
+        state.bytes.clear();
+        state.overflow = true;
+        state.complete = true;
+        true
+    }
+
     pub(crate) fn take_complete(&self) -> Result<Vec<u8>, &'static str> {
         let mut state = self.0.lock().expect("structured stdout capture");
         if !state.complete {
