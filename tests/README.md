@@ -272,9 +272,10 @@ re-proven there.
 
 Every one of these is platform-sensitive (process groups, signals, unix
 sockets, shell supervision), so the `boundary_suites::` prefix runs in the
-`rust-boundaries` lane. CI is Linux-only. When a change touches a primitive
-that differs across operating systems, run the suite locally on each
-affected platform.
+`rust-boundaries` lane. Scripted boundary suites are compiled on Linux only;
+the macOS lanes cover the platform-sensitive boundary tests natively. When a
+change touches a primitive that differs across operating systems, run the
+suite locally on each affected platform.
 
 ## External integration targets
 

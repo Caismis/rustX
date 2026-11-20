@@ -69,7 +69,7 @@ TEST_PRESERVING = ("added", "modified")
 SURFACES = {
     "documentation": ("*.md", "docs/**", "web-console/*.md", "tui/*.md"),
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
-             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
+             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**", "crates/**"),
     "protocol": ("protocol/**",),
     "web": ("web-console/**", "src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"),
     "tui": ("tui/**",),
@@ -158,9 +158,11 @@ def selected_jobs(profile, surfaces):
 
 
 # Heavy Rust contract groups that FAST runs only for the change's affected
-# components (FULL always runs them), as `<job>:<component>` step keys.
+# components (FULL always runs them), as `<job>:<component>` step keys. The
+# extracted workspace crates' tests (crates/rustx-*, including rustx-durable's
+# SQLite store contracts) are not a component: rust-fast runs every member lib
+# unconditionally minus the `::scale::` capacity suite.
 COMPONENTS = {
-    "rust-fast:durable": ("src/durable/**",),
     "rust-fast:app-server": ("src/app_server/**", "src/local_runtime/**", "tests/scripted/app_server/**",
                              "tests/support/**"),
     "rust-fast:runtime-client": ("src/runtime_client/**",),

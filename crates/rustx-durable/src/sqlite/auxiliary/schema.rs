@@ -4,7 +4,7 @@ use super::{Connection, ConversationStoreError, OptionalExtension, params, stora
 
 pub const AUXILIARY_SCHEMA: &str = concat!(
     "CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx ON events",
-    rustx_types::sql!("observation_kind"),
+    crate::sql!("observation_kind"),
     " WHERE observation_trace_fact_required=1;",
     r"
 CREATE TABLE IF NOT EXISTS request_owners (
@@ -204,7 +204,7 @@ pub const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         columns: &[None],
         definition: concat!(
             "CREATE INDEX events_primary_trace_kind_idx ON events",
-            rustx_types::sql!("observation_kind"),
+            crate::sql!("observation_kind"),
             " WHERE observation_trace_fact_required=1"
         ),
     },

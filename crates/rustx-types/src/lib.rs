@@ -194,11 +194,6 @@ pub mod runtime {
 }
 pub mod durable {
     pub mod canonical;
-    pub mod sqlite {
-        pub mod content_metadata;
-        pub mod event_kind_key;
-        pub mod statements;
-    }
 }
 pub mod scheduler {
     pub mod calendar;

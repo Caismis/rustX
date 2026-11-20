@@ -1,6 +1,6 @@
 //! Borrowed native metadata; payload trees are never copied for display indexes.
-use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
-use crate::runtime::identity::{ToolCallId, ToolId};
+use rustx_types::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
+use rustx_types::runtime::identity::{ToolCallId, ToolId};
 use serde::{Serialize, Serializer, ser::SerializeMap as _};
 pub struct MessageMetadata<'a>(pub &'a MessageBlock);
 impl Serialize for MessageMetadata<'_> {
@@ -32,7 +32,7 @@ impl Serialize for MessageMetadata<'_> {
         map.end()
     }
 }
-struct ResultMetadata<'a>(&'a crate::tools::types::ToolExecutionResult);
+struct ResultMetadata<'a>(&'a rustx_types::tools::types::ToolExecutionResult);
 impl Serialize for ResultMetadata<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let result = self.0;

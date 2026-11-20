@@ -254,7 +254,7 @@ class Planning(unittest.TestCase):
 class AffectedSteps(unittest.TestCase):
     def test_fast_runs_a_heavy_contract_group_only_when_its_component_changed(self):
         steps = v.plan("pull_request", [], modified("src/durable/sqlite.rs", "README.md"))["steps"]
-        self.assertEqual(steps, {"rust-fast:durable": True, "rust-fast:app-server": False,
+        self.assertEqual(steps, {"rust-fast:app-server": False,
                                  "rust-fast:runtime-client": False})
         steps = v.plan("pull_request", [], modified("tests/support/app_server_driver.rs"))["steps"]
         self.assertTrue(steps["rust-fast:app-server"])
@@ -376,6 +376,14 @@ class Gate(unittest.TestCase):
     def test_a_superseded_fast_run_is_not_current_verification(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
         self.assertIn("superseded", v.gate(planned, passing(planned), "old", "new")[0])
+
+    def test_an_extracted_crate_change_selects_the_rust_surface(self):
+        # crates/** feeds the `rust` surface: rust-fast runs every member's
+        # lib tests unconditionally, so a rustx-durable change needs no
+        # component gate to keep its SQLite store contracts exercised.
+        planned = v.plan("pull_request", [], modified("crates/rustx-durable/src/lib.rs"))
+        self.assertIn("rust", planned["surfaces"])
+        self.assertTrue(planned["run"]["rust-fast"])
 
     def test_full_without_macos_full_fails(self):
         planned = v.plan("push", [], [])

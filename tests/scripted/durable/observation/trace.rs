@@ -325,7 +325,7 @@ fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
             .query_row(
                 concat!(
                     "SELECT COUNT(*) FROM events INDEXED BY events_kind_idx WHERE ",
-                    rustx_types::sql!("event_kind"),
+                    rustx_durable::sql!("event_kind"),
                     "=x'0002'",
                     " AND sequence=?1"
                 ),

@@ -1,7 +1,7 @@
 use crate::durable::sqlite::event_kind_key::*;
 use rusqlite::types::Value;
 use rusqlite::{Connection, StatementStatus, params};
-use rustx_types::sql;
+use rustx_durable::sql;
 
 #[test]
 fn sql_and_parameter_keys_preserve_all_kinds_and_disjoint_sql_types() {

@@ -15,7 +15,6 @@ chrono-tz = { version = "0.10", features = ["serde"] }
 referencing = "=0.60.2"
 serde_yaml_ng = "0.10.0"
 tempfile = "3"
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint"] }
 serde = { version = "1", features = ["derive", "rc"] }
 schemars = { version = "1", features = ["chrono04"] }
 strum = { version = "0.27.2", features = ["derive"] }
