@@ -60,6 +60,8 @@ pub(crate) fn configured_child_environment(
 pub(crate) struct ChildPreparation {
     cancellation: crate::runtime::cancellation::CancellationSignal,
     parent_lost: Option<crate::local_runtime::dispatcher::ChildControlHandle>,
+    pub(crate) execution_scope:
+        Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
     // Installed before external preparation can create physical resources.
     capability: std::sync::Mutex<Option<CapabilityCoordinator>>,
 }
@@ -75,6 +77,7 @@ impl ChildPreparation {
             cancellation,
             parent_lost: Some(parent_lost),
             capability: std::sync::Mutex::new(None),
+            execution_scope: None,
         }
     }
 
@@ -86,6 +89,7 @@ impl ChildPreparation {
             cancellation: crate::runtime::cancellation::CancellationSignal::new(),
             parent_lost: None,
             capability: std::sync::Mutex::new(None),
+            execution_scope: None,
         }
     }
 
@@ -644,6 +648,7 @@ impl LocalConversationCore {
                 })?;
             runtime_config.lifecycle = Some(lifecycle);
             runtime_config.environment = Some(base_environment.clone());
+            runtime_config.execution_scope = preparation.execution_scope.clone();
             let durable_store = Arc::new(
                 SqliteConversationStore::open(
                     spec.child_conversation_id.clone(),

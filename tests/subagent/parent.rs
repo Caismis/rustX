@@ -46,6 +46,7 @@ pub(crate) struct ParentBindings {
     pub(crate) runtime_root: PathBuf,
     pub(crate) workspace: PathBuf,
     pub(crate) home: PathBuf,
+    pub(crate) execution: bool,
 }
 
 impl Parent {
@@ -94,6 +95,13 @@ impl Parent {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if bindings.execution {
+            command
+                .arg("--local-execution-session")
+                .arg(session_id.as_str())
+                .arg("--local-execution-workspace")
+                .arg(bindings.workspace.canonicalize().expect("bound Workspace"));
+        }
         for (key, value) in environment {
             command.env(key, value);
         }
@@ -473,6 +481,7 @@ impl ParentBindings {
             config: root.join("rustx.toml"),
             runtime_root: root.join("private"),
             workspace: workspace.to_path_buf(),
+            execution: false,
             home: root.join("host"),
         }
     }

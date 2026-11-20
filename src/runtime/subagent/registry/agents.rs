@@ -849,7 +849,10 @@ impl SubagentRegistry {
                         }
                         // The mutex reservation still owns this exact Agent/activation
                         // and frozen authority. Filesystem I/O stays off that mutex.
-                        super::preparation::validate_execution_workspace(&identity.workspace)?;
+                        super::preparation::validate_execution_workspace(
+                            &identity.workspace,
+                            registry.execution_scope.as_ref(),
+                        )?;
                         if cancellation.is_cancelled() {
                             return Err(SubagentStartError::Cancelled);
                         }

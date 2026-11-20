@@ -4844,6 +4844,7 @@ dependencies = [
  "nix",
  "rustx-execution-protocol",
  "rustx-execution-transport",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",

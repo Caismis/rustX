@@ -115,7 +115,7 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 37 combines frozen Resources authority with Scheduled Workflow and
 /// interaction origins and prepared execution inputs.
 /// Version 38 freezes Skill definitions and live locations; no package file lists.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 39;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 40;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -216,6 +216,8 @@ pub(crate) struct SubagentChildSpec {
     /// parent at creation. The child uses exactly this directory; it never
     /// resolves a default workspace or falls back to its process CWD.
     pub workspace: PathBuf,
+    /// The existing Session admission and the child-side relay descriptors.
+    pub execution: Option<crate::local_runtime::session_runtime_manager::ChildExecutionGrant>,
     /// The name of the already-reserved private incarnation beneath the child's
     /// identity-derived allocation. Never an absolute path or a grouping path.
     pub incarnation: String,
@@ -1196,6 +1198,7 @@ mod tests {
                 keep_recent_tokens: 2,
                 summary_output_cap: None,
             },
+            execution: None,
             workspace: PathBuf::from("/tmp/ws"),
             incarnation: "incarnation-test".to_owned(),
             product_root: PathBuf::from("/tmp"),
@@ -1222,7 +1225,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 39);
+        assert_eq!(SUBAGENT_IPC_VERSION, 40);
     }
 
     #[test]

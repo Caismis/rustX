@@ -36,13 +36,14 @@ use rustx_execution_protocol::{
     ProcessCancelDisposition, ReadError, Reject, SearchSpec, SessionId, TextReplacement,
     TreeMutation, WriteExpectation, is_normalized_absolute_path,
     transport::{
-        CONTROL_COMMAND_TIMEOUT, CONTROL_FRAME_TIMEOUT, MAX_CONTROL_COMMANDS, PAGE_REQUEST_TIMEOUT,
-        encode_record, write_record,
+        CONTROL_COMMAND_TIMEOUT, CONTROL_FRAME_TIMEOUT, EncodedRecord, MAX_CONTROL_COMMANDS,
+        PAGE_REQUEST_TIMEOUT, encode_record, write_record,
     },
 };
 use rustx_execution_transport::{ChannelShutdown, RecordChannel};
 use sha2::{Digest, Sha256};
 
+pub mod delegation;
 mod process_reply;
 
 /// The deadline for a Client to present its Hello on an accepted local
@@ -1015,7 +1016,7 @@ impl Binding {
                         let worker =
                             ControlWorker::spawn(channel, self.inner.clone(), connection, shared);
                         Ok(ChannelAccept::Live(LocalConnection {
-                            owner: self.inner.clone(),
+                            owner: Some(self.inner.clone()),
                             channel: commit.channel,
                             control: Some(worker),
                             usable: true,
@@ -1153,6 +1154,7 @@ struct PairCommit {
 /// the terminal error every orphan waiter is resolved with.
 struct ControlShared {
     state: Mutex<ControlState>,
+    ready: Condvar,
 }
 
 struct ControlState {
@@ -1187,6 +1189,7 @@ impl ControlShared {
                 stop_requested: false,
                 closed: None,
             }),
+            ready: Condvar::new(),
         }
     }
 
@@ -1213,6 +1216,7 @@ impl ControlShared {
             ));
         }
         state.queue.push_back(ControlCommand { request, responder });
+        self.ready.notify_one();
         Ok(receipt)
     }
 
@@ -1266,6 +1270,29 @@ impl ControlShared {
             .map(|command| command.request.clone())
     }
 
+    fn wait_next_command(&self) -> Option<ControlRequest> {
+        let mut state = self
+            .ready
+            .wait_while(self.lock(), |state| {
+                state.closed.is_none() && state.queue.is_empty()
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.closed.is_some() {
+            return None;
+        }
+        state.inflight = state.queue.pop_front();
+        state
+            .inflight
+            .as_ref()
+            .map(|command| command.request.clone())
+    }
+
+    fn reject(&self, error: io::Error) {
+        if let Some(command) = self.lock().inflight.take() {
+            let _ = command.responder.send(Err(error));
+        }
+    }
+
     /// Arms the worker's stop handle — once, at spawn.
     fn arm_stop(&self, stop: ChannelShutdown) {
         self.lock().stop = Some(stop);
@@ -1278,6 +1305,7 @@ impl ControlShared {
         let mut state = self.lock();
         state.stop_requested = true;
         Self::drain(&mut state, error);
+        self.ready.notify_one();
         if let Some(stop) = state.stop.take() {
             stop.shutdown();
         }
@@ -1641,7 +1669,7 @@ fn receipt_matches(request: &ControlRequest, reply: &ControlReply) -> bool {
 /// unexpected-reply failure retires the stream: it is never reused while a
 /// reply could still be outstanding, and later calls fail closed.
 pub struct LocalConnection {
-    owner: Arc<ConnectionOwner>,
+    owner: Option<Arc<ConnectionOwner>>,
     /// The data lane — the only dispatch channel.
     channel: RecordChannel,
     /// The paired control lane's worker, stopped exactly once.
@@ -1759,6 +1787,11 @@ pub struct SearchResult {
     pub short_lines: bool,
 }
 
+enum ExchangeFailure {
+    Refused(io::Error),
+    Unknown(io::Error),
+}
+
 impl LocalConnection {
     /// The admission the peer was sent.
     #[must_use]
@@ -1783,7 +1816,14 @@ impl LocalConnection {
                 "connection retired after a protocol or transport failure",
             ));
         }
-        let inner = self.owner.inner();
+        let Some(owner) = &self.owner else {
+            return if self.closed {
+                Err(io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(())
+            };
+        };
+        let inner = owner.inner();
         if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(&self.connection)
         {
             Ok(())
@@ -1814,7 +1854,9 @@ impl LocalConnection {
         if let Some(control) = self.control.take() {
             control.stop();
         }
-        self.owner.disconnect(&self.connection).shutdown();
+        if let Some(owner) = &self.owner {
+            owner.disconnect(&self.connection).shutdown();
+        }
         self.channel.shutdown();
     }
 
@@ -1834,7 +1876,9 @@ impl LocalConnection {
         if let Some(control) = self.control.take() {
             control.stop();
         }
-        self.owner.disconnect(&self.connection).shutdown();
+        if let Some(owner) = &self.owner {
+            owner.disconnect(&self.connection).shutdown();
+        }
         self.channel.shutdown();
         error
     }
@@ -1876,17 +1920,64 @@ impl LocalConnection {
         admit: impl FnOnce() -> io::Result<()>,
         sent: impl FnOnce(),
     ) -> io::Result<ClientReply> {
-        let encoded = encode_record(request)?;
+        let (encoded, deadline) = self.encode_exchange(request, deadline)?;
         self.gate()?;
         admit()?;
-        let result = self
-            .channel
-            .send(&encoded, deadline)
-            .map(|()| sent())
-            .and_then(|()| self.channel.receive(deadline));
-        match result {
+        match self.exchange_encoded(&encoded, deadline, sent) {
             Ok(reply) => Ok(reply),
-            Err(error) => Err(self.retire(error)),
+            Err(ExchangeFailure::Refused(error)) => Err(error),
+            Err(ExchangeFailure::Unknown(error)) => Err(self.retire(error)),
+        }
+    }
+
+    fn encode_exchange(
+        &self,
+        request: &ClientRequest,
+        deadline: Option<Instant>,
+    ) -> io::Result<(EncodedRecord, Option<Instant>)> {
+        if self.owner.is_some() {
+            return Ok((encode_record(request)?, deadline));
+        }
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + PAGE_REQUEST_TIMEOUT);
+        let remaining_ms = u32::try_from(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(u32::MAX);
+        let encoded = encode_record(&delegation::DataRequest {
+            request: request.clone(),
+            remaining_ms,
+        })?;
+        Ok((encoded, Some(deadline)))
+    }
+
+    fn exchange_encoded(
+        &mut self,
+        encoded: &EncodedRecord,
+        deadline: Option<Instant>,
+        sent: impl FnOnce(),
+    ) -> Result<ClientReply, ExchangeFailure> {
+        self.channel
+            .send(encoded, deadline)
+            .map_err(ExchangeFailure::Unknown)?;
+        sent();
+        if self.owner.is_some() {
+            return self
+                .channel
+                .receive(deadline)
+                .map_err(ExchangeFailure::Unknown);
+        }
+        match self
+            .channel
+            .receive(deadline)
+            .map_err(ExchangeFailure::Unknown)?
+        {
+            delegation::DataReply::Client(reply) => Ok(reply),
+            delegation::DataReply::Rejected(
+                refusal @ (delegation::Refusal::Busy | delegation::Refusal::Denied),
+            ) => Err(ExchangeFailure::Refused(refusal.into())),
+            delegation::DataReply::Rejected(error) => Err(ExchangeFailure::Unknown(error.into())),
         }
     }
 
@@ -3721,18 +3812,16 @@ impl LocalConnection {
         admit: &impl Fn() -> io::Result<()>,
         sent: &impl Fn(),
     ) -> io::Result<FileStamp> {
-        let encoded = encode_record(&ClientRequest::CommitWrite { ticket })?;
+        let (encoded, deadline) =
+            self.encode_exchange(&ClientRequest::CommitWrite { ticket }, deadline)?;
         self.gate()?;
         admit()?;
         let outcome_unknown =
             |connection: &mut Self| connection.retire(io::Error::other(WriteOutcomeUnknown));
-        let result = self
-            .channel
-            .send(&encoded, deadline)
-            .map(|()| sent())
-            .and_then(|()| self.channel.receive(deadline));
-        let Ok(reply) = result else {
-            return Err(outcome_unknown(self));
+        let reply = match self.exchange_encoded(&encoded, deadline, sent) {
+            Ok(reply) => reply,
+            Err(ExchangeFailure::Refused(error)) => return Err(error),
+            Err(ExchangeFailure::Unknown(_)) => return Err(outcome_unknown(self)),
         };
         match reply {
             // An explicit typed refusal means the Client never crossed:

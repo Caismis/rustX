@@ -204,6 +204,7 @@ fn spec_with_extensions(
             keep_recent_tokens: 0,
             summary_output_cap: None,
         },
+        execution: None,
         workspace: root.join("workspace"),
         incarnation: "incarnation-test".to_owned(),
         terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,

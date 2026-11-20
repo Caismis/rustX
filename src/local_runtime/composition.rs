@@ -751,7 +751,8 @@ impl LocalConversationCore {
                     // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
                 },
-            );
+            )
+            .with_execution_scope(tool_runtime.workspace().execution_scope().cloned());
             let workflow_runtime = WorkflowRuntime::new(
                 subagents.clone(),
                 tool_runtime.durable_store(),

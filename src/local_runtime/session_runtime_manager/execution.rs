@@ -44,6 +44,9 @@ use rustx_execution_server::{
 use super::super::session::SessionId;
 use super::{RuntimeManagerError, SessionRuntimeManager, error};
 
+mod delegation;
+pub(crate) use delegation::{ChildExecutionGrant, ChildExecutionRelay};
+
 /// One Session's local execution endpoint, published once.
 ///
 /// Owned by the trusted native composer: the App Server protocol has no
@@ -52,7 +55,7 @@ use super::{RuntimeManagerError, SessionRuntimeManager, error};
 /// accepted stream through [`admit_local_stream`](Self::admit_local_stream)
 /// and dispatches through [`read_range`](Self::read_range).
 pub struct LocalExecutionEndpoint {
-    binding: Binding,
+    authority: EndpointAuthority,
     /// The one admitted Client connection — at most one, never replaced.
     /// There is no recovery path (#577), so the first `Live` peer owns the
     /// slot for the binding's whole life.
@@ -71,8 +74,6 @@ pub struct LocalExecutionEndpoint {
     /// signal. Management callers never take it: they still answer
     /// `WouldBlock` immediately.
     agent_writer: Arc<Semaphore>,
-    listener: ExecutionListener,
-    bootstrap: PathBuf,
     /// The reserved logical workspace — trusted catalog identity,
     /// recorded once at claim time, never probed on disk.
     workspace: PathBuf,
@@ -80,6 +81,20 @@ pub struct LocalExecutionEndpoint {
     /// connection lands; the operation-identity source for every
     /// managed process this endpoint dispatches.
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
+}
+
+enum EndpointAuthority {
+    Reserved(Box<ReservedExecutionEndpoint>),
+    Delegated {
+        control: rustx_execution_server::ControlHandle,
+        shutdown: rustx_execution_transport::ChannelShutdown,
+    },
+}
+
+struct ReservedExecutionEndpoint {
+    binding: Binding,
+    listener: ExecutionListener,
+    bootstrap: PathBuf,
     /// The fd-and-dirfd proof of the bundle `create_new` wrote at
     /// reservation. `Drop` removes the file only while `fstatat` still
     /// matches this proof — a foreign replacement is never unlinked and
@@ -166,16 +181,18 @@ impl LocalExecutionEndpoint {
         let (binding, listener, bundle) =
             Binding::reserve_local(reservation, &root.join("s"), &root.join("b"))?;
         Ok(Self {
-            binding,
+            authority: EndpointAuthority::Reserved(Box::new(ReservedExecutionEndpoint {
+                binding,
+                listener: ExecutionListener::Unix(listener),
+                bootstrap: root.join("b"),
+                bundle,
+                _private: Some(private),
+            })),
             connection: Mutex::new(None),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
-            listener: ExecutionListener::Unix(listener),
-            bootstrap: root.join("b"),
-            bundle,
             workspace,
-            _private: Some(private),
         })
     }
 
@@ -212,17 +229,28 @@ impl LocalExecutionEndpoint {
         let (binding, listener, bundle) =
             Binding::reserve_websocket(reservation, listen, &bootstrap, public_url)?;
         Ok(Self {
-            binding,
+            authority: EndpointAuthority::Reserved(Box::new(ReservedExecutionEndpoint {
+                binding,
+                listener: ExecutionListener::WebSocket(listener),
+                bootstrap,
+                bundle,
+                _private: None,
+            })),
             connection: Mutex::new(None),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
-            listener: ExecutionListener::WebSocket(listener),
-            bootstrap,
-            bundle,
             workspace,
-            _private: None,
         })
+    }
+
+    fn reservation(&self) -> &ReservedExecutionEndpoint {
+        match &self.authority {
+            EndpointAuthority::Reserved(reservation) => reservation,
+            EndpointAuthority::Delegated { .. } => {
+                unreachable!("delegated endpoints never reserve")
+            }
+        }
     }
 
     /// The exact logical workspace this binding reserved — the trusted
@@ -236,13 +264,13 @@ impl LocalExecutionEndpoint {
     /// the Execution Client it chooses to spawn.
     #[must_use]
     pub fn bootstrap_path(&self) -> &Path {
-        &self.bootstrap
+        &self.reservation().bootstrap
     }
 
     /// The bound listener for this binding — exactly one transport mode.
     #[must_use]
     pub fn listener(&self) -> &ExecutionListener {
-        &self.listener
+        &self.reservation().listener
     }
 
     /// Admits the Client on one accepted local stream through this
@@ -291,7 +319,10 @@ impl LocalExecutionEndpoint {
         stream: UnixStream,
         deadline: std::time::Instant,
     ) -> io::Result<EndpointAdmission> {
-        let admitted = self.binding.accept_local_deadline(stream, deadline)?;
+        let admitted = self
+            .reservation()
+            .binding
+            .accept_local_deadline(stream, deadline)?;
         Ok(self.store(admitted))
     }
 
@@ -318,7 +349,10 @@ impl LocalExecutionEndpoint {
         deadline: std::time::Instant,
     ) -> io::Result<EndpointAdmission> {
         let channel = rustx_execution_transport::accept(stream, deadline)?;
-        let admitted = self.binding.accept_channel_deadline(channel, deadline)?;
+        let admitted = self
+            .reservation()
+            .binding
+            .accept_channel_deadline(channel, deadline)?;
         Ok(self.store(admitted))
     }
 
@@ -350,7 +384,10 @@ impl LocalExecutionEndpoint {
     /// of the data lane's dispatch lock. `None` while no pair is live.
     #[must_use]
     pub fn control(&self) -> Option<rustx_execution_server::ControlHandle> {
-        self.binding.control()
+        match &self.authority {
+            EndpointAuthority::Reserved(reservation) => reservation.binding.control(),
+            EndpointAuthority::Delegated { control, .. } => Some(control.clone()),
+        }
     }
 
     /// The committed pair's admission — the complete identity source
@@ -919,7 +956,7 @@ impl LocalExecutionEndpoint {
     /// fencing asserts the phase it drove.
     #[cfg(test)]
     fn binding(&self) -> &Binding {
-        &self.binding
+        &self.reservation().binding
     }
 
     /// Fences the endpoint: a live pair is first asked to revoke — the
@@ -937,10 +974,10 @@ impl LocalExecutionEndpoint {
         // Client is proven before this fence returns. No pair live — or
         // a lane that cannot carry the request — falls through to the
         // local fence, which is terminal either way.
-        if let Some(control) = self.binding.control() {
+        if let Some(control) = self.reservation().binding.control() {
             let _ = control.request_revoke();
         }
-        let fenced = self.binding.fence();
+        let fenced = self.reservation().binding.fence();
         match self.connection.try_lock() {
             Ok(mut guard) => match guard.as_mut() {
                 // An idle stored connection earns the orderly Close.
@@ -992,7 +1029,10 @@ impl LocalExecutionEndpoint {
     /// Fences the binding and shuts its sockets without taking the data lock:
     /// a wedged exchange fails on its own read, and the pair cannot be reused.
     pub(crate) fn cut_pair(&self) {
-        self.binding.fence().shutdown();
+        match &self.authority {
+            EndpointAuthority::Reserved(reservation) => reservation.binding.fence().shutdown(),
+            EndpointAuthority::Delegated { shutdown, .. } => shutdown.shutdown(),
+        }
     }
 
     /// Retires the one admitted connection so its Client clears every
@@ -1237,7 +1277,7 @@ fn project_page(listing: DirectoryListing) -> rustx_confined_fs::DirectoryPage {
 impl std::fmt::Debug for LocalExecutionEndpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalExecutionEndpoint")
-            .field("bootstrap", &self.bootstrap)
+            .field("workspace", &self.workspace)
             .finish_non_exhaustive()
     }
 }
@@ -1254,7 +1294,13 @@ impl std::fmt::Debug for LocalExecutionEndpoint {
 #[derive(Clone)]
 pub struct SessionExecutionScope {
     session: SessionId,
-    registry: Weak<SessionExecutionRegistry>,
+    route: ExecutionRoute,
+}
+
+#[derive(Clone)]
+enum ExecutionRoute {
+    Registry(Weak<SessionExecutionRegistry>),
+    Delegated(Arc<LocalExecutionEndpoint>),
 }
 
 enum DataCapacity {
@@ -1274,8 +1320,14 @@ impl SessionExecutionScope {
                 "Session execution unavailable: no admitted Execution Client",
             )
         };
-        let registry = self.registry.upgrade().ok_or_else(unavailable)?;
-        registry.endpoint(&self.session).map_err(|_| unavailable())
+        match &self.route {
+            ExecutionRoute::Registry(registry) => registry
+                .upgrade()
+                .ok_or_else(unavailable)?
+                .endpoint(&self.session)
+                .map_err(|_| unavailable()),
+            ExecutionRoute::Delegated(endpoint) => Ok(Arc::clone(endpoint)),
+        }
     }
 
     pub(crate) async fn read_bash_output(
@@ -1966,7 +2018,13 @@ impl std::fmt::Debug for SessionExecutionScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionExecutionScope")
             .field("session", &self.session)
-            .field("registry_available", &self.registry.upgrade().is_some())
+            .field(
+                "owner_available",
+                &match &self.route {
+                    ExecutionRoute::Registry(registry) => registry.strong_count() != 0,
+                    ExecutionRoute::Delegated(_) => true,
+                },
+            )
             .finish_non_exhaustive()
     }
 }
@@ -1976,13 +2034,22 @@ impl PartialEq for SessionExecutionScope {
     /// registry. Two scopes built by different managers are different
     /// routes even when they name the same Session.
     fn eq(&self, other: &Self) -> bool {
-        self.session == other.session && self.registry.ptr_eq(&other.registry)
+        self.session == other.session
+            && match (&self.route, &other.route) {
+                (ExecutionRoute::Registry(left), ExecutionRoute::Registry(right)) => {
+                    left.ptr_eq(right)
+                }
+                (ExecutionRoute::Delegated(left), ExecutionRoute::Delegated(right)) => {
+                    Arc::ptr_eq(left, right)
+                }
+                _ => false,
+            }
     }
 }
 
 impl Eq for SessionExecutionScope {}
 
-impl Drop for LocalExecutionEndpoint {
+impl Drop for ReservedExecutionEndpoint {
     /// Removes the bootstrap bundle — but only while `fstatat` through
     /// the retained parent descriptor still proves the file is the one
     /// `create_new` wrote (same type, device, and inode). A replaced,
@@ -2136,7 +2203,7 @@ impl StandaloneExecution {
     pub(crate) fn scope(&self) -> SessionExecutionScope {
         SessionExecutionScope {
             session: self.session.clone(),
-            registry: Arc::downgrade(&self.registry),
+            route: ExecutionRoute::Registry(Arc::downgrade(&self.registry)),
         }
     }
 
@@ -2429,7 +2496,7 @@ impl SessionRuntimeManager {
     pub fn execution_scope(&self, session: &SessionId) -> SessionExecutionScope {
         SessionExecutionScope {
             session: session.clone(),
-            registry: Arc::downgrade(&self.execution),
+            route: ExecutionRoute::Registry(Arc::downgrade(&self.execution)),
         }
     }
 }
@@ -3549,7 +3616,7 @@ mod tests {
     ) -> SessionExecutionScope {
         SessionExecutionScope {
             session: session.clone(),
-            registry: Arc::downgrade(registry),
+            route: ExecutionRoute::Registry(Arc::downgrade(registry)),
         }
     }
 

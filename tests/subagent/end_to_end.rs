@@ -399,14 +399,17 @@ async fn a_real_child_shares_the_session_workspace_subdirectory() {
     .expect("uncommitted parent state");
 
     let models = models_json(&server.url("/v1"));
-    let mut process = launch_parent(
-        root.path(),
-        &logical_parent,
-        &models,
-        SHARED_SUBDIRECTORY_SESSION_TOML,
-        "subagent-secret",
+    std::fs::write(
+        root.path().join("rustx.toml"),
+        format!("{}\n{models}", toml::to_string_pretty(&session).unwrap()),
+    )
+    .unwrap();
+    let mut bindings = ParentBindings::under(root.path(), &logical_parent);
+    bindings.execution = true;
+    let mut process = Parent::spawn(
+        &bindings,
+        &[("RUSTX_SUBAGENT_TEST_KEY", "subagent-secret")],
         None,
-        false,
     )
     .await;
     process.attach().await;

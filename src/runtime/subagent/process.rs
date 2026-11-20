@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 
+use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
 use crate::runtime::identity::{ConversationId, SubagentId};
 use crate::runtime::interaction::{InteractionRef, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
@@ -201,6 +202,7 @@ impl SubagentSpawnPlan {
             model_timeout_policy: execution_policy.model_timeout,
             tool_deadline_policy: execution_policy.tool_deadline,
             context: execution_policy.context,
+            execution: None,
             workspace: workspace.to_path_buf(),
             incarnation: runtime_root
                 .path()
@@ -234,6 +236,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     /// production-allocated root. Test-only roots do not own a durable store.
     durable_store: Option<(ConversationId, PathBuf, PathBuf)>,
     physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
+    execution_relay: Option<tokio::sync::oneshot::Receiver<std::io::Result<()>>>,
 }
 
 impl PhysicalChildRuntimeRoot {
@@ -352,6 +355,7 @@ impl PhysicalChildRuntimeRoot {
                             product.root().to_owned(),
                         )),
                         physical_owner: None,
+                        execution_relay: None,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -397,6 +401,16 @@ impl PhysicalChildRuntimeRoot {
     /// Removes exactly this incarnation directory. The semantic grouping
     /// directory is intentionally left alone because another incarnation
     /// may be using it.
+    async fn settle_execution_relay(&mut self) -> Result<(), String> {
+        match self.execution_relay.take() {
+            Some(relay) => relay
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string()),
+            None => Ok(()),
+        }
+    }
+
     fn remove(self) -> std::io::Result<()> {
         std::fs::remove_dir_all(self.path)
     }
@@ -447,6 +461,7 @@ impl PhysicalChildRuntimeRoot {
             path,
             durable_store: None,
             physical_owner: None,
+            execution_relay: None,
         }
     }
 }
@@ -631,6 +646,7 @@ pub(crate) async fn spawn_staged(
     spec: &SubagentChildSpec,
     mut runtime_root: PhysicalChildRuntimeRoot,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
+    execution_scope: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
 ) -> Result<StagedChild, SpawnError> {
     if runtime_root.physical_owner.is_none() {
         match super::physical_recovery::ParentPhysicalLease::reserve(
@@ -693,11 +709,42 @@ pub(crate) async fn spawn_staged(
             .credentials
             .export_process_credentials(&mut credentials);
     }
-    let spawned = match spawn_process(plan, &runtime_root, &spec.workspace, &credentials) {
-        Ok(spawned) => spawned,
-        Err(error) => {
-            return Err(discard_unstaged_resources(runtime_root, error));
+    let relay = match execution_scope {
+        Some(scope) => {
+            let workspace = spec.workspace.clone();
+            let conversation = spec.child_conversation_id.clone();
+            let tools = spec.resolved.tools.clone();
+            let created = tokio::task::spawn_blocking(move || {
+                ChildExecutionRelay::create(&scope, &workspace, &conversation, &tools)
+            })
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(std::convert::identity);
+            match created {
+                Ok(relay) => Some(relay),
+                Err(error) if error.kind() == std::io::ErrorKind::NotConnected => None,
+                Err(error) => {
+                    return Err(discard_unstaged_resources(
+                        runtime_root,
+                        SpawnError::Spawn {
+                            detail: error.to_string(),
+                        },
+                    ));
+                }
+            }
         }
+        None => None,
+    };
+    if preparation_cancellation.is_cancelled() {
+        return Err(discard_unstaged_resources(
+            runtime_root,
+            SpawnError::Cancelled,
+        ));
+    }
+    wire_spec.execution = relay.as_ref().map(ChildExecutionRelay::grant);
+    let spawned = match spawn_process(plan, &runtime_root, &credentials) {
+        Ok(spawned) => spawned,
+        Err(error) => return Err(discard_unstaged_resources(runtime_root, error)),
     };
     let mut staged = StagedChild {
         child: spawned.child,
@@ -722,6 +769,24 @@ pub(crate) async fn spawn_staged(
                 detail: format!("{error}; {rollback}"),
             }),
         };
+    }
+    if let Some(relay) = relay {
+        let ready = relay
+            .transfer(&staged.control)
+            .await
+            .and_then(|()| relay.start());
+        match ready {
+            Ok(settlement) => staged.runtime_root.execution_relay = Some(settlement),
+            Err(error) => {
+                let detail = error.to_string();
+                return match staged.rollback().await {
+                    Ok(()) => Err(SpawnError::Spawn { detail }),
+                    Err(rollback) => Err(SpawnError::Rollback {
+                        detail: format!("{detail}; {rollback}"),
+                    }),
+                };
+            }
+        }
     }
     if let Err(error) = staged.handshake(spec, preparation_cancellation).await {
         if matches!(error, SpawnError::Cancelled) {
@@ -776,7 +841,6 @@ fn discard_unstaged_resources(
 fn spawn_process(
     plan: &SubagentSpawnPlan,
     runtime_root: &PhysicalChildRuntimeRoot,
-    project_workspace: &Path,
     credentials: &[(String, String)],
 ) -> Result<SpawnedProcess, SpawnError> {
     // The control channel: one UnixStream pair. The child end becomes the
@@ -824,11 +888,7 @@ fn spawn_process(
     let mut command = tokio::process::Command::new(&plan.program);
     command.envs(credentials.iter().map(|(key, value)| (key, value)));
     command
-        // The typed child spec carries the Session execution binding. This
-        // matters for subprocesses that inherit cwd in addition to the
-        // native tools that receive ConversationToolRuntime's Workspace. A
-        // missing binding fails the spawn; there is no fallback directory.
-        .current_dir(project_workspace)
+        .current_dir(runtime_root.path())
         .arg("--subagent-child")
         .stdin(child_stdio)
         .stdout(observation_stdio)
@@ -1082,9 +1142,10 @@ impl StagedChild {
         // Once the direct child and every nested anchor are settled, remove
         // the disposable child-private runtime root. The Session workspace is
         // not a runtime resource and is never touched here.
-        let runtime_root = self.runtime_root;
+        let mut runtime_root = self.runtime_root;
+        let relay = runtime_root.settle_execution_relay().await;
         remove_inspection_liveness_marker(&runtime_root);
-        let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
+        let runtime_root_cleanup_error = if settlement.unproven.is_empty() && relay.is_ok() {
             // Reaping the direct child and containing every retained anchor
             // prove physical quiescence, even when the child needed escalation.
             let proof_error = runtime_root
@@ -1106,6 +1167,9 @@ impl StagedChild {
         } else {
             None
         };
+        if let Err(detail) = relay {
+            return Err(RollbackError::NestedContainment { detail });
+        }
         if let Some(detail) = settlement.unproven_diagnostic() {
             return Err(RollbackError::NestedContainment { detail });
         }
@@ -2026,11 +2090,13 @@ async fn drive_child_control(
 async fn settle_nested(
     outcome: PhysicalOutcome,
     retained: &mut RetainedProcessUnits,
-    runtime_root: PhysicalChildRuntimeRoot,
+    mut runtime_root: PhysicalChildRuntimeRoot,
 ) -> PhysicalSettlement {
+    let relay = runtime_root.settle_execution_relay().await;
     let nested = contain_retained(retained.take()).await;
     remove_inspection_liveness_marker(&runtime_root);
-    let runtime_root_cleanup_error = if nested.unproven.is_empty()
+    let runtime_root_cleanup_error = if relay.is_ok()
+        && nested.unproven.is_empty()
         && !matches!(outcome, PhysicalOutcome::ControlFailure { .. })
     {
         let path = runtime_root.path().display().to_string();
@@ -2053,7 +2119,7 @@ async fn settle_nested(
     PhysicalSettlement {
         outcome,
         nested,
-        runtime_root_cleanup_error,
+        runtime_root_cleanup_error: relay.err().or(runtime_root_cleanup_error),
     }
 }
 
@@ -3274,6 +3340,7 @@ mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
+            execution: None,
             workspace: dir.path().join("workspace"),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
@@ -3299,7 +3366,8 @@ mod tests {
                     &plan,
                     &spec,
                     runtime_root,
-                    &crate::runtime::cancellation::CancellationSignal::new()
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                    None,
                 )
                 .await,
                 Err(super::SpawnError::Spawn { .. })
