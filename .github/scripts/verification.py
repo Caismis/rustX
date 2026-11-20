@@ -69,7 +69,7 @@ TEST_PRESERVING = ("added", "modified")
 SURFACES = {
     "documentation": ("*.md", "docs/**", "web-console/*.md", "tui/*.md"),
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
-             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
+             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**", "crates/**"),
     "protocol": ("protocol/**",),
     "web": ("web-console/**", "src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"),
     "tui": ("tui/**",),
@@ -133,7 +133,7 @@ def classify(changes):
 
 
 # Every gated job and when it runs. FULL runs everything once: the complete
-# Rust lanes replace the FAST Rust lane and macOS full replaces macOS core.
+# Rust lanes replace the FAST Rust lane.
 def selected_jobs(profile, surfaces):
     full = profile == "full"
     s = set(surfaces)
@@ -145,11 +145,8 @@ def selected_jobs(profile, surfaces):
         "documentation-contracts": not full and "documentation" in s,
         "rust-contracts": full,
         "rust-boundaries": full,
-        "rust-platform-core": not full and rust,
-        "rust-platform-boundaries": full,
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,
-        "desktop-macos": full or bool(s & {"web", "tui"}),
         "browser-prepare": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "web-client": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "browser-shard": full or bool(s & {"web", "dev", "rust", "protocol"}),
@@ -158,9 +155,11 @@ def selected_jobs(profile, surfaces):
 
 
 # Heavy Rust contract groups that FAST runs only for the change's affected
-# components (FULL always runs them), as `<job>:<component>` step keys.
+# components (FULL always runs them), as `<job>:<component>` step keys. The
+# extracted workspace crates' tests (crates/rustx-*, including rustx-durable's
+# SQLite store contracts) are not a component: rust-fast runs every member lib
+# unconditionally minus the `::scale::` capacity suite.
 COMPONENTS = {
-    "rust-fast:durable": ("src/durable/**",),
     "rust-fast:app-server": ("src/app_server/**", "src/local_runtime/**", "tests/scripted/app_server/**",
                              "tests/support/**"),
     "rust-fast:runtime-client": ("src/runtime_client/**",),
