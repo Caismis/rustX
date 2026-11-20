@@ -4854,7 +4854,6 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rmp-serde",
- "rusqlite",
  "rustix",
  "rustx-bounded-file",
  "rustx-bounded-json",

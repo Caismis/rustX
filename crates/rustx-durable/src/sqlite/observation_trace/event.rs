@@ -348,7 +348,7 @@ fn terminal_owner(
             connection,
             concat!(
                 "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
-                rustx_types::sql!("event_kind"),
+                crate::sql!("event_kind"),
                 "='compaction_started'",
                 " AND sequence<?1 ORDER BY sequence DESC LIMIT 1"
             ),

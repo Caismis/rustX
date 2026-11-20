@@ -1340,7 +1340,7 @@ mod content;
 pub mod content_encoding;
 #[cfg(not(any(test, feature = "test-hooks")))]
 mod content_encoding;
-pub use rustx_types::durable::sqlite::content_metadata;
+pub mod content_metadata;
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod observation;
 #[cfg(not(any(test, feature = "test-hooks")))]
@@ -1560,7 +1560,7 @@ pub mod event_holes;
 #[cfg(not(any(test, feature = "test-hooks")))]
 mod event_holes;
 
-pub use rustx_types::durable::sqlite::statements;
+pub mod statements;
 
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod observation_checkpoint;
@@ -1591,7 +1591,7 @@ mod attempt_start;
 pub mod event_insert;
 #[cfg(not(any(test, feature = "test-hooks")))]
 mod event_insert;
-pub use rustx_types::durable::sqlite::event_kind_key;
+pub mod event_kind_key;
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod event_owner_key;
 #[cfg(not(any(test, feature = "test-hooks")))]
