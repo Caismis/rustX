@@ -4,30 +4,55 @@ import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { routeWorkspaceHost } from './workspace-host';
 
-test('renders a fenced Express rating card in assistant history', async ({ page }, info) => {
+test('opens only valid HTTPS destinations from an Express card in assistant history', async ({ page, context }, info) => {
   const fixture = await startDogfood('web_a2ui_express');
   let passed = false;
   try {
+    const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
+    const hn = 'https://news.ycombinator.com/';
+    await context.route(hn, route => route.fulfill({ contentType: 'text/html', body: '<title>Hacker News fixture</title>' }));
     await page.goto('/');
+    await expect(page).toHaveTitle('rustX');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Render ratings');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const chat = page.getByLabel('Canonical conversation', { exact: true });
+    const card = chat.locator('[data-a2ui-express]');
+    const openHn = card.getByRole('button', { name: '打开 HN', exact: true });
     const assertCard = async () => {
       for (const text of ['评分如下。', '模型嘉豪指数', '模型与评价', 'Claude Mythos 5.2', '赛级嘉豪', 'Gemini 4 Neon', 'Carbon 换皮', '以上为示例。']) {
         await expect(chat.getByText(text, { exact: true })).toBeVisible();
       }
       await expect(chat).not.toContainText('root = Card');
-      const card = chat.locator('[data-a2ui-express]');
-      await expect(card.getByRole('button', { name: '打开 HN' })).toBeDisabled();
+      await expect(openHn).toBeEnabled();
+      for (const name of ['HTTP 链接', '相对链接', '脚本链接', '无效链接', '加载 11–15 名']) {
+        await expect(card.getByRole('button', { name, exact: true })).toBeDisabled();
+      }
     };
     await assertCard();
     await page.screenshot({ path: info.outputPath('express-ratings.png') });
     await page.reload();
     await connectRemote(page, fixture.endpoint, fixture.token);
     await assertCard();
+    expect(await openHn.evaluate((button: HTMLButtonElement) => {
+      const open = window.open;
+      let calls = 0;
+      window.open = () => { calls++; return null; };
+      try { button.click(); } finally { window.open = open; }
+      return calls;
+    })).toBe(0);
+    const opened = context.waitForEvent('page');
+    await openHn.click();
+    const destination = await opened;
+    await expect(destination).toHaveURL(hn);
+    await expect(destination).toHaveTitle('Hacker News fixture');
+    expect(await destination.evaluate(() => [window.opener === null, document.referrer])).toEqual([true, '']);
+    await destination.close();
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
+    expect((await fixture.control('requests')).requests).toHaveLength(1);
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);

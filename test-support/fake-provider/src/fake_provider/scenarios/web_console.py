@@ -811,7 +811,12 @@ root = Card(Column([
     Row([Text($/models/0/name), Text($/models/0/verdict, "caption")]),
     Row([Text($/models/1/name), Text($/models/1/verdict, "caption")])
   ]),
-  Button(Text("打开 HN"), action=openUrl("https://news.ycombinator.com"))
+  Button(Text("打开 HN"), action=openUrl("https://news.ycombinator.com")),
+  Button(Text("HTTP 链接"), action=openUrl("http://example.com")),
+  Button(Text("相对链接"), action=openUrl("//example.com")),
+  Button(Text("脚本链接"), action=openUrl("javascript:")),
+  Button(Text("无效链接"), action=openUrl("https://")),
+  Button(Text("加载 11–15 名"), action=Event("load_more"))
 ]))
 </a2ui>
 ```

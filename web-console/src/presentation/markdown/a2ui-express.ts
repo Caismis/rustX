@@ -399,18 +399,9 @@ class Parser {
         if (!child) return null;
         children.push(child);
       } else if (key === 'action') {
-        // Both agent events and catalog functions are opaque, display-only metadata.
-        if (argument.type !== 'ident') return null;
-        this.pos++;
-        if (!this.expectPunct('(')) return null;
-        let nesting = 1;
-        while (nesting > 0) {
-          const token = this.peek();
-          if (token.type === 'eof') return null;
-          if (this.atPunct('(')) nesting++;
-          if (this.atPunct(')')) nesting--;
-          this.pos++;
-        }
+        const url = this.parseAction();
+        if (url === null) return null;
+        if (url) properties.openUrl = url;
       } else if (argument.type === 'ref') {
         properties[key] = argument;
         this.pos++;
@@ -423,6 +414,33 @@ class Parser {
     }
     if (kind === 'Button' && children.length !== 1) return null;
     return { kind, properties, children };
+  }
+
+  private parseAction(): PropertyExpr | undefined | null {
+    const name = this.peek();
+    if (name.type !== 'ident') return null;
+    this.pos++;
+    if (!this.expectPunct('(')) return null;
+    const start = this.pos;
+    let nesting = 1;
+    while (nesting > 0) {
+      if (this.peek().type === 'eof') return null;
+      if (this.atPunct('(')) nesting++;
+      if (this.atPunct(')')) nesting--;
+      this.pos++;
+    }
+    // Only the URL operand is retained. Other actions remain display-only.
+    if (name.value !== 'openUrl') return undefined;
+    const args = this.tokens.slice(start, this.pos - 1);
+    const last = args.at(-1);
+    if (last?.type === 'punct' && last.value === ',') args.pop();
+    const [first, equals, namedValue] = args;
+    const value = args.length === 1 ? first
+      : args.length === 3 && first.type === 'ident' && first.value === 'url' && equals.type === 'punct' && equals.value === '='
+        ? namedValue : undefined;
+    if (value?.type === 'string') return { type: 'value', value: value.value };
+    if (value?.type === 'ref') return value;
+    return undefined;
   }
 
   /** One child position: a component, or an array literal flattened to nodes. */

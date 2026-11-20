@@ -40,9 +40,10 @@ textarea.field { resize: vertical; }
 .button[data-variant='default'] { background: var(--a2-primary); color: var(--a2-primary-foreground); }
 .button[data-variant='outline'] { background: var(--a2-background); border-color: var(--a2-border); }
 .button[data-variant='destructive'] { background: color-mix(in oklch, var(--a2-destructive) 10%, transparent); color: var(--a2-destructive); }
+.button:enabled { cursor: pointer; }
 .button:disabled { opacity: .5; }
 .fullWidth { width: 100%; }
-:is(.field, .chip, .check input, .choice input, .slider input):focus-visible {
+:is(.field, .chip, .button, .check input, .choice input, .slider input):focus-visible {
   outline: 3px solid color-mix(in oklch, var(--a2-ring) 50%, transparent);
   outline-offset: 1px;
 }

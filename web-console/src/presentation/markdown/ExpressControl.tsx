@@ -41,16 +41,30 @@ function choiceOptions(value: unknown): { label: string; value: string }[] {
   return out;
 }
 
+function httpsDestination(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !/^https:\/\//i.test(value.trim())) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function ControlButton({ props, children }: { props: Record<string, unknown>; children?: ReactNode }) {
   const variant = text(props.variant);
+  const destination = httpsDestination(props.openUrl);
   const appearance = props.color === 'danger' ? 'destructive'
     : variant === 'primary' || variant === 'solid' ? 'default'
       : variant === 'soft' ? 'secondary'
         : variant === 'borderless' || variant === 'ghost' ? 'ghost' : 'outline';
   return (
-    <button type="button" disabled data-slot="button" data-variant={appearance}
+    <button type="button" disabled={!destination} data-slot="button" data-variant={appearance}
       data-size={props.size === 'sm' || props.size === 'xs' ? 'sm' : 'lg'}
-      className={clsx(css.button, props.block === true && css.fullWidth)}>
+      className={clsx(css.button, props.block === true && css.fullWidth)}
+      onClick={event => {
+        if (destination && event.isTrusted) window.open(destination, '_blank', 'noopener,noreferrer');
+      }}>
       {children}
     </button>
   );
