@@ -11,7 +11,8 @@ import type { TrajectoryRowActions } from './TrajectoryRow';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, withHistoryGaps, completeHistoryThrough, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
-import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
+import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange } from './timeline';
+import { useTrajectoryDurationMode } from './preferences';
 import css from './Trajectory.module.css';
 import { workflowCalls, withWorkflowNodes } from './workflow';
 import { useWorkflowNodes } from './useWorkflowNodes';
@@ -49,7 +50,7 @@ export interface TrajectoryProps {
 export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
+  const [mode, setMode] = useTrajectoryDurationMode();
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<string>>(new Set());
   const [calls, setCalls] = useState<ReadonlySet<string>>(new Set());
   const [workflowExpansion, setWorkflowExpansion] = useState<{ epoch: number; ids: ReadonlySet<string> }>({ epoch: cache.epoch, ids: new Set() });
@@ -254,6 +255,8 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
   const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.ownerKey] : []);
   const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));
   const allCallsCollapsed = callOwners.size > 0 && [...callOwners].every(id => calls.has(id));
+  const workflowRootIds = useMemo(() => workflowRoots.map(root => root.id), [workflowRoots]);
+  const allSubCallsCollapsed = workflowRootIds.length === 0 || !workflowRootIds.some(id => openedWorkflows.has(id));
   return <section className={css.root} data-conversation-composer-overlay="" aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
@@ -275,6 +278,14 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
           title={allCallsCollapsed ? tx('trajectory:toolbar.expand-calls') : tx('trajectory:toolbar.collapse-calls')}
           onClick={() => setCalls(allCallsCollapsed ? new Set() : new Set(callOwners))}>
           <span className={css.actionIcon} aria-hidden="true">{allCallsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.calls')}
+        </button>
+        <button type="button" className={css.action} aria-label={allSubCallsCollapsed ? tx('trajectory:toolbar.expand-sub-calls') : tx('trajectory:toolbar.collapse-sub-calls')} aria-pressed={allSubCallsCollapsed}
+          title={allSubCallsCollapsed ? tx('trajectory:toolbar.expand-sub-calls') : tx('trajectory:toolbar.collapse-sub-calls')}
+          onClick={() => {
+            if (!allSubCallsCollapsed && selection?.workflow_node) select();
+            setWorkflowExpansion({ epoch: cache.epoch, ids: allSubCallsCollapsed ? new Set(workflowRootIds) : new Set() });
+          }}>
+          <span className={css.actionIcon} aria-hidden="true">{allSubCallsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.sub-calls')}
         </button>
       </div>
       <div className={css.search}>

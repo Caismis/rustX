@@ -30,6 +30,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   }, [rows, activeKey]);
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
+  const topLoadFirst = useRef<string | undefined>(undefined);
   const restoringFocus = useRef<string | undefined>(undefined);
   const prepend = useRef<{ first?: string; boundary?: string; key: string; offset: number } | null>(null);
   const virtualized = rows.length > 100;
@@ -119,7 +120,15 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   });
   const rendered = virtualized ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index]!, index: item.index, start: item.start })) : rows.map((row, index) => ({ row, index, start: 0 }));
   return <div ref={viewport} className={css.ledger} data-trajectory-scroll="" role="table" aria-label={tx('trajectory:trajectory.trace-ledger')} aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
-    const pane = event.currentTarget; followsTail.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
+    const pane = event.currentTarget;
+    const atBottom = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
+    followsTail.current = atBottom;
+    if (pane.scrollTop > 48) {
+      topLoadFirst.current = undefined;
+    } else if (!atBottom && canLoadEarlier && !loading && first && topLoadFirst.current !== first) {
+      topLoadFirst.current = first;
+      requestOlder();
+    }
   }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div style={{ position: 'relative', ...(virtualized ? { height: virtualizer.getTotalSize() } : {}) }}>
       {rendered.map(({ row, index, start }) => {

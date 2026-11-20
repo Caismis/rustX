@@ -9,6 +9,7 @@ import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
+import { trajectoryDurationStore, trajectoryStringWrappingStore } from '../src/app/trajectory/preferences';
 import { prependTrace, beginTraceDetail, completeTraceDetail, fillTraceGap, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
 import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
@@ -21,7 +22,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(360);
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: function (this: HTMLElement, options: ScrollToOptions) { this.scrollTop = options.top ?? 0; } });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); trajectoryDurationStore.set(false); trajectoryStringWrappingStore.set(false); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
 it('a page of background lifecycle records does not create standalone rows or empty Turns', () => {
   const records = [

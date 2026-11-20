@@ -853,6 +853,7 @@
         "./TrajectoryRow",
         "./TrajectoryTimeline",
         "./layout",
+        "./preferences",
         "./search",
         "./timeline",
         "./useTraceContexts",
@@ -917,7 +918,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "bc159d5efb08ac3e8b357181d02dcc4b3de2411545b51181287b3c4cbe536824"
+      "local_sha256": "f269835e7e41d3ec7623db5d16bbc05f5b5900a6f083887dd639452a5278d2fd"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -954,6 +955,7 @@
         "./TrajectoryRow",
         "./layout",
         "./message-version",
+        "./preferences",
         "./timeline",
         "./useTraceContent",
         "./useWorkflowNodeContent",
@@ -1006,7 +1008,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "96a58b971772ccefb68f506a771dd5ae40f8021484baeb26d6cc73389d704a28"
+      "local_sha256": "da13bae647583a1f3ff5bb470171a11ae87b9898e38e02ca88e54eb54ccc3718"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -3361,6 +3363,7 @@
         "../src/app/trajectory/Trajectory",
         "../src/app/trajectory/TrajectoryCell",
         "../src/app/trajectory/layout",
+        "../src/app/trajectory/preferences",
         "../src/app/trajectory/search",
         "../src/app/trajectory/timeline",
         "../src/bindings/status-labels",
@@ -3389,7 +3392,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "2e2d0592e8bfff08951c539fe511ed03f4006b52d30a1d3346d38cb1cce041d1"
+      "local_sha256": "84292978a9cbce15510707cd1c3323adca22a8444d88825e7b90fda0442b0940"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -4039,7 +4042,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "8729ada919605038577cf3c498d049d836afeaa56c0d565c06fd20c4abcc9ac3"
+      "local_sha256": "f7d8a94486636d59a2f6d76cdb7717c53cb87275a8736c029fa8572b5a945bc7"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4147,7 +4150,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "4410ad73562abdc306d41ed1a89ff9d1404ba00ef25c58fbec3db1cd5379d49d"
+      "local_sha256": "aca6fd1874a8c395543c8fe8c742143879515480d9d0de3496dc01713d3bcc79"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4201,7 +4204,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "e2c2e5555b0d73c43db2ff6eb5bd5c9a8a0f088a766f6acf720ee26baf3572be"
+      "local_sha256": "4bed74a65a894f150db10829ee9dc65bac68294a1e9bab5280da0e4dc88de04a"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
@@ -4323,7 +4326,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "70a6476da33049b680ba027eb30b13460ed7a56c491d962615d810db52482be0"
+      "local_sha256": "852b5fae5318f73c493417b2fe3fc7458b6c084592e6a859c3c73fe7af1454b0"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
@@ -5036,7 +5039,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "bc0d6e238a4591ad469150f258ecf9862e0ec68e4ec9b83f5f006605de5fc098"
+      "local_sha256": "6dec91092dcd2d09e09040621fbff8c11fcb34ffb0227643825cfb7975016fb9"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5069,7 +5072,7 @@
           "treatment": "Plain source uses the full pane as its sole scrollport, retaining the shared text inset and wrap preference; remove the inherited global pre height limit and inner scrolling."
         }
       ],
-      "local_sha256": "13f71dce1343ba1aaa0494e7ddfeaa6bf34efa3749c26b172b858b13964da742"
+      "local_sha256": "f4d5b8bfaa0f69ddd39ccb703d997783b54b14762531e9074375ad681e1f47fb"
     },
     {
       "upstream": "packages/client/ui-primitives/src/CodeToolbar.tsx",
@@ -8585,12 +8588,13 @@
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "./BackgroundJobs",
+        "./SessionPanelSubagents",
         "./SessionPanelToggle.module.css",
         "./session-panel-state",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "234dcce0f075d249f42e00e366921a3103a5ba0bf468a7bdbf03621bb94b58e5"
+      "local_sha256": "64a7ff2f03488272ce8fb38492ab9342015a5ed0d82b23154725f42421e87d48"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
@@ -8618,12 +8622,13 @@
         "../../presentation/primitives/keyboard-composition",
         "./BackgroundJobs",
         "./SessionPanel.module.css",
+        "./SessionPanelSubagents",
         "./WorkingDirectory",
         "./session-panel-state",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "d03425120cfb36f6be0fbe94952b23203ca39d6fb5791076ef2c44da7c593592"
+      "local_sha256": "8cba36c652504293ef1c3457a56d07222e6628c4505a0b2b3d3156a8a690bf5d"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",

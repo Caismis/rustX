@@ -29,6 +29,7 @@ import { structuredPatch } from 'diff';
 import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v80';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
+import { trajectoryStringWrappingStore, useTrajectoryStringWrapping } from './preferences';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
@@ -152,11 +153,19 @@ export function WorkflowNodeReadInspector({ node, error, onRetry, onClose }: { n
   </>;
 }
 
+function jsonStringWrapping(tx: Translate) {
+  return {
+    getDefault: trajectoryStringWrappingStore.getSnapshot,
+    setDefault: trajectoryStringWrappingStore.set,
+    label: tx('trajectory:record.wrap-lines'),
+  };
+}
+
 function Json({ value, label, preview = false, error = false }: { value: unknown; label: string; preview?: boolean; error?: boolean }) {
   const tx = useTranslation();
   const className = [preview ? css.jsonPreview : css.jsonPayload, error ? css.errorPayload : undefined].filter(Boolean).join(' ');
   if (value === null || typeof value !== 'object' || isJsonNumber(value)) return <pre className={[css.payload, preview ? css.payloadPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>{JSON.stringify(value)}</pre>;
-  return <JsonTree data={value} label={label} labels={jsonLabels(tx)} collapsedStringLines={preview ? 3 : 12} className={className} />;
+  return <JsonTree data={value} label={label} labels={jsonLabels(tx)} stringWrapping={jsonStringWrapping(tx)} collapsedStringLines={preview ? 3 : 12} className={className} />;
 }
 
 function parseJsonContainer(value: string): object | undefined {
@@ -454,7 +463,7 @@ function Schema({ definition, preview = false }: { definition: TraceToolDefiniti
     <section className={css.schemaParameters}>
       <h4 className={css.schemaParametersTitle}>{tx('trajectory:record.parameters')}</h4>
       {parameters !== null && typeof parameters === 'object'
-        ? <JsonTree data={parameters} label={tx('trajectory:record.named-parameters-json', { name: definition.name })} labels={jsonLabels(tx)} collapsedStringLines={preview ? 3 : 12} className={css.schemaTree} />
+        ? <JsonTree data={parameters} label={tx('trajectory:record.named-parameters-json', { name: definition.name })} labels={jsonLabels(tx)} stringWrapping={jsonStringWrapping(tx)} collapsedStringLines={preview ? 3 : 12} className={css.schemaTree} />
         : <pre className={`${css.payload} ${preview ? css.payloadPreview : ''}`}>{JSON.stringify(parameters)}</pre>}
     </section>
   </div>;
@@ -479,7 +488,7 @@ function CopyAction({ text, label }: { text: string; label: string }) {
 function ProgramInput({ source, language, args, onOpen }: { source: string; language: string | undefined; args: TraceJson | null | undefined; onOpen?: () => void }) {
   const tx = useTranslation();
   const contents = useId();
-  const [wrapped, setWrapped] = useState(false);
+  const [wrapped, setWrapped] = useTrajectoryStringWrapping();
   const [showJson, setShowJson] = useState(false);
   const actions = <span className={css.programActions}>
     {!showJson && language !== undefined && <span className={css.programLanguage}>{language}</span>}
@@ -559,7 +568,7 @@ function ToolCatalog({ tools }: { tools: readonly TraceToolDefinition[] }) {
       <div className={css.toolCatalogDefinition}>
         {tool.description.text !== '' && <p className={css.toolCatalogFullDescription}>{tool.description.text}</p>}
         {tool.input_schema.value !== null && typeof tool.input_schema.value === 'object'
-          ? <JsonTree data={tool.input_schema.value} label={tx('trajectory:record.named-parameters-json', { name: tool.name })} labels={jsonLabels(tx)} className={css.toolCatalogTree} />
+          ? <JsonTree data={tool.input_schema.value} label={tx('trajectory:record.named-parameters-json', { name: tool.name })} labels={jsonLabels(tx)} stringWrapping={jsonStringWrapping(tx)} className={css.toolCatalogTree} />
           : <pre className={css.payload}>{JSON.stringify(tool.input_schema.value)}</pre>}
       </div>
     </details>)}

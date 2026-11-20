@@ -6,6 +6,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconFlatListOutline16 } from '../../presentation/primitives/icons';
 import { JobsRunningIndicator } from './BackgroundJobs';
+import { SubagentsRunningIndicator } from './SessionPanelSubagents';
 import { panelElementId, presentationOf, toggleElementId, useSessionPanelState } from './session-panel-state';
 import css from './SessionPanelToggle.module.css';
 
@@ -40,6 +41,7 @@ export function SessionPanelToggle({ client, sessionId }: { client: AppServerCli
         <span id={nameId} className={css.name}>{tx('common:session-panel.name')}</span>
         <span id={indicatorsId} className={css.indicators}>
           <JobsRunningIndicator client={client} sessionId={sessionId} panelShown={open} />
+          <SubagentsRunningIndicator sessionId={sessionId} panelShown={open} />
         </span>
       </Button>
     </Tooltip>

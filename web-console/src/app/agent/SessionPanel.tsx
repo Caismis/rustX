@@ -4,6 +4,7 @@ import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { observeComposition } from '../../presentation/primitives/keyboard-composition';
 import { BackgroundJobs } from './BackgroundJobs';
+import { SubagentsProgress, SubagentsSection } from './SessionPanelSubagents';
 import { WorkingDirectory } from './WorkingDirectory';
 import { panelElementId, presentationOf, toggleElementId, useSessionPanelState } from './session-panel-state';
 import css from './SessionPanel.module.css';
@@ -85,6 +86,7 @@ export function SessionPanel({ client, sessionId }: { client: AppServerClient; s
   const focus = useFocusReturn(!shown, toggleId);
 
   const environmentTitleId = `${panelElementId(sessionId)}-environment`;
+  const subagentsTitleId = `${panelElementId(sessionId)}-subagents`;
   const sectionTitleId = `${panelElementId(sessionId)}-background-jobs`;
 
   return (
@@ -107,6 +109,21 @@ export function SessionPanel({ client, sessionId }: { client: AppServerClient; s
             <div className={css.body}>
               <div data-slot="">
                 <WorkingDirectory client={client} sessionId={sessionId} />
+              </div>
+            </div>
+          </section>
+          <section className={css.section} aria-labelledby={subagentsTitleId} data-session-panel-section="subagents">
+            <div className={css.head}>
+              <h2 id={subagentsTitleId} className={css.title}>{tx('common:subagents.list')}</h2>
+              <div className={css.actions}>
+                <div data-slot="">
+                  <SubagentsProgress sessionId={sessionId} />
+                </div>
+              </div>
+            </div>
+            <div className={css.body}>
+              <div data-slot="">
+                <SubagentsSection sessionId={sessionId} onOpened={presentation === 'overlay' ? dismissOverlay : undefined} />
               </div>
             </div>
           </section>

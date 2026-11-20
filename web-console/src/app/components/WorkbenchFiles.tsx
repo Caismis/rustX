@@ -24,7 +24,7 @@ import { PathLabel } from '../../presentation/primitives/PathLabel';
 import { languageForPath } from '../../presentation/primitives/file-language';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Menu } from '../../presentation/primitives/Menu';
-import { IconFolderClose16, IconFolderOpenOutline16, IconRefreshOutline16, IconWrapLinesOutline16, IconCodeOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
+import { IconFolderClose16, IconFolderOpenOutline16, IconRefreshOutline16, IconWrapLinesOutline16, IconCodeOutline16, IconChevronDownOutline14, IconSearchOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 import css from '../../presentation/right-panel/WorkbenchFiles.module.css';
 import type { DesktopApplication } from '../../workspaces/desktop';
 export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
@@ -36,9 +36,17 @@ function Reload({ reload }: { reload: () => void }) {
   const tx = useTranslation(); const label = tx('artifacts:workbench.refresh');
   return <button type="button" className={css.tool} aria-label={label} title={label} onClick={reload}><IconRefreshOutline16/></button>;
 }
+const IGNORED_SEARCH_DIRS = new Set(['.git', 'node_modules', 'target', 'dist', '.next', '.turbo', '.cache']);
+const MAX_SEARCH_MATCHES = 200;
+const MAX_SEARCH_DIRS = 250;
+
 export function WorkspaceFiles({ call, view, onOpen, embedded = false, current }: { call: WorkbenchCall; view: FileTabView; onOpen: (path: string) => void; embedded?: boolean; current?: string }) {
   const tx = useTranslation(), [, redraw] = useReducer(n => n + 1, 0);
   const [revision, setRevision] = useState(view.revision), body = useRef<HTMLDivElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [searchState, setSearchState] = useState<{ results: string[]; loading: boolean; error: string }>({ results: [], loading: false, error: '' });
+  const searchInput = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const el = body.current!; el.scrollTop = view.top;
     if (view.treeFocus) [...el.querySelectorAll<HTMLElement>('[data-files-path]')].find(row => row.dataset.filesPath === view.treeFocus)?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
@@ -48,10 +56,100 @@ export function WorkspaceFiles({ call, view, onOpen, embedded = false, current }
       view.treeFocus = active instanceof HTMLElement && el.contains(active) ? active.closest<HTMLElement>('[data-files-path]')?.dataset.filesPath : undefined;
     };
   }, [view]);
+  useEffect(() => {
+    if (searchOpen) searchInput.current?.focus();
+  }, [searchOpen]);
+  const trimmedQuery = query.trim().toLowerCase();
+  useEffect(() => {
+    if (!searchOpen || !trimmedQuery) {
+      setSearchState({ results: [], loading: false, error: '' });
+      return;
+    }
+    const abort = new AbortController();
+    setSearchState(prev => ({ ...prev, loading: true, error: '' }));
+    void (async () => {
+      const queue: string[] = [''];
+      const matches: string[] = [];
+      let visited = 0;
+      try {
+        while (queue.length > 0 && visited < MAX_SEARCH_DIRS && matches.length < MAX_SEARCH_MATCHES) {
+          if (abort.signal.aborted) return;
+          const dir = queue.shift()!;
+          visited += 1;
+          let level = view.levels.get(dir);
+          if (!level) {
+            level = await call({ kind: 'files', path: dir }, abort.signal);
+            if (abort.signal.aborted || revision !== view.revision) return;
+            view.levels.set(dir, level);
+          }
+          for (const entry of level.entries ?? []) {
+            if (entry.link) continue;
+            const child = [dir, entry.name].filter(Boolean).join('/');
+            if (entry.directory) {
+              if (!IGNORED_SEARCH_DIRS.has(entry.name)) queue.push(child);
+            } else if (child.toLowerCase().includes(trimmedQuery)) {
+              matches.push(child);
+              if (matches.length >= MAX_SEARCH_MATCHES) break;
+            }
+          }
+        }
+        if (!abort.signal.aborted) {
+          matches.sort((a, b) => byName.compare(a, b));
+          setSearchState({ results: matches, loading: false, error: '' });
+        }
+      } catch (cause) {
+        if (!abort.signal.aborted) setSearchState({ results: matches, loading: false, error: String(cause) });
+      }
+    })();
+    return () => abort.abort();
+  }, [searchOpen, trimmedQuery, call, view, revision]);
   const loaded = useCallback((result: WorkbenchResult) => { view.cwd = result.cwd ?? ''; redraw(); }, [view]);
   return <section className={css.root} aria-label={tx('artifacts:workbench.files')} data-workbench-files>
-    {!embedded && <div className={css.header}><PathLabel path={view.cwd} className={css.path}/><Reload reload={() => { view.revision++; view.levels.clear(); setRevision(view.revision); }}/><OpenFileApp call={call} path="" directory/></div>}
-    <div className={css.body} ref={body} data-files-body><Directory path="" {...{ call, view, revision, onOpen, loaded, current }}/></div>
+    {!embedded && <div className={css.header}>
+      <PathLabel path={view.cwd} className={css.path}/>
+      <Reload reload={() => { view.revision++; view.levels.clear(); setRevision(view.revision); }}/>
+      <button type="button" className={css.tool} aria-label={tx('artifacts:workbench.search-files')} title={tx('artifacts:workbench.search-files')} aria-expanded={searchOpen} aria-pressed={searchOpen} data-files-search-toggle=""
+        onClick={() => { setSearchOpen(open => { if (open) setQuery(''); return !open; }); }}>
+        <IconSearchOutline16/>
+      </button>
+      <OpenFileApp call={call} path="" directory/>
+    </div>}
+    {searchOpen && <div className={css.searchBar}>
+      <div className={css.searchField}>
+        <IconSearchOutline16 size={13} className={css.searchIcon}/>
+        <input ref={searchInput} type="search" className={css.searchInput} data-files-search="" aria-label={tx('artifacts:workbench.search-files')} placeholder={tx('artifacts:workbench.search-placeholder')}
+          value={query} onChange={event => setQuery(event.currentTarget.value)}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              if (query) setQuery('');
+              else setSearchOpen(false);
+            }
+          }}/>
+        {query && <button type="button" className={css.searchClear} aria-label={tx('artifacts:workbench.search-clear')} onClick={() => { setQuery(''); searchInput.current?.focus(); }}><IconCloseOutline16 size={12}/></button>}
+      </div>
+    </div>}
+    <div className={css.body} ref={body} data-files-body>
+      {searchOpen && trimmedQuery ? (
+        <ul className={css.level}>
+          {searchState.error && <li className={css.note} role="alert">{searchState.error}</li>}
+          {searchState.loading && !searchState.results.length && <li className={css.note}>{tx('artifacts:workbench.loading')}</li>}
+          {!searchState.loading && !searchState.error && !searchState.results.length && <li className={css.note} data-files-row="search-empty">{tx('artifacts:workbench.search-empty')}</li>}
+          {searchState.results.map(filePath => {
+            const slash = filePath.lastIndexOf('/');
+            const name = slash >= 0 ? filePath.slice(slash + 1) : filePath;
+            const dir = slash >= 0 ? filePath.slice(0, slash) : '';
+            return <li className={css.item} key={filePath} data-files-path={filePath}>
+              <button type="button" className={css.row} aria-current={filePath === current ? 'page' : undefined} title={filePath} onClick={() => onOpen(filePath)}>
+                <FileTypeIcon path={name} size={16} className={css.fileIcon}/>
+                <span className={css.name}>{name}</span>
+                {dir && <span className={css.searchDir}>{dir}</span>}
+              </button>
+            </li>;
+          })}
+        </ul>
+      ) : <Directory path="" {...{ call, view, revision, onOpen, loaded, current }}/>}
+    </div>
   </section>;
 }
 function Directory({ path, call, view, revision, onOpen, loaded, current }: { path: string; call: WorkbenchCall; view: FileTabView; revision: number; onOpen: (path: string) => void; loaded: (result: WorkbenchResult) => void; current?: string }) {
