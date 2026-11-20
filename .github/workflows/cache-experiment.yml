@@ -1,0 +1,206 @@
+name: cache-experiment
+
+# Isolated macOS caching experiments for the #570 performance line.
+# Every key is `exp-`-prefixed and never collides with the production lane
+# lineages (rust-platform-*). Jobs save caches only on this experiment PR's
+# own refs (its merge ref for pull_request runs, its branch ref for push
+# runs) — nothing ever writes to `main`'s trusted cache namespace, and the
+# keys additionally isolate these entries so production lookups can never
+# restore them and these jobs can never restore production entries.
+#
+# Round 2 additions over round 1:
+# - `scope-proof` job: proves GitHub's ref-scoped cache visibility rules on
+#   THIS pull_request run before macOS minutes are spent — the same PR's
+#   second run must restore what its first run saved.
+# - `exp-deps` / `exp-workspace` save unconditionally on the experiment ref,
+#   modelling a hypothetical "PR-scoped producer" without touching the real
+#   lane's save-if contract.
+
+on:
+  pull_request:
+    branches: [devin/1794960987-macos-ci-build-speed]
+  push:
+    branches: [devin/1795172159-macos-ci-cache-exp]
+  workflow_dispatch:
+
+concurrency:
+  group: cache-exp-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: 1
+  CARGO_PROFILE_TEST_DEBUG: 1
+  CARGO_BUILD_JOBS: 2
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Cheap proof of ref-scoped cache visibility for pull_request runs.
+  scope-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: restore scope marker
+        id: scope
+        uses: actions/cache/restore@v4
+        with:
+          path: scope-marker.txt
+          key: exp-scope-${{ github.base_ref }}-${{ github.head_ref }}
+      - name: report
+        run: |
+          if [ "${{ steps.scope.outputs.cache-hit }}" = "true" ]; then
+            echo "RESTORED prior marker on $(cat scope-marker.txt)"
+          else
+            echo "COLD — first run on this ref pair"
+          fi
+      - name: write marker
+        if: steps.scope.outputs.cache-hit != 'true'
+        run: echo "$(date -u +%FT%TZ) run=${{ github.run_id }} ref=${{ github.ref }}" > scope-marker.txt
+      - name: save scope marker
+        if: steps.scope.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: scope-marker.txt
+          key: exp-scope-${{ github.base_ref }}-${{ github.head_ref }}
+
+  # Variant D: production-equivalent deps-only rust-cache, but saving on the
+  # experiment ref so this PR self-warms (the missing producer problem).
+  exp-deps:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - uses: ./.github/actions/libclang
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: exp-macos-deps
+          save-if: true
+      - run: |
+          {
+            echo "## macOS experiment D (deps-only cache)"
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "latest"
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: compile external test targets
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
+      - name: compile lib + bins test units
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: exp-deps-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+
+  # Variant W: same but caching workspace crates too — measures the warm
+  # lib-test path and the invalidation cost on a member-crate source change.
+  exp-workspace:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - uses: ./.github/actions/libclang
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: exp-macos-ws
+          save-if: true
+          cache-workspace-crates: true
+      - run: |
+          {
+            echo "## macOS experiment W (workspace crates cached)"
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "latest"
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: compile external test targets
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
+      - name: compile lib + bins test units
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: exp-workspace-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+
+  # Variant S: sccache on the GitHub Actions cache backend (Codex parity).
+  # Proves whether sccache actually engages rustc on macOS this time and
+  # whether the backend write errors seen on Linux recur.
+  exp-sccache:
+    runs-on: macos-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_ERROR_LOG: /tmp/sccache-err.log
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_CACHE_SIZE: 8G
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - uses: ./.github/actions/libclang
+      # sccache-action is a JS action, so the runner injects
+      # ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN / ACTIONS_RESULTS_URL
+      # into it — a `run:` step sees them as empty, which is why a plain
+      # `brew install sccache` cannot reach the ghac backend.
+      - name: install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      # No local-disk fallback: with SCCACHE_GHA_ENABLED, sccache writes only
+      # to the ghac backend — SCCACHE_DIR would stay empty and actions/cache
+      # would persist nothing. Backend write failures are surfaced via
+      # SCCACHE_ERROR_LOG and the stats step instead.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "latest"
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: sccache zero stats
+        run: sccache --zero-stats || true
+      - name: compile external test targets
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
+      - name: compile lib + bins test units
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+      - name: sccache stats
+        if: always()
+        run: |
+          sccache --show-stats || true
+          echo "--- error log ---"
+          cat /tmp/sccache-err.log 2>/dev/null | tail -40 || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: exp-sccache-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
