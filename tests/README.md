@@ -301,6 +301,20 @@ meaningful domain/boundary/dependency topology:
 | `cfg3_managed_output` | durable identity domains | typed Session/Node/Conversation/execution identity validation and serialization; output locators are independent of execution IDs |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
+For the Linux Execution Client mount proof, run
+`test-support/prove_execution_mount_view.sh`. It stages the Server and Client
+test artifacts, runs the separate mount cases for App Server commands and
+Client filesystem operations, and exercises live Agent Bash Read/Grep,
+Workspace Python, and delegated Subagent Write/Edit/Read/Bash. The
+Subagent case keeps the authored role fixture available to the Server and
+overlays the execution directory only on the Client. It verifies that the
+physical output appears exclusively in that overlay and that Session drain
+reaps the supervision probe.
+
+Browser scenarios driving native tools create and enroll the exact testing
+Session before connecting the browser. The ordinary browser connection and
+history-only fixtures still use the same bare server startup.
+
 The stdio MCP canonical-executor test holds the fixture's `mutate` response
 behind a parent-created marker until the real `ProgressReporter` has observed
 its fractional progress. rmcp schedules notification handlers independently of

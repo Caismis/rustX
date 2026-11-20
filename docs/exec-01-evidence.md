@@ -20,7 +20,7 @@ The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platfor
 
 | ID | Required PR1 proof | Current implementer / test | Lane and evidence at initial audit |
 | --- | --- | --- | --- |
-| T01 | Server-only work without any execution dependency | `app_server::process`, `standalone_server_reads_cold_sessions_without_workspace_or_helpers` | Partial; Linux process test passed: two real catalog IDs, no workspace at either recorded path, only the Server executable on PATH. No model-call or output-capture proof yet |
+| T01 | Server-only work without any execution dependency | `standalone_server_reads_cold_sessions_without_workspace_or_helpers`, `standalone_server_commits_a_model_turn_without_a_client_or_helpers` | Linux process tests passed. The isolated Server lists two cold Sessions with missing Workspaces. A separate isolated launch submits exactly one loopback model request, settles its canonical answer and leaves the Workspace empty. T31 separately exercises overflow without Client storage |
 | T02 | Separate filesystem views for read/write/Bash through product | `explicit_composition_reads_from_client_mount_namespace`, `filesystem_operations_use_the_private_mount_view`, `background_live_output_is_readable_while_running_and_reused_at_settlement` | Linux mount proofs cover the App Server query/Write/argv path and native Agent Read/Write/Bash/Grep. The writable overlay exercises Client directory creation, file copy, recursive removal, watch delivery, Git baseline, first-mutation capture and comparison release while the Server sees the original empty mount point. Separate macOS gate applies |
 | T03 | Exactly one Session dispatch owner | `Binding::connect`, `concurrent_hellos_commit_exactly_one_live_connection`; `session_runtime_manager::execution` claim registry and endpoint dispatch | Partial; member unit at `b75d78c75` tests one Binding, not competing Session reservations; `5fddad74f` proves one endpoint claim per Session with dropped-waiter safety; `the_endpoint_dispatches_one_bounded_read_for_its_own_session` proves the stored connection is the sole serialized dispatch owner — `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` dispatch today |
 | T04 | Root, child and Workflow route to exact Session | `SessionExecutionScope`, delegated child IPC, `delegated_write_preserves_the_commit_frame_and_unknown_cut`, `shipped_repair_*` | Root and native Workflow use the exact Session route. A real Subagent relays files and processes through its parent and shares that authenticated binding. The three shipped Workflow repair cases subsequently passed with the provider emulator in the relay slice. Combined private-mount coverage across roles remains open |
@@ -28,7 +28,7 @@ The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platfor
 | T06 | Parallel results commit in call order, unique terminal is last | `client_bash_reversed_settlement_keeps_canonical_order`, `shipped_repair_*` | Two parallel native Bash operations on one real Client finish in reverse physical order. The test proves one START per operation, two model requests, tool results in call order, and one final terminal. The shipped Workflow fixtures cover separately admitted child writers followed by physical check commands |
 | T11 | Real control/cancel/bidirectional health progress with saturated data | `detach_during_data_and_control_backpressure`; split Unix/WebSocket send blockage, pairing and data-permit tests | Linux integration passed. The real Execution Client answers an actual UI command. The proxy parks a Client metadata reply and the first health receipt. Four control slots stay occupied and the fifth probe returns `WouldBlock`. After real UI WebSocket EOF, the keyed cancellation progresses while the data reply remains parked. The business socket closes before the data gate opens. All four health probes receive their own receipts. Agent-flow saturation across other roles and the future recovery cases remain open |
 | T18 | Authenticate the binding before Workspace configuration | `execution_enrollment_precedes_client_and_workspace_configuration_readiness`, production launcher enrollment | Passed on Linux for trusted remote enrollment. The durable Session is inspectable before Client startup. Unbound browsing fails, the authenticated Client browses its Workspace, and malformed Workspace configuration refuses Agent attach without disabling history or management |
-| T24 | Independently built and launched Server and Client, isolated credentials/dependencies | Client package + dependency tree, `Launcher.start`, `app_server::process::local_execution`, Server-only process test in T01; `rustx-process-supervisor` is an independently built physical package whose `bash-supervisor`/`interactive-supervisor` helpers stage beside the Client | Partial; isolated runtime launch, cold catalog and the paired-flag two-process composition verified (`explicit_composition_launches_and_reaps_the_sibling_client`: trusted sibling, empty environment, sealed stdio, drained reaping); the process kernel builds and tests standalone in `rustx-execution-client` with no root/runtime dependency. Complete product runtime dependency audit outstanding |
+| T24 | Independently built and launched Server and Client, isolated credentials/dependencies | T01 standalone Server, Client-only build and paired admission, `explicit_composition_launches_and_reaps_the_sibling_client`, both normal Cargo dependency graphs | Linux Server-only and Client-only builds passed. Only the staged Server executable is present in the cold catalog and model tests. The admitted sibling uses sealed stdio and an empty inherited environment. The Client's production graph excludes the Agent Server, model adapters and canonical storage. The Server's Client crate dependency is test-only. Native macOS and installed-package proof remain open |
 | T26 | Client revocation wins before file commit or START | `client_applied_control_wins_before_file_publication`, `a_revoked_binding_after_prepare_sends_no_commit_frame`, `agent_bash_has_separate_registration_and_a_client_owned_start_gate`, Client mutation gate tests | The real paired Client proves zero effects before file publication for cancel and binding revoke. Both cases send exactly one prepare and one commit frame, return typed `CommitCancelled`, and leave the Workspace empty. Real Bash cancellation before START produces no business marker. Mid-crossing disposition is tested at the Client mutation gate |
 | T28 | Reject wrong Session, credential, instance, generation and duplicate | `wrong_hello_fields_never_consume_a_reservation`, `credential_replay_after_eof_never_reconnects`; `session_runtime_manager::execution` claim registry | Partial; member unit + bootstrap; `5fddad74f` proves distinct per-Session binding material and delete/drain revocation; `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` Session routing is live — an uncomposed Session returns `ExecutionUnavailable` and never serves or mutates another Session's bytes |
 | T29 | UI command ownership distinct from accepted Agent execution | `detach_during_data_and_control_backpressure`, `detached_operations_release_without_touching_siblings`, PTY and drain suite | Combined two-process Linux test passed. It asserts one register, one START, a correlated `CancellationRequested`, a physical `Cancelled` snapshot, the original five ordered stdout bytes, zero stderr, exact release cursor, one `OutputReleased` and Client exit. A distinct UI operation survives detach in the sibling scenario. Later transport recovery remains #577 |
@@ -153,6 +153,15 @@ Linux mount test verifies the actual interpreter under the Client-only
 `.venv` and no matching Server-side path. The replacement regression
 asserts zero probes, records or `.venv` after the bound root changes. Native
 macOS verification remains open. Managed Python is owned by #577.
+
+The detached-stdio process test controls two independent real Clients with
+separate Unix stream gates. One completes exactly one Workspace Python
+preparation after stdio EOF. The other is cancelled by Server SIGTERM;
+its uv process closes the stream and exits without creating a `.venv`.
+The six Workflow Code regressions pass with a valid venv and an explicit
+Client readiness receipt, including language selection, large typed results,
+retry, and error branches. Three crash recovery regressions pass with the
+real Client bound to the same durable Session used by the recovered turn.
 
 Trusted enrollment and authorized inspection do not run Workspace
 configuration, discover Skills or wait for MCP or uv. Unavailable or invalid
@@ -281,8 +290,18 @@ synchronous write performance comparisons.
 Peak wire-visible data in flight was one record. All ten command output
 journals reached 65,536 bytes and released at that exact cursor. In the
 separate pressure fixture, all four control slots were occupied and the
-fifth probe returned `WouldBlock`. Internal scheduler queue measurements
-for the product load and measurements after this release remain open.
+fifth probe returned `WouldBlock`. The held-writer regression
+`the_control_lane_progresses_while_every_data_permit_is_parked` also proves
+all eight data permits were occupied during control traffic. Internal
+scheduler high-water measurements for the production load remain open.
+
+The paired UDS measuring peer ran 18 separate Client probes against the same
+release executable. For the 67,108,877-byte source, line selection took one
+RPC with 99 bytes sent and 265 bytes returned, a 56.27 ms median, and a
+Client peak of 8,528 KiB. Grep took one RPC with 149 bytes sent and 132 bytes
+returned, a 21.34 ms median, and a Client peak of 9,392 KiB. The probe peer
+reached 18,764 KiB and 18,808 KiB respectively. It is a measuring peer with
+different runtime dependencies from the product Server.
 
 The repository environment benchmark also ran successfully with the tree
 mutation candidate. Each workload explicitly composes its measured Session,
@@ -419,7 +438,24 @@ telemetry remain unmeasured.
 
 ## Final-head gate
 
-Record local commands, actual head SHA, Actions checkout SHA, required Linux/macOS jobs, explicit skips and the final `full-verification` / Merge verification URL here before requesting final review. No final-head verification is claimed by this initial ledger.
+The [FULL run on `ec9342c49692893eca14bba7c1b9d3ec32fae10f`](https://github.com/Caismis/rustX/actions/runs/44744451236)
+passed generated protocol, Format and lint, TUI, Web/Host/launcher, and
+Browser input build. Linux Boundary, Deterministic contracts, all three
+Browser shards, and Merge verification failed. The local prepared
+workspace test stopped in the Server library with 6,145 passed, seven
+failed, and 27 ignored. The seven failures affected three recovery
+fixtures that enrolled the wrong Session and four Workflow Code fixtures
+that substituted Python symlinks for a venv. The corrected targeted runs
+pass. The independent Linux process suite also passes the corrected
+detached-stdio Python case.
+
+Local pinned Chromium runs passed native Bash promotion, Stop in both
+languages, replay of removed capabilities in both layouts, native child
+settlement, file delivery, Session deletion, and uploads. The fork test
+reuses the two actual upload receipts returned by the fork after starting
+an authorized Client for the destination Session and observes exactly four
+mock-provider requests. New exact-head FULL and Merge verification and a
+native macOS run are still required.
 
 ## Command cancellation, detach, and release (UI-owned `command/exec`)
 
