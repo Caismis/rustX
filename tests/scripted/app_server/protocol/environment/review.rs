@@ -614,3 +614,114 @@ pub(crate) async fn catalog_credentials() {
     server.abort();
     let _ = server.await;
 }
+
+/// Waits until a physically spawned pid is gone: the Client reaped it.
+async fn wait_gone(pid: i32) {
+    bounded(async {
+        while nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+            != Err(nix::errno::Errno::ESRCH)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+}
+
+/// Five sequential operations on one Session, each abandoned by its UI
+/// connection after START: every one physically terminates, the next one
+/// still starts (no leaked capacity), and an independent operation on another
+/// connection keeps running to its own result.
+pub(crate) async fn detached_operations_release_without_touching_siblings() {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
+    let sibling = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&sibling).await;
+    let sibling_params = parameters(&fixture, &["/bin/sh", "-c", "sleep 4; printf SIBLING"]);
+    let sibling_worker = sibling.clone();
+    let sibling_run =
+        tokio::spawn(
+            async move { call(&sibling_worker, 1, Method::CommandExec(sibling_params)).await },
+        );
+    for round in 0..5 {
+        let id = format!("detach-{round}");
+        let pidfile = format!("pid-{round}");
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        initialize(&connection).await;
+        let script = format!("echo $$ > {pidfile}; printf READY; exec sleep 600");
+        let mut params = parameters(&fixture, &["/bin/sh", "-c", &script]);
+        params.process_id = Some(id.clone());
+        params.stream_stdout_stderr = true;
+        let worker = connection.clone();
+        let command =
+            tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+        through_marker(&connection, &id, b"READY").await;
+        let pid: i32 = std::fs::read_to_string(fixture.workspaces[0].join(&pidfile))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        connection.close();
+        let _ = bounded(command).await;
+        wait_gone(pid).await;
+    }
+    let MethodResult::CommandExec { result } = bounded(sibling_run).await.unwrap() else {
+        panic!("the independent operation must produce its own result")
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&result.stdout_base64)
+            .unwrap(),
+        b"SIBLING"
+    );
+    sibling.close();
+    execution.kill().await.unwrap();
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
+}
+
+/// A release refused before the wire as a busy data lane is retried within the
+/// one release budget and then succeeds; the business result is unchanged.
+pub(crate) async fn release_retries_prewire_busy_then_releases() {
+    use crate::app_server::command::ReleaseOutcome;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let id = "release-busy";
+    let observer = crate::app_server::command::observe_release(id);
+    crate::app_server::command::force_release_busy(id, 2);
+    let mut params = parameters(&fixture, &["/bin/sh", "-c", "printf busy-release"]);
+    params.process_id = Some(id.into());
+    let worker = connection.clone();
+    let command = tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+    let MethodResult::CommandExec { result } = bounded(command).await.unwrap() else {
+        panic!("the business result survives a busy release")
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&result.stdout_base64)
+            .unwrap(),
+        b"busy-release"
+    );
+    assert_eq!(
+        observer.outcomes(),
+        [
+            ReleaseOutcome::Busy,
+            ReleaseOutcome::Busy,
+            ReleaseOutcome::Released
+        ]
+    );
+    connection.close();
+    execution.kill().await.unwrap();
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
+}

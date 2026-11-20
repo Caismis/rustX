@@ -88,3 +88,35 @@ Before changing selection or buffering algorithms, retain `a24cbf6e6` as the rea
 ## Final-head gate
 
 Record local commands, actual head SHA, Actions checkout SHA, required Linux/macOS jobs, explicit skips and the final `full-verification` / Merge verification URL here before requesting final review. No final-head verification is claimed by this initial ledger.
+
+## Command cancellation, detach, and release (UI-owned `command/exec`)
+
+- Cancellation has one owner: `terminate` and UI detach only signal the
+  operation's entry; its driver starts exactly one control-lane delivery
+  (`CancelProcess`) off the reactor, within one absolute budget covering
+  queue wait and the correlated receipt. Only a refusal proven to precede
+  the queue (`WouldBlock`) is retried inside that budget. An undeliverable
+  or `Unknown` cancel fails closed unless the operation is already proven
+  settled: the binding is fenced and its sockets shut without waiting on a
+  wedged data exchange. A delivered, known cancel keeps the pair live. A
+  receipt is never physical containment; the driver keeps waiting for the
+  Client's settled snapshot.
+- A detached operation (UI delivery failed or the UI closed) keeps its
+  driver: it stops emitting, tracks settlement, and releases the journal
+  through its exact final sequence without draining it (release is a
+  discard, not a delivery). Pre-START returns deliver the cancellation first.
+- Release retries only a proven pre-wire `Busy` within one absolute budget;
+  any other answer is final and never relaunches. A failed release never
+  changes the known business outcome.
+- Tests: `an_unknown_cancel_cuts_the_pair_while_a_data_exchange_is_parked` and
+  `a_delivered_known_cancel_keeps_the_pair_live` (real admitted pair, control
+  peer holds its acknowledgement, data peer parked on the wire),
+  `detached_operations_release_without_touching_siblings` (five
+  sequential detached operations on one Session, each physically terminated,
+  an independent sibling keeps running to its own result),
+  `release_retries_prewire_busy_then_releases`, and the execution-server test
+  `a_saturated_control_lane_refuses_a_cancel_explicitly_and_delivers_it_once_a_slot_frees`.
+- Pending: a product-level test driving a saturated control lane through a
+  real UI command (the saturation is covered at the control handle only);
+  the Client-side ambient `RUSTX_TEST_SUPERVISION_TRACE` read in production
+  `Operations::new` is still present and remains pending.

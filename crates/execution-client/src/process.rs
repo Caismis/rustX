@@ -851,7 +851,7 @@ impl Operations {
             return ProcessReply::Unknown { key };
         }
         // Release is valid only over the *complete* settled journal —
-        // the caller must have consumed through the snapshot's final
+        // the caller consumed or discarded through the snapshot's final
         // sequence exactly.
         let OperationState::Settled(snapshot) = op.state else {
             return ProcessReply::Conflict { key };
@@ -1533,9 +1533,10 @@ mod tests {
 
     #[test]
     fn argv_pwd_runs_in_the_workspace_and_settles_known() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         let adm = admission(dir.path());
@@ -1565,9 +1566,10 @@ mod tests {
 
     #[test]
     fn duplicate_register_attaches_and_second_start_cannot_spawn_twice() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1604,9 +1606,10 @@ mod tests {
 
     #[test]
     fn cancel_before_start_admits_zero_business_spawn() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1636,9 +1639,10 @@ mod tests {
     /// flag, never assumed. Cancelled-before-crossing writes no marker.
     #[test]
     fn held_start_cancelled_before_crossing_writes_no_marker() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1676,9 +1680,10 @@ mod tests {
 
     #[test]
     fn streamed_stdin_reaches_the_process_in_order() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1748,9 +1753,10 @@ mod tests {
 
     #[test]
     fn pty_output_resize_and_eof_work() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1859,9 +1865,10 @@ mod tests {
 
     #[test]
     fn release_requires_the_exact_final_cursor() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1917,9 +1924,10 @@ mod tests {
 
     #[test]
     fn authorized_env_reaches_the_command_and_baseline_wins() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1942,9 +1950,10 @@ mod tests {
 
     #[test]
     fn sequential_released_operations_do_not_exhaust_capacity() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
@@ -1970,9 +1979,10 @@ mod tests {
 
     #[test]
     fn revoke_fences_a_pending_start() {
-        if !supervisor_staged() {
-            return;
-        }
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());

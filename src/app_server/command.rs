@@ -139,8 +139,10 @@ struct Entry {
     key: ProcessOperationKey,
     process_id: String,
     endpoint: Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
-    control: rustx_execution_server::ControlHandle,
     cancellation: crate::runtime::CancellationSignal,
+    /// Set once the driver has observed the Client's settled snapshot: a
+    /// settled operation never fences the pair on a cancel answer.
+    settled: std::sync::atomic::AtomicBool,
     /// The strict input sequence — serialized so concurrent writes can
     /// never double-assign one sequence position.
     next_input: tokio::sync::Mutex<u64>,
@@ -225,7 +227,7 @@ impl Commands {
             .admission()
             .ok_or_else(|| domain(ErrorData::ExecutionUnavailable))?
             .clone();
-        let control = endpoint
+        endpoint
             .control()
             .ok_or_else(|| domain(ErrorData::ExecutionUnavailable))?;
         let relative = crate::local_runtime::session_runtime_manager::workspace_entry(
@@ -281,8 +283,8 @@ impl Commands {
             key: key.clone(),
             process_id: process_id.clone(),
             endpoint: endpoint.clone(),
-            control,
             cancellation: cancellation.clone(),
+            settled: std::sync::atomic::AtomicBool::new(false),
             next_input: tokio::sync::Mutex::new(1),
         });
         state.active.insert(process_id.clone(), entry.clone());
@@ -291,6 +293,14 @@ impl Commands {
         let (sender, received) = oneshot::channel();
         let commands = self.clone();
         let streaming = params.tty || params.stream_stdout_stderr;
+        let (disarm, disarmed) = oneshot::channel::<()>();
+        watch_cancellation(
+            entry.clone(),
+            cancellation.clone(),
+            root_retired.clone(),
+            events.closed.clone(),
+            disarmed,
+        );
         tokio::spawn(async move {
             let _owner = owner;
             let result = run(
@@ -301,10 +311,18 @@ impl Commands {
                 streaming,
                 manager,
                 events,
-                cancellation,
+                cancellation.clone(),
                 root_retired,
             )
             .await;
+            // Success means the driver released the settled journal: the
+            // watcher is disarmed and never sends. Any failure hands the
+            // cancellation to the same watcher, which delivers it once.
+            if result.is_err() {
+                cancellation.cancel();
+            } else {
+                let _ = disarm.send(());
+            }
             commands
                 .state
                 .lock()
@@ -481,13 +499,12 @@ impl Commands {
     }
     /// Cancel this connection's one operation: the control lane carries
     /// the cancellation to the exact key — nonblocking enqueue, the
-    /// operation task watches its own signal and settles honestly.
+    /// operation's watcher delivers the keyed cancel on the control lane.
     pub fn terminate(&self, process_id: &str) -> Result<(), RpcError> {
         let entry = self.entry(process_id)?;
         // The enqueue-only path: a full queue or dead lane is not an
         // error the caller can act on — the driver already observes its
         // own cancellation and the lane's health is reported elsewhere.
-        let _ = entry.control.request_process_cancel(&entry.key);
         entry.cancellation.cancel();
         Ok(())
     }
@@ -551,8 +568,22 @@ async fn exchange(
     endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
     request: ProcessRequest,
 ) -> Exchange {
+    exchange_until(
+        endpoint,
+        request,
+        std::time::Instant::now() + rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT,
+    )
+    .await
+}
+
+/// [`exchange`] under one absolute deadline shared with the wire exchange.
+async fn exchange_until(
+    endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    request: ProcessRequest,
+    deadline: std::time::Instant,
+) -> Exchange {
     let endpoint = endpoint.clone();
-    match tokio::task::spawn_blocking(move || endpoint.process(&request)).await {
+    match tokio::task::spawn_blocking(move || endpoint.process_until(&request, deadline)).await {
         Ok(Ok(reply)) => Exchange::Reply(reply),
         Ok(Err(io)) if io.kind() == std::io::ErrorKind::WouldBlock => Exchange::Busy,
         Ok(Err(io)) => Exchange::Failed(match io.kind() {
@@ -589,6 +620,12 @@ async fn contradicted(
     let _ = tokio::task::spawn_blocking(move || endpoint.retire_connection()).await;
     domain(ErrorData::OutcomeUnknown)
 }
+
+/// The one absolute budget of a cancellation delivery, queue wait included.
+const CANCEL_BUDGET: std::time::Duration =
+    rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+/// The one absolute budget of the final release, prewire retries included.
+const RELEASE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The physical outcome pace of the operation task: far inside every
 /// wire budget, never busy-spinning the data lane.
@@ -639,7 +676,6 @@ async fn run(
             // A record may already exist Client-side (a register reply
             // could be in flight or lost) — the cancel settles a landed
             // record or plants the tombstone that fences a late one.
-            let _ = entry.control.request_process_cancel(&key);
             return Err(domain(ErrorData::ConnectionClosed));
         }
         match exchange(&endpoint, register.clone()).await {
@@ -714,7 +750,6 @@ async fn run(
             // The record is registered but START was never dispatched —
             // the control-lane cancel settles it instead of leaving the
             // `Registered` record to pin a capacity slot.
-            let _ = entry.control.request_process_cancel(&key);
             return Err(domain(ErrorData::ConnectionClosed));
         }
         match exchange(&endpoint, ProcessRequest::Start { key: key.clone() }).await {
@@ -737,6 +772,9 @@ async fn run(
 
     let mut settled: Option<SettledSnapshot> = None;
     let mut cancelled = false;
+    // The UI can no longer receive output: the driver keeps tracking the
+    // physical operation to settlement and releases it, never delivering.
+    let mut detached = false;
     let mut drained = false;
     let mut finished = false;
     let mut delta_sequence = 0_u64;
@@ -756,7 +794,7 @@ async fn run(
                     .any(|root| endpoint.workspace().starts_with(root)))
         {
             cancelled = true;
-            let _ = entry.control.request_process_cancel(&key);
+            cancellation.cancel();
         }
         // Settle the outstanding delivery receipt without blocking the
         // lane: a queued notification the consumer dropped — never
@@ -766,8 +804,10 @@ async fn run(
                 Ok(()) => last_receipt = None,
                 Err(oneshot::error::TryRecvError::Empty) => {}
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    let _ = entry.control.request_process_cancel(&key);
-                    return Err(domain(ErrorData::ConnectionClosed));
+                    detached = true;
+                    last_receipt = None;
+                    outbox.clear();
+                    cancellation.cancel();
                 }
             }
         }
@@ -776,6 +816,7 @@ async fn run(
         // with truncation visible only in the totals — is announced now,
         // after the retained output.
         if !finished
+            && !detached
             && drained
             && let Some(snapshot) = settled
         {
@@ -814,11 +855,12 @@ async fn run(
             })) {
                 last_receipt = Some(receipt);
             } else {
-                // The consumer is gone — the operation is cancelled and
-                // the request ends closed; the result could never be
-                // delivered anyway.
-                let _ = entry.control.request_process_cancel(&key);
-                return Err(domain(ErrorData::ConnectionClosed));
+                // The consumer is gone: the rest of the output is
+                // discarded and the operation is cancelled — the driver
+                // still settles and releases it.
+                detached = true;
+                outbox.clear();
+                cancellation.cancel();
             }
         }
         // Drain the ordered journal one bounded page at a time until the
@@ -826,7 +868,11 @@ async fn run(
         // holds paging while a delivery receipt is still outstanding,
         // and only once the previous page's chunks are all queued — so
         // the outbox never holds more than one page plus its markers.
-        if !drained && outbox.is_empty() && (last_receipt.is_none() || settled.is_some()) {
+        if !drained
+            && !detached
+            && outbox.is_empty()
+            && (last_receipt.is_none() || settled.is_some())
+        {
             match exchange(
                 &endpoint,
                 ProcessRequest::OutputPage {
@@ -917,6 +963,9 @@ async fn run(
                         return Err(contradicted(&endpoint).await);
                     }
                     if let OperationState::Settled(snapshot) = state {
+                        entry
+                            .settled
+                            .store(true, std::sync::atomic::Ordering::Release);
                         settled = Some(snapshot);
                     }
                 }
@@ -925,30 +974,112 @@ async fn run(
                 Exchange::Failed(error) => return Err(error),
             }
         }
-        if finished && drained && outbox.is_empty() {
+        if settled.is_some() && (detached || (finished && drained && outbox.is_empty())) {
             break;
         }
         tokio::time::sleep(OPERATION_POLL).await;
     }
     let snapshot = settled.expect("settled after drain");
-    if let Some(receipt) = last_receipt.take() {
-        events
+    let delivered = match last_receipt.take() {
+        _ if detached => Err(domain(ErrorData::ConnectionClosed)),
+        Some(receipt) => events
             .emitted(receipt)
             .await
-            .map_err(|()| domain(ErrorData::ConnectionClosed))?;
-    }
-    // The final acknowledgement frees the Client's retained buffers;
-    // the minimal tombstone stays queryable. A failed release leaves a
-    // bounded record, never a lost outcome — the result is still honest.
-    let _ = exchange(
-        &endpoint,
-        ProcessRequest::ReleaseOutput {
-            key: key.clone(),
-            final_sequence: snapshot.final_sequence,
-        },
-    )
-    .await;
+            .map_err(|()| domain(ErrorData::ConnectionClosed)),
+        None => Ok(()),
+    };
+    // The exact final sequence releases the settled journal whether its
+    // bytes were delivered or discarded. A failed release leaves a
+    // bounded record and never changes the known outcome.
+    release_output(&endpoint, &process_id, &key, snapshot.final_sequence).await;
+    delivered?;
     Ok(result_from(snapshot, streaming, stdout, stderr))
+}
+
+/// Arms the operation's one cancellation watcher, independent of the driver's
+/// data exchanges: UI detach, root retirement, or a driver failure wakes it,
+/// and it delivers the keyed cancel on the control lane exactly once. Its
+/// budget starts at first observation, not after the blocking-pool wait.
+/// Disarming (dropping the sender) without a wake-up sends nothing.
+fn watch_cancellation(
+    entry: Arc<Entry>,
+    cancellation: crate::runtime::CancellationSignal,
+    root_retired: crate::runtime::CancellationSignal,
+    closed: crate::runtime::CancellationSignal,
+    disarmed: oneshot::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        // Only an explicit disarm (a successful release) ends the watch
+        // without delivery; a dropped sender means the driver failed.
+        let disarmed_ok = tokio::select! {
+            biased;
+            disarmed = disarmed => disarmed.is_ok(),
+            () = cancellation.cancelled() => false,
+            () = root_retired.cancelled() => false,
+            () = closed.cancelled() => false,
+        };
+        if disarmed_ok {
+            return;
+        }
+        let deadline = std::time::Instant::now() + CANCEL_BUDGET;
+        let _ = tokio::task::spawn_blocking(move || {
+            let settled = entry.settled.load(std::sync::atomic::Ordering::Acquire);
+            deliver_cancel(&entry.endpoint, &entry.key, settled, deadline);
+        })
+        .await;
+    });
+}
+
+/// Delivers the keyed cancel under one absolute budget. Delivery failures
+/// fail closed through the endpoint unless the operation is already settled;
+/// a receipt is never reported as containment — the driver waits for the
+/// Client's settled snapshot.
+fn deliver_cancel(
+    endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    key: &ProcessOperationKey,
+    settled: bool,
+    deadline: std::time::Instant,
+) {
+    endpoint.cancel_operation(key, deadline, settled);
+}
+
+/// Releases the settled journal through its exact final sequence. Only a
+/// refusal proven to precede the wire (`Busy`) is retried, within one
+/// absolute budget; any other answer — including an ambiguous transport
+/// failure — is final and never relaunches or retries the operation.
+async fn release_output(
+    endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    process_id: &str,
+    key: &ProcessOperationKey,
+    final_sequence: DecimalU64,
+) {
+    let deadline = std::time::Instant::now() + RELEASE_BUDGET;
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return;
+        }
+        let answer = if take_forced_release_busy(process_id) {
+            Exchange::Busy
+        } else {
+            exchange_until(
+                endpoint,
+                ProcessRequest::ReleaseOutput {
+                    key: key.clone(),
+                    final_sequence,
+                },
+                deadline,
+            )
+            .await
+        };
+        record_release(process_id, &answer);
+        match answer {
+            Exchange::Busy => {
+                tokio::time::sleep(OPERATION_POLL.min(deadline - std::time::Instant::now())).await;
+            }
+            _ => return,
+        }
+    }
 }
 
 /// Server-side START-dispatch hold for scripted START-race tests: the
@@ -1013,6 +1144,103 @@ pub(crate) fn hold_start(process_id: &str) -> StartHold {
         released: released_tx,
     }
 }
+
+#[cfg(test)]
+static FORCED_RELEASE_BUSY: std::sync::Mutex<Vec<(String, u32)>> =
+    std::sync::Mutex::new(Vec::new());
+/// A typed release answer, recorded without any peer-supplied text.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleaseOutcome {
+    Busy,
+    Released,
+    Refused,
+    Failed,
+}
+#[cfg(test)]
+type ReleaseLog = std::sync::Arc<std::sync::Mutex<Vec<ReleaseOutcome>>>;
+#[cfg(test)]
+static RELEASE_OBSERVERS: std::sync::Mutex<Vec<(String, ReleaseLog)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Test seam: a keyed observer of one operation's release answers, installed
+/// for one test and removed when dropped.
+#[cfg(test)]
+pub(crate) struct ReleaseObserver {
+    process_id: String,
+    log: ReleaseLog,
+}
+#[cfg(test)]
+pub(crate) fn observe_release(process_id: &str) -> ReleaseObserver {
+    let log = ReleaseLog::default();
+    RELEASE_OBSERVERS
+        .lock()
+        .expect("release observers")
+        .push((process_id.to_owned(), log.clone()));
+    ReleaseObserver {
+        process_id: process_id.to_owned(),
+        log,
+    }
+}
+#[cfg(test)]
+impl ReleaseObserver {
+    pub(crate) fn outcomes(&self) -> Vec<ReleaseOutcome> {
+        self.log.lock().expect("release log").clone()
+    }
+}
+#[cfg(test)]
+impl Drop for ReleaseObserver {
+    fn drop(&mut self) {
+        RELEASE_OBSERVERS
+            .lock()
+            .expect("release observers")
+            .retain(|(id, _)| *id != self.process_id);
+    }
+}
+
+/// Test seam: the next `times` release attempts of `process_id` are refused
+/// before the wire as a busy data lane.
+#[cfg(test)]
+pub(crate) fn force_release_busy(process_id: &str, times: u32) {
+    FORCED_RELEASE_BUSY
+        .lock()
+        .expect("release busy")
+        .push((process_id.to_owned(), times));
+}
+#[cfg(test)]
+fn take_forced_release_busy(process_id: &str) -> bool {
+    let mut forced = FORCED_RELEASE_BUSY.lock().expect("release busy");
+    let Some(index) = forced.iter().position(|(id, _)| id == process_id) else {
+        return false;
+    };
+    forced[index].1 -= 1;
+    if forced[index].1 == 0 {
+        forced.remove(index);
+    }
+    true
+}
+#[cfg(not(test))]
+fn take_forced_release_busy(_process_id: &str) -> bool {
+    false
+}
+#[cfg(test)]
+fn record_release(process_id: &str, answer: &Exchange) {
+    let outcome = match answer {
+        Exchange::Busy => ReleaseOutcome::Busy,
+        Exchange::Reply(ProcessReply::OutputReleased { .. }) => ReleaseOutcome::Released,
+        Exchange::Reply(ProcessReply::Conflict { .. } | ProcessReply::Unknown { .. }) => {
+            ReleaseOutcome::Refused
+        }
+        Exchange::Failed(_) | Exchange::Reply(_) => ReleaseOutcome::Failed,
+    };
+    for (id, log) in RELEASE_OBSERVERS.lock().expect("release observers").iter() {
+        if id == process_id {
+            log.lock().expect("release log").push(outcome);
+        }
+    }
+}
+#[cfg(not(test))]
+fn record_release(_process_id: &str, _answer: &Exchange) {}
 
 fn result_from(
     snapshot: SettledSnapshot,

@@ -376,6 +376,22 @@ impl LocalExecutionEndpoint {
         self.with_connection(None, false, |connection| connection.process(request))
     }
 
+    /// [`Self::process`] with the exchange bounded by one absolute `deadline`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::process`], plus [`io::ErrorKind::TimedOut`] when the
+    /// deadline passed before the request was sent.
+    pub fn process_until(
+        &self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+        deadline: std::time::Instant,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        self.with_connection(None, false, |connection| {
+            connection.process_until(request, deadline)
+        })
+    }
+
     /// One bounded, revision-checked range read through the admitted
     /// Client — the first dispatch path on the endpoint.
     ///
@@ -848,6 +864,41 @@ impl LocalExecutionEndpoint {
             // interrupted either way.
             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => fenced.shutdown(),
         }
+    }
+
+    /// Delivers one keyed cancellation on the control lane under one absolute
+    /// `deadline` (queue wait and receipt included) and fails closed. Unless
+    /// `settled` proves the operation already finished, an undeliverable or
+    /// `Unknown` cancellation cuts the pair at once: the binding is fenced and
+    /// its sockets shut without waiting on any in-flight data exchange. A
+    /// delivered, known disposition keeps the pair live. A receipt is never
+    /// containment — the caller still waits for the Client's settled snapshot.
+    pub fn cancel_operation(
+        &self,
+        key: &rustx_execution_protocol::process::ProcessOperationKey,
+        deadline: std::time::Instant,
+        settled: bool,
+    ) {
+        let delivered = match self.control() {
+            Some(control) => control.cancel_process_by(key, deadline),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "no control lane is admitted",
+            )),
+        };
+        let proven = matches!(
+            delivered,
+            Ok(disposition) if !matches!(disposition, rustx_execution_protocol::ProcessCancelDisposition::Unknown)
+        );
+        if !settled && !proven {
+            self.cut_pair();
+        }
+    }
+
+    /// Fences the binding and shuts its sockets without taking the data lock:
+    /// a wedged exchange fails on its own read, and the pair cannot be reused.
+    fn cut_pair(&self) {
+        self.binding.fence().shutdown();
     }
 
     /// Retires the one admitted connection so its Client clears every
@@ -2885,6 +2936,20 @@ mod tests {
         PathBuf,
         tempfile::TempDir,
     ) {
+        admitted_endpoint_with(capabilities, control_peer_loop)
+    }
+
+    fn admitted_endpoint_with(
+        capabilities: BTreeSet<Capability>,
+        control_loop: impl FnOnce(UnixStream) + Send + 'static,
+    ) -> (
+        Arc<SessionExecutionRegistry>,
+        SessionId,
+        Arc<LocalExecutionEndpoint>,
+        UnixStream,
+        PathBuf,
+        tempfile::TempDir,
+    ) {
         let registry = Arc::new(SessionExecutionRegistry::default());
         let session = SessionId::generate();
         let (dir, workspace) = workspace();
@@ -2927,8 +2992,178 @@ mod tests {
         ));
         let reply: ControlHelloReply = read_record(&mut control).unwrap();
         assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
-        std::thread::spawn(move || control_peer_loop(control));
+        std::thread::spawn(move || control_loop(control));
         (registry, session, endpoint, client, workspace, dir)
+    }
+
+    /// A control peer that reports each `CancelProcess` key on `seen` and
+    /// answers only once `ack` releases it, with `disposition`.
+    fn held_cancel_control_peer(
+        mut peer: UnixStream,
+        seen: &std::sync::mpsc::Sender<rustx_execution_protocol::process::ProcessOperationKey>,
+        ack: &std::sync::mpsc::Receiver<()>,
+        disposition: rustx_execution_protocol::ProcessCancelDisposition,
+    ) {
+        let mut sequence = 1_u64;
+        let mut receipt: Option<ControlReply> = None;
+        loop {
+            let health = DecimalU64::new(sequence);
+            if write_record(
+                &mut peer,
+                &ControlPoll {
+                    sequence: DecimalU64::new(sequence),
+                    receipt: receipt.take(),
+                    health,
+                },
+            )
+            .is_err()
+            {
+                return;
+            }
+            let Ok(turn) = read_record::<ControlTurn>(&mut peer) else {
+                return;
+            };
+            if turn.sequence != DecimalU64::new(sequence) || turn.health != health {
+                return;
+            }
+            sequence += 1;
+            let Some(request) = turn.request else {
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            };
+            receipt = Some(match request {
+                ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
+                ControlRequest::CancelProcess { key } => {
+                    let _ = seen.send(key.clone());
+                    if ack.recv_timeout(Duration::from_secs(10)).is_err() {
+                        return;
+                    }
+                    ControlReply::ProcessCancelled { key, disposition }
+                }
+                ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
+                    ticket,
+                    disposition: rustx_execution_protocol::CancelDisposition::Unknown,
+                },
+                ControlRequest::Revoke => ControlReply::Revoked,
+            });
+        }
+    }
+
+    /// Runs a parked data exchange on a real admitted pair, then delivers the
+    /// keyed cancel with `cancel_operation`. The data peer observes the request
+    /// on the wire and parks; the control peer holds its acknowledgement until
+    /// the test releases it. Returns the observed cancel key, the endpoint, and
+    /// the data-exchange result joiner.
+    #[allow(clippy::type_complexity)]
+    fn parked_cancel_rig(
+        disposition: rustx_execution_protocol::ProcessCancelDisposition,
+    ) -> (
+        Arc<LocalExecutionEndpoint>,
+        rustx_execution_protocol::process::ProcessOperationKey,
+        std::sync::mpsc::Receiver<rustx_execution_protocol::process::ProcessOperationKey>,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<io::Result<rustx_execution_protocol::process::ProcessReply>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+        let (on_wire_tx, on_wire_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (_registry, _session, endpoint, client, _workspace, _dir) = admitted_endpoint_with(
+            BTreeSet::from([Capability::Connection, Capability::Process]),
+            move |control| held_cancel_control_peer(control, &seen_tx, &ack_rx, disposition),
+        );
+        let admission = endpoint.admission().expect("admitted").clone();
+        let key = ProcessOperationKey {
+            incarnation: admission.server_incarnation,
+            session: admission.session.clone(),
+            instance: admission.instance.clone(),
+            generation: admission.generation,
+            operation: OperationId::new(),
+        };
+        // The data peer reads the request off the wire, reports it, and keeps
+        // the stream open until the test releases it.
+        let data_peer = std::thread::spawn(move || {
+            let mut client = client;
+            let _request: ClientRequest = read_record(&mut client).unwrap();
+            on_wire_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            drop(client);
+        });
+        let data_endpoint = endpoint.clone();
+        let request = ProcessRequest::Query { key: key.clone() };
+        let exchange = std::thread::spawn(move || data_endpoint.process(&request));
+        on_wire_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the data request reaches the wire");
+        (
+            endpoint, key, seen_rx, ack_tx, release_tx, exchange, data_peer,
+        )
+    }
+
+    /// An `Unknown` cancellation answer while a data exchange is parked on the
+    /// wire fails closed without waiting on the data lock: the pair is cut,
+    /// the parked exchange fails on its own, and only then does the data peer
+    /// release.
+    #[test]
+    fn an_unknown_cancel_cuts_the_pair_while_a_data_exchange_is_parked() {
+        let (endpoint, key, seen, ack, release, exchange, data_peer) =
+            parked_cancel_rig(rustx_execution_protocol::ProcessCancelDisposition::Unknown);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let cancel = {
+            let endpoint = endpoint.clone();
+            let key = key.clone();
+            std::thread::spawn(move || endpoint.cancel_operation(&key, deadline, false))
+        };
+        let observed = seen
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the keyed cancel reaches the control lane");
+        assert_eq!(observed, key);
+        assert!(!exchange.is_finished(), "the data exchange is still parked");
+        ack.send(()).unwrap();
+        cancel.join().unwrap();
+        // Liveness watchdog only: the parked exchange must fail before the
+        // data peer is released.
+        let until = Instant::now() + Duration::from_secs(10);
+        while !exchange.is_finished() {
+            assert!(Instant::now() < until, "the parked exchange never failed");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(exchange.join().unwrap().is_err());
+        assert_ne!(endpoint.binding().status().phase, BindingPhase::Live);
+        release.send(()).unwrap();
+        data_peer.join().unwrap();
+    }
+
+    /// A delivered, known cancellation keeps the admitted pair live: no fence,
+    /// the control lane stays attached, and the parked exchange is unaffected
+    /// by the cancel itself.
+    #[test]
+    fn a_delivered_known_cancel_keeps_the_pair_live() {
+        let (endpoint, key, seen, ack, release, exchange, data_peer) = parked_cancel_rig(
+            rustx_execution_protocol::ProcessCancelDisposition::CancelledBeforeStart,
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let cancel = {
+            let endpoint = endpoint.clone();
+            let key = key.clone();
+            std::thread::spawn(move || endpoint.cancel_operation(&key, deadline, false))
+        };
+        assert_eq!(
+            seen.recv_timeout(Duration::from_secs(10))
+                .expect("the keyed cancel reaches the control lane"),
+            key
+        );
+        ack.send(()).unwrap();
+        cancel.join().unwrap();
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
+        assert!(endpoint.control().is_some());
+        assert!(!exchange.is_finished(), "the parked exchange is untouched");
+        release.send(()).unwrap();
+        data_peer.join().unwrap();
+        let _ = exchange.join();
     }
 
     /// A busy exchange parks on the reply read holding the connection's

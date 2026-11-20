@@ -1398,10 +1398,46 @@ impl ControlHandle {
         &self,
         key: &rustx_execution_protocol::process::ProcessOperationKey,
     ) -> io::Result<ProcessCancelDisposition> {
-        let receipt = self
-            .shared
-            .enqueue(ControlRequest::CancelProcess { key: key.clone() })?;
-        match receipt.recv_timeout(CONTROL_COMMAND_TIMEOUT) {
+        self.cancel_process_by(key, Instant::now() + CONTROL_COMMAND_TIMEOUT)
+    }
+
+    /// [`Self::cancel_process`] under one absolute `deadline` covering both
+    /// the queue wait and the correlated receipt. Only a refusal the queue
+    /// returns before anything is queued — the bounded budget being full — is
+    /// retried, paced inside the deadline; a dead lane fails at once. A
+    /// budget still full at the deadline is an explicit
+    /// [`io::ErrorKind::WouldBlock`]: the command was never queued.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::WouldBlock`] when the budget stayed full to the
+    /// deadline, the closed lane's terminal error, or
+    /// [`io::ErrorKind::TimedOut`] when the receipt missed the deadline.
+    pub fn cancel_process_by(
+        &self,
+        key: &rustx_execution_protocol::process::ProcessOperationKey,
+        deadline: Instant,
+    ) -> io::Result<ProcessCancelDisposition> {
+        let receipt = loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "control budget stayed full to the deadline",
+                ));
+            }
+            match self
+                .shared
+                .enqueue(ControlRequest::CancelProcess { key: key.clone() })
+            {
+                Ok(receipt) => break receipt,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5).min(deadline - now));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        match receipt.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok(ControlReply::ProcessCancelled {
                 key: echoed,
                 disposition,
@@ -1416,24 +1452,6 @@ impl ControlHandle {
                 "control command outlived its budget",
             )),
         }
-    }
-
-    /// Queues one `CancelProcess` without awaiting its receipt — the
-    /// bounded-queue answer for callers that must never wait on the
-    /// lane: the command is still delivered and arbitrated on the
-    /// Client; the queue-full or dead-lane refusal is returned.
-    ///
-    /// # Errors
-    ///
-    /// Returns the queue-full [`io::ErrorKind::WouldBlock`] or the
-    /// closed lane's terminal error.
-    pub fn request_process_cancel(
-        &self,
-        key: &rustx_execution_protocol::process::ProcessOperationKey,
-    ) -> io::Result<()> {
-        self.shared
-            .enqueue(ControlRequest::CancelProcess { key: key.clone() })
-            .map(drop)
     }
 
     /// Requests terminal revocation from the Client — its local commits
@@ -2045,6 +2063,27 @@ impl LocalConnection {
         &mut self,
         request: &rustx_execution_protocol::process::ProcessRequest,
     ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        self.process_until(request, Instant::now() + PAGE_REQUEST_TIMEOUT)
+    }
+
+    /// [`Self::process`] under one absolute `deadline` covering the wire
+    /// exchange. A deadline already passed refuses before anything is sent.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::process`], plus [`io::ErrorKind::TimedOut`] for a deadline
+    /// that passed before the request was sent.
+    pub fn process_until(
+        &mut self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "process deadline passed before dispatch",
+            ));
+        }
         if !self.capabilities.contains(&Capability::Process) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -2055,7 +2094,7 @@ impl LocalConnection {
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         let ClientReply::Process(reply) = self.exchange_admitted(
             &ClientRequest::Process(request.clone()),
-            Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            Some(deadline),
             || Ok(()),
             || (),
         )?
@@ -7134,6 +7173,72 @@ mod tests {
         for thread in threads {
             thread.join().unwrap();
         }
+        drop(connection);
+    }
+
+    #[test]
+    fn a_saturated_control_lane_refuses_a_cancel_explicitly_and_delivers_it_once_a_slot_frees() {
+        let (binding, hello) = reserved(required());
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+        let (connection, gate) = pair_control_half_gated(&binding, &hello, &data.challenge);
+        let control = connection
+            .control()
+            .expect("a live pair has a control handle");
+
+        // Fill the whole budget synchronously: four admissions are queued
+        // before the test continues, so no timing decides the outcome.
+        let mut admitted = Vec::new();
+        for nonce in 1..=4_u64 {
+            admitted.push(
+                control
+                    .shared
+                    .enqueue(ControlRequest::Health {
+                        nonce: DecimalU64::new(nonce),
+                    })
+                    .unwrap(),
+            );
+        }
+
+        // A full budget is an explicit refusal at the deadline — the cancel
+        // was never queued, so it cannot be silently lost.
+        let key = process_key();
+        let refused = control.cancel_process_by(&key, Instant::now()).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::WouldBlock);
+
+        // Once the admitted commands resolve, the same cancel is queued,
+        // delivered on the lane, and acknowledged.
+        for _ in 0..4 {
+            gate.send(()).unwrap();
+        }
+        for receipt in admitted {
+            receipt
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+        }
+        let delivered = {
+            let control = control.clone();
+            let key = key.clone();
+            thread::spawn(move || {
+                control.cancel_process_by(&key, Instant::now() + Duration::from_secs(5))
+            })
+        };
+        gate.send(()).unwrap();
+        assert_eq!(
+            delivered.join().unwrap().unwrap(),
+            rustx_execution_protocol::ProcessCancelDisposition::Unknown
+        );
+        binding.revoke();
+        drop(gate);
         drop(connection);
     }
 

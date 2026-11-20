@@ -604,7 +604,7 @@ pub enum ProcessRequest {
     ReleaseOutput {
         /// The operation being released.
         key: ProcessOperationKey,
-        /// The highest ordered-output sequence the Server consumed.
+        /// The highest ordered-output sequence the Server consumed or discarded.
         final_sequence: DecimalU64,
     },
 }
