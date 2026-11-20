@@ -21,5 +21,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             serde_json::to_string_pretty(&rustx::app_server::schema::fixtures())?
         ),
     )?;
+    std::fs::write(
+        root.join("host-upload-fixtures.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&rustx::app_server::host_upload::fixtures())?
+        ),
+    )?;
     Ok(())
 }

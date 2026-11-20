@@ -1012,13 +1012,25 @@ result_digest := SHA-256(digest_input)    (32 bytes; lowercase hex on the wire)
 ```
 
 `type_tag` assigns one code point per result content kind at schema
-freeze; item order is significant and preserved. Immutable result
+freeze. Implemented contract values: `0x0001` is `inputText` (UTF-8
+text, the only defined tag); `0x0000` is reserved and refused; every other
+tag is refused as unknown. Item order is significant and preserved; a
+zero-length item carries a header and no bytes. Independent upload-record
+budgets (not the transport frame limit, not the management limit): at most
+1024 items per result, 64 KiB raw per chunk, 1 MiB total per result. Immutable result
 metadata — content-item count, per-item type and declared length — is
 fixed at `Begin`, verified again at `End`, and bounded. Chunk bytes
 append to the incremental digest; re-derived metadata never mutates the
 envelope.
 
 ## Explicitly not claimed
+
+- Host upload (EXEC-01, `item/tool/result/{begin,chunk,end,abort}`) is a
+  generated contract and fixtures only. `src/app_server/host_upload.rs`
+  defines the closed envelopes and a pure verifier; they are registered in
+  the public schema as unreachable definitions and the protocol parser does
+  not accept them. There is no receiver, no callback claim wiring, no
+  winner/loser arbitration, and no Host content storage (#578).
 
 - The remote transport is a real authenticated WebSocket channel with
   identical record/Session semantics as the Unix socket, bound to

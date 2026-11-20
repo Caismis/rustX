@@ -24,6 +24,16 @@ function normalizeRefSiblings(value) {
 // A union root does not emit unreachable definitions in the generator. The
 // object catalog exports native DomainPage display DTOs alongside the exact
 // ProtocolMessage union; it is generation input, never an accepted wire record.
+// The flattened host-upload envelope keeps shared properties beside its method
+// oneOf; json-schema-to-typescript drops those siblings. Express the same
+// conjunction with allOf on that one definition only, as compiler input.
+{
+  const envelope = schema.$defs?.HostUploadEnvelope;
+  if (envelope?.oneOf && envelope.properties) {
+    const {oneOf, description, ...siblings} = envelope;
+    schema.$defs.HostUploadEnvelope = {...(description ? {description} : {}), allOf: [siblings, {oneOf}]};
+  }
+}
 const {$defs, ...messageSchema}=normalizeRefSiblings(schema);
 const typeCatalog={type:'object',properties:{message:{$ref:'#/$defs/ProtocolMessage'}},required:['message'],additionalProperties:false,$defs:{...$defs,ProtocolMessage:messageSchema}};
 const types = await compile(typeCatalog, 'ProtocolTypes', {
@@ -40,3 +50,7 @@ const fixtures = await readFile(new URL('fixtures.json', import.meta.url), 'utf8
 await writeFile(new URL('fixtures.ts', import.meta.url),
   "// Generated from serialized Rust DTOs.\nimport type {ProtocolMessage} from './v80.js';\n" +
   `export const fixtures = ${fixtures.trim()} satisfies ProtocolMessage[];\n`);
+const uploads = await readFile(new URL('host-upload-fixtures.json', import.meta.url), 'utf8');
+await writeFile(new URL('host-upload-fixtures.ts', import.meta.url),
+  "// Generated contract examples; not admitted management messages.\nimport type {HostUploadEnvelope} from './v80.js';\n" +
+  `export const hostUploads = ${uploads.trim()} satisfies HostUploadEnvelope[];\n`);

@@ -8093,6 +8093,318 @@
         }
       ]
     },
+    "HostUploadEnvelope": {
+      "description": "The complete upload envelope: JSON-RPC version, correlation identifier, and\none closed method.",
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "description": "The JSON-RPC version.",
+          "$ref": "#/$defs/JsonRpcVersion"
+        },
+        "id": {
+          "description": "The correlation identifier of this request.",
+          "$ref": "#/$defs/AppServerRequestId"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "oneOf": [
+        {
+          "description": "Begins a candidate.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/begin"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadBeginParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Appends one chunk.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/chunk"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadChunkParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Ends and verifies the candidate.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/end"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadEndParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Aborts the candidate.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/abort"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadAbortParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        }
+      ]
+    },
+    "JsonRpcVersion": {
+      "type": "string",
+      "enum": [
+        "2.0"
+      ]
+    },
+    "AppServerRequestId": {
+      "description": "Integer request IDs use the JavaScript safe-integer range at admission.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "format": "int64",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
+    "HostUploadBeginParams": {
+      "description": "`item/tool/result/begin`: captures the immutable success and descriptors.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate being begun.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        },
+        "success": {
+          "description": "The tool result's success flag, fixed at begin.",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "The ordered item descriptors, at most [`MAX_ITEMS`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostUploadItem"
+          },
+          "maxItems": 1024
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "success",
+        "items"
+      ]
+    },
+    "HostUploadCandidate": {
+      "description": "The identity one upload candidate belongs to. The Server callback\nincarnation, original request identifier, and tool call identity are the\ncorrelation; the Host subscription incarnation and upload identifier bind\nthe candidate to one eligible participant.",
+      "type": "object",
+      "properties": {
+        "callbackIncarnation": {
+          "description": "The Server callback incarnation that issued the original request.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "requestId": {
+          "description": "The original request identifier.",
+          "$ref": "#/$defs/AppServerRequestId"
+        },
+        "threadId": {
+          "description": "The conversation the tool call belongs to.",
+          "$ref": "#/$defs/ConversationId"
+        },
+        "turnId": {
+          "description": "The attempt the tool call belongs to.",
+          "$ref": "#/$defs/AttemptId"
+        },
+        "callId": {
+          "description": "The tool call being answered.",
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "connectionIncarnation": {
+          "description": "The callback connection incarnation the request was delivered on.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "subscriptionIncarnation": {
+          "description": "The selected subscription the request was delivered to.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "uploadId": {
+          "description": "The upload identifier, unique per candidate.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "callbackIncarnation",
+        "requestId",
+        "threadId",
+        "turnId",
+        "callId",
+        "connectionIncarnation",
+        "subscriptionIncarnation",
+        "uploadId"
+      ]
+    },
+    "HostUploadItem": {
+      "description": "One item descriptor: its type tag and declared byte length.",
+      "type": "object",
+      "properties": {
+        "typeTag": {
+          "description": "The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "length": {
+          "description": "The declared byte length of this item.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "typeTag",
+        "length"
+      ]
+    },
+    "HostUploadChunkParams": {
+      "description": "`item/tool/result/chunk`: one ordered, bounded chunk of one item.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate the chunk feeds.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        },
+        "itemIndex": {
+          "description": "The current item's index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "sequence": {
+          "description": "The strictly increasing chunk sequence, starting at `1`.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "offset": {
+          "description": "The byte offset within the item.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "dataBase64": {
+          "description": "The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].",
+          "type": "string",
+          "maxLength": 87384
+        },
+        "sha256": {
+          "description": "The SHA-256 of the decoded bytes.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "itemIndex",
+        "sequence",
+        "offset",
+        "dataBase64",
+        "sha256"
+      ]
+    },
+    "HostUploadEndParams": {
+      "description": "`item/tool/result/end`: echoes the begin metadata and closes the candidate.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate being ended.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        },
+        "success": {
+          "description": "The success flag, which must equal the begin's.",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "The item descriptors, which must equal the begin's.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostUploadItem"
+          },
+          "maxItems": 1024
+        },
+        "total": {
+          "description": "The declared total length, which must equal the sum of the items.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "digest": {
+          "description": "The result digest over the canonical layout.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "success",
+        "items",
+        "total",
+        "digest"
+      ]
+    },
+    "HostUploadAbortParams": {
+      "description": "`item/tool/result/abort`: retires the candidate without a result.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate being aborted.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate"
+      ]
+    },
     "ServerOutput": {
       "description": "Direction-specific server output. Generic client replies cannot weaken\nvalidation of typed server responses sharing the same JSON-RPC envelope.",
       "anyOf": [
@@ -8136,26 +8448,6 @@
         "jsonrpc",
         "id",
         "result"
-      ]
-    },
-    "JsonRpcVersion": {
-      "type": "string",
-      "enum": [
-        "2.0"
-      ]
-    },
-    "AppServerRequestId": {
-      "description": "Integer request IDs use the JavaScript safe-integer range at admission.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "integer",
-          "format": "int64",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
-        }
       ]
     },
     "MethodResult": {

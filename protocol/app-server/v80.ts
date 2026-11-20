@@ -8249,6 +8249,40 @@ export type HostToolContent = {
   type: 'inputText';
 };
 /**
+ * The complete upload envelope: JSON-RPC version, correlation identifier, and
+ * one closed method.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadEnvelope".
+ */
+export type HostUploadEnvelope = {
+  /**
+   * The JSON-RPC version.
+   */
+  jsonrpc: '2.0';
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  id: string | number;
+} & (
+  | {
+      method: 'item/tool/result/begin';
+      params: HostUploadBeginParams;
+    }
+  | {
+      method: 'item/tool/result/chunk';
+      params: HostUploadChunkParams;
+    }
+  | {
+      method: 'item/tool/result/end';
+      params: HostUploadEndParams;
+    }
+  | {
+      method: 'item/tool/result/abort';
+      params: HostUploadAbortParams;
+    }
+);
+/**
  * Direction-specific server output. Generic client replies cannot weaken
  * validation of typed server responses sharing the same JSON-RPC envelope.
  *
@@ -21996,6 +22030,302 @@ export interface InteractionRequester2 {
 export interface HostToolResponse {
   success: boolean;
   contentItems: HostToolContent[];
+}
+/**
+ * `item/tool/result/begin`: captures the immutable success and descriptors.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadBeginParams".
+ */
+export interface HostUploadBeginParams {
+  candidate: HostUploadCandidate;
+  /**
+   * The tool result's success flag, fixed at begin.
+   */
+  success: boolean;
+  /**
+   * The ordered item descriptors, at most [`MAX_ITEMS`].
+   *
+   * @maxItems 1024
+   */
+  items: HostUploadItem[];
+}
+/**
+ * The candidate being begun.
+ */
+export interface HostUploadCandidate {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * One item descriptor: its type tag and declared byte length.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadItem".
+ */
+export interface HostUploadItem {
+  /**
+   * The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.
+   */
+  typeTag: number;
+  /**
+   * The declared byte length of this item.
+   */
+  length: string;
+}
+/**
+ * `item/tool/result/chunk`: one ordered, bounded chunk of one item.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadChunkParams".
+ */
+export interface HostUploadChunkParams {
+  candidate: HostUploadCandidate1;
+  /**
+   * The current item's index.
+   */
+  itemIndex: number;
+  /**
+   * The strictly increasing chunk sequence, starting at `1`.
+   */
+  sequence: string;
+  /**
+   * The byte offset within the item.
+   */
+  offset: string;
+  /**
+   * The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].
+   */
+  dataBase64: string;
+  /**
+   * The SHA-256 of the decoded bytes.
+   */
+  sha256: string;
+}
+/**
+ * The candidate the chunk feeds.
+ */
+export interface HostUploadCandidate1 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * `item/tool/result/end`: echoes the begin metadata and closes the candidate.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadEndParams".
+ */
+export interface HostUploadEndParams {
+  candidate: HostUploadCandidate2;
+  /**
+   * The success flag, which must equal the begin's.
+   */
+  success: boolean;
+  /**
+   * The item descriptors, which must equal the begin's.
+   *
+   * @maxItems 1024
+   */
+  items: HostUploadItem[];
+  /**
+   * The declared total length, which must equal the sum of the items.
+   */
+  total: string;
+  /**
+   * The result digest over the canonical layout.
+   */
+  digest: string;
+}
+/**
+ * The candidate being ended.
+ */
+export interface HostUploadCandidate2 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * `item/tool/result/abort`: retires the candidate without a result.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadAbortParams".
+ */
+export interface HostUploadAbortParams {
+  candidate: HostUploadCandidate3;
+}
+/**
+ * The candidate being aborted.
+ */
+export interface HostUploadCandidate3 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * The identity one upload candidate belongs to. The Server callback
+ * incarnation, original request identifier, and tool call identity are the
+ * correlation; the Host subscription incarnation and upload identifier bind
+ * the candidate to one eligible participant.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadCandidate".
+ */
+export interface HostUploadCandidate4 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
 }
 /**
  * Native display metadata, shared by exact identity reads and catalog rows.

@@ -667,6 +667,7 @@ pub(super) fn protocol_schema() -> Value {
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
     let _ = generator.subschema_for::<crate::runtime::interaction::InteractionResponse>();
     let _ = generator.subschema_for::<super::protocol::HostToolResponse>();
+    let _ = generator.subschema_for::<super::host_upload::HostUploadEnvelope>();
     let _ = generator.subschema_for::<super::protocol::ServerOutput>();
     // Assign envelope-owned names first; the chunked report shares domain type names.
     let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
