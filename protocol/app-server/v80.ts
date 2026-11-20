@@ -11208,7 +11208,7 @@ export interface ScheduleRequestBudget {
   mutation_limit: number;
 }
 /**
- * Bounded paths and counts; whole file content is read only on demand.
+ * Bounded paths and counts from one completed observation.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ChangesSummary".
@@ -11226,9 +11226,6 @@ export interface ChangesSummary {
  * via the `definition` "ChangedFile".
  */
 export interface ChangedFile {
-  /**
-   * Absolute resolved Host path; never accepted from a comparison request.
-   */
   path: string;
   display: string;
   added: number;
@@ -11237,7 +11234,7 @@ export interface ChangedFile {
   oversized: boolean;
 }
 /**
- * An immutable, bounded comparison of a recorded file's two endpoints.
+ * Bounded comparison of the recorded endpoints of one file.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "FileComparison".
@@ -11249,7 +11246,7 @@ export interface FileComparison {
   truncated: boolean;
 }
 /**
- * Three lines of shared context around one group of edits.
+ * Three lines of shared context around a group of edits.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ComparisonHunk".

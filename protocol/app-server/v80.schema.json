@@ -12979,7 +12979,7 @@
       ]
     },
     "ChangesSummary": {
-      "description": "Bounded paths and counts; whole file content is read only on demand.",
+      "description": "Bounded paths and counts from one completed observation.",
       "type": "object",
       "properties": {
         "files": {
@@ -13020,7 +13020,6 @@
       "type": "object",
       "properties": {
         "path": {
-          "description": "Absolute resolved Host path; never accepted from a comparison request.",
           "type": "string"
         },
         "display": {
@@ -13056,7 +13055,7 @@
       ]
     },
     "FileComparison": {
-      "description": "An immutable, bounded comparison of a recorded file's two endpoints.",
+      "description": "Bounded comparison of the recorded endpoints of one file.",
       "type": "object",
       "properties": {
         "hunks": {
@@ -13084,7 +13083,7 @@
       ]
     },
     "ComparisonHunk": {
-      "description": "Three lines of shared context around one group of edits.",
+      "description": "Three lines of shared context around a group of edits.",
       "type": "object",
       "properties": {
         "old_start": {
