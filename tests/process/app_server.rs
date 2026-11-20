@@ -344,6 +344,210 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
     .await;
 }
 
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_spilling() {
+    bounded(Box::pin(async {
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use rustx::{
+            app_server::protocol::Method,
+            durable::SqliteConversationStore,
+            events::types::{AttemptOutcome, RuntimeEvent},
+            message::types::MessageBlock,
+            tools::{
+                limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
+                mcp::fixture::FixtureServer as McpFixture,
+                types::{ManagedOutputContinuation, ToolExecutionStatus},
+            },
+        };
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = Fixture::new().await;
+        let original_bytes = FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1;
+        let mcp_calls = fixture.root.path().join("mcp-calls");
+        let mcp = McpFixture {
+            result_bytes: Some(original_bytes),
+            echo_call_count_file: Some(mcp_calls.clone()),
+            ..McpFixture::default()
+        };
+        let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
+            move || Ok(mcp.clone()),
+            std::sync::Arc::default(),
+            StreamableHttpServerConfig::default(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mcp_server = tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+                .await
+                .unwrap();
+        });
+        let _mcp_server = tokio_util::task::AbortOnDropHandle::new(mcp_server);
+        let provider = crate::common::FixtureServer::start(|attempt, _| {
+            if attempt == 0 {
+                let arguments = crate::common::tool_call_envelope(serde_json::json!({})).to_string();
+                let chunk = serde_json::json!({
+                    "id": "mcp-overflow", "object": "chat.completion.chunk", "created": 1, "model": "test",
+                    "choices": [{"index": 0, "delta": {"tool_calls": [{
+                        "index": 0, "id": "overflow-call", "type": "function",
+                        "function": {"name": "echo", "arguments": arguments}
+                    }]}, "finish_reason": "tool_calls"}]
+                });
+                crate::common::FixtureReply::body(
+                    200,
+                    "OK",
+                    "text/event-stream",
+                    format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+                )
+            } else {
+                crate::common::sse_fixture("openai_chat", "plain_text.sse")
+            }
+        })
+        .await;
+
+        let home = fixture.root.path().join("home");
+        let catalog = home.join("rustx/rustx.toml");
+        let authored = std::fs::read_to_string(&catalog)
+            .unwrap()
+            .replace("http://127.0.0.1:9/v1", &provider.url("/v1"));
+        let mut authored: toml::Value = toml::from_str(&authored).unwrap();
+        authored.as_table_mut().unwrap().insert(
+            "approval_mode".to_owned(),
+            toml::Value::String("full_access".to_owned()),
+        );
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".to_owned(),
+            toml::from_str("overflow = ['echo']").unwrap(),
+        );
+        std::fs::write(catalog, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        std::fs::create_dir_all(home.join("rustx/.agents")).unwrap();
+        std::fs::write(
+            home.join("rustx/.agents/mcp.toml"),
+            format!("[mcp_servers.overflow]\nurl = \"http://{address}/mcp\"\n"),
+        )
+        .unwrap();
+
+        let (bin, rustx) = isolated_server_bin();
+        let launch_probe = bin.path().join("rustx-execution-client");
+        std::fs::write(
+            &launch_probe,
+            "#!/bin/sh\nprintf 'launch\n' >> \"${0%/*}/client-launches\"\nexit 99\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(launch_probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let scratch = fixture.root.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let mut child = fixture
+            .command_with_program(rustx, "stdio")
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", bin.path())
+            .env("TMPDIR", &scratch)
+            .env("TEST_KEY", "fixture")
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let session = &fixture.sessions[0];
+        let target = attach(&client, session.clone(), 2).await;
+        start_turn(&client, &target, "overflow without execution binding").await;
+        let state = settled(&client, &target).await;
+        assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        result(&client, Method::SessionDetach { target }).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        let request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
+        let names: Vec<_> = request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"echo"),
+            "HTTP MCP tool not advertised: {names:?}"
+        );
+        assert!(
+            !bin.path().join("client-launches").exists(),
+            "zero Client starts"
+        );
+        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+        let runtime = fixture.root.path().join("runtime");
+        let controller = SessionController::open(&runtime).unwrap();
+        let access = controller.acquire_session(session, None).await.unwrap();
+        let store = SqliteConversationStore::open_existing(
+            access.node.conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        let page = store.read_events(None, 128).unwrap();
+        assert!(page.events.len() < 128, "complete attempt journal");
+        let commits: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
+                    Some((entry.sequence, message_id.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let [(commit_sequence, message_id)] = commits.as_slice() else {
+            panic!("one tool commit: {commits:?}");
+        };
+        let terminals: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|entry| {
+                AttemptOutcome::from_terminal_event(&entry.event)
+                    .map(|outcome| (entry.sequence, outcome))
+            })
+            .collect();
+        let [(terminal_sequence, AttemptOutcome::Completed { .. })] = terminals.as_slice() else {
+            panic!("one completed terminal: {terminals:?}");
+        };
+        assert!(commit_sequence < terminal_sequence);
+        let MessageBlock::Tool(tool) = store
+            .load_messages(std::slice::from_ref(message_id))
+            .unwrap()
+            .remove(0)
+        else {
+            panic!("canonical tool result");
+        };
+        let preview = tool.result.model_facing_projection();
+        assert_eq!(tool.result.status, ToolExecutionStatus::Success, "{}", preview.as_text());
+        assert_eq!(std::fs::read_to_string(mcp_calls).unwrap(), "echo\n");
+        assert_eq!(
+            tool.result.truncation.as_ref().and_then(|cut| cut.original_bytes),
+            Some(original_bytes as u64)
+        );
+        assert!(matches!(
+            tool.result.managed_output.as_deref(),
+            Some(ManagedOutputContinuation::Unavailable { diagnostic })
+                if diagnostic.contains("no eligible Execution Client save binding")
+        ));
+        assert!(!preview.as_text().contains("Read or Grep"));
+        for entry in ignore::WalkBuilder::new(&runtime)
+            .standard_filters(false)
+            .build()
+            .map(Result::unwrap)
+        {
+            let name = entry.file_name().to_string_lossy();
+            assert!(
+                !name.starts_with("r-") && !name.starts_with("e-"),
+                "unexpected Spill: {entry:?}"
+            );
+        }
+    }))
+    .await;
+}
+
 /// A fresh staging directory on the *same filesystem as the staged
 /// sources* so staging is a hard link — no write, so the staged inode
 /// can never still be counted as written at execve. (A tmpfs copy of
