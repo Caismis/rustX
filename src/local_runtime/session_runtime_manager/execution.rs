@@ -45,7 +45,7 @@ use super::super::session::SessionId;
 use super::{RuntimeManagerError, SessionRuntimeManager, error};
 
 mod delegation;
-pub(crate) use delegation::{ChildExecutionGrant, ChildExecutionRelay};
+pub(crate) use delegation::{ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement};
 
 /// One Session's local execution endpoint, published once.
 ///
@@ -1483,6 +1483,23 @@ impl SessionExecutionScope {
                             .with_active(|| ())
                             .ok_or_else(cancelled_before_dispatch)
                     })
+                })
+            },
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn workspace_python_status(
+        &self,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_execution_protocol::WorkspacePythonStatus> {
+        self.dispatch_data(
+            cancellation,
+            DataCapacity::WaitForSlot,
+            |endpoint, data, _writer, _deadline, _cancellation| {
+                endpoint.with_connection(Some(data), true, |connection| {
+                    connection.workspace_python_status()
                 })
             },
         )

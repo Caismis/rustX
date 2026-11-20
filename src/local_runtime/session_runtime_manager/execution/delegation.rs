@@ -4,7 +4,8 @@ use super::{
     EndpointAuthority, ExecutionRoute, LocalExecutionEndpoint, SessionExecutionScope, SessionId,
 };
 use rustx_execution_protocol::process::{
-    OperationId, OperationState, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
+    BashCaptureState, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION, OperationId,
+    OperationState, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
 };
 use rustx_execution_protocol::transport::{
     LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record,
@@ -23,8 +24,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
-
-const MAX_CHILD_PROCESSES: usize = 256;
 
 /// The existing physical admission transferred alongside the two IPC channels.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -83,12 +82,41 @@ pub(crate) struct ChildExecutionRelay {
     authority: Arc<Authority>,
 }
 
+pub(crate) struct ChildExecutionSettlement {
+    stop: rustx_process_supervisor::signal::ProcessSignal,
+    data: Arc<ChannelShutdown>,
+    control: Arc<ChannelShutdown>,
+    receipt: tokio::sync::oneshot::Receiver<io::Result<()>>,
+}
+
+impl std::fmt::Debug for ChildExecutionSettlement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildExecutionSettlement")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ChildExecutionSettlement {
+    pub(crate) async fn after_child_reaped(self) -> io::Result<()> {
+        self.stop.cancel();
+        self.data.shutdown();
+        self.control.shutdown();
+        self.receipt.await.map_err(io::Error::other)?
+    }
+}
+
 struct Authority {
     conversation: String,
     tools: BTreeSet<String>,
-    operations: Mutex<BTreeMap<OperationId, ProcessOperationKey>>,
+    operations: Mutex<BTreeMap<OperationId, ChildOperation>>,
     tickets: Mutex<BTreeSet<DecimalU64>>,
     stop: rustx_process_supervisor::signal::ProcessSignal,
+}
+
+struct ChildOperation {
+    key: ProcessOperationKey,
+    journal_released: bool,
+    capture_disposed: bool,
 }
 
 impl ChildExecutionRelay {
@@ -145,7 +173,7 @@ impl ChildExecutionRelay {
         descriptor::send(startup, &self.child_data, &self.child_control).await
     }
 
-    pub(crate) fn start(self) -> io::Result<tokio::sync::oneshot::Receiver<io::Result<()>>> {
+    pub(crate) fn start(self) -> io::Result<ChildExecutionSettlement> {
         let Self {
             parent_data,
             parent_control,
@@ -155,8 +183,11 @@ impl ChildExecutionRelay {
         } = self;
         let parent_data = RecordChannel::unix(parent_data);
         let parent_control = RecordChannel::unix(parent_control);
-        let data_stop = parent_data.shutdown_handle()?;
-        let control_stop = parent_control.shutdown_handle()?;
+        let data_stop = Arc::new(parent_data.shutdown_handle()?);
+        let control_stop = Arc::new(parent_control.shutdown_handle()?);
+        let control_to_data = Arc::clone(&data_stop);
+        let data_to_control = Arc::clone(&control_stop);
+        let stop = authority.stop.clone();
         let control_owner = Arc::clone(&owner);
         let control_authority = Arc::clone(&authority);
         let control_worker = std::thread::Builder::new()
@@ -166,7 +197,7 @@ impl ChildExecutionRelay {
                     parent_control,
                     &control_owner,
                     &control_authority,
-                    &data_stop,
+                    &control_to_data,
                 );
             })?;
         let (finished, settlement) = tokio::sync::oneshot::channel();
@@ -175,14 +206,19 @@ impl ChildExecutionRelay {
             .spawn(move || {
                 run_data(parent_data, &owner, &authority);
                 authority.stop.cancel();
-                control_stop.shutdown();
+                data_to_control.shutdown();
                 let result = authority.release(&owner);
                 let control_result = control_worker
                     .join()
                     .map_err(|_| io::Error::other("child control relay stopped without proof"));
                 let _ = finished.send(result.and(control_result));
             })?;
-        Ok(settlement)
+        Ok(ChildExecutionSettlement {
+            stop,
+            data: data_stop,
+            control: control_stop,
+            receipt: settlement,
+        })
     }
 }
 
@@ -210,8 +246,12 @@ impl Authority {
                     && endpoint
                         .process_key(key.operation)
                         .is_ok_and(|current| current == *key)
-                    && self.operations.lock().expect("child process keys").len()
-                        < MAX_CHILD_PROCESSES
+                    && {
+                        let operations = self.operations.lock().expect("child process keys");
+                        operations.contains_key(&key.operation)
+                            || operations.len()
+                                < MAX_GENERATION_TOMBSTONES + MAX_OPERATIONS_PER_SESSION
+                    }
             }
             ClientRequest::Process(ProcessRequest::Register { .. }) => false,
             ClientRequest::Process(request) => self.owns_process(request.key()),
@@ -230,7 +270,7 @@ impl Authority {
             .lock()
             .expect("child process keys")
             .get(&key.operation)
-            == Some(key)
+            .is_some_and(|operation| operation.key == *key)
     }
 
     fn owns_ticket(&self, ticket: DecimalU64) -> bool {
@@ -249,16 +289,47 @@ impl Authority {
                 self.operations
                     .lock()
                     .expect("child process keys")
-                    .insert(key.operation, key.clone());
+                    .entry(key.operation)
+                    .or_insert_with(|| ChildOperation {
+                        key: key.clone(),
+                        journal_released: false,
+                        capture_disposed: false,
+                    });
             }
             (
-                ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }),
+                ClientRequest::Process(
+                    request @ (ProcessRequest::ReleaseOutput { key, .. }
+                    | ProcessRequest::DiscardBashOutput { key }),
+                ),
                 ClientReply::Process(ProcessReply::OutputReleased { key: echoed }),
             ) if key == echoed => {
-                self.operations
+                let mut operations = self.operations.lock().expect("child process keys");
+                if let Some(operation) = operations.get_mut(&key.operation) {
+                    operation.journal_released = true;
+                    operation.capture_disposed |=
+                        matches!(request, ProcessRequest::DiscardBashOutput { .. });
+                }
+            }
+            (
+                ClientRequest::Process(ProcessRequest::BashCapture { key }),
+                ClientReply::Process(ProcessReply::BashCapture {
+                    key: echoed,
+                    capture: Some(capture),
+                }),
+            ) if key == echoed
+                && matches!(
+                    capture.output,
+                    BashCaptureState::None | BashCaptureState::Unavailable
+                ) =>
+            {
+                if let Some(operation) = self
+                    .operations
                     .lock()
                     .expect("child process keys")
-                    .remove(&key.operation);
+                    .get_mut(&key.operation)
+                {
+                    operation.capture_disposed = true;
+                }
             }
             (
                 ClientRequest::PrepareWrite { .. } | ClientRequest::BeginWrite { .. },
@@ -301,8 +372,8 @@ impl Authority {
                 ));
             }
         }
-        for key in operations.into_values() {
-            if Self::release_operation(owner, &key, deadline).is_err() {
+        for operation in operations.into_values() {
+            if Self::release_operation(owner, &operation, deadline).is_err() {
                 owner.cut_pair();
                 return Err(io::Error::other(
                     "child execution cleanup remains unconfirmed",
@@ -313,6 +384,30 @@ impl Authority {
     }
 
     fn release_operation(
+        owner: &LocalExecutionEndpoint,
+        operation: &ChildOperation,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        if !operation.journal_released {
+            Self::release_journal(owner, &operation.key, deadline)?;
+        }
+        if !operation.capture_disposed {
+            let key = &operation.key;
+            let discarded = owner.with_connection(None, true, |connection| {
+                connection.process_until(
+                    &ProcessRequest::DiscardBashOutput { key: key.clone() },
+                    deadline,
+                )
+            })?;
+            if !matches!(discarded, ProcessReply::OutputReleased { key: echoed } if echoed == *key)
+            {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+        }
+        Ok(())
+    }
+
+    fn release_journal(
         owner: &LocalExecutionEndpoint,
         key: &ProcessOperationKey,
         deadline: Instant,
@@ -363,10 +458,6 @@ impl Authority {
             final_sequence: snapshot.final_sequence,
         })?;
         if !matches!(released, ProcessReply::OutputReleased { key: echoed } if echoed == *key) {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        let discarded = exchange(ProcessRequest::DiscardBashOutput { key: key.clone() })?;
-        if !matches!(discarded, ProcessReply::OutputReleased { key: echoed } if echoed == *key) {
             return Err(io::ErrorKind::InvalidData.into());
         }
         Ok(())
@@ -536,5 +627,122 @@ mod descriptor {
         // SAFETY: recvmsg(SCM_RIGHTS) returned a newly allocated, uniquely owned
         // descriptor. Adopt every received fd, including on a malformed transfer.
         unsafe { OwnedFd::from_raw_fd(fd) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustx_execution_protocol::process::{BashCaptureResult, ServerIncarnation};
+    use rustx_execution_protocol::{ClientInstanceId, Generation};
+
+    #[tokio::test]
+    async fn reaping_retires_both_relays_even_when_their_peers_are_open() {
+        let (data, data_peer) = UnixStream::pair().unwrap();
+        let (control, control_peer) = UnixStream::pair().unwrap();
+        let mut data = RecordChannel::unix(data);
+        let mut control = RecordChannel::unix(control);
+        let data_stop = Arc::new(data.shutdown_handle().unwrap());
+        let control_stop = Arc::new(control.shutdown_handle().unwrap());
+        let stop = rustx_process_supervisor::signal::ProcessSignal::new();
+        let witness = stop.clone();
+        let (settled, receipt) = tokio::sync::oneshot::channel();
+        let worker = std::thread::spawn(move || {
+            assert!(
+                data.receive_optional::<DataRequest>(None)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                control
+                    .receive_optional::<ControlRequest>(None)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(witness.is_cancelled());
+            settled.send(Ok(())).unwrap();
+        });
+        tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, async {
+            ChildExecutionSettlement {
+                stop,
+                data: data_stop,
+                control: control_stop,
+                receipt,
+            }
+            .after_child_reaped()
+            .await
+            .unwrap();
+        })
+        .await
+        .unwrap();
+        worker.join().unwrap();
+        drop((data_peer, control_peer));
+    }
+
+    #[test]
+    fn child_drain_uses_the_physical_output_and_capture_receipts() {
+        let key = ProcessOperationKey {
+            incarnation: ServerIncarnation::generate(),
+            session: rustx_execution_protocol::SessionId::new("session"),
+            instance: ClientInstanceId::new("client"),
+            generation: Generation::new(std::num::NonZeroU64::MIN),
+            operation: OperationId::new(),
+        };
+        let authority = Authority {
+            conversation: "child".into(),
+            tools: BTreeSet::from(["bash".into()]),
+            operations: Mutex::new(BTreeMap::from([(
+                key.operation,
+                ChildOperation {
+                    key: key.clone(),
+                    journal_released: false,
+                    capture_disposed: false,
+                },
+            )])),
+            tickets: Mutex::default(),
+            stop: rustx_process_supervisor::signal::ProcessSignal::new(),
+        };
+        let command = ClientRequest::Process;
+        let receipt = ClientReply::Process;
+        let output_released = receipt(ProcessReply::OutputReleased { key: key.clone() });
+        let state = || {
+            let operations = authority.operations.lock().unwrap();
+            let operation = &operations[&key.operation];
+            (operation.journal_released, operation.capture_disposed)
+        };
+        authority.retain_reply(
+            &command(ProcessRequest::BashCapture { key: key.clone() }),
+            &receipt(ProcessReply::BashCapture {
+                key: key.clone(),
+                capture: None,
+            }),
+        );
+        assert_eq!(state(), (false, false));
+        authority.retain_reply(
+            &command(ProcessRequest::BashCapture { key: key.clone() }),
+            &receipt(ProcessReply::BashCapture {
+                key: key.clone(),
+                capture: Some(BashCaptureResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    combined: String::new(),
+                    truncated: false,
+                    total: Some(0.into()),
+                    output: BashCaptureState::None,
+                    started: true,
+                    signal: None,
+                }),
+            }),
+        );
+        assert_eq!(state(), (false, true));
+        authority.retain_reply(
+            &command(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: 0.into(),
+            }),
+            &output_released,
+        );
+        assert_eq!(state(), (true, true));
+        assert!(authority.owns_process(&key));
     }
 }

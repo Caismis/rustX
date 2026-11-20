@@ -38,7 +38,9 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 
-use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
+use crate::local_runtime::session_runtime_manager::{
+    ChildExecutionRelay, ChildExecutionSettlement,
+};
 use crate::runtime::identity::{ConversationId, SubagentId};
 use crate::runtime::interaction::{InteractionRef, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
@@ -236,7 +238,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     /// production-allocated root. Test-only roots do not own a durable store.
     durable_store: Option<(ConversationId, PathBuf, PathBuf)>,
     physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
-    execution_relay: Option<tokio::sync::oneshot::Receiver<std::io::Result<()>>>,
+    execution_relay: Option<ChildExecutionSettlement>,
 }
 
 impl PhysicalChildRuntimeRoot {
@@ -398,19 +400,17 @@ impl PhysicalChildRuntimeRoot {
         &self.path
     }
 
-    /// Removes exactly this incarnation directory. The semantic grouping
-    /// directory is intentionally left alone because another incarnation
-    /// may be using it.
     async fn settle_execution_relay(&mut self) -> Result<(), String> {
         match self.execution_relay.take() {
             Some(relay) => relay
+                .after_child_reaped()
                 .await
-                .map_err(|error| error.to_string())?
                 .map_err(|error| error.to_string()),
             None => Ok(()),
         }
     }
 
+    /// Removes the disposable root of this physical incarnation.
     fn remove(self) -> std::io::Result<()> {
         std::fs::remove_dir_all(self.path)
     }
