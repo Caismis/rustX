@@ -188,6 +188,10 @@ pub trait ConversationStore:
 {
     /// The conversation this store is the durable authority of.
     fn conversation_id(&self) -> &ConversationId;
+    /// Read-only context of the first request on an in-session version.
+    fn lineage_request(&self) -> Option<&LineageRequest> {
+        None
+    }
     /// Isolated cancellation scope for presentation reads. It shares storage,
     /// never execution ownership, and must be closed before joining its tasks.
     fn presentation_reader(&self) -> std::sync::Arc<dyn ConversationStore>;
@@ -203,4 +207,13 @@ pub trait ConversationStore:
 
     #[cfg(test)]
     fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>);
+}
+
+/// A single source-owned request before an in-session version boundary.
+/// This evidence never confers execution or task authorization.
+pub struct LineageRequest {
+    pub store: std::sync::Arc<dyn ConversationStore>,
+    pub header: crate::durable::observation::TraceRequestPredecessorHeader,
+    pub through: u64,
+    pub permission_mode: Option<crate::runtime::types::ApprovalMode>,
 }

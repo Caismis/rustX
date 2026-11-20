@@ -741,6 +741,7 @@ export class AppServerClient {
   });
   loadEarlierTrace(id: string, gapBefore?: string) { return this.traces.loadEarlierTrace(id, false, gapBefore); }
   loadInitialTrace(id: string) { return this.traces.loadInitialTrace(id); }
+  loadLineageTrace(id: string) { return this.traces.loadLineageTrace(id); }
   locateToolTrace(id: string, locator: TraceToolLocator) { return this.traces.locateToolTrace(id, locator); }
   returnToLatestTrace(id: string) { return this.traces.returnToLatestTrace(id); }
   selectTrace(id: string, record?: string) { this.traces.selectTrace(id, record); }

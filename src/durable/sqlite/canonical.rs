@@ -1723,6 +1723,82 @@ impl SqliteConversationStore {
         Ok(())
     }
 
+    /// The committed bootstrap prefix length: positions at or below it were
+    /// seeded by lineage and carry no local journal facts of their own.
+    pub(crate) fn lineage_seed_count(&self) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row_cached(
+                "SELECT message_count FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| super::sqlite_error(&error, format!("native branch seed: {error}")))?
+            .ok_or_else(|| storage("native branch seed is unavailable"))
+    }
+
+    pub(crate) fn lineage_previous_request(
+        &self,
+        through: u64,
+    ) -> Result<
+        Option<crate::durable::observation::TraceRequestPredecessorHeader>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        super::observation_trace::previous_primary(&connection, through, through)
+    }
+
+    /// Immutable observation cut bounded to the canonical Ledger prefix through
+    /// `ledger_through`. The Journal ends before adoption of the first omitted
+    /// message, retaining settlement facts for the last included turn.
+    /// Other frontiers stay at the native head so the cut remains reconstructible.
+    /// This is the source-owned fence for composed lineage trace reads; it is
+    /// never execution or recovery authority.
+    pub(crate) fn observation_prefix_cut(
+        &self,
+        ledger_through: u64,
+    ) -> Result<crate::durable::observation::ObservationReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let actual = observation::cut(&connection, &self.conversation_id)?;
+        if ledger_through > actual.ledger_through {
+            return Err(storage("lineage prefix beyond native Ledger"));
+        }
+        let journal_at = |position| -> Result<Option<u64>, ConversationStoreError> {
+            connection
+                .query_row_cached(
+                    "SELECT journal_position FROM transcript_entries WHERE ledger_position=?1",
+                    [position],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| {
+                    super::sqlite_error(&error, format!("lineage prefix provenance: {error}"))
+                })
+        };
+        let retained = journal_at(ledger_through)?
+            .filter(|sequence| *sequence > 0)
+            .ok_or_else(|| storage("lineage prefix journal provenance unavailable"))?;
+        // Include the previous turn's settlement, which can follow its last
+        // Ledger message. For a shared adoption, the Ledger cut filters its
+        // members while the Journal cut retains the adoption itself.
+        let journal = journal_at(ledger_through + 1)?
+            .filter(|sequence| *sequence >= retained)
+            .map_or(retained, |excluded| retained.max(excluded - 1));
+        let read = actual.read.clone();
+        Ok(crate::durable::observation::ObservationReadCut {
+            read: crate::durable::reading::ConversationReadCut {
+                journal,
+                ledger_through,
+                ..read
+            },
+            ledger_through,
+            transcript_total: actual.transcript_total,
+            surface_revision: actual.surface_revision,
+            inherited_through: actual.inherited_through,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn canonical_scalar_sources_match(
         &self,

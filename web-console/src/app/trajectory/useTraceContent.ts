@@ -3,7 +3,6 @@ import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionH
 import { traceFields } from '../../../../protocol/app-server/trace-identity';
 import { readRequestField, readTraceBlocks, readTraceMessages, readTraceSource, traceProgram } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
-import { readRequestPredecessor, requestDomain } from '../../client/request-system';
 import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
 
 export type ToolContent = { name?: string; arguments?: { value: unknown; truncated: boolean }; source?: TraceToolSource; definition?: TraceToolDefinition; result?: Pick<TraceToolResult, 'outcome' | 'detail' | 'blocks' | 'attachments'> | null };
@@ -79,19 +78,20 @@ export function useTraceContent(page: CheckpointPage | undefined, reader: TraceF
         request.options = { model: values.model, protocol: values.protocol, ...(values.profile ? { profile: values.profile } : {}), maxTokens: values.max_output_tokens, contextWindowTokens: values.context_window_tokens,
           ...Object.fromEntries((values.options as { name: string; value: { value: unknown } }[]).map(option => [option.name, option.value.value])) };
       }
-      let previousRequestDomain = previousDomain?.replace(/\.effective_system_prompt$/, '');
-      if (facet === 'diff' && item.record.request?.predecessor.availability === 'available' && !previousRequestDomain) {
-        const previous = await readRequestPredecessor(reader, cut, item.record, current);
-        if (previous) previousRequestDomain = requestDomain(previous);
-      }
+      const previousRequestDomain = previousDomain?.replace(/\.effective_system_prompt$/, '');
+      const preceding = facet === 'diff' && item.record.request?.predecessor.availability === 'available';
       if (facet === 'system-prompt' || facet === 'diff') request.effective_system_prompt = prompt(await readRequestField(reader, cut, `${domain}.effective_system_prompt`, current));
-      if (facet === 'diff' && previousRequestDomain && item.record.request?.system_prompt.state === 'changed') request.previous_system_prompt = prompt(await readRequestField(reader, cut, `${previousRequestDomain}.effective_system_prompt`, current));
+      if (preceding && item.record.request?.system_prompt.state === 'changed') {
+        const previousPrompt = previousRequestDomain ? `${previousRequestDomain}.effective_system_prompt` : `${domain}.previous_system_prompt`;
+        request.previous_system_prompt = prompt(await readRequestField(reader, cut, previousPrompt, current));
+      }
       if (facet === 'tools' || facet === 'diff' && item.record.request?.tool_catalog === 'changed') {
         const tools = await readRequestField(reader, cut, `${domain}.tools`, current);
         if (!Array.isArray(tools)) throw Error('Original Tool catalog is unavailable.');
         request.tools = tools as TraceToolDefinition[];
-        if (facet === 'diff' && previousRequestDomain) {
-          const previousTools = await readRequestField(reader, cut, `${previousRequestDomain}.tools`, current);
+        if (preceding) {
+          const previousToolsDomain = previousRequestDomain ? `${previousRequestDomain}.tools` : `${domain}.previous_tools`;
+          const previousTools = await readRequestField(reader, cut, previousToolsDomain, current);
           if (!Array.isArray(previousTools)) throw Error('Original preceding Tool catalog is unavailable.');
           request.previous_tools = previousTools as TraceToolDefinition[];
         }

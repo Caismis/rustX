@@ -60,6 +60,10 @@ export interface TraceCache {
   /** Navigation marker only; locating history never pauses live appends. */
   located?: true;
   page: TracePage;
+  /** Composed lineage cursor: `undefined` unprobed, `null` exhausted, else the
+   * next source-owned prefix page boundary. Never sent to live reads. */
+  lineageCursor?: string | null;
+  lineageRecords?: readonly TraceRecord[];
   /** Unloaded history between retained records and a newer native interval. */
   gaps?: readonly TraceGap[];
   /** Issued for each represented row; renewed only by that row's native head. */
@@ -112,7 +116,12 @@ export function standaloneTraceCut(page:TracePage,conversationId:string,activati
 }
 
 /** A detail header may itself be deferred; that never authorizes whole-item hydration. */
+export function originalTraceId(recordId: string): string {
+  return isComposedTraceId(recordId) ? `trace:${BigInt(recordId.slice(6)) % (1n << 48n)}` : recordId;
+}
+
 export function inlineTraceDetail(page:CheckpointPage,recordId:string):TraceDetail|undefined {
+  recordId = originalTraceId(recordId);
   const item=page.items[0];
   if(!item||item.deferred)return;
   const value=item.value;
@@ -123,6 +132,7 @@ export function inlineTraceDetail(page:CheckpointPage,recordId:string):TraceDeta
 
 /** A deferred header remains read evidence, never an incomplete typed detail. */
 export function retainedTraceDetailPage(page:CheckpointPage,id:string):CheckpointPage|undefined {
+ id=originalTraceId(id);
  const item=page.items[0];
  if(!item?.deferred)return;
  const sequence=/^trace:(0|[1-9][0-9]*)$/.exec(id)?.[1];
@@ -158,9 +168,16 @@ function interestBatch(values: readonly string[]): TraceInterests {
   return values.reduce<TraceInterests>(appendInterest, []);
 }
 
+/** Composed lineage records own immutable source cuts; live refreshes never
+ * address them, so they stay out of checkpoint interest batches. */
+export function isComposedTraceId(id: string): boolean {
+  const match = /^trace:(\d+)$/.exec(id);
+  return match != null && BigInt(match[1]) >= (1n << 48n);
+}
+
 /** Loaded identities the server should refresh at the next snapshot cut. */
 export function traceInterestBatches(cache?: TraceCache) {
-  const records = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.records] : [];
+  const records = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.records].filter(record => !isComposedTraceId(record.id)) : [];
   const interests=[...new Map(records.map(record => [record.id, record.position])).values()];
   return Array.from({length:Math.max(1,Math.ceil(interests.length/8))},(_,index)=>interestBatch(interests.slice(index*8,index*8+8)));
 }
@@ -200,6 +217,7 @@ function boundDetails(
 
 export function selectTrace(cache: TraceCache, id?: string): TraceCache {
   const selection = cache.page.records.find(record => record.id === id)
+    ?? cache.lineageRecords?.find(record => record.id === id)
     ?? (cache.selection?.id === id ? cache.selection : undefined);
   const details = { ...cache.details };
   // An explicit selection is a fresh read opportunity after a failed inspection.

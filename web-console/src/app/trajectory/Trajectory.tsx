@@ -1,10 +1,9 @@
-import type { useInheritedTurns } from './useInheritedTurns';
 import {traceAttemptKey,traceStepKey} from '../../../../protocol/app-server/trace-identity';
 import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { traceInspectionHead, type TraceCache } from '../../client/trace';
+import { originalTraceId, traceInspectionHead, type TraceCache } from '../../client/trace';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import type { SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
@@ -41,7 +40,6 @@ function defaultToolRequestWidth(splitWidth: number): number {
 
 export interface TrajectoryProps {
   cache: TraceCache;
-  inherited?: Pick<ReturnType<typeof useInheritedTurns>, 'turns' | 'more'>;
   messageHistory?: TrajectoryRowActions['messageHistory'];
   onLatest?: () => void;
   loadEarlier: (gapBefore?: string) => void;
@@ -50,7 +48,7 @@ export interface TrajectoryProps {
 }
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
-export function Trajectory({ cache, inherited = { turns: undefined, more: undefined }, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
+export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
@@ -72,31 +70,16 @@ export function Trajectory({ cache, inherited = { turns: undefined, more: undefi
   const focusedDisplay = useRef<string | undefined>(undefined);
   const [pendingFocus, setPendingFocus] = useState<string | undefined>(() => selection?.display_key);
   const context = useTraceContexts(cache, selection?.owner_record_id);
-  const records = context.records;
-  const projection = useMemo(() => projectTrajectory(tx, records, inherited.turns?.length), [tx, records, inherited.turns]);
-  const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
+  const records = useMemo(() => [...(cache.lineageRecords ?? []), ...context.records], [cache.lineageRecords, context.records]);
+  const historyCursor = cache.lineageCursor === undefined ? cache.page.next_cursor : cache.page.next_cursor ?? cache.lineageCursor;
+  const projection = useMemo(() => projectTrajectory(tx, records), [tx, records]);
+  const allItems = useMemo(() => trajectoryItems(tx, projection, historyCursor), [tx, projection, historyCursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);
   const visible = useMemo(() => visibleItems(tx, allItems, records, calls, matches), [tx, allItems, records, calls, matches]);
   const workflowMap = useMemo(() => workflowCalls(records), [records]);
   const workflowRoots = useMemo(() => [...new Map([...workflowMap.values()].map(root => [root.id, root])).values()], [workflowMap]);
   const { nodes: workflowNodes, retry: retryWorkflowNodes } = useWorkflowNodes(cache, workflowRoots, openedWorkflows);
-  const localRows = useMemo(() => withHistoryGaps(withWorkflowNodes(ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), workflowMap, openedWorkflows, workflowNodes), records, cache.gaps), [tx, projection, visible, collapsedTurns, matches, workflowMap, openedWorkflows, workflowNodes, records, cache.gaps]);
-  const rows = useMemo(() => {
-    if (!inherited.turns?.length && !inherited.more) return localRows;
-    const earlier: typeof localRows = [];
-    const term = query.trim().toLocaleLowerCase();
-    for (const turn of inherited.turns ?? []) {
-      for (const role of ['user', 'assistant'] as const) {
-        const text = role === 'user' ? turn.prompt : turn.response;
-        if (text && (!term || text.toLocaleLowerCase().includes(term))) earlier.push({
-          display_key: `inherited:${turn.ordinal}:${role}`, kind: 'structure', height: 30, turnStart: role === 'user',
-          inherited: { role, ordinal: turn.ordinal, text },
-        });
-      }
-    }
-    if (inherited.more) earlier.push({ display_key: 'inherited:more', kind: 'history', height: 30, turnStart: false, loadInherited: inherited.more });
-    return [...earlier, ...localRows];
-  }, [inherited.turns, inherited.more, localRows, query]);
+  const rows = useMemo(() => withHistoryGaps(withWorkflowNodes(ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), workflowMap, openedWorkflows, workflowNodes), records, cache.gaps), [tx, projection, visible, collapsedTurns, matches, workflowMap, openedWorkflows, workflowNodes, records, cache.gaps]);
   const selectionItems = useMemo(() => displayUniverse(allItems, [...visible, ...rows.flatMap(row => row.item ? [row.item] : [])]), [allItems, visible, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
@@ -114,7 +97,7 @@ export function Trajectory({ cache, inherited = { turns: undefined, more: undefi
       if (record.message_id && messageHistory.versions.has(canonicalLocatorKey({ type: 'by_message_id', message_id: record.message_id }))) continue;
       const page = detail.page;
       let head: ReturnType<typeof traceInspectionHead>;
-      try { head = traceInspectionHead(page, record.id); } catch { continue; }
+      try { head = traceInspectionHead(page, originalTraceId(record.id)); } catch { continue; }
       if (head?.content.type !== 'messages' || head.content.page.next_offset != null) continue;
       const inputs = head.content.page.items.filter(message => message.ordinary_input);
       if (inputs.length !== 1) continue;
@@ -185,7 +168,7 @@ export function Trajectory({ cache, inherited = { turns: undefined, more: undefi
     }
   }, [selection, selectedItem]);
   const activeKey = selection?.display_key;
-  const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading;
+  const canLoadEarlier = Boolean(historyCursor) && !cache.loading;
   const requestOlder = () => ledger.current?.loadEarlier();
   const toggleTurn = (id: string) => setCollapsedTurns(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
   const toggleCalls = (id: string) => setCalls(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
@@ -288,7 +271,7 @@ export function Trajectory({ cache, inherited = { turns: undefined, more: undefi
   const inspector = selected && selection && selectedItem
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
-      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(cache.page.records, selected.id, cache.page.next_cursor, cache.gaps)} onOpen={openRecord}
+      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(records, selected.id, historyCursor, cache.gaps)} onOpen={openRecord}
       onOpenWorkflowCanvas={inspectorOpenCanvas} messageHistory={messageHistory} detailFamilies={detailFamilies} />
     : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
       onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
@@ -332,7 +315,7 @@ export function Trajectory({ cache, inherited = { turns: undefined, more: undefi
       selectedId={timelineModel?.spans.find(span => span.displayKey === selection?.display_key)?.id ?? null}
       searchMatches={matches === null ? null : new Set(timelineModel?.spans.filter(span => span.displayKey ? matches.has(span.displayKey) : matchingOwners?.has(span.ownerId ?? span.id)).map(span => span.id))}
       onRangeChange={setRange}
-      hasEarlierRecords={Boolean(cache.page.next_cursor)} canLoadEarlier={canLoadEarlier} loadingEarlier={cache.loading === true} onLoadEarlier={requestOlder}
+      hasEarlierRecords={Boolean(historyCursor)} canLoadEarlier={canLoadEarlier} loadingEarlier={cache.loading === true} onLoadEarlier={requestOlder}
       onSelect={id => {
         const span = timelineModel?.spans.find(span => span.id === id);
         const item = span?.displayKey ? allItems.find((item): item is InspectableDisplayItem => item.display_key === span.displayKey && isInspectable(item)) : preferredItem(allItems, id);

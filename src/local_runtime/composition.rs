@@ -570,6 +570,7 @@ impl LocalConversationCore {
             startup,
             &crate::runtime::cancellation::CancellationSignal::new(),
             &dynamic_tools,
+            None,
         )
         .await
     }
@@ -589,6 +590,7 @@ impl LocalConversationCore {
         startup: McpInitialSubmission,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
         host_tools: &[crate::tools::host::HostToolDefinition],
+        lineage_request: Option<Arc<crate::durable::store::LineageRequest>>,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now()); // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
@@ -644,6 +646,20 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
+            if lineage_request.is_some() {
+                let store = crate::durable::SqliteConversationStore::open(
+                    conversation_id.clone(),
+                    &artifacts_root.join("conversation.sqlite"),
+                )
+                .map_err(|error| LocalRuntimeError::ToolRuntime {
+                    detail: error.to_string(),
+                })?
+                .with_lifecycle(conversation_access.clone())
+                .with_lineage_request(lineage_request);
+                tool_runtime_config.durable_binding = Some(
+                    crate::durable::ConversationStoreBinding::new(Arc::new(store)),
+                );
+            }
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {

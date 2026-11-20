@@ -130,8 +130,10 @@ export async function readRequestField(reader: TraceFieldReader, cut: Checkpoint
     if (page.next_offset == null) break;
     offset = Number(page.next_offset);
   } while (current());
-  const field = domain.split('.detail.request.')[1];
-  if (!field) throw Error('Original request field is unavailable.');
+  const requestedField = domain.split('.detail.request.')[1];
+  if (!requestedField) throw Error('Original request field is unavailable.');
+  const field = requestedField === 'previous_tools' ? 'tools'
+    : requestedField === 'previous_system_prompt' ? 'effective_system_prompt' : requestedField;
   const array = ['options', 'tools', 'contributions', 'messages'].includes(field);
   const entries: [string, unknown][] = [];
   for (const row of rows) {

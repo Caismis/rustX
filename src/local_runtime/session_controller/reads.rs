@@ -200,7 +200,13 @@ impl SessionController {
         ),
         SessionError,
     > {
-        let access = self.acquire_read(id, node).await?;
+        let selected = self.catalog.lock().await.lineage(id, node)?.0;
+        let access = self.acquire_read(id, Some(&selected.id)).await?;
+        let lineage_request = if selected.parent.is_some() {
+            self.lineage_request(id, &selected.id).await?
+        } else {
+            None
+        };
         #[cfg(test)]
         let gate = self.trace_observation_read_gate.lock().unwrap().clone();
         tokio::task::spawn_blocking(move || {
@@ -209,7 +215,8 @@ impl SessionController {
                 &access.database_path,
             )
             .map_err(SessionError::Store)?
-            .with_lifecycle(access.allocation);
+            .with_lifecycle(access.allocation)
+            .with_lineage_request(lineage_request);
             #[cfg(test)]
             if let Some(gate) = gate {
                 gate.enter();

@@ -141,7 +141,7 @@ function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
  * Durable input order orders Turns and Steps, but never establishes ownership.
  * Interleaved records with the same exact location join the same group. Unscoped
  * records remain standalone sections, never members of a nearby Turn. */
-export function projectTrajectory(tx: Translate, records: readonly TraceRecord[], inheritedCount = 0): TrajectoryProjection {
+export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]): TrajectoryProjection {
   const sections: TrajectorySection[] = [];
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
@@ -159,7 +159,7 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     }
     let turn = turns.get(attempt);
     if (!turn) {
-      turn = { kind: 'turn', ownerKey:attempt,nativeAttemptId:record.location.attempt_id??undefined, displayOrdinal: inheritedCount + turns.size + 1, records: [], groups: [] };
+      turn = { kind: 'turn', ownerKey:attempt,nativeAttemptId:record.location.attempt_id??undefined, displayOrdinal: turns.size + 1, records: [], groups: [] };
       turns.set(attempt, turn);
       sections.push(turn);
     }
@@ -314,8 +314,6 @@ export interface TrajectoryLedgerRow {
   kind: 'semantic' | 'marker' | 'structure' | 'summary' | 'history';
   /** A middle boundary loads its own native continuation, not the oldest page. */
   historyBefore?: string;
-  inherited?: { role: 'user' | 'assistant'; ordinal: number; text: string };
-  loadInherited?: () => void;
   height: 30 | 20 | 10;
   item?: InspectableDisplayItem;
   turn?: TurnStructure;

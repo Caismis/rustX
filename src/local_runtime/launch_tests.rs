@@ -49,6 +49,7 @@ async fn compose_admitted_with_controller(
         super::composition::McpInitialSubmission::default(),
         &crate::runtime::cancellation::CancellationSignal::new(),
         &[],
+        None,
     )
     .await?
     .into_interactive()

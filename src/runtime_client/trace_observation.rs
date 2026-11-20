@@ -82,20 +82,62 @@ pub(crate) fn selection(domain: &str) -> Option<(u64, Vec<String>)> {
         .collect();
     Some((sequence, path))
 }
-struct RequestView {
+/// Resolve the preceding request without changing either store's read authority.
+fn preceding_source(
+    store: &dyn ConversationStore,
+    sequence: u64,
+    through: u64,
+) -> Result<Option<(&dyn ConversationStore, u64, u64)>, RuntimeClientError> {
+    let local = store
+        .observation_request_predecessor_at(sequence, through)
+        .map_err(RuntimeClientError::observation_store_error)?;
+    Ok(match local {
+        Some(previous) => previous
+            .summary
+            .map(|_| (store, previous.start_sequence, through)),
+        None => store.lineage_request().and_then(|source| {
+            source.header.summary.as_ref()?;
+            Some((
+                source.store.as_ref(),
+                source.header.start_sequence,
+                source.through,
+            ))
+        }),
+    })
+}
+
+fn request_field_source<'a>(
+    store: &'a dyn ConversationStore,
+    cut: &CheckpointReadCut,
+    sequence: u64,
+    path: &[String],
+) -> Result<(&'a dyn ConversationStore, u64, u64, Vec<String>), RuntimeClientError> {
+    let alias = match path.first().map(String::as_str) {
+        Some("previous_system_prompt") => "effective_system_prompt",
+        Some("previous_tools") => "tools",
+        _ => return Ok((store, sequence, cut.through, path.to_vec())),
+    };
+    let (source, previous, through) = preceding_source(store, sequence, cut.through)?
+        .ok_or(RuntimeClientError::ReadCutExpired)?;
+    let mut path = path.to_vec();
+    path[0] = alias.into();
+    Ok((source, previous, through, path))
+}
+
+struct RequestView<'a> {
     request: u64,
-    previous: Option<u64>,
+    previous: Option<(&'a dyn ConversationStore, u64, u64)>,
     value: serde_json::Value,
     dynamic: bool,
     deferred: bool,
     content: Vec<crate::observation::cut::ContentBinding>,
     collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
-fn request_view(
-    store: &dyn ConversationStore,
+fn request_view<'a>(
+    store: &'a dyn ConversationStore,
     cut: &CheckpointReadCut,
     sequence: u64,
-) -> Result<RequestView, RuntimeClientError> {
+) -> Result<RequestView<'a>, RuntimeClientError> {
     let request = sequence;
     let header = store
         .request_summary_header_at(request, cut.through)
@@ -105,14 +147,19 @@ fn request_view(
     let predecessor = store
         .observation_request_predecessor_at(sequence, cut.through)
         .map_err(RuntimeClientError::observation_store_error)?;
-    let previous = predecessor
-        .as_ref()
-        .and_then(|previous| previous.summary.as_ref().map(|_| previous.start_sequence));
+    let previous = preceding_source(store, sequence, cut.through)?;
+    let predecessor = predecessor.or_else(|| {
+        store.lineage_request().map(|source| {
+            let mut header = source.header.clone();
+            header.source = None;
+            header
+        })
+    });
     if let Some(previous_header) = predecessor {
         value["predecessor"] = serde_json::json!({"availability":if previous_header.summary.is_some(){"available"}else{"unavailable"},"request_id":previous_header.request_id,"request_id_source":previous_header.source});
-        value["previous_system_prompt"] = if let Some(previous) = previous {
-            let field = store
-                .request_field_header_at(previous, cut.through, &["effective_system_prompt".into()])
+        value["previous_system_prompt"] = if let Some((source, previous, through)) = previous {
+            let field = source
+                .request_field_header_at(previous, through, &["effective_system_prompt".into()])
                 .map_err(RuntimeClientError::observation_store_error)?;
             deferred |= field.deferred;
             field.value
@@ -211,9 +258,9 @@ pub(crate) fn field_page(
     offset: u64,
     limit: usize,
 ) -> Result<CheckpointPage, RuntimeClientError> {
-    let request = sequence;
+    let (store, request, through, path) = request_field_source(store, cut, sequence, path)?;
     let source = store
-        .request_field_page_at(request, cut.through, path, offset, limit)
+        .request_field_page_at(request, through, &path, offset, limit)
         .map_err(RuntimeClientError::observation_store_error)?;
     let mut collections = Vec::new();
     let items = source
@@ -264,9 +311,9 @@ pub(crate) fn field_read(
 ) -> Result<CheckpointValueChunk, RuntimeClientError> {
     let (item_offset, path) = selection;
     let (offset, max_bytes) = range;
-    let request = sequence;
+    let (store, request, through, parent) = request_field_source(store, cut, sequence, parent)?;
     let header = store
-        .request_field_header_at(request, cut.through, parent)
+        .request_field_header_at(request, through, &parent)
         .map_err(RuntimeClientError::observation_store_error)?;
     let mut selected = if header.children_total == 0 {
         if item_offset != 0 || !path.is_empty() {
@@ -274,10 +321,10 @@ pub(crate) fn field_read(
                 message: "scalar request selection must use item zero and empty path".into(),
             });
         }
-        parent.to_vec()
+        parent
     } else {
         store
-            .request_field_page_at(request, cut.through, parent, item_offset, 1)
+            .request_field_page_at(request, through, &parent, item_offset, 1)
             .map_err(RuntimeClientError::observation_store_error)?
             .fields
             .into_iter()
@@ -287,7 +334,7 @@ pub(crate) fn field_read(
     };
     selected.extend_from_slice(path);
     let chunk = store
-        .request_value_read_at(request, cut.through, &selected, offset, max_bytes)
+        .request_value_read_at(request, through, &selected, offset, max_bytes)
         .map_err(RuntimeClientError::observation_store_error)?;
     Ok(CheckpointValueChunk {
         representation:
@@ -303,16 +350,18 @@ pub(crate) fn field_read(
     })
 }
 
-enum Part {
+enum Part<'a> {
     Inline(Vec<u8>),
     Native {
+        store: &'a dyn ConversationStore,
+        through: u64,
         request: u64,
         path: Vec<String>,
         length: u64,
         dynamic: bool,
     },
 }
-impl Part {
+impl Part<'_> {
     fn length(&self) -> u64 {
         match self {
             Self::Inline(bytes) => bytes.len() as u64,
@@ -320,12 +369,12 @@ impl Part {
         }
     }
 }
-fn parts(
-    store: &dyn ConversationStore,
+fn parts<'a>(
+    store: &'a dyn ConversationStore,
     cut: &CheckpointReadCut,
     sequence: u64,
-    source: &RequestView,
-) -> Result<Vec<Part>, RuntimeClientError> {
+    source: &RequestView<'a>,
+) -> Result<Vec<Part<'a>>, RuntimeClientError> {
     let fields = store
         .request_field_page_at(source.request, cut.through, &[], 0, 32)
         .map_err(RuntimeClientError::observation_store_error)?;
@@ -351,14 +400,16 @@ fn parts(
                 serde_json::to_vec(&source.value[name]).expect("finite identity"),
             ));
         } else if name == "previous_system_prompt" {
-            if let Some(previous) = &source.previous {
-                match store.request_field_header_at(
-                    *previous,
-                    cut.through,
+            if let Some((previous_store, previous, through)) = source.previous {
+                match previous_store.request_field_header_at(
+                    previous,
+                    through,
                     &["effective_system_prompt".into()],
                 ) {
                     Ok(header) => parts.push(Part::Native {
-                        request: *previous,
+                        store: previous_store,
+                        through,
+                        request: previous,
                         path: vec!["effective_system_prompt".into()],
                         length: header.encoded_bytes,
                         dynamic: false,
@@ -380,6 +431,8 @@ fn parts(
                 field.encoded_bytes
             };
             parts.push(Part::Native {
+                store,
+                through: cut.through,
                 request: source.request,
                 path: field.path,
                 length,
@@ -441,15 +494,17 @@ pub(crate) fn read(
                         ..usize::try_from(local).expect("finite inline") + count as usize],
                 ),
                 Part::Native {
+                    store,
+                    through,
                     request,
                     path,
                     dynamic,
                     ..
                 } => {
                     let chunk = if dynamic {
-                        store.request_outcome_read_at(request, cut.through, &path, local, count)
+                        store.request_outcome_read_at(request, through, &path, local, count)
                     } else {
-                        store.request_value_read_at(request, cut.through, &path, local, count)
+                        store.request_value_read_at(request, through, &path, local, count)
                     }
                     .map_err(RuntimeClientError::observation_store_error)?;
                     bytes.extend(chunk.bytes);

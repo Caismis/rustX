@@ -857,7 +857,6 @@
         "./layout",
         "./search",
         "./timeline",
-        "./useInheritedTurns",
         "./useTraceContexts",
         "./useWorkflowNodes",
         "./workflow",
@@ -920,7 +919,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "475866f18cd3cc878c3dcab63b775ba582ec16729e3ac25acadd60f7eee113de"
+      "local_sha256": "ef4415bcd2a462b418c531cc989b1f22ac2c8c1dfb4ac6e486dc2e1194380890"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -1008,7 +1007,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "dce34b7eb90638049274c4823cb8f11fef7abf1bebc9325a6dbc212ebafdae4d"
+      "local_sha256": "8fbfb69847493035ada6757279ccf83784d8cae1cb9d2ae2519494057bb04f55"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1100,7 +1099,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "4f2869f32c445e1f6d556e0481a4ef43ca1da1c02a54cf405b5be3a5544bf603",
+      "local_sha256": "e4a29adbe5fccfcb5264a029b5522a19adcb33d3ad7c76ecb5df50dc9a2c53ae",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -4303,7 +4302,6 @@
         "../../locale/react",
         "../../presentation/primitives/StateDot",
         "./Trajectory.module.css",
-        "./TrajectoryCell",
         "./TrajectoryRow",
         "./layout",
         "@tanstack/react-virtual",
@@ -4320,7 +4318,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "9f817232f4b9665331a709bc81ccfb052b1185d3a8ab7211b4b7cdfccb6d9bf9"
+      "local_sha256": "70a6476da33049b680ba027eb30b13460ed7a56c491d962615d810db52482be0"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",

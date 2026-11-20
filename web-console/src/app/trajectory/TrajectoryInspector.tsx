@@ -1,6 +1,6 @@
 import { modelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
-import {traceInspectionHead} from '../../client/trace';
+import { isComposedTraceId, originalTraceId, traceInspectionHead } from '../../client/trace';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import type { TraceDisplayBlock } from '../../client/trace-content';
 import { completeTools } from '../../client/request-system';
@@ -610,7 +610,7 @@ export interface TrajectoryInspectorProps {
  */
 export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas, messageHistory, detailFamilies }: TrajectoryInspectorProps) {
   const tx = useTranslation();
-  const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
+  const inspection=detailPage?traceInspectionHead(detailPage,originalTraceId(item.record.id)):undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
   const record = item.record;
   // The selected durable content head never replaces the outer live lifecycle.
@@ -631,7 +631,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   };
   const predecessor=record.request?.predecessor;
   const previous=predecessor?.availability==='available'?records.find(row=>row.request&&(predecessor.request_id!=null?row.request.request_id===predecessor.request_id:predecessor.request_id_source!=null&&row.request.request_id_source!=null&&traceFieldKey(predecessor.request_id_source)===traceFieldKey(row.request.request_id_source))):undefined;
-  const previousSequence=previous&&/^trace:(0|[1-9][0-9]*)$/.exec(previous.id)?.[1];
+  const previousSequence=previous&&!isComposedTraceId(previous.id)&&/^trace:(0|[1-9][0-9]*)$/.exec(previous.id)?.[1];
   const previousDomain=previousSequence?`trace.records.${previousSequence}.detail.request.effective_system_prompt`:undefined;
   const native = useTraceContent(detailPage, detailReader, inspection, item, active, previousDomain);
   const resolved = native?.content;

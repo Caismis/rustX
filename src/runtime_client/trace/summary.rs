@@ -18,7 +18,16 @@ impl TraceProjection<'_> {
         probe::record(&probe::SYSTEM_PREDECESSOR);
         self.store
             .observation_request_predecessor_at(start, self.through)
-            .map(PreviousRequest)
+            .map(|previous| {
+                PreviousRequest(previous.or_else(|| {
+                    self.store.lineage_request().map(|source| {
+                        let mut header = source.header.clone();
+                        // Original IDs and fields remain owned by the source store.
+                        header.source = None;
+                        header
+                    })
+                }))
+            })
     }
     pub(super) fn context_presentation(
         &self,

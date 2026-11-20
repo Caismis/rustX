@@ -20,7 +20,6 @@ import { QueueDock } from '../composer/QueueDock';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
-import { useInheritedTurns } from '../trajectory/useInheritedTurns';
 import { Trajectory } from '../trajectory/Trajectory';
 import { SessionPanel } from './SessionPanel';
 import type { ResponseAction } from '../commands/native';
@@ -177,9 +176,13 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       {contentNode}
     </ConversationRunCanvasHost>
   );
-  const inherited = useInheritedTurns(mode === 'trajectory' && view?.hasBranches && view.readable && !view.retrying && !view.readingPreview
-    ? { client, session: view.id, conversation: view.conversation_id } : undefined);
-  const currentLedger = mode === 'trajectory' && view?.trace ? <Trajectory key={view.conversation_id} cache={view.trace} inherited={inherited} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}
+  const needsPrefix = mode === 'trajectory' && !!view?.hasBranches && view.readable
+    && !view.retrying && !view.readingPreview && !!view.trace && view.trace.page.next_cursor == null;
+  const prefixReady = !needsPrefix || view?.trace?.lineageCursor !== undefined || !!view?.trace?.error;
+  useEffect(() => {
+    if (needsPrefix && !prefixReady && sessionId) void client.loadLineageTrace(sessionId);
+  }, [client, sessionId, needsPrefix, prefixReady, view?.trace?.epoch, view?.conversation_id]);
+  const currentLedger = mode === 'trajectory' && view?.trace ? <Trajectory key={view.conversation_id} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}
         messageHistory={switchVersion && !view.readingPreview && !view.retrying ? { versions, switchVersion, disabled: view.disabled || !view.safe || historicalPending } : undefined}/> : undefined;
   const owner = JSON.stringify([sessionId, mode, readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, client.getSnapshot().generation]);
   type VersionFrame = { conversation: string; body: ReactNode };
@@ -189,7 +192,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   if (!sameReader) released.current = undefined;
   const destination = versionDestination ?? (sameReader && messageVersionFocus?.conversationId === last.destination ? last.destination : undefined);
   const liveBody = view?.readable && !view.retrying && !view.readingPreview
-    && (mode === 'chat' || !!view.trace && inherited.ready);
+    && (mode === 'chat' || !!view.trace && prefixReady);
   const cachedDestination = sameReader && last.alternate?.conversation === destination ? last.alternate : undefined;
   // A selected version has durable text even while its runtime is starting.
   // Keep that exact frame through the gap between resume and checkpoint.

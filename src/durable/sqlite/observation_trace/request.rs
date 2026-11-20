@@ -14,7 +14,15 @@ pub(in crate::durable::sqlite) fn predecessor(
     through: u64,
 ) -> Result<Option<TraceRequestPredecessorHeader>, ConversationStoreError> {
     super::super::observation_request::validate_start(connection, start, through)?;
-    let previous:Option<u64>=connection.query_row(concat!("SELECT sequence FROM events INDEXED BY events_primary_trace_kind_idx WHERE ",crate::durable::sqlite::event_kind_key::sql!("observation_kind"),"=x'0004'"," AND observation_trace_fact_required=1 AND sequence<?1 ORDER BY sequence DESC LIMIT 1"),[start],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    previous_primary(connection, start - 1, through)
+}
+
+pub(in crate::durable::sqlite) fn previous_primary(
+    connection: &Connection,
+    upper: u64,
+    through: u64,
+) -> Result<Option<TraceRequestPredecessorHeader>, ConversationStoreError> {
+    let previous: Option<u64> = connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_primary_trace_kind_idx WHERE ",crate::durable::sqlite::event_kind_key::sql!("observation_kind"),"=x'0004'"," AND observation_trace_fact_required=1 AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"),[upper.min(through)],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     previous
         .map(|previous| {
             let own = header(connection, previous, through)?;

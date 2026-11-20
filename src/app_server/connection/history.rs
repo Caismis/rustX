@@ -87,9 +87,7 @@ impl AppServerConnection {
                 }
                 let (conversation_id, page) = self
                     .sessions
-                    .read_trace(&session_id, node_id.as_ref(), move |projection| {
-                        projection.page(before.as_ref(), limit)
-                    })
+                    .read_lineage_trace(&session_id, node_id.as_ref(), before, limit)
                     .await
                     .map_err(session_error)?;
                 Ok(MethodResult::SessionTraceHistory {
@@ -104,6 +102,17 @@ impl AppServerConnection {
             } => {
                 if record_id.len() > 256 {
                     return Err(domain(ErrorData::InvalidParams));
+                }
+                if let Some((conversation_id, page)) = self
+                    .sessions
+                    .read_lineage_trace_detail(&session_id, node_id.as_ref(), &record_id)
+                    .await
+                    .map_err(session_error)?
+                {
+                    return Ok(MethodResult::SessionTraceHistoryDetail {
+                        conversation_id,
+                        page: page.map_err(client_error)?,
+                    });
                 }
                 let (node_id, cut) = self
                     .history_trace_cut(&session_id, node_id.as_ref(), None)
@@ -137,15 +146,15 @@ impl AppServerConnection {
                 if limit == 0 || limit > 32 || offset > 9_007_199_254_740_991 {
                     return Err(domain(ErrorData::InvalidParams));
                 }
-                let (node_id, _) = self
-                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+                let (source_session, source_node, store_cut) = self
+                    .history_field_source(&session_id, node_id.as_ref(), &cut)
                     .await?;
                 let (_, page) = self
                     .sessions
-                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                    .read_trace_observation(&source_session, Some(&source_node), move |store| {
                         crate::runtime_client::trace_observation::history_page(
                             store,
-                            &cut,
+                            &store_cut,
                             &collection,
                             offset,
                             limit,
@@ -153,9 +162,9 @@ impl AppServerConnection {
                     })
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::CheckpointPage {
-                    page: page.map_err(client_error)?,
-                })
+                let mut page = page.map_err(client_error)?;
+                page.read_cut = cut;
+                Ok(MethodResult::CheckpointPage { page })
             }
             Method::SessionTraceValueRead {
                 session_id,
@@ -175,15 +184,15 @@ impl AppServerConnection {
                 {
                     return Err(domain(ErrorData::InvalidParams));
                 }
-                let (node_id, _) = self
-                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+                let (source_session, source_node, store_cut) = self
+                    .history_field_source(&session_id, node_id.as_ref(), &cut)
                     .await?;
                 let (_, chunk) = self
                     .sessions
-                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                    .read_trace_observation(&source_session, Some(&source_node), move |store| {
                         crate::runtime_client::trace_observation::history_value_read(
                             store,
-                            &cut,
+                            &store_cut,
                             &collection,
                             item_offset,
                             &path,
@@ -192,9 +201,9 @@ impl AppServerConnection {
                     })
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::CheckpointValueChunk {
-                    chunk: chunk.map_err(client_error)?,
-                })
+                let mut chunk = chunk.map_err(client_error)?;
+                chunk.cut = cut;
+                Ok(MethodResult::CheckpointValueChunk { chunk })
             }
             Method::SessionTraceContentRead {
                 session_id,
@@ -232,14 +241,14 @@ impl AppServerConnection {
                 cut,
                 instance,
             } => {
-                let (selected, _) = self
-                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+                let (source_session, source_node, store_cut) = self
+                    .history_field_source(&session_id, node_id.as_ref(), &cut)
                     .await?;
                 let (_, node) = self
                     .sessions
-                    .read_trace_observation(&session_id, Some(&selected), move |store| {
+                    .read_trace_observation(&source_session, Some(&source_node), move |store| {
                         crate::runtime_client::trace_observation::history_workflow_node(
-                            store, &cut, &instance,
+                            store, &store_cut, &instance,
                         )
                     })
                     .await
@@ -469,16 +478,16 @@ impl AppServerConnection {
         {
             return Err(domain(ErrorData::InvalidParams));
         }
-        let (node_id, _) = self
-            .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+        let (source_session, source_node, store_cut) = self
+            .history_field_source(&session_id, node_id.as_ref(), &cut)
             .await?;
         let (_, chunk) = self
             .sessions
-            .read_trace_observation(&session_id, Some(&node_id), move |store| {
+            .read_trace_observation(&source_session, Some(&source_node), move |store| {
                 // Native source validation checks Conversation ownership,
                 // immutable cut, representation and committed source frontier.
-                crate::runtime_client::trace_observation::validate_history_cut(store, &cut)?;
-                let source = cut
+                crate::runtime_client::trace_observation::validate_history_cut(store, &store_cut)?;
+                let source = store_cut
                     .source_cut
                     .as_ref()
                     .ok_or(RuntimeClientError::ReadCutExpired)?;
@@ -494,6 +503,77 @@ impl AppServerConnection {
         Ok(MethodResult::ContentChunk {
             chunk: chunk.map_err(client_error)?,
         })
+    }
+
+    /// Resolve the store-owning `(session, node)` and the effective cut for one
+    /// bounded historical field read. A `source_cut` naming another
+    /// conversation inside the Session's committed lineage routes to its
+    /// owning ancestor segment; the physical cut is rebuilt so native store
+    /// validation stays exact. Ordinary reads keep the client's cut.
+    async fn history_field_source(
+        &self,
+        session: &crate::local_runtime::session::SessionId,
+        node: Option<&crate::local_runtime::session::SessionNodeId>,
+        cut: &crate::observation::cut::CheckpointReadCut,
+    ) -> Result<
+        (
+            crate::local_runtime::session::SessionId,
+            crate::local_runtime::session::SessionNodeId,
+            crate::observation::cut::CheckpointReadCut,
+        ),
+        RpcError,
+    > {
+        let selected = match node {
+            Some(node) => node.clone(),
+            None => {
+                self.sessions
+                    .read_session_summary(session)
+                    .await
+                    .map_err(session_error)?
+                    .active_node
+            }
+        };
+        let observed = self
+            .sessions
+            .observe_node(session, &selected)
+            .await
+            .map_err(session_error)?;
+        if cut.conversation_id != observed.conversation_id || cut.activation_id.is_some() {
+            return Err(domain(ErrorData::ReadCutExpired));
+        }
+        let foreign = cut
+            .source_cut
+            .as_ref()
+            .is_some_and(|source| source.read.conversation_id != observed.conversation_id);
+        if !foreign {
+            self.history_trace_cut(session, Some(&selected), Some(cut))
+                .await?;
+            return Ok((session.clone(), selected, cut.clone()));
+        }
+        let source = cut
+            .source_cut
+            .as_ref()
+            .ok_or_else(|| domain(ErrorData::ReadCutExpired))?;
+        let Some((source_session, source_node)) = self
+            .sessions
+            .lineage_trace_source(session, Some(&selected), source)
+            .await
+            .map_err(session_error)?
+        else {
+            return Err(domain(ErrorData::ReadCutExpired));
+        };
+        let store_cut = crate::observation::cut::CheckpointReadCut {
+            canonical_foreground: None,
+            live_publication: None,
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
+            conversation_id: source.read.conversation_id.clone(),
+            activation_id: None,
+            revision: 0,
+            through: cut.through,
+            source_cut: cut.source_cut.clone(),
+            domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+        };
+        Ok((source_session, source_node, store_cut))
     }
 
     async fn history_trace_cut(
@@ -568,14 +648,13 @@ impl AppServerConnection {
         )>,
         RpcError,
     > {
-        let (selected, _) = self
-            .history_trace_cut(session_id, node_id, Some(&cut))
-            .await?;
-        let header_cut = cut.clone();
+        let (source_session, source_node, store_cut) =
+            self.history_field_source(session_id, node_id, &cut).await?;
+        let header_cut = store_cut.clone();
         let header_run = run_id.clone();
         let (_, db_header) = self
             .sessions
-            .read_trace_observation(session_id, Some(&selected), move |store| {
+            .read_trace_observation(&source_session, Some(&source_node), move |store| {
                 crate::runtime_client::trace_observation::history_workflow_run_snapshot_header(
                     store,
                     &header_cut,
@@ -595,9 +674,9 @@ impl AppServerConnection {
         }
         let (_, loaded) = self
             .sessions
-            .read_trace_observation(session_id, Some(&selected), move |store| {
+            .read_trace_observation(&source_session, Some(&source_node), move |store| {
                 crate::runtime_client::trace_observation::history_workflow_run_snapshot_document(
-                    store, &cut, &run_id,
+                    store, &store_cut, &run_id,
                 )
             })
             .await

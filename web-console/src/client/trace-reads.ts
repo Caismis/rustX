@@ -1,6 +1,6 @@
 import { validateObservationCut } from '../../../protocol/app-server/observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, TRACE_REFRESH_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
+import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, isComposedTraceId, TRACE_PAGE_SIZE, TRACE_REFRESH_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
 import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v80';
 import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
@@ -222,7 +222,7 @@ export class TraceReads {
     };
     const reader:TraceFieldReader = {
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/traceValueRead',params:{session_id:id,node_id:node,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
-      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation)throw new Error('Historical Trace content source changed.');return (await this.port.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation&&reference.conversation_id!==cut.source_cut?.read?.conversation_id)throw new Error('Historical Trace content source changed.');return (await this.port.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);return (await this.port.request({method:'session/tracePage',params:{session_id:id,node_id:node,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns())).page;},
       workflowNode:async(cut,instance,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/workflowTraceNode',params:{session_id:id,node_id:node,cut,instance}},'workflow_trace_node',undefined,()=>current()&&owns());valid(cut,owns);return result.node??null;},
     };
@@ -339,6 +339,10 @@ export class TraceReads {
   }
   async loadEarlierTrace(id: string, initial = false, gapBefore?: string) {
     if (isDurableColdRead(this.port.state().views[id])) return this.readPreview(id, () => true, true);
+    const lineage = this.port.state().views[id]?.trace;
+    if (!gapBefore && lineage && lineage.page.next_cursor == null && typeof lineage.lineageCursor === 'string') {
+      return this.loadLineageTrace(id);
+    }
     const observation = this.port.observe(id);
     if (!observation) return;
     const { target } = observation;
@@ -429,6 +433,7 @@ export class TraceReads {
    */
   async loadTraceDetail(id: string, record: string) {
     if (isDurableColdRead(this.port.state().views[id])) return this.readPreviewDetail(id, record);
+    if (isComposedTraceId(record)) return this.loadLineageDetail(id, record);
     const observation = this.port.observe(id);
     if (!observation) return;
     const { target } = observation;
@@ -452,6 +457,83 @@ export class TraceReads {
       if(!current())return;
       const reader=page?bindTraceDetailReader(this.liveFields(target),page,()=>observation.current()&&this.traceAuthorities.get(id)===authority&&this.port.state().views[id]?.trace?.epoch===epoch&&this.port.state().views[id]?.trace?.details[record]?.page===page):undefined;
       this.port.setSession(id, { trace: completeTraceDetail(this.port.state().views[id].trace!,record,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.port.readContent(target,undefined,ref,offset,()=>ownsView()&&observation.current()&&this.traceAuthorities.get(id)===authority&&this.port.state().views[id]?.trace?.epoch===epoch),page,reader) });
+    } catch (error) {
+      if (current()) this.port.setSession(id, { trace: completeTraceDetail(this.port.state().views[id].trace!, record, epoch, undefined, String(error)) });
+    }
+  }
+  /** Source-owned prefix records of this node's committed lineage, fetched
+   * through the composed durable read and merged ahead of the live suffix. */
+  private readonly lineageLoads = new Map<string, { epoch: number; work: Promise<void> }>();
+  loadLineageTrace(id: string): Promise<void> {
+    const trace = this.port.state().views[id]?.trace;
+    if (!trace || trace.page.next_cursor != null || trace.lineageCursor === null) return Promise.resolve();
+    const existing = this.lineageLoads.get(id);
+    if (existing?.epoch === trace.epoch) return existing.work;
+    const entry = { epoch: trace.epoch, work: this.fetchLineagePage(id, trace) };
+    this.lineageLoads.set(id, entry);
+    return entry.work.finally(() => {
+      if (this.lineageLoads.get(id) === entry) this.lineageLoads.delete(id);
+    });
+  }
+  private async fetchLineagePage(id: string, trace: TraceCache): Promise<void> {
+    const observation = this.port.observe(id);
+    if (!observation) return;
+    const { target } = observation;
+    const authority = this.traceAuthorities.get(id);
+    const node = this.port.state().views[id]?.nodeId ?? null;
+    const current = () => observation.current()
+      && this.traceAuthorities.get(id) === authority
+      && this.port.state().views[id]?.trace?.epoch === trace.epoch;
+    const before = trace.lineageCursor ?? trace.page.records[0]?.position ?? null;
+    try {
+      const result = await this.port.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before, limit: TRACE_PAGE_SIZE } }, 'session_trace_history', undefined, current);
+      if (!current()) return;
+      if (result.conversation_id !== target.conversation_id) throw new Error('Trace conversation changed.');
+      standaloneTraceCut(result.page, target.conversation_id);
+      const live = this.port.state().views[id]!.trace!;
+      const known = new Set(live.lineageRecords?.map(record => record.id));
+      const added = result.page.records.filter(record => isComposedTraceId(record.id) && !known.has(record.id));
+      if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Historical Trace history did not advance.');
+      this.port.setSession(id, { trace: { ...live, lineageRecords: [...added, ...(live.lineageRecords ?? [])], lineageCursor: result.page.next_cursor ?? null } });
+    } catch (error) {
+      if (current()) this.port.setSession(id, { trace: { ...this.port.state().views[id]!.trace!, error: String(error) } });
+    }
+  }
+  /** Heavy detail of one source-owned prefix record through its owning
+   * node's immutable cut; never attaches or switches to that node. */
+  private async loadLineageDetail(id: string, record: string) {
+    const observation = this.port.observe(id);
+    const view = this.port.state().views[id];
+    const cache = view?.trace;
+    if (!observation || !cache) return;
+    const { target } = observation;
+    const epoch = cache.epoch;
+    const authority = this.traceAuthorities.get(id);
+    const existing = cache.details[record];
+    if (existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
+    const pending = beginTraceDetail(cache, record);
+    const node = view.nodeId ?? null;
+    const current = () => observation.current()
+      && this.traceAuthorities.get(id) === authority
+      && this.port.state().views[id]?.trace?.epoch === epoch
+      && this.port.state().views[id]?.trace?.details[record]?.read === pending.details[record].read;
+    this.port.setSession(id, { trace: pending });
+    try {
+      const admission = await this.port.admit(id, current);
+      if (!admission) return;
+      const result = await this.port.request({ method: 'session/traceHistoryDetail', params: { session_id: id, node_id: node, record_id: record } }, 'session_trace_history_detail', undefined, admission);
+      if (!current()) return;
+      if (result.conversation_id !== target.conversation_id) throw new Error('Trace conversation changed.');
+      const detail = inlineTraceDetail(result.page, record), page = retainedTraceDetailPage(result.page, record);
+      if (page && (page.read_cut.conversation_id !== target.conversation_id || page.read_cut.activation_id != null)) throw new Error('Trace detail source changed.');
+      if (!current()) return;
+      const fields = this.coldFields(id, node, target.conversation_id, () => observation.current() && this.traceAuthorities.get(id) === authority);
+      const reader = page ? bindTraceDetailReader(fields, page, () => observation.current() && this.traceAuthorities.get(id) === authority && this.port.state().views[id]?.trace?.epoch === epoch && this.port.state().views[id]?.trace?.details[record]?.page === page) : undefined;
+      this.port.setSession(id, { trace: completeTraceDetail(this.port.state().views[id].trace!, record, epoch, detail, undefined, result.page.items.flatMap(item => item.content), async (ref, offset, ownsView) => {
+        const valid = () => ownsView() && observation.current() && this.traceAuthorities.get(id) === authority && this.port.state().views[id]?.trace?.epoch === epoch;
+        if (!valid()) throw new Error('Trace content view was replaced.');
+        return (await this.port.request({ method: 'session/traceContentRead', params: { session_id: id, node_id: node, cut: result.page.read_cut, content_ref: ref, offset, max_bytes: 65536 } }, 'content_chunk', undefined, valid)).chunk;
+      }, page, reader) });
     } catch (error) {
       if (current()) this.port.setSession(id, { trace: completeTraceDetail(this.port.state().views[id].trace!, record, epoch, undefined, String(error)) });
     }

@@ -72,12 +72,18 @@ def web_commands() -> Scenario:
 SCENARIOS["web_commands"] = web_commands
 
 
-def web_response_retry() -> Scenario:
+def web_response_retry(scenario: str = "web_response_retry", *, trace_tool: bool = False) -> Scenario:
     """Keep an earlier turn while a native sibling replay replaces this response."""
     def expected(prompt: str, **kwargs) -> Expect:
         return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
-    return Scenario("web_response_retry",
-                    Step(expected("Earlier question"), Stream(Text("Earlier answer stays."), Finish())),
+    first = [Step(expected("Earlier question"), Stream(Text("Earlier answer stays."), Finish()))]
+    if trace_tool:
+        first = [
+            Step(expected("Earlier question"), Stream(
+                ToolCall("version-prefix-read", "read", '{"path":"version-prefix.txt"}'), Finish("tool_calls"))),
+            Step(expected("Original tool result for the shared turn."), Stream(Text("Earlier answer stays."), Finish())),
+        ]
+    return Scenario(scenario, *first,
                     Step(expected("Retry this question"), Stream(Text("## Original response\n\nOld reply to replace."), Finish())),
                     Step(expected("Retry this question", body_excludes=("Original response", "Old reply to replace.")),
                          Stream(Gate("replay-request"), Text("## New response\n\nGenerating the replacement."),
@@ -85,6 +91,7 @@ def web_response_retry() -> Scenario:
 
 
 SCENARIOS["web_response_retry"] = web_response_retry
+SCENARIOS["web_trace_response_retry"] = lambda: web_response_retry("web_trace_response_retry", trace_tool=True)
 
 
 def web_user_message_versions() -> Scenario:

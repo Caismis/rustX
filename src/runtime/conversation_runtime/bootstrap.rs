@@ -862,7 +862,22 @@ impl ConversationRuntime {
             })
             .transpose()
             .and_then(|evidence| {
-                let (mode, task) = evidence.unwrap_or((None, None));
+                let (mode, task) = if let Some(evidence) = evidence {
+                    evidence
+                } else if let Some(lineage) = store.lineage_request() {
+                    let seeded = store
+                        .projection_at_journal_cut(0)?
+                        .map(|head| head.activation.activation);
+                    let current = store
+                        .projection_head()?
+                        .map(|head| head.activation.activation);
+                    let mode = (seeded == current)
+                        .then_some(lineage.permission_mode)
+                        .flatten();
+                    (mode, None)
+                } else {
+                    (None, None)
+                };
                 let mut candidate = None;
                 if let Some(id) = recovery.continuation_task_message() {
                     let messages = store.load_messages(std::slice::from_ref(id))?;

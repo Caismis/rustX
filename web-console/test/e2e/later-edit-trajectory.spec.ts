@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -25,9 +27,11 @@ async function monitorEarlierTurn(page: Page, selector: string) {
 }
 
 test('editing the second question retains the first turn and its own version pager in trajectory', async ({ page }) => {
-  const fixture = await startDogfood('web_response_retry', undefined, { imageMcp: true, handshakeSeconds: 1 });
+  const fixture = await startDogfood('web_trace_response_retry', undefined, { imageMcp: true, handshakeSeconds: 1 });
   let passed = false;
   try {
+    const toolResult = 'Original tool result for the shared turn.';
+    writeFileSync(join(fixture.workspaceA, 'version-prefix.txt'), toolResult);
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');
@@ -72,6 +76,23 @@ test('editing the second question retains the first turn and its own version pag
     const ledger = page.getByRole('table', { name: 'Trace ledger' });
     await expect(ledger).toContainText('Earlier question');
     await expect(ledger).toContainText('Earlier answer stays.');
+    await expect(ledger.getByText('Initial System Prompt', { exact: true })).toHaveCount(1);
+    await expect(ledger.getByText(/Execution permission mode:/)).toHaveCount(1);
+    const inspector = page.getByRole('complementary', { name: 'Event details', exact: true });
+    const closeDetails = () => inspector.getByRole('button', { name: 'Close details', exact: true }).click();
+    const beforeDetails = wire.requests.length;
+    await ledger.locator('[data-kind="user"]').filter({ hasText: 'Earlier question' }).click();
+    await expect(inspector).toContainText('Earlier question');
+    await closeDetails();
+    await ledger.locator('[data-kind="tool"]').filter({ hasText: 'version-prefix.txt' }).click();
+    await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
+    await expect(inspector.getByRole('tabpanel')).toContainText(toolResult);
+    await closeDetails();
+    await ledger.locator('[data-request-owner]').first().click();
+    await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
+    await expect(inspector.getByRole('tabpanel')).toContainText('console-model');
+    await closeDetails();
+    expect(wire.requests.slice(beforeDetails).map(request => request.method)).not.toContain('thread/resume');
     const edited = ledger.locator('[data-kind="user"]').filter({ hasText: 'with more detail' });
     const finishSwitch = await monitorEarlierTurn(page, '[aria-label="Trace ledger"]');
     await edited.getByRole('button', { name: 'Switch to previous message version' }).click();

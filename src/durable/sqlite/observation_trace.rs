@@ -15,6 +15,7 @@ mod catalog_tests;
 mod event;
 mod inspection;
 mod request;
+pub(super) use request::previous_primary;
 mod storage;
 pub(super) use canonical::{index_canonical, index_proposals};
 pub(super) use catalog::{

@@ -428,6 +428,7 @@ pub struct SqliteConversationStore {
     conversation_id: ConversationId,
     conn: Arc<ConnectionOwner>,
     read_cancel: Option<Arc<AtomicBool>>,
+    lineage_request: Option<Arc<super::store::LineageRequest>>,
     write_cancel: Option<Arc<WriteCancellation>>,
     #[cfg(test)]
     read_progress_entered: Mutex<Option<std::sync::mpsc::Sender<()>>>,
@@ -776,6 +777,7 @@ impl SqliteConversationStore {
             conversation_id,
             conn,
             read_cancel: None,
+            lineage_request: None,
             write_cancel: None,
             #[cfg(test)]
             read_progress_entered: Mutex::new(None),
@@ -826,6 +828,13 @@ impl SqliteConversationStore {
             #[cfg(test)]
             fail_workflow_snapshot_remaining: Arc::new(AtomicUsize::new(0)),
         }
+    }
+    pub(crate) fn with_lineage_request(
+        mut self,
+        request: Option<Arc<super::store::LineageRequest>>,
+    ) -> Self {
+        self.lineage_request = request;
+        self
     }
     fn auxiliary_writer_scope(&self) -> Self {
         let mut writer =
@@ -1132,11 +1141,16 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn lineage_request(&self) -> Option<&super::store::LineageRequest> {
+        self.lineage_request.as_deref()
+    }
+
     fn presentation_reader(&self) -> Arc<dyn ConversationStore> {
         let mut reader =
             Self::from_connection_owner(self.conversation_id.clone(), self.conn.clone());
         reader.read_cancel = Some(Arc::new(AtomicBool::new(false)));
         reader.lifecycle.clone_from(&self.lifecycle);
+        reader.lineage_request.clone_from(&self.lineage_request);
         Arc::new(reader)
     }
     #[cfg(test)]

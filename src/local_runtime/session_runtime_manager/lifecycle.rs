@@ -558,6 +558,14 @@ impl SessionRuntimeManager {
         if self.registry.0.lock().expect("registry mutex").draining {
             return Err(RuntimeManagerError::Draining);
         }
+        let lineage_request = if access.node.parent.is_some() {
+            self.sessions
+                .lineage_request(&access.session.id, &access.node.id)
+                .await
+                .map_err(error)?
+        } else {
+            None
+        };
         let core = LocalConversationCore::compose_with_access(
             &paths,
             &self.dependencies,
@@ -574,6 +582,7 @@ impl SessionRuntimeManager {
             startup,
             &initialization.cancellation,
             &access.node.dynamic_tools,
+            lineage_request,
         )
         .await
         .map_err(|failure| match failure {
