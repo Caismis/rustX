@@ -16,6 +16,7 @@ export interface ExpressNode {
   kind: ExpressKind;
   children: ExpressNode[];
   text?: string;
+  textTemplate?: TextPart[];
   variant?: string;
   props?: Record<string, unknown>;
   bindings?: Record<string, string[]>;
@@ -41,6 +42,7 @@ const IDENT_PART = /[A-Za-z0-9_]/;
 const SEGMENT = /^[^\s\/()[\]{},:="'`$=<>]+/;
 const NUMBER = /^-?\d+(\.\d+)?/;
 const EOF_TOKEN: Token = { type: 'eof' };
+const MAX_SOURCE_LENGTH = 65536;
 
 function isSpace(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v';
@@ -52,7 +54,7 @@ function isSpace(ch: string): boolean {
  * by a `/`-path), which the caller treats as malformed input.
  */
 function tokenize(source: string): Token[] | null {
-  if (source.length > 65536) return null;
+  if (source.length > MAX_SOURCE_LENGTH) return null;
   const tokens: Token[] = [];
   let i = 0;
   while (i < source.length) {
@@ -153,13 +155,16 @@ type ScalarExpr =
   | { type: 'literal'; value: string | number | boolean | null }
   | { type: 'ref'; path: string[] };
 
+type TextPart = string | { path: string[] };
+type TextExpr = ScalarExpr | { type: 'format'; parts: TextPart[] };
+
 type PropertyExpr = { type: 'value'; value: unknown } | { type: 'ref'; path: string[] };
 
 /** Pre-resolution component: containers hold raw children; Text holds its operand. */
 type RawNode = { reference: string } | {
   kind: ExpressKind;
   children: RawNode[];
-  textExpr?: ScalarExpr;
+  textExpr?: TextExpr;
   properties?: Record<string, PropertyExpr>;
   variant?: string;
 }
@@ -263,6 +268,37 @@ function scalarToText(value: unknown): string | null {
   return null;
 }
 
+/** Compile absolute JSON Pointer placeholders and escaped literal `${` markers. */
+function parseTextTemplate(template: string): TextPart[] | null {
+  const parts: TextPart[] = [];
+  let end = 0;
+  for (const match of template.matchAll(/\\\$\{|\$\{([^{}]*)\}|\$\{/g)) {
+    if (match.index > end) parts.push(template.slice(end, match.index));
+    end = match.index + match[0].length;
+    if (match[0] === '\\\${') {
+      parts.push('${');
+      continue;
+    }
+    const pointer = match[1];
+    if (!pointer?.startsWith('/') || /~(?![01])/.test(pointer)) return null;
+    const path = pointer.slice(1).split('/');
+    if (path.length > 64) return null;
+    parts.push({ path: path.map(segment => segment.replaceAll('~1', '/').replaceAll('~0', '~')) });
+  }
+  if (end < template.length) parts.push(template.slice(end));
+  return parts;
+}
+
+function resolveTemplate(parts: TextPart[], data: Record<string, unknown>): string | null {
+  let result = '';
+  for (const part of parts) {
+    const value = typeof part === 'string' ? part : scalarToText(lookupPath(data, part.path));
+    if (value === null || result.length + value.length > MAX_SOURCE_LENGTH) return null;
+    result += value;
+  }
+  return result;
+}
+
 /**
  * Recursive-descent parser over the token stream. Grammar:
  *
@@ -271,10 +307,11 @@ function scalarToText(value: unknown): string | null {
  *               | 'root' '=' component     // the component tree (last wins)
  *   component  := ident '(' args ')'       // ident in {@link COMPONENT_KINDS}
  *   args       := child (',' child)*       // containers: components/arrays
- *               | scalar (',' variant)?    // Text
+ *               | textOperand (',' variant)? // Text
  *               | variant?                 // Divider
  *   child      := component | '[' child (',' child)* ']'   // arrays flatten
  *   scalar     := string | number | ref | 'true' | 'false' | 'null'
+ *   textOperand := scalar | 'formatString' '(' ('value' '=')? string ')'
  *   variant    := string | number | ident
  *   value      := scalar-without-ref | array | object
  *
@@ -340,7 +377,7 @@ class Parser {
     if (!COMPONENT_KINDS.has(name.value)) return null;
     let node: RawNode;
     if (kind === 'Text') {
-      const textExpr = this.parseScalarExpr();
+      const textExpr = this.parseTextExpr();
       if (textExpr === null) return null;
       let variant: string | undefined;
       if (this.atPunct(',')) {
@@ -463,7 +500,27 @@ class Parser {
     return node === null ? null : [node];
   }
 
-  /** Text operand or literal scalar; `ref` is rejected inside binding values. */
+  /** Text additionally accepts a template that reads absolute data paths. */
+  private parseTextExpr(): TextExpr | null {
+    const name = this.peek();
+    if (name.type !== 'ident' || name.value !== 'formatString') return this.parseScalarExpr();
+    this.pos++;
+    if (!this.expectPunct('(')) return null;
+    const argument = this.peek();
+    if (argument.type === 'ident' && argument.value === 'value') {
+      this.pos++;
+      if (!this.expectPunct('=')) return null;
+    }
+    const template = this.peek();
+    if (template.type !== 'string') return null;
+    this.pos++;
+    this.expectPunct(',');
+    if (!this.expectPunct(')')) return null;
+    const parts = parseTextTemplate(template.value);
+    return parts && { type: 'format', parts };
+  }
+
+  /** A literal scalar or a data reference. */
   private parseScalarExpr(allowRef = true): ScalarExpr | null {
     const t = this.peek();
     switch (t.type) {
@@ -551,8 +608,9 @@ class Parser {
 }
 
 /** Resolve a Text operand against the binding store; null when unresolvable. */
-function resolveScalar(expr: ScalarExpr, data: Record<string, unknown>): string | null {
+function resolveText(expr: TextExpr, data: Record<string, unknown>): string | null {
   if (expr.type === 'literal') return scalarToText(expr.value);
+  if (expr.type === 'format') return resolveTemplate(expr.parts, data);
   const value = lookupPath(data, expr.path);
   return value === MISSING ? null : scalarToText(value);
 }
@@ -565,9 +623,16 @@ function resolveNode(node: RawNode, program: Program, budget: { remaining: numbe
     return target ? resolveNode(target, program, budget, depth + 1) : null;
   }
   if (node.kind === 'Text') {
-    const text = node.textExpr === undefined ? '' : resolveScalar(node.textExpr, program.data);
+    const template = node.textExpr?.type === 'format' ? node.textExpr.parts : undefined;
+    if (template && (budget.remaining -= template.length) < 0) return null;
+    const text = node.textExpr === undefined ? '' : resolveText(node.textExpr, program.data);
     if (text === null) return null;
-    return { kind: 'Text', children: [], text, ...(node.textExpr?.type === 'ref' ? { bindings: { text: node.textExpr.path } } : {}), ...(node.variant === undefined ? {} : { variant: node.variant }) };
+    return {
+      kind: 'Text', children: [], text,
+      ...(template ? { textTemplate: template } : {}),
+      ...(node.textExpr?.type === 'ref' ? { bindings: { text: node.textExpr.path } } : {}),
+      ...(node.variant === undefined ? {} : { variant: node.variant }),
+    };
   }
   if (node.kind === 'Divider') {
     return { kind: 'Divider', children: [], ...(node.variant === undefined ? {} : { variant: node.variant }) };
@@ -651,6 +716,7 @@ export function writeBinding(data: Record<string, unknown>, path: string[], valu
 
 export function boundProps(node: ExpressNode, data: Record<string, unknown>): Record<string, unknown> {
   const props = { ...node.props };
+  if (node.kind === 'Text') props.text = node.textTemplate ? resolveTemplate(node.textTemplate, data) : node.text;
   for (const [key, path] of Object.entries(node.bindings ?? {})) {
     const value = lookupPath(data, path);
     props[key] = value === MISSING ? undefined : value;

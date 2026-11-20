@@ -6,6 +6,18 @@ describe('static Express trees', () => {
     const tree = parseExpress('root = Card(label)\nlabel = Text($/items/0/name, "caption")\n$/items = [{name: "模型"}]');
     expect(tree?.root.children[0]).toMatchObject({ kind: 'Text', children: [], text: '模型', variant: 'caption' });
   });
+  it('interpolates data paths in Text and reacts to changes in card data', () => {
+    const template = '${/stories/0/pts} 分 · ${/stories/0/cmt} 评';
+    const surface = parseExpress('$/stories=[{pts:858,cmt:1669}]\nroot=Text(formatString(' + JSON.stringify(template) + '), "caption")')!;
+    expect(surface.root).toMatchObject({ kind: 'Text', text: '858 分 · 1669 评', variant: 'caption' });
+    const changed = writeBinding(surface.data, ['stories', '0', 'pts'], 860);
+    expect(boundProps(surface.root, changed).text).toBe('860 分 · 1669 评');
+  });
+  it('supports named formatString arguments, JSON Pointer escapes and literal placeholders', () => {
+    const template = '${/stats/a~1b~0c} · \\${/literal}';
+    const surface = parseExpress('$/stats={"a/b~c":"ready"}\nroot=Text(formatString(value=' + JSON.stringify(template) + '))');
+    expect(surface?.root.text).toBe('ready · ${/literal}');
+  });
   it('reads Playground button appearance independently of its outbound action', () => {
     const surface = parseExpress('root=Button(Text("Delete"), "solid", Event("delete"), color="danger", size="sm", block=true)');
     expect(surface?.root.props).toMatchObject({ variant: 'solid', color: 'danger', size: 'sm', block: true });
@@ -34,7 +46,15 @@ root = Card(Column([
     expect(surface?.root.kind).toBe('Button');
     expect(surface?.root.props).not.toHaveProperty('openUrl');
   });
-  it.each(['root=Card(root)', 'root=Button(Text("Go"), Event("go"))', '<a2ui>root=Text("partial")', 'root=Text($/missing)'])('leaves invalid or unsupported input as source', source => {
+  it.each([
+    'root=Card(root)',
+    'root=Button(Text("Go"), Event("go"))',
+    '<a2ui>root=Text("partial")',
+    'root=Text($/missing)',
+    'root=Text(formatString("${/missing}"))',
+    'root=Text(formatString("${/unclosed"))',
+    'root=Text(formatString("${now()}"))',
+  ])('leaves invalid or unsupported input as source', source => {
     expect(parseExpress(source)).toBeNull();
   });
 });

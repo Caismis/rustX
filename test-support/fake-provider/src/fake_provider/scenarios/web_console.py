@@ -839,7 +839,7 @@ $/name = "原名"
 $/date = "2026-11-19"
 $/selection = ["A"]
 root = Card(Column([
-  Slider("评分", 0, 10, $/score), Text($/score),
+  Slider("评分", 0, 10, $/score), Text(formatString("${/score} 分")),
   CheckBox("显示详情", $/enabled), Text($/enabled),
   TextField("名称", $/name), Text($/name),
   DateTimeInput($/date, true, false, _, _, "日期"), Text($/date),

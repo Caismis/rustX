@@ -24,7 +24,7 @@ export function ExpressCard({ surface }: { surface: ExpressSurface }) {
         const heading = /^h[1-6]$/.test(node.variant ?? '');
         const Tag = heading ? node.variant as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' : node.variant === 'description' ? 'p' : 'span';
         return <Tag key={index} className={css.text} data-variant={node.variant}>
-          {node.bindings?.text ? String(props.text ?? '') : node.text}
+          {String(props.text ?? '')}
         </Tag>;
       }
       case 'Divider': return <hr key={index} data-slot="separator" className={css.divider}/>;

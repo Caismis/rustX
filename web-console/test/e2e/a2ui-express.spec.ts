@@ -79,8 +79,9 @@ test('Express inputs update only their own card and never submit another turn', 
     const slider = card.getByRole('slider', { name: '评分' });
     await slider.focus();
     await slider.press('End');
-    await expect(card.locator('span').filter({ hasText: /^10$/ }).last()).toBeVisible();
+    await expect(card.getByText('10 分', { exact: true })).toBeVisible();
     await expect(cards.last().getByRole('slider')).toHaveValue('3');
+    await expect(cards.last().getByText('3 分', { exact: true })).toBeVisible();
     await card.getByRole('checkbox', { name: '显示详情' }).check();
     await expect(card.getByText('true', { exact: true })).toBeVisible();
     await card.getByRole('textbox', { name: '名称' }).fill('新名字');
