@@ -1030,6 +1030,14 @@ envelope.
   real physical congestion proofs; what remains open under T11 is
   end-to-end proof at the product Agent-flow level (a real mid-commit
   cancel raced against a live composed Client), not the mechanism.
+- Optional save (EXEC-01) is contract and fixtures only: `protocol::save`
+  defines `SaveRequest`/`SaveReply` on `ClientRequest::Save`/`ClientReply::Save`,
+  with a pure reference state machine and checked-in envelope fixtures
+  (`crates/execution-protocol/fixtures/save-envelopes.json`). The real Client
+  does not advertise managed output and answers every save message with
+  `Unavailable { code: capability-unavailable }`, touching no path,
+  allocation, or queue. No Host path, storage, or Native Bash capture is
+  implemented here.
 - No MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
   two-phase conditional write, the conditional edit, the two

@@ -585,6 +585,14 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
         .ok_or_else(|| String::from("untrusted admission"))
 }
 
+/// The Client does not advertise managed output: a save message is refused
+/// before any path, allocation, or queue is touched.
+fn save_unavailable() -> ClientReply {
+    ClientReply::Save(rustx_execution_protocol::save::SaveReply::Unavailable {
+        code: rustx_execution_protocol::save::SaveCode::CapabilityUnavailable,
+    })
+}
+
 fn serve(
     channel: &mut RecordChannel,
     root: &PackageDirectory,
@@ -607,6 +615,9 @@ fn serve(
             ClientRequest::Process(process_request) => {
                 ClientReply::Process(operations.dispatch(process_request))
             }
+            // The Client does not advertise managed output: a save message is
+            // refused before any path, allocation, or queue is touched.
+            ClientRequest::Save(_) => save_unavailable(),
             ClientRequest::ReadRange {
                 relative_path,
                 offset,

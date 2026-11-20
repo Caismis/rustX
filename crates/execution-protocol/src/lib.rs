@@ -20,6 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 pub mod process;
+pub mod save;
 pub mod transport;
 
 /// The only protocol revision this implementation speaks. Incompatible
@@ -984,6 +985,8 @@ pub enum ClientRequest {
     /// One managed-process operation request — register, start, query,
     /// ordered output paging, stdin, resize, close, release.
     Process(crate::process::ProcessRequest),
+    /// One optional-save request. The real Client answers `Unavailable`.
+    Save(crate::save::SaveRequest),
     /// A bounded revision-checked range read under the binding workspace.
     ReadRange {
         /// The workspace-relative file path: normal components only.
@@ -1244,6 +1247,8 @@ pub enum ClientReply {
     Pong,
     /// The reply to a `Process` request.
     Process(crate::process::ProcessReply),
+    /// The reply to a `Save` request.
+    Save(crate::save::SaveReply),
     /// The verified range the Client physically read.
     Range {
         /// The returned bytes, base64. Never exceeds `max_bytes`.

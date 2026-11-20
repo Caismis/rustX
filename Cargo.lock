@@ -4820,6 +4820,7 @@ dependencies = [
 name = "rustx-execution-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nix",
  "serde",
  "serde_json",

@@ -1800,6 +1800,94 @@ fn a_malformed_edit_request_is_an_error_not_a_stage() {
     expect_success(&mut child);
 }
 
+/// The real Client does not offer managed output: a save `Begin` on the
+/// admitted pair is declined with a typed `Unavailable`, the workspace is left
+/// exactly as it was, and the same connection keeps answering `Ping`.
+#[test]
+fn save_is_declined_as_unavailable_without_touching_the_workspace() {
+    use rustx_execution_protocol::process::{OperationId, ServerIncarnation};
+    use rustx_execution_protocol::save::{
+        ContentFormat, ConversationId, SaveCode, SaveOwner, SaveReply, SaveRequest,
+    };
+    use rustx_execution_protocol::{Generation, SessionId};
+
+    let rig = rig();
+    fs::write(rig.workspace_path.join("kept"), "before").unwrap();
+    let before = workspace_listing(&rig.workspace_path);
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut peer = stream.try_clone().unwrap();
+    let connection = admit_pair_stream(&rig, &mut child, stream);
+
+    let owner = SaveOwner {
+        incarnation: ServerIncarnation::generate(),
+        session: SessionId::new("session-1"),
+        instance: ClientInstanceId::new("instance-1"),
+        generation: Generation::new(NonZeroU64::new(1).unwrap()),
+        conversation: ConversationId::parse("conv-1").unwrap(),
+        operation: OperationId::new(),
+    };
+    write_record(
+        &mut peer,
+        &ClientRequest::Save(SaveRequest::Begin {
+            owner,
+            content_format: ContentFormat::NormalizedUtf8V1,
+        }),
+    )
+    .unwrap();
+    let reply: ClientReply = read_record(&mut peer).unwrap();
+    assert_eq!(
+        reply,
+        ClientReply::Save(SaveReply::Unavailable {
+            code: SaveCode::CapabilityUnavailable
+        })
+    );
+    assert_eq!(
+        workspace_listing(&rig.workspace_path),
+        before,
+        "a declined save never stages anything in the workspace"
+    );
+    write_record(&mut peer, &ClientRequest::Ping).unwrap();
+    assert_eq!(
+        read_record::<ClientReply>(&mut peer).unwrap(),
+        ClientReply::Pong
+    );
+
+    drop(peer);
+    drop(connection);
+    expect_success(&mut child);
+}
+
+/// A reservation demanding managed output cannot be satisfied by the real
+/// Client, which does not advertise that capability: the handshake is rejected
+/// for missing capabilities, never admitted.
+#[test]
+fn a_reservation_requiring_managed_output_is_rejected_by_the_real_client() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ManagedOutput,
+    ]));
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let outcome = rig.binding.accept_local(stream).unwrap();
+    assert!(matches!(
+        outcome,
+        rustx_execution_server::ChannelAccept::Rejected(Reject::MissingCapabilities)
+    ));
+    assert!(!child.wait().unwrap().success());
+    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
+}
+
+fn workspace_listing(workspace: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(workspace)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
 /// The real Client searches one shared file universe for both `Glob` and
 /// `Grep`: the traversal never follows a link outside the binding, keeps
 /// hidden files visible, refuses a symlinked root, skips a file whose
