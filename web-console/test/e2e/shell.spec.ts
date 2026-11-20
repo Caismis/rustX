@@ -286,6 +286,9 @@ test('a Session row scrolled out from under its open actions menu leaves the key
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.evaluate(() => window.sessionFixture.presentation('many'));
   const tree = page.getByRole('tree', { name: 'Session browser' });
+  for (const remaining of [21, 16, 11, 6, 1]) {
+    await tree.getByRole('button', { name: `Show ${remaining} more sessions`, exact: true }).click();
+  }
   await expect(tree.locator('button[data-session-id="S24"]')).toBeAttached();
   // A known starting point: the list at its top, with room to scroll.
   expect(await tree.evaluate(el => { el.scrollTop = 0; return el.scrollTop; })).toBe(0);

@@ -4,7 +4,7 @@ import { useTranslation } from '../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
 import { useEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { ClientView } from '../client/contracts';
+import type { ClientView, SessionSummary } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { deriveSessionProductState, type SessionTransition } from '../bindings/session-product';
@@ -40,6 +40,18 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string,
   if (!transition && state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
+
+function sidebarThreadStatus(view?: ClientView['views'][string], row = view?.summary) {
+  const target = view?.target?.conversation_id ?? view?.nodeConversationId ?? row?.thread_id;
+  return (view?.threadStatus && view.threadStatus.threadId === target ? view.threadStatus : undefined)
+    ?? (row?.thread_status && (!target || row.thread_status.threadId === target) ? row.thread_status : undefined);
+}
+
+function selectRunningSessions(state: ClientView) {
+  if (state.connection !== 'connected') return [];
+  return state.sessions.filter(row => sidebarThreadStatus(state.views[row.id], row)?.status.type === 'active').map(row => row.id);
+}
+
 export function WorkspaceNavigation({ pins, associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
   pins: SessionPins; associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
   workspaceSettings?: (id: string, label: string) => void;
@@ -62,6 +74,7 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
   const [renaming, setRenaming] = useState<{ id: string; title: string }>();
   const [toast, setToast] = useState<{ sequence: number; copied: boolean }>();
   const pinned = useSyncExternalStore(pins.subscribe, pins.getSnapshot);
+  const running = useClientSelector(client, selectRunningSessions, sameValue);
   useEffect(() => client.subscribeSessionDeletion(id => pins.remove(id)), [client, pins]);
   const [dialog, setDialog] = useState<{ kind: 'workspace' | 'remove' | 'add'; id: string; name: string; mutation: WorkspaceMutation; catalog: WorkspaceCatalog }>();
   const [name, setName] = useState('');
@@ -126,9 +139,9 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
   });
   const status = associationState.status;
 
-  const toNode = (session: typeof state.sessions[number]): SessionNode => {
+  const toNode = (session: SessionSummary): SessionNode => {
     return { id: session.id, title: sessionDisplayTitle(tx, session), viewOpen: openViews.includes(session.id), pinned: pinned.includes(session.id),
-      running: false, runningSubagentCount: 0, forking: transition?.sessionId === session.id && transition.action === 'fork', updatedAt: Date.parse(session.updated_at) || 0 };
+      running: running.includes(session.id), runningSubagentCount: 0, forking: transition?.sessionId === session.id && transition.action === 'fork', updatedAt: Date.parse(session.updated_at) || 0 };
 
   };
   const groupNodes: GroupNode[] = (bound ? catalog?.workspaces ?? [] : []).map(row => ({ key: row.id, workspaceId: row.id,
@@ -164,7 +177,7 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
 
 const UNAVAILABLE_GRACE_MS = 750;
 
-/** Only the individual activity row observes execution; the browser stays catalog-owned. */
+/** Each row observes its detailed execution status independently. */
 function LiveSessionNode({ client, node, children, transition }: { client: AppServerClient; node: SessionNode; transition?: SessionTransition; children: (node: SessionNode) => ReactNode }) {
   const tx = useTranslation();
   const taskCopy = useTaskCopy(), locale = useLocale().active;
@@ -173,10 +186,7 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
   const tasks = records.filter(row => row.binding.session_id === node.id && row.state === 'enabled').sort((a, b) => (a.next_due_utc ?? '').localeCompare(b.next_due_utc ?? ''));
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
-    const row = state.sessions.find(row => row.id === node.id) ?? view?.summary;
-    const target = view?.target?.conversation_id ?? view?.nodeConversationId ?? row?.thread_id;
-    const entry = (view?.threadStatus && view.threadStatus.threadId === target ? view.threadStatus : undefined)
-      ?? (row?.thread_status && (!target || row.thread_status.threadId === target) ? row.thread_status : undefined);
+    const entry = sidebarThreadStatus(view, state.sessions.find(row => row.id === node.id));
     const connected = state.connection === 'connected';
     let runtimeStatus: SessionNode['runtimeStatus'];
     if (connected && entry != null) switch (entry.status.type) {

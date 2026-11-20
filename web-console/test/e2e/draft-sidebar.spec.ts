@@ -35,3 +35,52 @@ test('new conversation appears above history and disappears when leaving the uns
   await expect(page.locator('[data-session-id=A]')).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test('workspace session lists fold independently and keep active sessions visible', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
+  await page.goto(`${origin}/test/fixtures/shell.html?session-folding`);
+
+  const project = page.locator('[data-workspace-group="project"]');
+  const other = page.locator('[data-workspace-group="other"]');
+  const rows = project.locator('[data-session-id]');
+  const otherRows = other.locator('[data-session-id]');
+  const more = (count: number) => project.getByRole('button', { name: `展开其余 ${count} 个会话`, exact: true });
+  const less = project.getByRole('button', { name: '收起', exact: true });
+  await expect(rows).toHaveCount(5);
+  await expect(otherRows).toHaveCount(5);
+  await more(7).click();
+  await expect(rows).toHaveCount(10);
+  await expect(otherRows).toHaveCount(5);
+  await more(2).click();
+  await expect(rows).toHaveCount(12);
+  await other.getByRole('button', { name: '展开其余 1 个会话', exact: true }).click();
+  await expect(otherRows).toHaveCount(6);
+
+  const older = project.locator('[data-session-id="History-09"]');
+  await older.click();
+  await expect(older).toHaveAttribute('aria-current', 'page');
+  await less.click();
+  await expect(rows).toHaveCount(11);
+  await expect(older).toBeVisible();
+  await project.locator('[data-session-id="A"]').click();
+  await expect(rows).toHaveCount(11);
+
+  const folder = project.locator('[role=treeitem][aria-expanded]');
+  await folder.press('Enter');
+  await expect(rows).toHaveCount(0);
+  await folder.press('Enter');
+  await expect(rows).toHaveCount(5);
+  await expect(otherRows).toHaveCount(6);
+
+  await page.evaluate(() => window.sessionFixture.setHistoryRunning('History-06', true));
+  await expect(project.locator('[data-session-id="History-06"]')).toBeVisible();
+  await expect(rows).toHaveCount(8);
+  await page.evaluate(() => window.sessionFixture.setHistoryRunning('History-06', false));
+  await expect(more(4)).toBeVisible();
+  await more(4).click();
+  await less.click();
+  await expect(rows).toHaveCount(5);
+  expect(errors).toEqual([]);
+});

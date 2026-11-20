@@ -9,6 +9,30 @@ import { ProjectRowItem, SessionNodeItem, SearchResultItem, DraftConversationRow
 import type { DraftConversation, GroupNode, SessionNode } from './types';
 import css from './WorkspaceBrowser.module.css';
 
+const SESSION_BATCH_SIZE = 5;
+
+function WorkspaceSessionRows({ sessions, selected, renderRow }: {
+  sessions: readonly SessionNode[];
+  selected?: string;
+  renderRow: (node: SessionNode) => ReactNode;
+}) {
+  const tx = useTranslation();
+  const baseline = sessions.reduce((count, node, index) => node.id === selected || node.running ? Math.max(count, index + 1) : count, SESSION_BATCH_SIZE);
+  const [limit, setLimit] = useState(baseline);
+  const visible = Math.max(baseline, limit);
+  // Keep automatically revealed rows in place until the user folds the list.
+  if (visible > limit) setLimit(visible);
+  const remaining = Math.max(0, sessions.length - visible);
+  const expanded = remaining === 0;
+  return <>
+    {sessions.slice(0, visible).map(renderRow)}
+    {sessions.length > baseline && <button type="button" className={css.sessionOverflowButton} aria-expanded={expanded}
+      onClick={() => setLimit(expanded ? baseline : remaining <= SESSION_BATCH_SIZE ? Infinity : visible + SESSION_BATCH_SIZE)}>
+      {expanded ? tx('workspace:workspace-browser.show-less-sessions') : tx('workspace:workspace-browser.show-more-sessions', { count: remaining })}
+    </button>}
+  </>;
+}
+
 /** Native adapters supply facts/gestures. This component owns only visual state. */
 export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected, draft, query, search, open, rename, fork, remove, pin, copyId, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, addingWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
@@ -65,7 +89,7 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
           onToggle={() => setCollapsed(value => value.includes(group.key) ? value.filter(id => id !== group.key) : [...value, group.key])}
           onSelect={() => group.workspaceId && selectWorkspace(group.workspaceId)} onCreate={() => group.workspaceId && create(group.workspaceId)}
           actions={group.workspaceId ? { settings: workspaceSettings ? () => workspaceSettings(group.workspaceId!, group.label) : undefined, rename: () => renameWorkspace(group.workspaceId!, group.label), delete: () => removeWorkspace(group.workspaceId!, group.label) } : undefined} />
-        {!collapsed.includes(group.key) && <>{group.key === draftGroup && draftRow}{group.sessions.map(row)}</>}
+        {!collapsed.includes(group.key) && <>{group.key === draftGroup && draftRow}<WorkspaceSessionRows sessions={group.sessions} selected={selected} renderRow={row} /></>}
       </div>)}
       {!flat && !query && groups.length > 0 && sessions.some(session => !unclassified.includes(session.id) && !groups.some(group => group.sessions.some(member => member.id === session.id))) && <details><summary>{tx('workspace:workspace-browser.sessions-outside-registered-workspaces')}</summary>{sessions.filter(session => !unclassified.includes(session.id) && !groups.some(group => group.sessions.some(member => member.id === session.id))).map(row)}</details>}
       {!flat && !query && groups.length > 0 && unclassified.length > 0 && <section aria-label={tx('workspace:association.unclassified')}><p>{tx('workspace:association.unclassified')}</p>{sessions.filter(session => unclassified.includes(session.id)).map(row)}</section>}

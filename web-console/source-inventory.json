@@ -3225,7 +3225,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "3b8b1d80f4c940ef5e70ed5381ec672548ac5cd2027829654579f7ba73073151",
+      "local_sha256": "7359388897ad82415403d3b3675f8606db42528bd1d6f1aa16382e007c5f9191",
       "classification": "B",
       "additional_sources": [
         {
@@ -3308,7 +3308,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6482b355a216e797496677c0c3595d61ce164c7fe3842e76cc1ad0089892f900"
+      "local_sha256": "d915c64c113d4cf1615d6dc945816ad3022fee463967496253d5487b72f41e35"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -4079,7 +4079,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "bd70ee9778121b946e7a09e8a9dd17a4b88d4e077f4fe6f4cd639f28bf4bff6f",
+      "local_sha256": "82cdc79ab173c3de882fc4d803194cf88d3dfc74df7c96d2e7106e37ebb7b8ef",
       "classification": "B",
       "additional_sources": [
         {
