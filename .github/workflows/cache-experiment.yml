@@ -161,22 +161,26 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_ERROR_LOG: /tmp/sccache-err.log
       SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_CACHE_SIZE: 8G
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
       - uses: ./.github/actions/libclang
+      # sccache-action is a JS action, so the runner injects
+      # ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN / ACTIONS_RESULTS_URL
+      # into it — a `run:` step sees them as empty, which is why a plain
+      # `brew install sccache` cannot reach the ghac backend.
       - name: install sccache
-        run: brew install sccache
-      - name: sccache server config
-        run: |
-          {
-            echo "SCCACHE_DIR=$RUNNER_TEMP/sccache"
-            echo "ACTIONS_CACHE_URL=$ACTIONS_CACHE_URL"
-            echo "ACTIONS_RUNTIME_TOKEN=$ACTIONS_RUNTIME_TOKEN"
-            echo "ACTIONS_RESULTS_URL=$ACTIONS_RESULTS_URL"
-          } >> "$GITHUB_ENV"
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: point sccache at the runner-temp disk store
+        run: echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
+      - name: local-disk sccache fallback
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sccache
+          key: exp-sccache-disk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
