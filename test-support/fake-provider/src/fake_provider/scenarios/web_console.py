@@ -3,6 +3,7 @@
 No rustX operation, interaction lifetime, or Tool behavior is simulated here.
 """
 import json
+from pathlib import Path
 from fake_provider.scenario import (
     OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, HttpError, Raw, Scenario, Step, Stream, Text, ToolCall, Usage,
 )
@@ -906,6 +907,42 @@ root = Card(Column([
 
 
 SCENARIOS["web_a2ui_controls"] = web_a2ui_controls
+
+
+def web_a2ui_catalog_gallery(batch: int) -> Scenario:
+    source = Path(__file__).resolve().parents[5] / "web-console/test/fixtures/playground-express.json"
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    entries = {**fixture["official"], **fixture["additional"]}
+    names = sorted(entries)[(batch - 1) * 16:batch * 16]
+    samples = "\n\n".join(f"### {name} preview\n\n<a2ui>\n{entries[name]}\n</a2ui>" for name in names)
+    reply = f"Catalog preview starts here.\n\n{samples}\n\nCatalog preview ends here."
+    return Scenario(f"web_a2ui_catalog_gallery_{batch}", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Show Playground gallery",)),
+        Stream(Text(reply), Finish()),
+    ))
+
+
+for catalog_batch in range(1, 9):
+    SCENARIOS[f"web_a2ui_catalog_gallery_{catalog_batch}"] = lambda batch=catalog_batch: web_a2ui_catalog_gallery(batch)
+
+
+def web_a2ui_catalog_interactions() -> Scenario:
+    source = Path(__file__).resolve().parents[5] / "web-console/test/fixtures/playground-express.json"
+    samples = json.loads(source.read_text(encoding="utf-8"))["official"]
+    chart_examples = [samples[name] for name in ("WeatherCard", "Svg", "DataTable", "Tabs", "Switch")]
+    event = 'surface("inline")\nroot = Pressable(children=[Text("Select forecast")], onClick=Event("select", userMessage="Forecast selected"))'
+    chart_examples.append('surface("inline")\nroot = HtmlView(r"""<svg viewBox="0 0 300 80" role="img" aria-label="Inline vector arrows"><path d="M20 60 H240 M20 60 V12" stroke="teal" stroke-width="3" fill="none"/><text x="244" y="65">v</text><text x="30" y="20">F</text></svg>""", "Inline SVG markup", 180)')
+    reply = "Here are the Playground examples.\n\n" + "\n\n".join(
+        f"<a2ui>\n{sample}\n</a2ui>" for sample in [*chart_examples, event]
+    )
+    return Scenario("web_a2ui_catalog_interactions",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Show Playground controls",)),
+             Stream(Text(reply), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Forecast selected",)),
+             Stream(Text("Forecast action confirmed."), Finish())))
+
+
+SCENARIOS["web_a2ui_catalog_interactions"] = web_a2ui_catalog_interactions
 
 
 def web_a2ui_market() -> Scenario:

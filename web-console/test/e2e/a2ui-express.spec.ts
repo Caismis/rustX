@@ -245,14 +245,12 @@ test('renders the Playground NVDA dashboard with all 30 reported OHLC bars', asy
     await expect(card.getByText('NVIDIA Corporation')).toBeVisible();
     await expect(card.getByText('$145.98', { exact: true })).toHaveCount(2);
     await expect(card.getByText('Sample data', { exact: true })).toBeVisible();
-    const sparkline = card.getByRole('img', { name: 'Price trend' });
-    await expect(sparkline.locator('path[data-part="sparkline"]')).toBeVisible();
+    const sparkline = card.locator('[data-a2-type="StockTicker"] svg[viewBox="0 0 320 72"]');
+    await expect(sparkline.locator('path')).toHaveCount(2);
 
     const chart = card.getByRole('img', { name: 'Daily candles' });
-    const bars = chart.locator('[data-part="candle"]');
+    const bars = chart.locator('.ts-chart__rect rect');
     await expect(bars).toHaveCount(30);
-    await expect(bars.last()).toContainText('11-19');
-    await expect(bars.last()).toContainText('$145.98');
     await expect(chart.getByText('10-09', { exact: true })).toBeVisible();
     await expect(chart.getByText('11-19', { exact: true })).toBeVisible();
     await expect(card.getByText('Key stats', { exact: true })).toBeVisible();
@@ -262,21 +260,17 @@ test('renders the Playground NVDA dashboard with all 30 reported OHLC bars', asy
 
     await page.setViewportSize({ width: 1440, height: 1250 });
     await card.screenshot({ path: info.outputPath('nvda-dashboard.png') });
-    await bars.nth(24).locator('rect').hover();
-    const tooltip = card.getByRole('tooltip');
+    await bars.nth(24).hover();
+    const tooltip = card.locator('.ts-chart-tooltip');
     for (const text of ['11-12', 'Open', '$151.01', 'High', '$167.14', 'Low', '$148.80', 'Close', '$166.19', 'Change', '+10.05%']) {
       await expect(tooltip.getByText(text, { exact: true })).toBeVisible();
     }
-    await expect(bars.nth(24)).toHaveAttribute('data-active', 'true');
     await card.screenshot({ path: info.outputPath('nvda-dashboard-hover.png') });
     await card.getByText('Daily candles', { exact: true }).hover();
-    await expect(tooltip).toHaveCount(0);
-    const focus = chart.locator('..');
-    await focus.press('End');
-    await expect(tooltip.getByText('11-19', { exact: true })).toBeVisible();
-    await focus.press('Escape');
-    await expect(tooltip).toHaveCount(0);
-    await focus.evaluate(element => (element as HTMLElement).blur());
+    await expect(tooltip).not.toBeVisible();
+    await chart.press('ArrowRight');
+    await expect(tooltip).toBeVisible();
+    await chart.evaluate(element => (element as SVGElement).blur());
 
     await page.setViewportSize({ width: 390, height: 900 });
     await expect(chart).toBeVisible();
@@ -310,18 +304,151 @@ test('keeps Playground chart data, prose and supported siblings inline', async (
     const line = card.getByRole('img', { name: 'Monthly trend' });
     const area = card.getByRole('img', { name: 'Revenue by region' });
     const bar = card.getByRole('img', { name: 'Revenue comparison' });
-    await expect(line.locator('[data-part="line"]')).toHaveCount(2);
-    await expect(area.locator('[data-part="area"]')).toHaveCount(2);
-    await expect(bar.locator('[data-part="bar"]')).toHaveCount(4);
-    await line.locator('[data-part="point"]').nth(1).hover();
-    const tooltip = card.getByRole('tooltip');
-    for (const text of ['February', 'North', '$1,800.00', 'South', '$1,100.00']) {
+    await expect(line.locator('.ts-chart__marks path')).toHaveCount(2);
+    await expect(area.locator('.ts-chart__marks path').first()).toBeVisible();
+    await bar.scrollIntoViewIfNeeded();
+    await expect(bar.locator('.ts-chart__marks :is(rect, path)')).toHaveCount(4);
+    await line.scrollIntoViewIfNeeded();
+    const region = await line.boundingBox();
+    if (!region) throw new Error('Monthly trend chart was not laid out');
+    await page.mouse.move(region.x + region.width * .85, region.y + region.height * .42);
+    const tooltip = card.locator('.ts-chart-tooltip').filter({ hasText: 'February' });
+    for (const text of ['February', 'North', '$1,800', 'South', '$1,100']) {
       await expect(tooltip.getByText(text, { exact: true })).toBeVisible();
     }
-    await expect(card.getByText('This view can’t display Timeline yet.')).toBeVisible();
+    await expect(card.locator('[data-a2-type="Timeline"]')).toHaveCount(1);
     await expect(card.locator('code')).toHaveCount(0);
     expect(errors).toEqual([]);
     await line.screenshot({ path: info.outputPath('inline-playground-line.png') });
+    passed = true;
+  } finally {
+    await stopDogfoodPage(page, fixture, passed);
+  }
+});
+
+async function stubPlaygroundAssets(page: import('@playwright/test').Page) {
+  await page.route(/^https:\/\//, route => {
+    const type = route.request().resourceType();
+    if (type === 'image') {
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jPe0AAAAASUVORK5CYII=', 'base64');
+      return route.fulfill({ contentType: 'image/png', body: png });
+    }
+    if (type === 'fetch' || type === 'xhr') {
+      return route.fulfill({ json: { version: 8, sources: {}, layers: [] }, headers: { 'access-control-allow-origin': '*' } });
+    }
+    return route.fulfill({ contentType: 'text/html', body: '<title>Playground media fixture</title>' });
+  });
+}
+
+for (let batch = 1; batch <= 8; batch++) {
+  test(`mounts the published catalog inline, batch ${batch} of 8`, async ({ page }) => {
+    const fixture = await startDogfood(`web_a2ui_catalog_gallery_${batch}`);
+    let passed = false;
+    try {
+      const errors: string[] = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await stubPlaygroundAssets(page);
+      await routeWorkspaceHost(page, fixture);
+      await page.goto('/');
+      await expect(page).toHaveTitle('rustX');
+      await connectRemote(page, fixture.endpoint, fixture.token);
+      await openEmptySession(page, fixture, 'Workspace A');
+      await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Show Playground gallery');
+      await page.getByRole('button', { name: 'Send', exact: true }).click();
+      const chat = page.getByLabel('Canonical conversation', { exact: true });
+      const response = chat.getByRole('article', { name: 'Assistant response' });
+      await expect(response.getByText('Catalog preview ends here.', { exact: true })).toHaveCount(1);
+      await expect(response.locator('[data-a2ui-catalog="playground"]')).toHaveCount(batch === 8 ? 9 : 16, { timeout: 25000 });
+      await expect(response.locator('[data-generative-ui-error]')).toHaveCount(0);
+      await expect(response.locator('[data-a2ui-catalog="playground"]:has([data-a2-type])')).toHaveCount(batch === 8 ? 9 : 16);
+      await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+      expect(errors).toEqual([]);
+      passed = true;
+    } finally {
+      await stopDogfoodPage(page, fixture, passed);
+    }
+  });
+}
+
+test('uses the Playground interactions for weather, diagrams, tables, and form controls', async ({ page }, info) => {
+  const fixture = await startDogfood('web_a2ui_catalog_interactions');
+  let passed = false;
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const wire = await wireProbe(page);
+    await stubPlaygroundAssets(page);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await expect(page).toHaveTitle('rustX');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+    await composer.fill('Show Playground controls');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+
+    const chat = page.getByLabel('Canonical conversation', { exact: true });
+    const weather = chat.locator('[data-a2-type="WeatherCard"]');
+    await expect(weather.getByText('San Francisco, CA', { exact: true })).toBeVisible();
+    await expect(weather.getByText('Partly cloudy', { exact: true })).toBeVisible();
+    await expect(weather.getByText('Thu', { exact: true })).toBeVisible();
+    await weather.locator('.a2-card').screenshot({ path: info.outputPath('playground-weather.png') });
+    const svg = chat.getByRole('img', { name: 'A sun over two hills' });
+    await expect(svg.locator('path')).toHaveCount(2);
+    await expect(svg.locator('circle')).toHaveCount(1);
+    await svg.evaluate(node => node.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    await expect.poll(() => svg.evaluate(node => {
+      const { x, y, width, height } = node.getBoundingClientRect();
+      return node.contains(document.elementFromPoint(x + width / 2, y + height / 2));
+    })).toBe(true);
+    await svg.screenshot({ path: info.outputPath('playground-svg.png') });
+    const html = chat.locator('iframe[title="Inline SVG markup"]');
+    await expect(html).toHaveAttribute('sandbox', '');
+    await expect(html).toHaveAttribute('srcdoc', /Content-Security-Policy/);
+    await expect(html.contentFrame().getByRole('img', { name: 'Inline vector arrows' })).toBeVisible();
+    await html.evaluate(node => node.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    await html.screenshot({ path: info.outputPath('playground-inline-svg.png') });
+
+    const tableView = chat.locator('[data-a2-type="DataTable"]');
+    const table = tableView.getByRole('table');
+    await expect(table.getByRole('row').nth(1)).toContainText('Northwind Labs');
+    await tableView.getByRole('button', { name: 'MRR', exact: true }).click();
+    await expect(table.getByRole('row').nth(1)).toContainText('Quarry Finance');
+    const search = tableView.getByRole('textbox', { name: 'Search rows' });
+    await search.fill('Helix');
+    await expect(table.getByRole('row')).toHaveCount(2);
+    await expect(table.getByRole('row').last()).toContainText('Helix Health');
+    await tableView.locator('.a2-card').screenshot({ path: info.outputPath('playground-table-filter.png') });
+
+    const specs = chat.getByRole('tab', { name: 'Specs' });
+    await specs.click();
+    await expect(specs).toHaveAttribute('aria-selected', 'true');
+    await expect(chat.getByText('22 liters, 1.1 kg, fits a 16-inch laptop.', { exact: true })).toBeVisible();
+    const toggle = chat.getByRole('switch', { name: 'Auto-approve small refunds' });
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
+    const action = chat.getByText('Select forecast', { exact: true });
+    await action.evaluate((element: HTMLElement) => element.click());
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
+    await composer.fill('Keep draft');
+    await action.click();
+    await expect(chat.getByText('Forecast action confirmed.', { exact: true })).toBeVisible();
+    await expect(composer).toHaveValue('Keep draft');
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expect(svg).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+    await page.setViewportSize({ width: 1440, height: 1080 });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+    await page.getByRole('button', { name: '主页', exact: true }).click();
+    await expect(page.locator('[data-a2-type="WeatherCard"]').getByText('体感温度')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: '搜索表格' })).toBeVisible();
+    await expect(page.getByText('San Francisco, CA', { exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);

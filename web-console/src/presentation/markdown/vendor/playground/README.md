@@ -1,0 +1,9 @@
+# CopilotKit A2UI Playground renderers
+
+The A2UI component definitions, renderers, shadcn/ui overrides, and UI primitives are from [CopilotKit Playground at 535978c](https://github.com/CopilotKit/CopilotKit/tree/535978c0ff44d7ee4132f69cca4e96f2ad16e968/examples/showcases/a2ui-playground). The license is included alongside the sources. `catalog.json` is the [published browser catalog](https://a2ui.open.bot/catalog.json), containing 121 components. This snapshot is bundled locally.
+
+The Web UI mounts these renderers through CopilotKit's surface manager and native `SurfaceView`. The port changes import paths, uses lazy Vite loading for MapLibre, adopts the rustX appearance and language settings, and loads Playground styles with its inline surface. `HtmlView` runs inside the standard scriptless iframe, with a policy that confines it to inline assets. Surface actions pass through rustX's conversation handler. Viewport callbacks and agent-initiated renderer calls are omitted from the inline transport.
+
+The Playground's server expands `FlightCard`, `ProductCard`, and `WeatherReport` before sending its browser operations. The browser catalog contains their renderer components, including `WeatherCard` and `Chart`. The standalone Playground chat, data retrieval pipeline, and demo server live in the upstream application.
+
+Refresh the schema and upstream renderer snapshot together. The 107 authored previews in [playground-express.json](../../../../../test/fixtures/playground-express.json) are converted from the pinned catalog samples by the A2UI SDK decompiler. The 14 additional cases cover published entries without a dedicated preview. The catalog test checks both files against the registered component names and compiles and applies every sample. The browser tests mount the same set in assistant messages.

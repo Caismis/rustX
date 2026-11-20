@@ -4,6 +4,7 @@ import { LocalWorkspaceHost } from './host/workspaces.ts';
 import { workspaceHandler } from './host/http.ts';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 import geometryRuntime from './geometry-runtime.json' with { type: 'json' };
 const host = process.env.RUSTX_WORKSPACE_HOST_CONFIG ? new LocalWorkspaceHost(JSON.parse(readFileSync(process.env.RUSTX_WORKSPACE_HOST_CONFIG, 'utf8'))) : undefined;
@@ -11,7 +12,7 @@ export default defineConfig({
   // Local file dependency lockfiles miss SDK content updates; couple the cached glue to its WASM.
   cacheDir: `node_modules/.vite/cad-${geometryRuntime.assets['occt-import-js.js'].sha256.slice(0, 12)}-${geometryRuntime.assets['occt-import-js.wasm'].sha256.slice(0, 12)}`,
   define: { __RUSTX_PDFJS_ASSETS__: JSON.stringify(pdfAssets()) },
-  plugins: [react(), { name: 'product-host-workspaces', async closeBundle() { await host?.close(); }, async closePreviewServer() { await host?.close(); }, configureServer(server) { server.middlewares.use(workspaceHandler(host));  }, configurePreviewServer(server) { server.middlewares.use(workspaceHandler(host));  } }],
+  plugins: [react(), tailwindcss(), { name: 'product-host-workspaces', async closeBundle() { await host?.close(); }, async closePreviewServer() { await host?.close(); }, configureServer(server) { server.middlewares.use(workspaceHandler(host));  }, configurePreviewServer(server) { server.middlewares.use(workspaceHandler(host));  } }],
   // TanStack Form core always constructs a devtools event client that
   // broadcasts and queues complete form state, secret field values included.
   // It is replaced by an inert module in the bundle and in tests alike; see

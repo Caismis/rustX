@@ -1,11 +1,18 @@
-import { Fragment, useMemo, useRef } from 'react';
+import { Fragment, lazy, Suspense, useMemo, useRef } from 'react';
 import { useTranslation } from '../../locale/react';
 import { MarkdownText } from './MarkdownText';
-import { parseExpress, type ExpressSurface } from './a2ui-express';
+import { parseExpress, type ExpressNode, type ExpressSurface } from './a2ui-express';
 import { ExpressCard } from './ExpressCard';
 import css from './ExpressCard.module.css';
 
-type Part = { start: number; text: string; tree?: ExpressSurface; pending?: boolean };
+const PlaygroundExpress = lazy(() => import('./PlaygroundExpress'));
+type Part = { start: number; text: string; tree?: ExpressSurface; source?: string; pending?: boolean };
+
+function needsPlayground(node: ExpressNode): boolean {
+  return node.kind === 'Unsupported' || ['AreaChart', 'CandlestickChart', 'StockTicker'].includes(node.kind)
+    || ((node.kind === 'LineChart' || node.kind === 'BarChart') && Object.hasOwn(node.props, 'data'))
+    || node.children.some(needsPlayground);
+}
 
 function expressParts(source: string, streaming: boolean, cache: Map<string, ExpressSurface | null>): Part[] {
   if (!source.includes('<a2ui>') && !source.includes('a2ui')) return [{ start: 0, text: source }];
@@ -20,9 +27,10 @@ function expressParts(source: string, streaming: boolean, cache: Map<string, Exp
       if (cache.size >= 8) cache.clear();
       cache.set(body, tree);
     }
-    if (!tree) return;
     if (consumed < start) parts.push({ start: consumed, text: source.slice(consumed, start) });
-    parts.push({ start, text: body, tree });
+    parts.push(!tree || needsPlayground(tree.root)
+      ? { start, text: source.slice(start, end), source: body, tree: tree ?? undefined }
+      : { start, text: body, tree });
     consumed = end;
   }
   for (const line of source.matchAll(/^.*(?:\r?\n|$)/gm)) {
@@ -63,8 +71,12 @@ export function AssistantMarkdown({ text, streaming = false }: { text: string; s
   const tx = useTranslation();
   const cache = useRef(new Map<string, ExpressSurface | null>());
   const parts = useMemo(() => expressParts(text, streaming, cache.current), [text, streaming]);
+  const pending = <div className={css.pending} role="status">{tx('interactions:express.preparing')}</div>;
   return <>{parts.map((part, index) => <Fragment key={part.start}>
-    {part.pending ? <div className={css.pending} role="status">{tx('interactions:express.preparing')}</div>
+    {part.pending ? pending
+      : part.source ? <Suspense fallback={pending}>
+        <PlaygroundExpress key={part.source} source={part.source} fallback={part.text} tree={part.tree} streaming={streaming}/>
+      </Suspense>
       : part.tree ? <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>
       : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
   </Fragment>)}</>;

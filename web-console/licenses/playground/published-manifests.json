@@ -1,0 +1,171 @@
+{
+  "@bufbuild/protobuf 2.17.0": {
+    "license": "(Apache-2.0 AND BSD-3-Clause)",
+    "upstream": "https://github.com/bufbuild/protobuf-es",
+    "file": "bufbuild-protobuf-es.txt"
+  },
+  "@protobuf-ts/protoc 2.11.1": {
+    "license": "Apache-2.0",
+    "upstream": "https://github.com/timostamm/protobuf-ts",
+    "file": "timostamm-protobuf-ts.txt"
+  },
+  "tr46 0.0.3": {
+    "license": "MIT",
+    "upstream": "https://github.com/Sebmaster/tr46.js",
+    "file": "Sebmaster-tr46.js.txt"
+  },
+  "react-remove-scroll-bar 2.3.8": {
+    "license": "MIT",
+    "upstream": "https://github.com/theKashey/react-remove-scroll-bar",
+    "file": "theKashey-react-remove-scroll-bar.txt"
+  },
+  "micromark 3.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-core-commonmark 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-core-commonmark",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-factory-destination 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-factory-destination",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-character 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-character",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-symbol 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-symbol",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-types 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-types",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-factory-label 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-factory-label",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-factory-space 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-factory-space",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-factory-title 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-factory-title",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-factory-whitespace 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-factory-whitespace",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-chunked 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-chunked",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-classify-character 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-classify-character",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-html-tag-name 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-html-tag-name",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-normalize-identifier 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-normalize-identifier",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-resolve-all 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-resolve-all",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-subtokenize 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-subtokenize",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-combine-extensions 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-combine-extensions",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-decode-numeric-character-reference 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-decode-numeric-character-reference",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-encode 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-encode",
+    "file": "micromark-micromark.txt"
+  },
+  "micromark-util-sanitize-uri 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/micromark/micromark/tree/main/packages/micromark-util-sanitize-uri",
+    "file": "micromark-micromark.txt"
+  },
+  "inline-style-parser 0.1.1": {
+    "license": "MIT",
+    "upstream": "https://github.com/remarkablemark/inline-style-parser",
+    "file": "remarkablemark-inline-style-parser.txt"
+  },
+  "hast 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/wooorm/rehype",
+    "file": "wooorm-rehype.txt"
+  },
+  "fastdom 1.0.12": {
+    "license": "MIT",
+    "upstream": "https://github.com/wilsonpage/fastdom"
+  },
+  "strictdom 1.0.1": {
+    "license": "MIT",
+    "upstream": "https://github.com/wilsonpage/strictdom"
+  },
+  "rehype-katex 7.0.1": {
+    "license": "MIT",
+    "upstream": "https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex",
+    "file": "remarkjs-remark-math.txt"
+  },
+  "remark-math 6.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/remarkjs/remark-math/tree/main/packages/remark-math",
+    "file": "remarkjs-remark-math.txt"
+  },
+  "@types/d3-shape 1.0.5": {
+    "license": "MIT",
+    "upstream": "https://www.github.com/DefinitelyTyped/DefinitelyTyped",
+    "file": "DefinitelyTyped-DefinitelyTyped.txt"
+  },
+  "murmurhash-js 1.0.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/mikolalysenko/murmurhash-js"
+  },
+  "bytewise 1.1.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/deanlandolt/bytewise"
+  },
+  "typewise 1.0.3": {
+    "license": "MIT",
+    "upstream": "https://github.com/deanlandolt/typewise"
+  },
+  "sugar-high 2.6.0": {
+    "license": "MIT",
+    "upstream": "https://github.com/huozhi/sugar-high"
+  }
+}

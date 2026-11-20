@@ -37,6 +37,14 @@ const declaredOnly: Record<string, { license: string | undefined; notice: string
       + 'An empty marker module (index.js is empty; error.js throws a fixed message) published by the React project, https://github.com/facebook/react. Required by react-aria-components.',
   },
 };
+const playgroundLicenseRoot = join(root, 'licenses/playground');
+const playgroundManifests = JSON.parse(readFileSync(join(playgroundLicenseRoot, 'published-manifests.json'), 'utf8')) as
+  Record<string, { license: string; upstream: string; file?: string }>;
+for (const [name, source] of Object.entries(playgroundManifests)) {
+  const notice = source.file ? readFileSync(join(playgroundLicenseRoot, source.file), 'utf8')
+    : `License: ${source.license}, as declared in the published package manifest. No standalone license text in the distribution. Project: ${source.upstream}`;
+  declaredOnly[name] = { license: source.license, notice };
+}
 function visit(file: string) {
   const pkg = JSON.parse(readFileSync(file, 'utf8'));
   const key = `${pkg.name} ${pkg.version}`;
@@ -69,7 +77,7 @@ for (const asset of ['dist/license.occt-import-js.txt', 'dist/license.occt.txt']
   packages.set(`occt-import-js ${cadVersion} (${asset})`, readFileSync(join(dirname(cadPackage), asset), 'utf8').replace(/\r\n/g, '\n'));
 }
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
-packages.set('CopilotKit A2UI Playground (adapted shadcn/ui catalog styles)', readFileSync(join(root, 'licenses/copilotkit-a2ui-playground.txt'), 'utf8'));
+packages.set('CopilotKit A2UI Playground (catalog renderers, examples and styles)', readFileSync(join(root, 'src/presentation/markdown/vendor/playground/LICENSE'), 'utf8'));
 packages.set('Google A2UI Express parser (vendored)', readFileSync(join(root, 'src/presentation/markdown/vendor/a2ui-express/LICENSE'), 'utf8'));
 const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\nModified CAD runtime source and rebuild instructions: cad-runtime-source/README.md\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');
 const path = join(root, 'public/THIRD-PARTY-NOTICES.txt');
