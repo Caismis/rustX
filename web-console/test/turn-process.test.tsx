@@ -14,10 +14,10 @@ it('folds only native completed membership across steering and interleaved Attem
   const ui = render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>);
   const folded = screen.getByRole('button', { name: 'Worked' });
   expect(folded.getAttribute('aria-expanded')).toBe('false');
-  expect(screen.getByText('Answer first').closest('[hidden]')).not.toBeNull();
-  for (const text of ['Answer final', 'Answer live', 'steering']) expect(screen.getByText(text).closest('[hidden]')).toBeNull();
+  expect(screen.getAllByRole('button', { name: 'Analysis completed', hidden: true })[0].closest('[hidden]')).not.toBeNull();
+  for (const text of ['Answer first', 'Answer final', 'Answer live', 'steering']) expect(screen.getByText(text).closest('[hidden]')).toBeNull();
   fireEvent.click(folded);
-  expect(screen.getByText('Answer first').closest('[hidden]')).toBeNull();
+  expect(screen.getAllByRole('button', { name: 'Analysis completed' })[0].closest('[hidden]')).toBeNull();
   // A settled Attempt's reasoning sits in its Harness step group until opened.
   const steps = screen.getAllByRole('button', { name: 'Analysis completed' });
   expect(steps).toHaveLength(3);
@@ -199,7 +199,7 @@ it('a settled Turn first shown from its canonical head folds behind its disclosu
   ui.rerender(<AgentTranscript snapshot={{ ...state, transcript: { entries: [row('call', owner, true), row('final', owner)] } }}/>);
   const durable = screen.getByRole('button', { name: 'Worked' });
   expect(durable.getAttribute('aria-expanded')).toBe('false');
-  expect(screen.getByText('Answer call').closest('[hidden]')).not.toBeNull();
+  expect(screen.getByRole('button', { name: 'Analysis completed', hidden: true }).closest('[hidden]')).not.toBeNull();
   fireEvent.click(durable);
   const step = screen.getByRole('button', { name: 'Analysis completed' });
   expect(step.getAttribute('aria-expanded')).toBe('false');

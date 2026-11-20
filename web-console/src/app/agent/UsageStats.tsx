@@ -10,6 +10,7 @@ import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { IconDatabaseOutline16, IconGaugeOutline16 } from '../../presentation/primitives/icons';
 import { StatDialog, StatHeading, statCss } from '../../presentation/primitives/StatDialog';
+import { useConversationPreferences } from '../conversation-preferences';
 import { formatCacheHitPercent, formatDuration, formatExactTokens, formatTokens, formatTokensPerSecond, type TokenCount } from './token-format';
 import css from './UsageStats.module.css';
 
@@ -56,12 +57,13 @@ function Joined({ first, second }: { first: string; second: string | null }) {
 }
 
 /** Turn and Step counts with whole-session speed, opening the time and speed dialog. */
-function ActivityPill({ statistics }: { statistics: ConversationStatistics }) {
+function ActivityPill({ statistics, compact }: { statistics: ConversationStatistics; compact: boolean }) {
   const tx = useTranslation();
-  const steps = Number(statistics.steps);
-  if (!steps) return null;
   const timing = statistics.timing;
   const speed = timing?.output_tokens_per_second != null ? tx('agent:usage.tps', { tps: formatTokensPerSecond(timing.output_tokens_per_second) }) : null;
+  if (compact) return speed === null ? null : <span className={css.pill} data-composer-stat="activity"><IconGaugeOutline16/><span className={css.label}>{speed}</span></span>;
+  const steps = Number(statistics.steps);
+  if (!steps) return null;
   const counts = tx('agent:usage.counts', { turns: statistics.turns, steps: statistics.steps });
   const model = timing?.model_ms ?? 0, tools = timing?.tool_ms ?? 0, ttft = timing?.mean_ttft_ms;
   const content = <><IconGaugeOutline16/><span className={css.label}><Joined first={counts} second={speed}/></span></>;
@@ -79,12 +81,13 @@ function ActivityPill({ statistics }: { statistics: ConversationStatistics }) {
 }
 
 /** Whole-conversation reported tokens and cache hit. */
-function UsagePill({ statistics }: { statistics: ConversationStatistics }) {
+function UsagePill({ statistics, compact }: { statistics: ConversationStatistics; compact: boolean }) {
   const tx = useTranslation();
   const usage = statistics.reported_usage;
   if (!usage || (usage.input_tokens != null && usage.output_tokens != null && BigInt(usage.input_tokens) === 0n && BigInt(usage.output_tokens) === 0n)) return null;
   const hit = cacheHit(usage, 0);
   const hitText = hit === null ? null : tx('agent:usage.cache-hit-percent', { percent: hit });
+  if (compact) return hitText === null ? null : <span className={css.pill} data-composer-stat="usage"><IconDatabaseOutline16/><span className={css.label}>{hitText}</span></span>;
   const total = count(tx, usage.total_tokens);
   return <StatDialog triggerClassName={css.pill} label={hitText === null ? total : `${total} · ${hitText}`} title={tx('agent:usage.usage-title')}
     trigger={<><IconDatabaseOutline16/><span className={css.label}><Joined first={total} second={hitText}/></span></>}>
@@ -148,10 +151,12 @@ function ContextMeter({ occupancy }: { occupancy: RuntimeClientContextOccupancy 
 /** The composer dock: native whole-conversation totals and current context reading. */
 export function ConversationStats({ statistics, occupancy, reserveDock }: { statistics?: ConversationStatistics | null; occupancy?: RuntimeClientContextOccupancy | null; reserveDock?: boolean }) {
   const tx = useTranslation();
+  const [{ performanceUsage }] = useConversationPreferences();
+  const compact = performanceUsage === 'compact';
   if (!statistics && !occupancy) return reserveDock ? <div className={css.pendingDock} aria-hidden="true" data-composer-dock=""/> : null;
   return <div className={css.dock} aria-label={tx('agent:usage.session-title')} data-composer-dock="">
-    {statistics && <ActivityPill statistics={statistics}/>}
-    {statistics && <UsagePill statistics={statistics}/>}
+    {statistics && <ActivityPill statistics={statistics} compact={compact}/>}
+    {statistics && <UsagePill statistics={statistics} compact={compact}/>}
     {occupancy && <ContextMeter occupancy={occupancy}/>}
   </div>;
 }

@@ -57,6 +57,20 @@
 .flowItem { min-width: 0; }
 .flow[hidden] { display: none; }
 
+.column[data-chat-motion] > :not([data-chat-motion]) {
+  transition: margin-top 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.column[data-chat-motion] > [data-chat-flow-kind="turn-process"] {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .column[data-chat-motion] > :not([data-chat-motion]) {
+    transition: none;
+  }
+}
+
 .flow {
   display: flex;
   flex-direction: column;

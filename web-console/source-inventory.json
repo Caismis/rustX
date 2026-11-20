@@ -1280,7 +1280,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "20b278f9fd91434eba59461abeefe9318d361735e6bc4d45b227f087db209644",
+      "local_sha256": "c6f3b89eae30e57f4ab5a5d98779eb7d3203443dc1b3e2f52ea986e0308255b5",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -1858,7 +1858,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3d51143bfe6f9116dffafdd019c2c8361acf4e4ca5f88361cb6e08bdff25469a",
+      "local_sha256": "384854a763227a8bbe2f3f4cf918b22f6370087cd26ced8c35c96659b2cc344b",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -3426,6 +3426,7 @@
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../commands/native",
+        "../conversation-preferences",
         "./ObservationSource",
         "./SourceContent",
         "./TurnTail.module.css",
@@ -3439,7 +3440,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "8a2ca27642530cc62772f1c188c44147a5da3d062b11b1290a4fde117020fb2a"
+      "local_sha256": "a8ce7ebbd2dae64f7f324290ab4ccf4bb9e96351935583eeebc4de3a55185fb5"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -4176,7 +4177,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "b577f175a9e0fcfc832d9dda4b915825473316e19be7d2240a3907167d14173e"
+      "local_sha256": "8a95e97563cb75ad5a2cbb50bb0cf37ad75ae207bbeb6fb912f8d0e13d26073c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4477,13 +4478,13 @@
         "../primitives/TextShimmer",
         "../primitives/icons",
         "./StepGroup.module.css",
-        "./searchable-hidden",
+        "./flow-motion",
         "./use-process-scroll",
         "clsx",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "fa9ca7cecc22d35d39e22608ca4d1ac1f69346082b7082b317d0cba8612e65f7"
+      "local_sha256": "dabf0123e16bb97c24f9dbf64ab1cc21008320aa7c824bdd375522cd8cee6206"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
@@ -4561,11 +4562,12 @@
         "../../locale/translation",
         "../../presentation/primitives/StatDialog",
         "../../presentation/primitives/icons",
+        "../conversation-preferences",
         "./UsageStats.module.css",
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "f8663b41649a709da868f247bb62ed3671f59465719cd582eaee2578c682ee54"
+      "local_sha256": "a21b91af3fddf1efb2b5810c67edf4b02cfb04436bbf0b8033f161f605d7c69f"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
@@ -6584,7 +6586,7 @@
           "treatment": "Settings row layout and selection interaction."
         }
       ],
-      "local_sha256": "30aa7f9e4e64dc3ddc01c5ac65f44fc1463e138cf82e4aa04d430f8737b680e0"
+      "local_sha256": "33a03ca34ec4d013fb09616f769753e13e0dcefa8abfef4f1b7346da82688a91"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

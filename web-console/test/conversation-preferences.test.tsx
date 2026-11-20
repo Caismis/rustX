@@ -6,7 +6,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { snapshot } from './fixture';
 import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v80';
 
-afterEach(() => { cleanup(); conversationPreferences().update({fontSize:14, transcriptMode:'detailed', codingView:true}); });
+afterEach(() => { cleanup(); conversationPreferences().update({fontSize:14, transcriptMode:'detailed', collapseTiming:'completion', foldedReplies:'all', performanceUsage:'detailed', codingView:true}); });
 it('validates stored preferences and applies settings even when browser storage fails', () => {
   const storage = new Map<string,string>();
   const adapter = { getItem:(key:string) => storage.get(key) ?? null, setItem:(key:string,value:string) => { storage.set(key,value); } };
@@ -19,13 +19,27 @@ it('validates stored preferences and applies settings even when browser storage 
   const denied = new ConversationPreferenceStore({getItem:()=>{throw Error();},setItem:()=>{throw Error();}});
   denied.update({fontSize:10});expect(denied.getSnapshot().fontSize).toBe(10);
 });
-it('General edits the three preferences, bounds the font stepper and persists the selection', async () => {
+it('General edits conversation preferences, bounds the font stepper and persists the selection', async () => {
   render(<GeneralPage theme="dark"/>);
   fireEvent.click(screen.getByRole('button', {name:'Increase font size'}));
+  fireEvent.click(screen.getByRole('button', {name:'When to Collapse Work Details On completion'}));
+  fireEvent.click(await screen.findByRole('menuitem', {name:'On next message'}));
+  fireEvent.click(screen.getByRole('button', {name:'Replies After Collapse All replies'}));
+  fireEvent.click(await screen.findByRole('menuitem', {name:'Final answer only'}));
+  fireEvent.click(screen.getByRole('button', {name:'Performance & usage Detailed'}));
+  fireEvent.click(await screen.findByRole('menuitem', {name:'Compact'}));
   fireEvent.click(screen.getByRole('button', {name:'Work details Detailed'}));
   fireEvent.click(await screen.findByRole('menuitem', {name:'Fully expanded'}));
+  expect(screen.queryByRole('button', {name:/Replies After Collapse/})).toBeNull();
   fireEvent.click(screen.getByRole('switch', {name:'Show coding view'}));
-  expect(new ConversationPreferenceStore().getSnapshot()).toEqual({fontSize:15, transcriptMode:'verbose', codingView:false});
+  expect(new ConversationPreferenceStore().getSnapshot()).toEqual({
+    fontSize:15,
+    transcriptMode:'verbose',
+    collapseTiming:'next-input',
+    foldedReplies:'final',
+    performanceUsage:'compact',
+    codingView:false,
+  });
   act(()=>conversationPreferences().update({fontSize:22}));
   expect((screen.getByRole('button',{name:'Increase font size'}) as HTMLButtonElement).disabled).toBe(true);
 });
@@ -34,10 +48,17 @@ const entries: RuntimeClientTranscriptEntry[] = [
   {cursor:'1',turn_process:process,item:{type:'message',message:{role:'assistant',id:'first',content:[{type:'reasoning',text:'A reasoning preview'},{type:'text',text:'An intermediate reply'}]}}},
   {cursor:'2',turn_process:process,item:{type:'message',message:{role:'assistant',id:'final',content:[{type:'text',text:'Final reply'}]}}},
 ];
-it('verbose reveals completed work, preserves manual disclosures across modes, and compact hides reasoning previews', () => {
+it('verbose reveals completed work, foldedReplies controls intermediate replies, collapseTiming defers latest turn, and compact hides reasoning previews', () => {
   render(<AgentTranscript snapshot={{...snapshot(),transcript:{entries}}}/>);
+  // DSH default foldedReplies='all': step process folds while intermediate replies remain visible.
+  expect(screen.getByText('An intermediate reply').closest('[hidden]')).toBeNull();
+  expect(screen.getByRole('button',{name:'Analysis completed', hidden: true}).closest('[hidden]')).not.toBeNull();
+  act(()=>conversationPreferences().update({foldedReplies:'final'}));
   expect(screen.getByText('An intermediate reply').closest('[hidden]')).not.toBeNull();
-  act(()=>conversationPreferences().update({transcriptMode:'verbose'}));
+  act(()=>conversationPreferences().update({collapseTiming:'next-input'}));
+  expect(screen.getByText('An intermediate reply').closest('[hidden]')).toBeNull();
+  expect(screen.getByRole('button',{name:'Worked'}).getAttribute('aria-expanded')).toBe('true');
+  act(()=>conversationPreferences().update({collapseTiming:'completion', transcriptMode:'verbose'}));
   expect(screen.getByText('An intermediate reply').closest('[hidden]')).toBeNull();
   expect((screen.getByRole('button',{name:'Worked'}) as HTMLButtonElement).disabled).toBe(true);
   const reasoning = screen.getByRole('button',{name:/Reasoning/});

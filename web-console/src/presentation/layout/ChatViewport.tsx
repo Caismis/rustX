@@ -6,6 +6,7 @@ import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
 const FOLLOW_THRESHOLD = 25;
+const TOP_LOAD_THRESHOLD = 160;
 const SCROLL_SAMPLE_MS = 500;
 const SCROLL_MEMORY_LIMIT = 200;
 /** Detached reading survives the selected-only mount lifecycle, like Harness's
@@ -35,6 +36,8 @@ interface ViewportProps {
   /** Loading the initial reading window is passive; it does not detach a following reader. */
   initialHistoryLoading?: boolean;
   onLatest?: () => void;
+  /** Called once per top-edge anchor when a reader scrolls near the top edge. */
+  onReachTop?: () => void;
   latestTurn?: string;
   /** null means observed detached reading with no native owner; undefined is
    * unobserved/follow mode, where the rail may use current native state. */
@@ -69,6 +72,21 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private landed?: { anchor: string; current: () => boolean };
   private active?: string | null;
   private explicitLatest = false;
+  private topLoadAnchor?: string;
+  private checkTopLoad = () => {
+    const el = this.scroller();
+    if (!el || el.closest('[hidden]') || this.props.initialHistoryLoading) return;
+    const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+    if (el.scrollTop > TOP_LOAD_THRESHOLD) {
+      this.topLoadAnchor = undefined;
+      return;
+    }
+    if (!this.props.onReachTop || floor <= 0) return;
+    const first = this.rows()[0]?.dataset.chatAnchorKey;
+    if (!first || this.topLoadAnchor === first) return;
+    this.topLoadAnchor = first;
+    this.props.onReachTop();
+  };
   private rows() { return [...(this.content.current?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? [])].filter(row => !row.closest('[hidden]')); }
   private position(): ReadingPosition | undefined {
     const el = this.scroller();
@@ -195,6 +213,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
         if (this.state.detached) this.setState({ detached: false });
         this.publishActive();
       } else this.scrollSample ??= setTimeout(this.sampleScroll, SCROLL_SAMPLE_MS);
+      if (top < previous) this.checkTopLoad();
+      else if (top > TOP_LOAD_THRESHOLD) this.topLoadAnchor = undefined;
     }
     this.writtenTop = top;
   }
@@ -221,6 +241,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // Queue its owner before the state update can snapshot that clamped offset.
     if (!this.following) this.markLayoutDirty();
     if (this.state.detached === this.following) this.setState({ detached: !this.following });
+    if (!this.following) this.checkTopLoad();
     this.publishActive();
   };
   /** Explicit action changes intent; positioning still belongs to the frame. */
@@ -317,6 +338,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.cancelScrollSample();
       this.retireNavigation();
       this.pendingRestore = undefined;
+      this.topLoadAnchor = undefined;
       this.following = true; this.reading = undefined;
       this.writtenTop = this.scroller()?.scrollTop ?? 0;
       const restored = !sameMemory && this.restoreMemory(this.props.memoryKey);

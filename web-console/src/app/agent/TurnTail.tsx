@@ -9,6 +9,7 @@ import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefresh
 import type { ResponseAction } from '../commands/native';
 import { turnAnchor } from '../../client/transcript';
 import { TurnUsage } from './UsageStats';
+import { useConversationPreferences } from '../conversation-preferences';
 import css from './TurnTail.module.css';
 import { messageContentBinding, observationSourceIdentity, useContentSource } from './ObservationSource';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
@@ -64,6 +65,7 @@ export function CopyMessage({ text, messageId, publication }: { text: string; me
 }
 export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false, forking = false, children }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean; forking?: boolean; children?: ReactNode }) {
   const tx = useTranslation();
+  const [{ performanceUsage }] = useConversationPreferences();
   const actions = <div className={css.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest || forking ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
     <CopyMessage text={text} messageId={response.closing_message_id}/>
     {onHistorical && <>
@@ -73,7 +75,7 @@ export function TurnTail({ text, response, onHistorical, disabled, lineageSwitch
       <Tooltip label={tx(forking ? 'common:session-product.forking' : 'agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} aria-busy={forking || undefined} disabled={disabled || forking} onClick={() => onHistorical('fork', response)}>{forking ? <StateDot state="ongoing"/> : <IconBranchOutline16/>}</button></Tooltip>
     </>}
     <span className={css.endInfo}>
-      {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
+      {performanceUsage === 'detailed' && response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
       <MessageTime time={response.completed_at}/>
     </span>
   </div>;

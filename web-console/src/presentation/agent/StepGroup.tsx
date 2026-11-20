@@ -9,7 +9,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import clsx from 'clsx';
 import { IconAgentPresetOutline16, IconApiOutline14, IconBrowseOutline16, IconChevronDownOutline14, IconChevronUpOutline14, IconCodeOutline16, IconEditOutline16, IconGlobeOutline14, IconPlanOutline14, IconQuestionOutline14, IconSearchOutline16, IconSparkle16, IconThinkOutline14 } from '../primitives/icons';
 import { TextShimmer } from '../primitives/TextShimmer';
-import { useSearchableHidden } from './searchable-hidden';
+import { useFlowHidden } from './flow-motion';
 import { useProcessScroll } from './use-process-scroll';
 import css from './StepGroup.module.css';
 
@@ -87,8 +87,8 @@ function useProcessTitle(counts: StepCounts) {
   return counts.length > 3 ? tx('agent:step-process.more', { title }) : title;
 }
 
-export function StepGroup({ id, counts, open, onToggle, onReveal, hidden = false, direct = false, running = false, liveActivity, activityTitle, detail, children }: {
-  id: string; counts: StepCounts; open: boolean; onToggle: () => void; onReveal?: () => void; hidden?: boolean; direct?: boolean; running?: boolean; liveActivity?: StepActivity | 'thinking'; activityTitle?: string; detail?: string; children: ReactNode;
+export function StepGroup({ id, counts, open, onToggle, onReveal, hidden = false, direct = false, running = false, liveActivity, activityTitle, detail, showDetail = true, children }: {
+  id: string; counts: StepCounts; open: boolean; onToggle: () => void; onReveal?: () => void; hidden?: boolean; direct?: boolean; running?: boolean; liveActivity?: StepActivity | 'thinking'; activityTitle?: string; detail?: string; showDetail?: boolean; children: ReactNode;
 }) {
   const defaultTitle = useProcessTitle(counts);
   const stableLive = useStableLiveTitle({
@@ -98,14 +98,14 @@ export function StepGroup({ id, counts, open, onToggle, onReveal, hidden = false
   }, running);
   const activity = running ? stableLive.activity : counts[0]?.kind ?? 'thinking';
   const title = running ? stableLive.title : activityTitle ?? defaultTitle;
-  const shownDetail = running ? stableLive.detail : detail ?? '';
+  const shownDetail = showDetail ? (running ? stableLive.detail : detail ?? '') : '';
   const fullTitle = shownDetail ? `${title} · ${shownDetail}` : title;
   const bodyId = useId();
   const reveal = useCallback(() => {
     if (onReveal) onReveal();
     else if (!open) onToggle();
   }, [onReveal, onToggle, open]);
-  const body = useSearchableHidden(!open && !direct, reveal);
+  const body = useFlowHidden(!open && !direct, reveal, true);
   const content = useRef<HTMLDivElement>(null);
   const { edges, events, initialize } = useProcessScroll(body, content, open && !direct, !direct);
   const handleToggle = useCallback(() => {

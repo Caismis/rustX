@@ -41,6 +41,7 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, wo
   const source = useObservationSource();
   return <ChatViewport chromeVisible={visible} ref={viewport} latestLabel={tx('agent:agent-transcript.return-to-latest')}
     initialHistoryLoading={reading.history?.initialLoading} historical={!!reading.history?.window} onLatest={() => { reader?.returnToLatest(); void reader?.loadInitial(); }} onActiveTurn={setActive}
+    onReachTop={reader && !reading.history?.initialLoading && !reading.history?.loading && reading.history?.page.next_cursor != null ? () => { viewport.current?.beginNavigation(); void reader.loadEarlier(); } : undefined}
     latestTurn={currentId && turnAnchor(currentId)}
     overlay={reader && <TurnNavigation page={reading.outline} currentId={currentId} location={currentTurnLocation(snapshot)}
       loading={reading.outlineLoading} pending={reading.pending} error={reading.navigationError ?? reading.outlineError}
