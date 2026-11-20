@@ -53,9 +53,9 @@ pub(crate) struct AppServerArgs {
     /// Session. Requires --local-execution-workspace; bare mode launches none.
     #[arg(long, requires = "local_execution_workspace")]
     local_execution_session: Option<String>,
-    /// Independently trusted workspace that must equal the Session's
-    /// reserved workspace exactly. Requires --local-execution-session.
-    #[arg(long, requires = "local_execution_session")]
+    /// Trusted Workspace for local execution. With no Session supplied,
+    /// enrolls a minimal Session under a configured environment root.
+    #[arg(long)]
     local_execution_workspace: Option<PathBuf>,
     /// Reserve this Session's execution binding for a remote Execution
     /// Client over WebSocket; no Client is launched — the operator
@@ -64,16 +64,24 @@ pub(crate) struct AppServerArgs {
     #[arg(
         long,
         requires_all = ["execution_ws_listen", "execution_bootstrap_out"],
-        conflicts_with = "local_execution_session"
+        conflicts_with_all = ["local_execution_workspace", "execution_workspace"]
     )]
     execution_session: Option<String>,
+    /// Enroll a minimal Session for this authorized Workspace before
+    /// publishing its remote Client bootstrap bundle.
+    #[arg(
+        long,
+        requires_all = ["execution_ws_listen", "execution_bootstrap_out"],
+        conflicts_with = "local_execution_workspace"
+    )]
+    execution_workspace: Option<PathBuf>,
     /// The numeric loopback `IP:PORT` the execution WebSocket listener
     /// binds. Port 0 selects an ephemeral port.
-    #[arg(long, requires = "execution_session")]
+    #[arg(long)]
     execution_ws_listen: Option<std::net::SocketAddr>,
     /// The `0600` bootstrap bundle the operator hands to the remote
     /// Client; its parent is created or must already be owner-only 0700.
-    #[arg(long, requires = "execution_session")]
+    #[arg(long)]
     execution_bootstrap_out: Option<PathBuf>,
     /// The public `wss://…/execution/v1` ingress endpoint published in
     /// the bundle instead of the loopback address.
@@ -96,6 +104,7 @@ impl AppServerArgs {
             local_execution_session: self.local_execution_session,
             local_execution_workspace: self.local_execution_workspace,
             execution_session: self.execution_session,
+            execution_workspace: self.execution_workspace,
             execution_ws_listen: self.execution_ws_listen,
             execution_bootstrap_out: self.execution_bootstrap_out,
             execution_public_url: self.execution_public_url,
@@ -119,6 +128,7 @@ pub struct Request {
     local_execution_session: Option<String>,
     local_execution_workspace: Option<PathBuf>,
     execution_session: Option<String>,
+    execution_workspace: Option<PathBuf>,
     execution_ws_listen: Option<std::net::SocketAddr>,
     execution_bootstrap_out: Option<PathBuf>,
     execution_public_url: Option<String>,
@@ -390,43 +400,55 @@ async fn run(options: Request) -> Result<(), String> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|error| error.to_string())?;
     let shutdown = CancellationToken::new();
-    // Explicit opt-in only: the paired flags reserve the Session's local
-    // binding and launch the sibling Client before transport readiness.
-    // Bare mode never discovers a default Session or a client binary.
+    let manager = host.manager();
     let mut local_client = match (
-        &options.local_execution_session,
-        &options.local_execution_workspace,
+        options.local_execution_session.as_deref(),
+        options.local_execution_workspace.as_deref(),
     ) {
-        (Some(id), Some(workspace)) => {
-            Some(local_execution::launch(host.manager(), id, workspace).await?)
+        (Some(id), Some(workspace)) => Some(local_execution::launch(manager, id, workspace).await?),
+        (None, Some(workspace)) => {
+            let session = local_execution::enroll(manager, workspace).await?;
+            Some(local_execution::launch(manager, session.as_str(), workspace).await?)
         }
         (None, None) => None,
-        _ => return Err("local execution requires both Session and workspace".into()),
+        _ => return Err("local execution Session requires its workspace".into()),
     };
-    // Remote mode only publishes the reservation and runs its bounded
-    // accept loop — the operator-owned Client arrives when it arrives;
-    // management serves unblocked meanwhile. The task stops on drain.
+    // Remote enrollment publishes a reservation. Management remains
+    // available while the operator starts the bound Client independently.
     let mut remote_accept = match (
-        &options.execution_session,
-        &options.execution_ws_listen,
+        options.execution_session.as_deref(),
+        options.execution_workspace.as_deref(),
+        options.execution_ws_listen,
         &options.execution_bootstrap_out,
         &options.execution_public_url,
     ) {
-        (Some(id), Some(listen), Some(bootstrap), public_url) => Some(
-            local_execution::launch_remote(
-                host.manager(),
-                id,
-                *listen,
-                bootstrap.clone(),
-                public_url.clone(),
-                shutdown.clone(),
+        (session, workspace, Some(listen), Some(bootstrap), public_url)
+            if session.is_some() ^ workspace.is_some() =>
+        {
+            let enrolled;
+            let session = if let Some(id) = session {
+                id
+            } else {
+                enrolled =
+                    local_execution::enroll(manager, workspace.expect("enrollment path")).await?;
+                enrolled.as_str()
+            };
+            Some(
+                local_execution::launch_remote(
+                    manager,
+                    session,
+                    listen,
+                    bootstrap.clone(),
+                    public_url.clone(),
+                    shutdown.clone(),
+                )
+                .await?,
             )
-            .await?,
-        ),
-        (None, None, None, None) => None,
+        }
+        (None, None, None, None, None) => None,
         _ => {
             return Err(
-                "remote execution requires --execution-session, --execution-ws-listen and --execution-bootstrap-out"
+                "remote execution requires a Session or Workspace, --execution-ws-listen and --execution-bootstrap-out"
                     .into(),
             );
         }

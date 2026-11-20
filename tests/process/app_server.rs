@@ -370,20 +370,26 @@ fn local_exec_command(
 fn remote_exec_command(
     binary: &std::path::Path,
     f: &Fixture,
-    session: &str,
+    session: Option<&str>,
     bundle: &std::path::Path,
 ) -> Command {
     let mut command = Command::new(binary);
+    if let Some(session) = session {
+        command
+            .arg("app-server")
+            .arg("--execution-session")
+            .arg(session);
+    } else {
+        command.arg("app-server");
+    }
     command
         .current_dir(f.root.path())
         .env_clear()
         .env("HOME", f.root.path().join("home"))
         .env("PATH", "/usr/bin:/bin")
-        .args(["app-server", "--runtime-root"])
+        .arg("--runtime-root")
         .arg(f.root.path().join("runtime"))
         .args(["--listen", "stdio"])
-        .arg("--execution-session")
-        .arg(session)
         .args(["--execution-ws-listen", "127.0.0.1:0"])
         .arg("--execution-bootstrap-out")
         .arg(bundle)
@@ -779,7 +785,7 @@ async fn remote_execution_serves_session_reads_over_websocket() {
         std::fs::create_dir(&private).unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
         let bundle = private.join("bootstrap");
-        let mut server = remote_exec_command(&rustx, &f, f.sessions[0].as_str(), &bundle)
+        let mut server = remote_exec_command(&rustx, &f, Some(f.sessions[0].as_str()), &bundle)
             .spawn()
             .expect("spawn staged server");
         let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
@@ -900,6 +906,81 @@ async fn remote_execution_serves_session_reads_over_websocket() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
         assert!(status.success(), "gracefully closed Client must exit 0");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn execution_enrollment_precedes_client_and_workspace_configuration_readiness() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        use rustx_execution_protocol::Bootstrap;
+        use rustx_execution_protocol::transport::read_record;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let f = Fixture::new().await;
+        let workspace = f.root.path().join("a");
+        grant_environment_roots(&f, std::slice::from_ref(&workspace));
+        std::fs::write(workspace.join("rustx.toml"), b"[broken").unwrap();
+        std::fs::write(workspace.join("marker"), b"authorized").unwrap();
+        let (_bin, rustx) = isolated_server_bin();
+        let private = f.root.path().join("bootstrap-private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bundle = private.join("binding");
+        let mut server = remote_exec_command(&rustx, &f, None, &bundle)
+            .env("TEST_KEY", "fixture")
+            .arg("--execution-workspace")
+            .arg(&workspace)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let bootstrap: Bootstrap = read_record(&mut std::fs::File::open(&bundle).unwrap()).unwrap();
+        let id = SessionId::parse(bootstrap.session.as_str()).unwrap();
+        assert!(!f.sessions.contains(&id));
+        assert_eq!(bootstrap.workspace, workspace);
+        assert!(matches!(
+            result(&client, Method::SessionRead { session_id: id.clone() }).await,
+            MethodResult::Session { session } if session.id == id
+        ));
+        let browse = || Method::FsReadDirectory {
+            session_id: id.clone(),
+            path: workspace.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        };
+        let Response::Failure(before) = rpc(&client, 18, browse()).await else {
+            panic!("browse before authenticated Client")
+        };
+        assert_eq!(before.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        let _execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
+        await_admission(&client, &id, &workspace.join("marker")).await;
+        assert!(matches!(
+            result(&client, browse()).await,
+            MethodResult::DirectoryPage { page }
+                if page.entries.iter().any(|entry| entry.file_name == "marker")
+        ));
+        let thread_id = app_server_conformance::thread_id(&client, id.clone()).await;
+        assert!(matches!(
+            rpc(&client, 44, Method::SessionAttach { thread_id }).await,
+            Response::Failure(_)
+        ));
+        assert!(matches!(
+            result(&client, Method::SessionRead { session_id: id }).await,
+            MethodResult::Session { .. }
+        ));
+        assert_eq!(diagnostics(&client).await.loaded, 0);
+        client.close().await;
+        terminate(&server);
+        let output = server.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     })
     .await;
 }
@@ -1182,7 +1263,7 @@ async fn seeded_transcript_over_websocket() -> Vec<String> {
     std::fs::create_dir(&private).unwrap();
     std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
     let bundle = private.join("bootstrap");
-    let mut server = remote_exec_command(&rustx, &f, f.sessions[0].as_str(), &bundle)
+    let mut server = remote_exec_command(&rustx, &f, Some(f.sessions[0].as_str()), &bundle)
         .spawn()
         .expect("spawn staged server");
     let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
@@ -2867,17 +2948,23 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let mut child = user.command("ws://127.0.0.1:0")
                 .arg("--config").arg(config.join("rustx.toml"))
                 .arg("--token-file").arg(user.root.path().join("token"))
+                .arg("--local-execution-session").arg(user.sessions[0].as_str())
+                .arg("--local-execution-workspace").arg(user.root.path().join("a"))
                 .env("TEST_KEY", format!("fake-{identity}"))
                 .env("RUSTX_HOST_MARKER", identity).spawn().unwrap();
             let (endpoint, stderr) = websocket_startup(&mut child).await;
             startup_stderr.push(stderr);
             let client = driver::websocket(&endpoint).await;
             initialize_client(&client).await;
-            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            // Exercise writable catalog management while execution stays
+            // bound to the exact Session reserved before this Client started.
+            let MethodResult::SessionTransition { session: other, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
             }).await else { panic!("created") };
-            result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
-            let target = attach(&client, session.id, 2).await;
+            let session = user.sessions[0].clone();
+            assert_ne!(session, other.id);
+            result(&client, Method::SessionName { session_id: session.clone(), name: format!("user-{identity}-private") }).await;
+            let target = attach(&client, session, 2).await;
             processes.push(child); clients.push(client); targets.push(target);
         }
         assert_ne!(processes[0].id(), processes[1].id());
@@ -2917,7 +3004,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
             assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
             let projected = checkpoint_state(&clients[index], &targets[index]).await;
-            assert!(projected["messages"].to_string().contains(&format!("{identity}:fake-{identity}")));
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(!projected["messages"].to_string().contains(&format!("fake-{identity}")));
             assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
         }
         let mut selections = Vec::new();
@@ -2976,7 +3064,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
         let after = checkpoint_state(&recovered, &cold).await;
         assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
-        assert!(after["messages"].to_string().contains("b:fake-b"));
+        assert!(after["messages"].to_string().contains("b:unset"));
+        assert!(!after["messages"].to_string().contains("fake-b"));
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);

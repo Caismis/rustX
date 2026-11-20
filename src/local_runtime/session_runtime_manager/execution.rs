@@ -14,6 +14,9 @@
 //! exchange runs at a time and a concurrent dispatch is refused as busy,
 //! never queued.
 
+mod sibling;
+pub(crate) use sibling::launch_sibling;
+
 use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::num::NonZeroU64;
@@ -898,7 +901,7 @@ impl LocalExecutionEndpoint {
         // a lane that cannot carry the request — falls through to the
         // local fence, which is terminal either way.
         if let Some(control) = self.binding.control() {
-            let _ = control.revoke();
+            let _ = control.request_revoke();
         }
         let fenced = self.binding.fence();
         match self.connection.try_lock() {
@@ -2008,6 +2011,65 @@ fn spawn_preparation(
 /// guarantees teardown only outside locks.
 #[derive(Default)]
 pub(super) struct SessionExecutionRegistry(Mutex<HashMap<SessionId, Arc<Slot>>>);
+
+/// The explicitly local Agent entry owns a single Session and its sibling Client.
+pub(crate) struct StandaloneExecution {
+    session: SessionId,
+    registry: Arc<SessionExecutionRegistry>,
+    child: tokio::sync::Mutex<tokio::process::Child>,
+}
+
+impl StandaloneExecution {
+    pub(crate) async fn start(session: SessionId, workspace: PathBuf) -> Result<Self, String> {
+        let registry = Arc::new(SessionExecutionRegistry::default());
+        let Claim::Create(slot) = registry
+            .claim(&session, workspace, ExecutionTransport::Unix)
+            .map_err(|error| error.to_string())?
+        else {
+            unreachable!("a new registry has no published binding")
+        };
+        let session_for_endpoint = session.clone();
+        let endpoint = spawn_preparation(slot, move |workspace| {
+            LocalExecutionEndpoint::new(&session_for_endpoint, workspace)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        let child = launch_sibling(endpoint).await?;
+        Ok(Self {
+            session,
+            registry,
+            child: tokio::sync::Mutex::new(child),
+        })
+    }
+
+    pub(crate) fn scope(&self) -> SessionExecutionScope {
+        SessionExecutionScope {
+            session: self.session.clone(),
+            registry: Arc::downgrade(&self.registry),
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<(), String> {
+        let registry = self.registry.clone();
+        tokio::task::spawn_blocking(move || registry.fence_all())
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut child = self.child.lock().await;
+        let status = tokio::time::timeout(
+            rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT,
+            child.wait(),
+        )
+        .await
+        .map_err(|_| "local Execution Client did not exit after Session drain".to_owned())?
+        .map_err(|error| error.to_string())?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("local Execution Client exited with {status}"))
+        }
+    }
+}
 
 impl SessionExecutionRegistry {
     /// Claims the Session's execution slot under the registry mutex alone.

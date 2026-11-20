@@ -1124,76 +1124,33 @@ envelope.
 - No Client instance replacement, generation increment, or death-cleanup
   evidence path exists; a detached binding rejects every Hello with
   `RecoveryRequired` until #577 lands.
-- The only caller inside `rustx` today is the native composition layer:
-  `SessionRuntimeManager::reserve_local_execution` claims one
-  process-owned `LocalExecutionEndpoint` per Session (binding, listener,
-  and owner-only bootstrap in a private directory) for the trusted
-  composer. The endpoint now carries the first dispatch path: the
-  composer hands an accepted Client stream through
-  `admit_local_stream`, and `read_range` performs one bounded
-  synchronous exchange at a time — a concurrent dispatch is refused as
-  `WouldBlock` busy rather than queued, a workspace check rejects
-  paths outside the Session's reserved workspace lexically, and the
-  binding's live-connection gate authorizes every send at dispatch
-  time. `app-server --local-execution-session
-  --local-execution-workspace` is that caller: the paired flags claim the
-  Session's endpoint, launch the trusted sibling Client (sibling-of-
-  `current_exe()` only — never PATH or HOME — with an empty environment,
-  `/` cwd, sealed stdio and `kill_on_drop`), race its connect against
-  `LOCAL_HANDSHAKE_TIMEOUT`, admit it through the blocking handshake, and
-  stop+reap it inside the drain deadline; bare mode composes nothing.
-  `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
-  `fs/writeFile`, and the `command/exec` group now route
-  through this owner: the App Server resolves the request's `sessionId`
-  through the non-creating `execution_endpoint` lookup (absence is
-  `ExecutionUnavailable`, never a fallback), authorizes the admitted
-  workspace against the configured environment roots before and after
-  the exchange, and projects the returned `RangeRead`, `EntryStamp`,
-  or `DirectoryListing` — including their source-descriptor
-  `FileStamp`s — into the wire shapes. The write adds its own
-  mutation admission: the workspace grant and the caller-closed flag
-  are checked before the prepare and again inside the commit gate on
-  the retained prepared original, `WriteOutcomeUnknown` maps to
-  `ErrorData::OutcomeUnknown`, and a known-successful commit is never
-  reported as cancelled or rolled back. What is proven is the
-  authenticated binding, the retained target, the two-phase commit,
-  and the unknown-outcome contract; revoking a Client while its stage
-  is unpublished closes the physical stream so the stage is dropped —
-  what is *not* yet proven is revoking a commit already inside the
-  Client's physical publish gate, which remains control work for a
-  later change. Every other
-  filesystem method still flows through the prior environment readers
-  (delegating to `rustx-confined-fs`); their migration remains
-  outstanding. The native `read` tool's physical reads route through
-  the same boundary: `SessionRuntimeManager::load` composes each
-  Session's conversation with a `SessionExecutionScope` — a non-owning
-  route that names the Session and upgrades the claim registry weakly
-  at dispatch, never keeping an endpoint, credential, or listener
-  alive — and the tool issues its `ReadLines`/`ReadDocument` page
-  exchange through it. Admission is bounded at the endpoint: at most
-  `MAX_DATA_RECORDS_PER_CONNECTION` data exchanges — Agent pages and
-  management queries sharing one budget — may be queued or in flight,
-  an over-budget dispatch is `WouldBlock`, and an admitted dispatch
-  awaits the single writer permit on the async side under one absolute
-  `PAGE_REQUEST_TIMEOUT` deadline with biased cancellation before its
-  synchronous exchange runs to settlement on a blocking worker; a
-  `TimedOut` or malformed reply retires the connection, never a
-  partial accounting. The native `read_image` tool routes through the
-  same scope and the same bounded admission: its physical bytes are
-  assembled from at most four `ReadRange` exchanges on the one admitted
-  connection — the first chunk's stamp is pinned whole, every later
-  request names its revision, a stamped size over the 256 KiB artifact
-  transfer bound is an honest `FileTooLarge` refusal after one request,
-  and a typed `conflict` mid-fetch or a contradictory stamp can never
-  publish assembled bytes. PNG validity, the artifact commit, and the
-  model-facing image reference stay on the Agent side — the wire
-  carries only bytes, never a whole-image operation. A Session without
-  an admitted Client is an honest `Session execution unavailable` — the
-  scope is never proof of admission and there is no Server-local
-  filesystem branch behind it; standalone composition and launch-test
-  composition bind no scope at all. The model-facing projection —
-  paging, continuation, and the historical diagnostics the stable
-  `ReadError` codes map to — stays on the Agent side of the wire.
+- The App Server reserves one endpoint from the Session catalog under the
+  residency owner. The explicitly local Agent entry and the App Server's
+  local execution option launch the trusted sibling over that same paired
+  Unix protocol. They pass an empty environment and seal standard I/O.
+  Normal shutdown confirms Client-side revocation, closes the data transport
+  and reaps an owned sibling. A busy data exchange is interrupted by the
+  binding fence.
+- The trusted App Server owner can enroll a minimal Session and reserve its
+  execution binding independently of Workspace configuration and runtime
+  initialization. Use `--local-execution-workspace` without an existing
+  Session ID to enroll and launch locally. Use `--execution-workspace`
+  with `--execution-ws-listen` and `--execution-bootstrap-out` to enroll a
+  remote Session. The enrolled Workspace must be a normalized absolute path
+  under a configured environment root. The new Session is durable and
+  listable if a later Client startup fails. When resuming that setup, use
+  the existing Session ID. The credential stays in the private bootstrap.
+- App Server file operations look up the exact `sessionId` without
+  allocating a binding. Authorized browsing works after Client admission
+  even when Workspace configuration is invalid and Agent runtime attach
+  fails. A missing current binding reports `ExecutionUnavailable`.
+- Agent tools resolve the binding through a non-owning
+  `SessionExecutionScope`. The physical side performs bounded line,
+  search and document work and returns the verified projection. Artifact
+  validation, commit and model-facing references remain on the Server.
+  Data exchanges share the endpoint's finite permits and absolute deadline.
+  Malformed or lost replies retire the pair when framing or ownership
+  becomes uncertain.
 
 ## Test ownership (T01–T73) and optional O-SUM
 

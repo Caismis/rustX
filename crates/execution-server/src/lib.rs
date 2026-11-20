@@ -986,7 +986,6 @@ impl Binding {
                 let shared = Arc::new(ControlShared::new());
                 let handle = ControlHandle {
                     shared: shared.clone(),
-                    owner: self.inner.clone(),
                 };
                 match self.commit_pair(
                     &hello,
@@ -1320,9 +1319,6 @@ impl ControlShared {
 #[derive(Clone)]
 pub struct ControlHandle {
     shared: Arc<ControlShared>,
-    /// The pair's arbitration owner — `revoke` fences it directly;
-    /// never exposed.
-    owner: Arc<ConnectionOwner>,
 }
 
 impl ControlHandle {
@@ -1454,19 +1450,17 @@ impl ControlHandle {
         }
     }
 
-    /// Requests terminal revocation from the Client — its local commits
-    /// are fenced before `Revoked` is echoed — then revokes the binding
-    /// locally. The peer's acknowledgement is awaited through the same
-    /// bounded receipt path as every command; after it, the binding is
-    /// `Revoked` whatever happens next.
+    /// Requests terminal revocation from the Client. Its local commits
+    /// are fenced before `Revoked` is echoed. The connection owner
+    /// applies the local binding fence and closes the data transport.
     ///
     /// # Errors
     ///
-    /// The same error kinds as [`Self::health`]. A failed command still
-    /// revokes the binding — a revoke never quietly un-happens.
-    pub fn revoke(&self) -> io::Result<()> {
+    /// The same error kinds as [`Self::health`]. A failed request leaves
+    /// Client settlement unconfirmed, so the owner must still fence.
+    pub fn request_revoke(&self) -> io::Result<()> {
         let receipt = self.shared.enqueue(ControlRequest::Revoke);
-        let result = match receipt {
+        match receipt {
             Ok(receipt) => match receipt.recv_timeout(CONTROL_COMMAND_TIMEOUT) {
                 Ok(Ok(ControlReply::Revoked)) => Ok(()),
                 Ok(Ok(_)) => Err(io::Error::new(
@@ -1480,9 +1474,7 @@ impl ControlHandle {
                 )),
             },
             Err(error) => Err(error),
-        };
-        self.owner.fence().shutdown();
-        result
+        }
     }
 
     /// Whether the lane is still delivering commands.
@@ -1525,7 +1517,7 @@ impl ControlWorker {
             shared.arm_stop(stop);
         }
         let worker_shared = shared.clone();
-        let worker_owner = owner.clone();
+        let worker_owner = owner;
         let join = std::thread::Builder::new()
             .name("execution-control".to_owned())
             .spawn(move || {
@@ -1574,7 +1566,6 @@ impl ControlWorker {
         Self {
             handle: ControlHandle {
                 shared: worker_shared,
-                owner,
             },
             join,
         }
@@ -7482,10 +7473,7 @@ mod tests {
             panic!("control_hello builds a control record");
         };
         let shared = Arc::new(ControlShared::new());
-        let handle = ControlHandle {
-            shared,
-            owner: binding.inner.clone(),
-        };
+        let handle = ControlHandle { shared };
         let (committed_tx, committed_rx) = mpsc::channel();
         thread::scope(|scope| {
             let committer = scope.spawn(|| {

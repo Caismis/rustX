@@ -387,6 +387,7 @@ pub struct LocalConversationCore {
     /// composition. A subagent child's generation is frozen by its parent and
     /// is never prepared again, so it has none.
     resource_loader: Option<Arc<LocalRuntimeResourceLoader>>,
+    standalone_execution: Option<super::session_runtime_manager::StandaloneExecution>,
 }
 
 impl std::fmt::Debug for LocalConversationCore {
@@ -405,7 +406,17 @@ impl LocalConversationCore {
     pub async fn shutdown(
         &self,
     ) -> Result<(), crate::runtime::conversation_runtime::ShutdownError> {
-        self.runtime.shutdown().await
+        let runtime = self.runtime.shutdown().await;
+        if let Some(execution) = &self.standalone_execution {
+            let settled = execution.shutdown().await.map_err(|detail| {
+                crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail,
+                }
+            });
+            runtime.and(settled)
+        } else {
+            runtime
+        }
     }
 
     /// Composes the shared semantic runtime from validated resolved launch inputs.
@@ -488,7 +499,13 @@ impl LocalConversationCore {
             .parent()
             .expect("Conversation database has an allocation")
             .to_path_buf();
-        let core = Self::compose_from_config_started(
+        let execution = super::session_runtime_manager::StandaloneExecution::start(
+            session_id.clone(),
+            current.locations.workspace.clone(),
+        )
+        .await
+        .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let mut core = Self::compose_from_config_started(
             &current,
             dependencies,
             registry,
@@ -499,9 +516,11 @@ impl LocalConversationCore {
             allocation,
             lifecycle,
             startup,
+            Some(execution.scope()),
         )
         .await?;
         catalog.commit_planned(planned)?;
+        core.standalone_execution = Some(execution);
         Ok(core)
     }
 
@@ -531,6 +550,7 @@ impl LocalConversationCore {
             artifacts_root,
             lifecycle,
             McpInitialSubmission::default(),
+            None,
         )
         .await
     }
@@ -547,6 +567,7 @@ impl LocalConversationCore {
         artifacts_root: PathBuf,
         lifecycle: Arc<crate::runtime::local_storage::ProductController>,
         startup: McpInitialSubmission,
+        execution_scope: Option<super::session_runtime_manager::SessionExecutionScope>,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now());
         startup
@@ -570,9 +591,7 @@ impl LocalConversationCore {
             startup,
             &crate::runtime::cancellation::CancellationSignal::new(),
             &dynamic_tools,
-            // The standalone composition carries no Session execution
-            // route: only the SessionRuntimeManager load path binds one.
-            None,
+            execution_scope,
         )
         .await
     }
@@ -952,6 +971,7 @@ impl LocalConversationCore {
                     capability,
                     workflow_terminal: None,
                     resource_loader: Some(resource_loader),
+                    standalone_execution: None,
                 })
             }
             .await;

@@ -1489,6 +1489,62 @@ fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
     );
 }
 
+#[test]
+fn client_applied_control_wins_before_file_publication() {
+    use rustx_execution_protocol::{CancelDisposition, WriteExpectation};
+
+    for revoke in [false, true] {
+        let rig = rig_with(BTreeSet::from([
+            Capability::Connection,
+            Capability::ConditionalWrite,
+        ]));
+        let mut child = spawn_client(&rig);
+        let mut connection = admit_pair(&rig, &mut child);
+        let target = Path::new("missing-parent/target");
+        let prepare_count = std::cell::Cell::new(0);
+        let commit_count = std::cell::Cell::new(0);
+        let prepared = connection
+            .prepare_write(
+                target,
+                &WriteExpectation::Absent,
+                b"side effect",
+                None,
+                &|| Ok(()),
+                &|| prepare_count.set(prepare_count.get() + 1),
+            )
+            .unwrap();
+        assert_eq!(prepare_count.get(), 1);
+        assert!(prepared.original.is_none());
+        assert!(!rig.workspace_path.join("missing-parent").exists());
+
+        let control = connection.control().unwrap();
+        if revoke {
+            control.request_revoke().unwrap();
+        } else {
+            assert_eq!(
+                control.cancel_mutation(prepared.ticket).unwrap(),
+                CancelDisposition::CancelledBeforeCommit,
+            );
+        }
+        let error = connection
+            .commit_prepared(&prepared, None, &|| Ok(()), &|| {
+                commit_count.set(commit_count.get() + 1)
+            })
+            .unwrap_err();
+        assert_eq!(commit_count.get(), 1);
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert!(
+            error
+                .get_ref()
+                .is_some_and(|error| error.is::<rustx_execution_server::CommitCancelled>())
+        );
+        assert!(fs::read_dir(&rig.workspace_path).unwrap().next().is_none());
+
+        connection.close();
+        expect_success(&mut child);
+    }
+}
+
 /// The real Client edits through the same ticketed publish kernel as a
 /// write: `PrepareEdit` retains and reads the original by descriptor,
 /// applies the bounded text-edit algorithm, stages privately, and the

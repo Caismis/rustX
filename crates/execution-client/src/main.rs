@@ -472,10 +472,15 @@ fn client_control_worker(
                         receipt,
                         health,
                     };
-                    if let Ok(encoded) = encode_record(&poll) {
-                        let _ = channel.send(
-                            &encoded,
-                            Some(std::time::Instant::now() + CONTROL_FRAME_TIMEOUT),
+                    let deadline = std::time::Instant::now() + CONTROL_FRAME_TIMEOUT;
+                    if let Ok(encoded) = encode_record(&poll)
+                        && channel.send(&encoded, Some(deadline)).is_ok()
+                    {
+                        // The Server now owns orderly data close. Keep the
+                        // control socket alive until that close reaches serve,
+                        // or interrupt the data lane at the bounded deadline.
+                        let _ = worker_arbitration.wait_worker(
+                            deadline.saturating_duration_since(std::time::Instant::now()),
                         );
                     }
                     return;

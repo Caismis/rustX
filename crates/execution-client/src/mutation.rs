@@ -261,7 +261,7 @@ impl Arbitration {
         let stopped = self.stopped.lock().expect("worker stop");
         let (stopped, _) = self
             .wake
-            .wait_timeout(stopped, timeout)
+            .wait_timeout_while(stopped, timeout, |stopped| !*stopped)
             .expect("worker stop");
         *stopped
     }

@@ -7839,8 +7839,12 @@ and [EXEC-01 evidence ledger](exec-01-evidence.md).
   `--local-execution-workspace` flags make the App Server itself the
   explicit composer: it claims the endpoint, launches the trusted sibling
   Client (empty environment, sealed stdio, killed-and-reaped on failure
-  and at drain) and admits it before transport readiness; bare mode
-  launches no Client. `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
+  and at drain) and admits it before transport readiness. Bare mode
+  launches no Client. Trusted owners can enroll an empty Session from
+  an authorized Workspace path and reserve its Client before Workspace
+  configuration or Agent runtime initialization. The local Agent entry
+  also launches the sibling through the same paired protocol and retains
+  that binding for the lifetime of its selected Session. `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
   `fs/writeFile`, `fs/createDirectory`, `fs/remove` and `fs/copy` require
   `sessionId` and route through the endpoint. An uncomposed Session returns
   `ExecutionUnavailable`. The remaining Server-side watcher still uses

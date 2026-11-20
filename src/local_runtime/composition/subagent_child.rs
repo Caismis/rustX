@@ -866,6 +866,7 @@ impl LocalConversationCore {
                 capability,
                 workflow_terminal,
                 resource_loader: None,
+                standalone_execution: None,
             })
         })
         .await
