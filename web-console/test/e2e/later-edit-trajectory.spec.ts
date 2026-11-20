@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
-import { connectRemote, openEmptySession } from './shell-actions';
+import { connectRemote, expectSettled, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -130,6 +130,67 @@ test('editing the second question retains the first turn and its own version pag
     await expect(chat.getByText('Replacement complete.', { exact: true })).toBeVisible();
     await expect(chat.getByRole('button', { name: 'Switch to previous message version' })).toBeEnabled();
     await finishChatSwitch();
+    passed = true;
+  } finally {
+    await stopDogfoodPage(page, fixture, passed);
+  }
+});
+
+test('trajectory shows the inherited message pager before opening any details', async ({ page }, info) => {
+  const fixture = await startDogfood('web_inherited_message_versions');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let passed = false;
+  try {
+    const wire = await wireProbe(page);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await expect(page).toHaveTitle('rustX');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    const chat = page.getByLabel('Canonical conversation', { exact: true });
+    const user = (text: string) => chat.getByRole('article', { name: 'Your message', exact: true }).filter({ hasText: text });
+    for (const [prompt, answer, replacement, revised] of [
+      ['Original opening', 'Original answer.', 'Revised opening', 'Revised answer.'],
+      ['Original follow-up', 'Follow-up answer.', 'Revised follow-up', 'Revised follow-up answer.'],
+    ]) {
+      await page.getByRole('textbox', { name: 'Message', exact: true }).fill(prompt);
+      await page.getByRole('button', { name: 'Send', exact: true }).click();
+      await expect(chat.getByText(answer, { exact: true })).toBeVisible();
+      await expectSettled(page, wire);
+      const message = user(prompt);
+      await message.getByRole('button', { name: 'Edit message', exact: true }).click();
+      await message.getByRole('textbox').fill(replacement);
+      await chat.getByRole('button', { name: 'Retry', exact: true }).click();
+      await expect(chat.getByText(revised, { exact: true })).toBeVisible();
+      await expectSettled(page, wire);
+    }
+    const previous = { name: 'Switch to previous message version', exact: true };
+    await expect(user('Revised opening').getByRole('button', previous)).toBeEnabled();
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
+    const row = (text: string) => ledger.locator('[data-kind="user"]').filter({ hasText: text });
+    await expect(row('Revised follow-up').getByRole('button', previous)).toBeEnabled();
+    const inherited = row('Revised opening');
+    await expect(inherited.getByRole('status')).toHaveText('2/2');
+    await expect(inherited.getByRole('button', previous)).toBeEnabled();
+    expect(wire.requests.some(request => /trace(?:History)?Detail$/.test(request.method))).toBe(false);
+    await page.screenshot({ path: info.outputPath('inherited-trajectory-pagers.png') });
+    await page.reload();
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    await expect(inherited.getByRole('status')).toHaveText('2/2');
+    await inherited.getByRole('button', previous).click();
+    const original = row('Original opening');
+    await expect(original.getByRole('status')).toHaveText('1/2');
+    await expect(ledger).toContainText('Original answer.');
+    await expect(row('Revised follow-up')).toHaveCount(0);
+    await original.getByRole('button', { name: 'Switch to next message version', exact: true }).click();
+    await expect(row('Revised opening').getByRole('status')).toHaveText('2/2');
+    await expect(ledger).toContainText('Revised answer.');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(4);
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);

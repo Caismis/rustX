@@ -3,9 +3,7 @@ import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { originalTraceId, traceInspectionHead, type TraceCache } from '../../client/trace';
-import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
-import type { SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
+import { traceInspectionHead, type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { WorkflowNodeReadInspector, TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
@@ -84,30 +82,6 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
   const executions = useMemo(() => matchingCalls(records), [records]);
-  // Exact native detail locators promote a pager to the ledger row only when
-  // they resolve to one unambiguous version family; adopted batches keep their
-  // per-message pagers inside the inspector instead.
-  const detailFamilies = useMemo(() => {
-    const families = new Map<string, SessionMessageVersionFamily>();
-    if (!messageHistory) return families;
-    for (const record of records) {
-      if (record.kind !== 'user') continue;
-      const detail = cache.details[record.id];
-      if (!detail?.page || detail.stale || detail.epoch !== cache.epoch) continue;
-      if (record.message_id && messageHistory.versions.has(canonicalLocatorKey({ type: 'by_message_id', message_id: record.message_id }))) continue;
-      const page = detail.page;
-      let head: ReturnType<typeof traceInspectionHead>;
-      try { head = traceInspectionHead(page, originalTraceId(record.id)); } catch { continue; }
-      if (head?.content.type !== 'messages' || head.content.page.next_offset != null) continue;
-      const inputs = head.content.page.items.filter(message => message.ordinary_input);
-      if (inputs.length !== 1) continue;
-      const message = inputs[0]!;
-      const family = messageHistory.versions.get(canonicalLocatorKey(message.locator))
-        ?? (message.identity ? messageHistory.versions.get(canonicalLocatorKey({ type: 'by_message_id', message_id: message.identity })) : undefined);
-      if (family) families.set(record.id, family);
-    }
-    return families;
-  }, [records, cache.details, cache.epoch, messageHistory]);
   // Loaded-window ordinals, like the Turn labels: identity stays native.
   const requestNumbers = useMemo(() => new Map(records.filter(record => record.kind === 'request').map((record, index) => [record.id, index + 1])), [records]);
   const foldableTurns = useMemo(() => new Set(projection.sections.flatMap(section => section.kind === 'turn'
@@ -240,7 +214,7 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
       sourceMode: 'history',
     }, trigger);
   }, [runCanvas, workflowNodes, cache.details, cache.fields, cache.readCuts, completeWorkflowNodes]);
-  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, messageHistory, detailFamilies, workflows: workflowMap, openedWorkflows,
+  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, messageHistory, workflows: workflowMap, openedWorkflows,
     openWorkflowNodeCanvas: runCanvas ? openNodeCanvas : undefined,
     openWorkflowRootCanvas: runCanvas ? openRootCanvas : undefined,
     toggleWorkflow: id => {
@@ -272,7 +246,7 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(records, selected.id, historyCursor, cache.gaps)} onOpen={openRecord}
-      onOpenWorkflowCanvas={inspectorOpenCanvas} messageHistory={messageHistory} detailFamilies={detailFamilies} />
+      onOpenWorkflowCanvas={inspectorOpenCanvas} messageHistory={messageHistory} />
     : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
       onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;

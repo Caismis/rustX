@@ -5,10 +5,10 @@ import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } fr
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
 import type { SessionMessageVersion, SessionMessageVersionFamily, TraceRecord } from '../../../../protocol/app-server/v80';
-import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import { MessageVersionPager } from '../agent/UserMessageVersions';
 import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
+import { traceUserVersion } from './message-version';
 
 export interface TrajectoryRowActions {
   messageHistory?: {
@@ -16,8 +16,6 @@ export interface TrajectoryRowActions {
     switchVersion: (version: SessionMessageVersion) => void;
     disabled?: boolean;
   };
-  /** Exact native detail locators promote a pager only when one family is unambiguous. */
-  detailFamilies?: ReadonlyMap<string, SessionMessageVersionFamily>;
   workflows?: ReadonlyMap<string, TraceRecord>;
   openedWorkflows?: ReadonlySet<string>;
   toggleWorkflow?: (id: string) => void;
@@ -44,11 +42,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
   const item = row.item;
   const record = item?.record;
   const messageHistory = actions.messageHistory;
-  const messageFamily = item?.type === 'RecordRow' && record?.kind === 'user' && messageHistory
-    ? (record.message_id
-      ? messageHistory.versions.get(canonicalLocatorKey({ type: 'by_message_id', message_id: record.message_id }))
-      : undefined) ?? actions.detailFamilies?.get(record.id)
-    : undefined;
+  const messageFamily = item?.type === 'RecordRow' && messageHistory ? traceUserVersion(item.record, messageHistory.versions) : undefined;
   const workflow = item && item.type !== 'WorkflowNode' ? actions.workflows?.get(item.owner_record_id) : undefined;
   const workflowOpen = !!workflow && actions.openedWorkflows?.has(workflow.id) === true;
   const node = item?.type === 'WorkflowNode' ? item.workflowNode : undefined;

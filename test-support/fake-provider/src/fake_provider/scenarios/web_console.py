@@ -94,6 +94,21 @@ SCENARIOS["web_response_retry"] = web_response_retry
 SCENARIOS["web_trace_response_retry"] = lambda: web_response_retry("web_trace_response_retry", trace_tool=True)
 
 
+def web_inherited_message_versions() -> Scenario:
+    def reply(prompt: str, answer: str) -> Step:
+        return Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,)),
+                    Stream(Text(answer), Finish()))
+
+    return Scenario("web_inherited_message_versions",
+                    reply("Original opening", "Original answer."),
+                    reply("Revised opening", "Revised answer."),
+                    reply("Original follow-up", "Follow-up answer."),
+                    reply("Revised follow-up", "Revised follow-up answer."))
+
+
+SCENARIOS["web_inherited_message_versions"] = web_inherited_message_versions
+
+
 def web_user_message_versions() -> Scenario:
     """The three sends carry the selected input's native attachment projection."""
     def expected(prompt: str, *excludes: str) -> Expect:

@@ -306,15 +306,18 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   const repair = (record: TraceRecord): TraceRecord => {
     const update = repairs.get(record.id);
     if (!update) return record;
+    // Adoption lifecycle facts can attach an answering attempt. The original
+    // summary still owns the input's immutable message and content coordinates.
+    const adopted = record.kind === 'user' || record.kind === 'context';
     return retainRecord(record, {
       ...record,
+      ...(!adopted && {
+        fields: update.fields, collections: update.collections,
+        message_id: update.message_id, attachments: update.attachments, truncated: update.truncated,
+      }),
       location: update.location,
-      fields:update.fields,collections:update.collections,
       state: update.state,
       timing: update.timing,
-      message_id: update.message_id,
-      attachments: update.attachments,
-      truncated: update.truncated,
       request: record.request && update.request ? { ...record.request, ...update.request } : record.request,
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
     });

@@ -225,6 +225,21 @@ it('native lifecycle patches repair selected history alongside a disjoint live t
   expect(updated.selection).toMatchObject({ state: 'completed', timing: { ...old.timing, duration_ms: '123' } });
 });
 
+it('keeps the canonical input boundary when a lifecycle patch assigns its answering attempt', () => {
+  const input = entry(1, {
+    kind: 'user', request: null, location: {}, message_id: 'retained-input',
+    collections: [{ domain: 'messages.ledger:4.blocks', total: '1', loaded: '0', revision: '1', next_offset: '0' }],
+  });
+  const history = selectTrace(replaceTrace({ records: [input] }), input.id);
+  const location = { attempt_id: 'answering-attempt' };
+  const refreshed = refreshTrace(history, { records: [] }, [{
+    id: input.id, location, state: input.state, timing: input.timing,
+    fields: [], collections: [], attachments: [], truncated: false,
+  }], undefined, true);
+  expect(refreshed.page.records).toEqual([{ ...input, location }]);
+  expect(refreshed.selection).toEqual({ ...input, location });
+});
+
 it('paging completion repairs newly loaded interests after a terminal notification raced the page', async () => {
   server = new Server();
   server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(100)], next_cursor: 'trace:100' } });

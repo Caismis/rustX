@@ -41,6 +41,7 @@ import { useWorkflowNodeContent } from './useWorkflowNodeContent';
 import { workflowStatus } from '../agent/workflow-state';
 import { MessageVersionPager } from '../agent/UserMessageVersions';
 import type { TrajectoryRowActions } from './TrajectoryRow';
+import { traceUserVersion } from './message-version';
 
 type RecordState = 'complete' | 'running' | 'error';
 
@@ -579,8 +580,6 @@ export interface TrajectoryInspectorProps {
   detailPage?:import('../../../../protocol/app-server/v80').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   messageHistory?: TrajectoryRowActions['messageHistory'];
-  /** The unambiguous family the ledger row already pages; never repeated here. */
-  detailFamilies?: TrajectoryRowActions['detailFamilies'];
   loading?: boolean | undefined;
   stale?: boolean;
   error?: string | undefined;
@@ -608,7 +607,7 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas, messageHistory, detailFamilies }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas, messageHistory }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,originalTraceId(item.record.id)):undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
@@ -635,12 +634,14 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const previousDomain=previousSequence?`trace.records.${previousSequence}.detail.request.effective_system_prompt`:undefined;
   const native = useTraceContent(detailPage, detailReader, inspection, item, active, previousDomain);
   const resolved = native?.content;
-  // An adoption can represent several inputs. Only the ledger row's own ID has a pager there.
+  // Grouped inputs use their own canonical positions inside the inspector.
   const adoptedVersions = messageHistory && item.type === 'RecordRow' && record.kind === 'user'
+    && !traceUserVersion(record, messageHistory.versions)
     ? (resolved?.messages ?? messagesHead?.items ?? []).flatMap(message => {
+      if (!message.ordinary_input) return [];
       const key = canonicalLocatorKey(message.locator);
       const family = messageHistory.versions.get(key);
-      if (!family || family === detailFamilies?.get(record.id) || (family.current.message_id && family.current.message_id === record.message_id)) return [];
+      if (!family) return [];
       const label = message.preview?.text || message.attachments.find(file => file.name)?.name || tx('trajectory:request.no-content');
       return [<li key={key}><span className={css.contentText} title={label}>{label}</span><MessageVersionPager compact family={family}
         disabled={messageHistory.disabled} onSwitch={messageHistory.switchVersion}/></li>];
