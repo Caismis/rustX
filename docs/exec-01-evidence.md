@@ -22,7 +22,7 @@ The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platfor
 | --- | --- | --- | --- |
 | T01 | Server-only work without any execution dependency | `standalone_server_reads_cold_sessions_without_workspace_or_helpers`, `standalone_server_commits_a_model_turn_without_a_client_or_helpers` | Linux process tests passed. The isolated Server lists two cold Sessions with missing Workspaces. A separate isolated launch submits exactly one loopback model request, settles its canonical answer and leaves the Workspace empty. T31 separately exercises overflow without Client storage |
 | T02 | Separate filesystem views for read/write/Bash through product | `explicit_composition_reads_from_client_mount_namespace`, `filesystem_operations_use_the_private_mount_view`, `background_live_output_is_readable_while_running_and_reused_at_settlement` | Linux mount proofs cover the App Server query/Write/argv path and native Agent Read/Write/Bash/Grep. The writable overlay exercises Client directory creation, file copy, recursive removal, watch delivery, Git baseline, first-mutation capture and comparison release while the Server sees the original empty mount point. Separate macOS gate applies |
-| T03 | Exactly one Session dispatch owner | `Binding::connect`, `concurrent_hellos_commit_exactly_one_live_connection`; `session_runtime_manager::execution` claim registry and endpoint dispatch | Partial; member unit at `b75d78c75` tests one Binding, not competing Session reservations; `5fddad74f` proves one endpoint claim per Session with dropped-waiter safety; `the_endpoint_dispatches_one_bounded_read_for_its_own_session` proves the stored connection is the sole serialized dispatch owner — `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` dispatch today |
+| T03 | Exactly one Session dispatch owner | `concurrent_claims_publish_one_endpoint_that_every_later_claim_shares`, `concurrent_hellos_commit_exactly_one_live_connection`, `a_dropped_caller_never_strands_the_claim` | The barrier-controlled Session competitors publish one shared endpoint, and the competing Hellos produce one live connection. The endpoint dispatch and revocation tests prove the stored Client is the sole serialized dispatch owner |
 | T04 | Root, child and Workflow route to exact Session | `SessionExecutionScope`, delegated child IPC, `delegated_write_preserves_the_commit_frame_and_unknown_cut`, `shipped_repair_*` | Root and native Workflow use the exact Session route. A real Subagent relays files and processes through its parent and shares that authenticated binding. The three shipped Workflow repair cases subsequently passed with the provider emulator in the relay slice. Combined private-mount coverage across roles remains open |
 | T05 | Cancel before dispatch/model/START causes zero corresponding side effects | `cancellation_before_model_turn_start_never_starts_the_request`, `revocation_before_native_start_never_executes_an_independent_command`, `client_applied_control_wins_before_file_publication`, `agent_bash_has_separate_registration_and_a_client_owned_start_gate` | The deterministic model test asserts zero requests, Request Snapshots and request-start facts, and one cancelled terminal. The App Server and Client-held gates prove zero process markers and zero published files at the respective crossings. Child-specific combined evidence remains open |
 | T06 | Parallel results commit in call order, unique terminal is last | `client_bash_reversed_settlement_keeps_canonical_order`, `shipped_repair_*` | Two parallel native Bash operations on one real Client finish in reverse physical order. The test proves one START per operation, two model requests, tool results in call order, and one final terminal. The shipped Workflow fixtures cover separately admitted child writers followed by physical check commands |
@@ -30,7 +30,7 @@ The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platfor
 | T18 | Authenticate the binding before Workspace configuration | `execution_enrollment_precedes_client_and_workspace_configuration_readiness`, production launcher enrollment | Passed on Linux for trusted remote enrollment. The durable Session is inspectable before Client startup. Unbound browsing fails, the authenticated Client browses its Workspace, and malformed Workspace configuration refuses Agent attach without disabling history or management |
 | T24 | Independently built and launched Server and Client, isolated credentials/dependencies | T01 standalone Server, Client-only build and paired admission, `explicit_composition_launches_and_reaps_the_sibling_client`, both normal Cargo dependency graphs | Linux Server-only and Client-only builds passed. Only the staged Server executable is present in the cold catalog and model tests. The admitted sibling uses sealed stdio and an empty inherited environment. The Client's production graph excludes the Agent Server, model adapters and canonical storage. The Server's Client crate dependency is test-only. Native macOS and installed-package proof remain open |
 | T26 | Client revocation wins before file commit or START | `client_applied_control_wins_before_file_publication`, `a_revoked_binding_after_prepare_sends_no_commit_frame`, `agent_bash_has_separate_registration_and_a_client_owned_start_gate`, Client mutation gate tests | The real paired Client proves zero effects before file publication for cancel and binding revoke. Both cases send exactly one prepare and one commit frame, return typed `CommitCancelled`, and leave the Workspace empty. Real Bash cancellation before START produces no business marker. Mid-crossing disposition is tested at the Client mutation gate |
-| T28 | Reject wrong Session, credential, instance, generation and duplicate | `wrong_hello_fields_never_consume_a_reservation`, `credential_replay_after_eof_never_reconnects`; `session_runtime_manager::execution` claim registry | Partial; member unit + bootstrap; `5fddad74f` proves distinct per-Session binding material and delete/drain revocation; `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` Session routing is live — an uncomposed Session returns `ExecutionUnavailable` and never serves or mutates another Session's bytes |
+| T28 | Reject wrong Session, credential, instance, generation and duplicate | `wrong_hello_fields_never_consume_a_reservation`, `credential_replay_after_eof_never_reconnects`, `two_sessions_sharing_one_workspace_hold_distinct_binding_material` | The negative Hello matrix leaves the reservation untouched. A second live claim is refused. The real Client cannot replay a credential after EOF. An unbound Session returns `ExecutionUnavailable` for queries and mutations even when another Session uses the same path. Rebinding and recovery remain #577 |
 | T29 | UI command ownership distinct from accepted Agent execution | `detach_during_data_and_control_backpressure`, `detached_operations_release_without_touching_siblings`, PTY and drain suite | Combined two-process Linux test passed. It asserts one register, one START, a correlated `CancellationRequested`, a physical `Cancelled` snapshot, the original five ordered stdout bytes, zero stderr, exact release cursor, one `OutputReleased` and Client exit. A distinct UI operation survives detach in the sibling scenario. Later transport recovery remains #577 |
 | T31 | No Client: truthful truncation, zero Server spill/start/wait | `ToolOutputCapture::PreviewOnly` in `tools::output`, `ManagedOutputContinuation::Unavailable` in `tools::mcp::result`, `tools::mcp::result::tests`, `mcp::unix_tests::foreground_mcp_result_normalization_is_collective_and_complete` | Partial; foreground MCP overflow now settles a typed `Unavailable` with accurate `original_bytes` and no locator — `foreground_mcp_overflow_never_attempts_storage_and_is_unavailable` and `foreground_mcp_overflow_never_writes_storage` prove zero save attempts against forced-open/write failure fixtures, the `assert_unavailable_no_save` helper asserts zero `r-`/`e-` files and no Read/Grep promise, and the real rmcp stdio boundary test verifies the same through a staged peer. A remote `is_error` keeps `Failed` at overflow (`foreground_mcp_overflow_keeps_a_reported_remote_error`); multi-fragment crossings count once (`foreground_mcp_text_image_text_overflow_preserves_order`). Structured JSON renders through a bounded streaming writer, and text blocks retain only bounded head/tail previews — no speculative complete-output retention. Still open: a counter-based whole-Server no-Client fixture (Client-launch attempt counting beyond this path) and the optional Client save binding itself; background MCP capture still needs its own evidence. Session-bound native Bash stores its continuation on the Client |
 | T32 | Complete normalized import including displayed prefix | `protocol::save` `SaveSelection` + `SaveCapture` reference, decode boundary `decode_chunk`, and `save-envelopes.json` | Partial; contract and executable fixtures only; no storage, no Host import |
@@ -165,10 +165,25 @@ real Client bound to the same durable Session used by the recovered turn.
 
 Trusted enrollment and authorized inspection do not run Workspace
 configuration, discover Skills or wait for MCP or uv. Unavailable or invalid
-Workspace configuration remains an attach failure. The ordinary authored
-configuration capture still reads Workspace config and resource inputs in
-the Server's filesystem view. Neither that capture nor its authoring and
-reload paths has a Client-view implementation in this revision.
+Workspace configuration remains an attach failure. Fresh App Server loads
+and explicit reconciliation of a reserved Session read the authenticated
+Client's `rustx.toml`, then parse, validate and publish on the Server. The
+source capture proves the Workspace root and rechecks the stamped document.
+An unconnected reservation never uses the same Server-side path as a source.
+The path-keyed authoring and Session-creation caches remain separate from
+bound Session captures. Workspace resource discovery and native automatic
+source watching still consult the Server filesystem, including guidance,
+roles, Workflows, Skills and MCP/Managed Python catalogs. Server-invisible
+Workspace resource trees and general authoring still need a Client-backed
+source.
+
+The real WebSocket enrollment regression proves browsing and Agent attach
+both refuse before the Client is admitted, even with a valid document in
+the Server filesystem. With the Client admitted, browsing succeeds and a
+malformed document still prevents attach. The Linux mount proof observes
+the Client-only 34,567 ms hard deadline on cold attach and the revised
+45,678 ms value after explicit reconciliation. The invalid Server decoy
+stays byte-for-byte unchanged.
 
 ## WorkspaceChanges physical observation
 
@@ -302,6 +317,27 @@ Client peak of 8,528 KiB. Grep took one RPC with 149 bytes sent and 132 bytes
 returned, a 21.34 ms median, and a Client peak of 9,392 KiB. The probe peer
 reached 18,764 KiB and 18,808 KiB respectively. It is a measuring peer with
 different runtime dependencies from the product Server.
+
+The same Linux release workload was repeated at
+`ec9342c49692893eca14bba7c1b9d3ec32fae10f`. Loaded peak RSS was 46,696
+KiB on the Server and 9,352 KiB on the Client. The Server-only process
+reached 33,596 KiB. Server-only initialization, paired Server
+initialization and Client admission took 16.74, 20.34 and 30.32 ms.
+
+| Load | Median completion | Throughput | Data RPCs, total | Server to Client bytes | Client to Server bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 20 sequential create-only writes, 64 KiB each | 4.75 ms | 11.17 MiB/s | 40 | 1,750,031 | 4,822 |
+| 20 sequential reads, 64 KiB each | 1.69 ms | 35.27 MiB/s | 20 | 1,980 | 1,752,180 |
+| 5 UI argv commands, emit 1 MiB, retain 64 KiB | 68.58 ms | 14.51 MiB/s | 50 | 15,220 | 451,625 |
+| 5 UI argv commands, emit 8 MiB, retain 64 KiB | 69.07 ms | 97.63 MiB/s | 55 | 16,620 | 452,965 |
+
+The journal again released at exactly 65,536 bytes for every command. The
+wire data high-water mark was one in-flight record. The independent
+67,108,877-byte probe again used one data RPC per query. Line selection
+transferred 99/265 bytes, with a 56.76 ms median and 8,456 KiB peak Client
+RSS. Grep transferred 149/132 bytes, with a 21.51 ms median and 9,704 KiB
+peak Client RSS. Each probe ran three times. These are descriptive runs
+under different host load and do not estimate a causal performance delta.
 
 The repository environment benchmark also ran successfully with the tree
 mutation candidate. Each workload explicitly composes its measured Session,
@@ -456,6 +492,21 @@ reuses the two actual upload receipts returned by the fork after starting
 an authorized Client for the destination Session and observes exactly four
 mock-provider requests. New exact-head FULL and Merge verification and a
 native macOS run are still required.
+
+The [FULL run on `142be9864d440bd5770794861a8da0fc6d913086`](https://github.com/Caismis/rustX/actions/runs/44751385601)
+was still in progress at the 30-minute checkpoint. Local exact-head
+format, check, strict Clippy, generated protocol, TypeScript and 15 Rust
+doctests passed. The prepared workspace test stopped after 6,152 passed,
+two failed and 27 ignored in the Server library. The Bash deadline case
+used an unbound fixture. Its corrected test waits for the real Bash PID
+before advancing the manual clock, observes exactly two model requests,
+confirms the process exited and keeps the single terminal assertion. The
+other failure was unavailable Managed Python capability preparation. Its
+unchanged isolated rerun passed in 66.27 seconds.
+The Linux Boundary job then reached the external Tools target. Its two
+failures were Skill/Bash fixtures without a Client. Both pass with the
+existing real Session-bound fixture, using their original content and
+success assertions.
 
 ## Command cancellation, detach, and release (UI-owned `command/exec`)
 

@@ -1161,6 +1161,16 @@ envelope.
   allocating a binding. Authorized browsing works after Client admission
   even when Workspace configuration is invalid and Agent runtime attach
   fails. A missing current binding reports `ExecutionUnavailable`.
+- Fresh App Server configuration capture for a reserved Session reads
+  `rustx.toml` through the authenticated Client. The Server uses the proven
+  root identity, a one-MiB whole-document limit, a five-second wire budget
+  per capture, and the same stamped `ReadRange` chunks as other files. It
+  verifies the document again before admission. Client-proven absence is
+  distinct from a refused or incomplete read. The Server still parses and
+  authorizes the document, combines it with Server-owned User policy, and
+  applies native configuration units. Explicit reconciliation of a bound
+  Session uses the same source and never populates the path-keyed
+  Session-creation catalog with the Client's configuration.
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
   search and document work and returns the verified projection. Artifact
