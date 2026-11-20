@@ -381,17 +381,19 @@ SCENARIOS["web_reading_scale_1000"] = web_reading_scale_1000
 def web_file_delivery() -> Scenario:
     """Ordinary Write/Bash/present Tool settlement; the browser owns no file facts."""
     markdown = '# Delivered report\r\n\r\n**Original** Unicode bytes.\r\n\r\n<script>globalThis.PWNED=1</script>\r\n\r\n![blocked](https://example.org/tracker)\r\n'
-    script = """import base64,json,pathlib
-p=pathlib.Path('.')
-(p/'plain 空格.txt').write_bytes(b'plain\\r\\noriginal\\r\\n')
-(p/'source.rs').write_bytes(b'fn main() { println!(\"native\"); }\\n')
-(p/'pixel.png').write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='))
-(p/'data.bin').write_bytes(bytes([0,1,255,128,10]))
-(p/'large.txt').write_bytes(b'x'*(300*1024))
-for name in ('a','b'):
- (p/name).mkdir()
- (p/name/'report.md').write_text('Ambiguous basename')
-print(json.dumps({'deliveries':[{'path':'a/report.md'}]}))
+    # File delivery exercises Workspace Bash while Python readiness is independent.
+    script = r"""set -eu
+printf 'plain\r\noriginal\r\n' > 'plain 空格.txt'
+printf '%s\n' 'fn main() { println!("native"); }' > source.rs
+base64 -d > pixel.png <<'PNG'
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=
+PNG
+printf '\000\001\377\200\012' > data.bin
+head -c 307200 /dev/zero | tr '\0' x > large.txt
+mkdir a b
+printf '%s' 'Ambiguous basename' > a/report.md
+printf '%s' 'Ambiguous basename' > b/report.md
+printf '%s\n' '{"deliveries": [{"path": "a/report.md"}]}'
 """
     files = [{'path': name, 'description': description} for name, description in [
         ('报告 file.md', 'Explicit Markdown report'), ('plain 空格.txt', 'Created by Bash'),
@@ -408,7 +410,7 @@ print(json.dumps({'deliveries':[{'path':'a/report.md'}]}))
             'elevation_reason': 'integration fixture escalates write under Plan mode',
         })),
         Step(expected, tool('delivery-bash', 'bash', {
-            'command': "python3 - <<'PY'\n" + script + 'PY\n',
+            'command': script,
             'execution_mode': 'foreground',
             'elevation_reason': 'integration fixture escalates mutating bash under Plan mode',
         })),
