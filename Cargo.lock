@@ -4803,6 +4803,7 @@ dependencies = [
  "grep-searcher",
  "libc",
  "nix",
+ "notify",
  "rustix",
  "rustx-confined-fs",
  "rustx-document-reader",

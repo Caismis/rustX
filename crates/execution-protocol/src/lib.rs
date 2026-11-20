@@ -22,6 +22,7 @@ use thiserror::Error;
 pub mod process;
 pub mod save;
 pub mod transport;
+pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
@@ -438,6 +439,8 @@ pub enum Capability {
     DirectoryMetadata,
     /// Descriptor-relative directory creation, tree removal and tree copy.
     TreeMutations,
+    /// Non-recursive native workspace watch hints.
+    FileWatches,
     /// The implemented conditional write: one staged `PrepareWrite` plus a
     /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
     /// private commit kernel under the binding workspace.
@@ -874,6 +877,11 @@ pub enum ControlRequest {
     /// commit — a commit that has not crossed never publishes — and
     /// acknowledges with `Revoked`.
     Revoke,
+    /// Calls for physical native observer cleanup.
+    StopWatch {
+        /// The exact registered watch incarnation.
+        id: crate::watch::WatchId,
+    },
     /// Cancels one live process operation: a `CancelProcess` delivered
     /// before physical START must admit zero spawn; a later one awaits
     /// actual physical containment before the honest disposition.
@@ -933,6 +941,13 @@ pub enum ControlReply {
     },
     /// The `Revoke` was arbitrated: local commits are fenced.
     Revoked,
+    /// The observer stop disposition.
+    WatchStopped {
+        /// The exact requested watch incarnation.
+        id: crate::watch::WatchId,
+        /// Physical closure was observed or the watch no longer exists.
+        settled: bool,
+    },
     /// The `CancelProcess` outcome for the exact operation key.
     ProcessCancelled {
         /// The exact supplied operation key.
@@ -1063,6 +1078,8 @@ pub enum ClientRequest {
     },
     /// A bounded mutation beneath the admitted workspace.
     MutateTree(TreeMutation),
+    /// Register a native observer or receive its bounded coalesced hints.
+    Watch(crate::watch::WatchRequest),
     /// First phase of one conditional write: retain the exact named target
     /// under the binding workspace, verify the expected original, and stage
     /// the payload privately. Nothing named by `relative_path` mutates until
@@ -1324,6 +1341,8 @@ pub enum ClientReply {
     TreeMutated,
     /// A change crossed and the tree operation could not settle successfully.
     TreeOutcomeUnknown,
+    /// Registration receipt or coalesced hints from one native observer.
+    Watch(crate::watch::WatchReply),
     /// The verified logical-text page the Client physically scanned.
     Lines {
         /// The source-descriptor stamp of the file the page came from.

@@ -145,6 +145,7 @@ export type Request1 =
   | {
       method: 'fs/watch';
       params: {
+        sessionId: SessionId;
         watchId: string;
         path: string;
       };

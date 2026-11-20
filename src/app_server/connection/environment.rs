@@ -10,7 +10,8 @@ type ExecutionEndpoint = crate::local_runtime::session_runtime_manager::LocalExe
 pub(in crate::app_server) fn error(error: std::io::Error) -> RpcError {
     let kind = error.kind();
     if let Some(inner) = error.into_inner()
-        && inner.is::<rustx_execution_server::WriteOutcomeUnknown>()
+        && (inner.is::<rustx_execution_server::WriteOutcomeUnknown>()
+            || inner.is::<rustx_execution_server::WatchOutcomeUnknown>())
     {
         return domain(ErrorData::OutcomeUnknown);
     }
@@ -117,12 +118,27 @@ impl AppServerConnection {
                 self.commands.terminate(&process_id)?;
                 Ok(MethodResult::EnvironmentAccepted {})
             }
-            Method::FsWatch { watch_id, path } => {
+            Method::FsWatch {
+                session_id,
+                watch_id,
+                path,
+            } => {
+                let manager = self.host.manager();
+                let endpoint = manager
+                    .execution_endpoint(&session_id)
+                    .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+                let root_grant = manager
+                    .environment
+                    .retirement(endpoint.workspace())
+                    .ok_or_else(|| domain(ErrorData::EnvironmentUnauthorized))?;
                 self.watches
                     .watch(
                         watch_id,
-                        path,
-                        self.host.manager().environment.clone(),
+                        super::super::filesystem::WatchSource {
+                            endpoint,
+                            root_grant,
+                            path: path.into(),
+                        },
                         self.service_events.clone(),
                         self.host.file_observers(),
                         owner,
@@ -131,7 +147,7 @@ impl AppServerConnection {
                 Ok(MethodResult::EnvironmentAccepted {})
             }
             Method::FsUnwatch { watch_id } => {
-                self.watches.unwatch(&watch_id)?;
+                self.watches.unwatch(&watch_id).await?;
                 Ok(MethodResult::EnvironmentAccepted {})
             }
             Method::FsReadFile {

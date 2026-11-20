@@ -57,6 +57,7 @@ mod process;
 mod search;
 mod terminal;
 mod tree;
+mod watch;
 
 // The document decoder's policy constants and the wire's must be the
 // same values — the decoder crate cannot depend on the protocol crate,
@@ -195,6 +196,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::ReadRange,
             Capability::DirectoryMetadata,
             Capability::TreeMutations,
+            Capability::FileWatches,
             Capability::ConditionalWrite,
             Capability::ConditionalEdit,
             Capability::ReadLines,
@@ -222,10 +224,19 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     // endpoint carrying the pairing challenge — no single-channel
     // fallback exists. Both lanes share the one armed deadline.
     let control_channel = pair_control(&endpoint, deadline, &hello, success.challenge, ca_file)?;
+    serve_session(channel, control_channel, &root, success.admission)
+}
+
+fn serve_session(
+    mut channel: RecordChannel,
+    control_channel: RecordChannel,
+    root: &PackageDirectory,
+    admission: rustx_execution_protocol::Admission,
+) -> Result<(), String> {
+    let workspace = admission.workspace.clone();
     let arbitration = std::sync::Arc::new(mutation::Arbitration::new());
     let operations = std::sync::Arc::new(
-        process::Operations::new(success.admission.clone())
-            .map_err(|error| handshake_error(&error))?,
+        process::Operations::new(admission).map_err(|error| handshake_error(&error))?,
     );
     // The control worker holds a shutdown duplicate of the data lane:
     // its exit — protocol violation, EOF, a peer that stops answering —
@@ -234,19 +245,31 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     let data_shutdown = channel
         .shutdown_handle()
         .map_err(|error| handshake_error(&error))?;
+    let watches = std::sync::Arc::new(watch::Watches::new());
     let control = client_control_worker(
         control_channel,
         arbitration.clone(),
         data_shutdown,
         operations.clone(),
+        watches.clone(),
     );
-    let result = serve(&mut channel, &root, &arbitration, &operations);
+    let result = serve(
+        &mut channel,
+        root,
+        &arbitration,
+        &operations,
+        &workspace,
+        &watches,
+    );
     // Teardown: stop the worker first so its lane ends cleanly, then
     // shut the data lane — never exit with a lane still live.
     control.stop();
     channel.shutdown();
     // An unresolved worker is never reported as a clean exit.
     let drained = operations.shutdown();
+    if !watches.shutdown() {
+        return Err(String::from("unresolved watch cleanup"));
+    }
     match (result, drained) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), _) => Err(error),
@@ -375,6 +398,7 @@ fn client_control_worker(
     arbitration: std::sync::Arc<mutation::Arbitration>,
     data_shutdown: rustx_execution_transport::ChannelShutdown,
     operations: std::sync::Arc<process::Operations>,
+    watches: std::sync::Arc<watch::Watches>,
 ) -> ClientControlWorker {
     /// The idle poll period: commands wait at most this for the next
     /// turn, far inside the Server's command receipt budget.
@@ -450,11 +474,15 @@ fn client_control_worker(
                         // containment actually settled — bounded so the
                         // Server's own revoke budget still fences.
                         operations.revoke();
-                        if operations.settle(REVOKE_SETTLE_BUDGET) != 0 {
+                        if !watches.shutdown() || operations.settle(REVOKE_SETTLE_BUDGET) != 0 {
                             return;
                         }
                         ControlReply::Revoked
                     }
+                    ControlRequest::StopWatch { id } => ControlReply::WatchStopped {
+                        id,
+                        settled: watches.stop(id),
+                    },
                     ControlRequest::CancelProcess { ref key } => ControlReply::ProcessCancelled {
                         key: key.clone(),
                         disposition: operations.cancel(key),
@@ -610,6 +638,8 @@ fn serve(
     root: &PackageDirectory,
     arbitration: &std::sync::Arc<mutation::Arbitration>,
     operations: &std::sync::Arc<process::Operations>,
+    workspace: &Path,
+    watches: &watch::Watches,
 ) -> Result<(), String> {
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
@@ -684,6 +714,9 @@ fn serve(
             ),
             ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
             ClientRequest::MutateTree(request) => tree::mutate(root, arbitration, &request),
+            ClientRequest::Watch(request) => {
+                ClientReply::Watch(watches.dispatch(root, workspace, request))
+            }
             ClientRequest::ReadDirectory {
                 relative_path,
                 offset,

@@ -35180,6 +35180,9 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "watchId": {
                   "type": "string"
                 },
@@ -35189,6 +35192,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "watchId",
                 "path"
               ]

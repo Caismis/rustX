@@ -5128,6 +5128,7 @@ export const fixtures = [
     "id": "environment-11",
     "method": "fs/watch",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "watchId": "watch-fixture",
       "path": "/workspace"
     }

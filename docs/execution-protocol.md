@@ -890,6 +890,22 @@ Partial changes or a failed post-publication check answer
 `TreeOutcomeUnknown`. A lost or invalid receipt after admission also
 returns `OutcomeUnknown` to the App Server caller and retires the pair.
 
+### Session-bound file observers
+
+With `FileWatches`, `Watch::Register` retains a file or directory descriptor
+under the authenticated Session's confined Workspace. Registration has a
+Server-created incarnation and checks the native source identity before
+and after attaching. `Watch::Poll` returns a coalesced, source-relative
+delta of at most 16 paths and 16 KiB of escaped path bytes. Each Client
+binding holds at most 32 observers. An unavailable or changed identity
+retires the observer with an empty resync hint.
+
+`StopWatch` uses the independent control lane. Its exact keyed receipt
+distinguishes physical cleanup from an unknown result. A detached or
+revoked Client stops its native observers before reporting clean exit.
+The App Server retains connection-local notification ownership and fences
+stale hints from a prior incarnation when a UI ID is reused.
+
 ### Authenticated connection is not readiness (frozen)
 
 `Admission` proves authenticated connection ownership only. It does not

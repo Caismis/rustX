@@ -1020,6 +1020,8 @@ fn a_foreign_protocol_version_never_connects() {
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 #[allow(clippy::too_many_lines)] // One real namespace owns every asserted side effect.
 fn filesystem_operations_use_the_private_mount_view() {
+    use rustx_execution_protocol::watch::WatchId;
+
     assert!(
         std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some(),
         "opt-in proof only: run test-support/prove_execution_mount_view.sh"
@@ -1040,6 +1042,7 @@ fn filesystem_operations_use_the_private_mount_view() {
         Capability::Connection,
         Capability::ReadRange,
         Capability::TreeMutations,
+        Capability::FileWatches,
     ]));
     // The marker lives only in the physical directory that the client's
     // private mount view substitutes for the workspace path.
@@ -1116,6 +1119,30 @@ fn filesystem_operations_use_the_private_mount_view() {
     );
     assert!(!rig.workspace_path.join("new").exists());
 
+    let id = WatchId::new(std::num::NonZeroU64::MIN);
+    let source = Path::new("new/nested");
+    connection.register_watch(id, source, || Ok(())).unwrap();
+    fs::write(physical.1.join("new/nested/client-only"), b"hint").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let change = connection.poll_watch(id, source).unwrap();
+        assert_eq!(change.id, id);
+        assert!(!change.retired);
+        if change.changed_paths.contains(&source.join("client-only")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the Client's private mount observer did not see the change"
+        );
+        std::thread::yield_now();
+    }
+    assert!(!rig.workspace_path.join("new/nested/client-only").exists());
+    rig.binding.control().unwrap().stop_watch(id).unwrap();
+    assert_eq!(
+        connection.poll_watch(id, source).unwrap_err().kind(),
+        io::ErrorKind::NotFound,
+    );
     // Remove a symlink without following its target. An absent leaf succeeds
     // under the explicit force contract.
     std::os::unix::fs::symlink("../../marker", physical.1.join("new/nested/link")).unwrap();

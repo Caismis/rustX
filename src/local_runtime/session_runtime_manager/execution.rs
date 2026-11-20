@@ -27,6 +27,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError, Weak};
 use std::time::Instant;
 
+use rustx_execution_protocol::watch::{WatchChange, WatchId};
 use rustx_execution_protocol::{
     Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, FileStamp, Generation,
     MAX_DATA_RECORDS_PER_CONNECTION, Reject, TreeMutation, is_normalized_absolute_path,
@@ -595,6 +596,34 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    pub(crate) fn register_watch(
+        &self,
+        id: WatchId,
+        path: &Path,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<PathBuf> {
+        self.with_connection(None, false, |connection| {
+            let relative = workspace_entry(&connection.admission().workspace, path)?;
+            connection.register_watch(id, &relative, authorize)?;
+            Ok(relative)
+        })
+    }
+
+    pub(crate) fn poll_watch(&self, id: WatchId, path: &Path) -> io::Result<WatchChange> {
+        self.with_connection(None, false, |connection| connection.poll_watch(id, path))
+    }
+
+    pub(crate) fn stop_watch(&self, id: WatchId) -> io::Result<()> {
+        let result = self
+            .control()
+            .ok_or(io::ErrorKind::NotConnected)
+            .and_then(|control| control.stop_watch(id).map_err(|error| error.kind()));
+        if result.is_err() {
+            self.cut_pair();
+        }
+        result.map_err(Into::into)
+    }
+
     /// One bounded logical-text page of a whitelisted document through
     /// the admitted Client — the same complete-line projection the Read
     /// tool owns, decoded by the shared parser policy — plus the verified
@@ -876,6 +905,14 @@ impl LocalExecutionEndpoint {
             ));
         };
         dispatch(connection)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_data_exchange_for_test(&self, hold: impl FnOnce()) -> io::Result<()> {
+        self.with_connection(None, true, |_| {
+            hold();
+            Ok(())
+        })
     }
 
     /// The shared authority binding behind this endpoint — test-facing:
@@ -2790,6 +2827,9 @@ mod tests {
                     disposition: rustx_execution_protocol::CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::StopWatch { id } => {
+                    ControlReply::WatchStopped { id, settled: true }
+                }
                 ControlRequest::CancelProcess { key } => ControlReply::ProcessCancelled {
                     key,
                     disposition: rustx_execution_protocol::ProcessCancelDisposition::Unknown,
@@ -3244,6 +3284,9 @@ mod tests {
                     disposition: rustx_execution_protocol::CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::StopWatch { id } => {
+                    ControlReply::WatchStopped { id, settled: true }
+                }
             });
         }
     }

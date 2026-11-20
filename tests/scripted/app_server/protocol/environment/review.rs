@@ -205,12 +205,10 @@ pub(crate) async fn output_after_cap() {
 }
 
 pub(crate) async fn watch_recheck() {
-    use futures_util::FutureExt as _;
     let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
-    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
-    // fs/readFile dispatches through Session A's admitted Execution Client.
     let mut execution = fixture.start_execution(0).await;
     let session_id = fixture.sessions[0].id.clone();
     let directory = fixture.workspaces[0].join("review-watch");
@@ -225,12 +223,14 @@ pub(crate) async fn watch_recheck() {
             &connection,
             1,
             Method::FsWatch {
+                session_id: session_id.clone(),
                 watch_id: id.into(),
                 path: source.display().to_string(),
             },
         )
         .await;
     }
+    assert_eq!(capacity.available_permits(), 30);
     let MethodResult::FileMetadata { metadata } = call(
         &connection,
         2,
@@ -243,92 +243,36 @@ pub(crate) async fn watch_recheck() {
     else {
         panic!("stat")
     };
-    let mut checks = Vec::new();
-    for source in [&path, &directory] {
-        let (observed, checked) = tokio::sync::oneshot::channel();
-        crate::app_server::filesystem::observe_recheck(source.clone(), observed);
-        checks.push(checked);
-    }
-    // Local watch I/O exclusion is held on an independent task while the
-    // real Client completes the atomic fs/writeFile: every native
-    // callback's identity check must observe WouldBlock inside the held
-    // window — the Client mutation never needs the Server's I/O gate.
-    let (held, locked) = tokio::sync::oneshot::channel();
-    let (release, unlocked) = std::sync::mpsc::channel();
-    let native = fixture.manager.environment.clone();
-    let source = directory.clone();
-    let lock = tokio::task::spawn_blocking(move || {
-        native.with_paths(&[source.to_str().unwrap()], |_| {
-            held.send(()).unwrap();
-            unlocked.recv().unwrap();
-            Ok(())
-        })
-    });
-    bounded(locked).await.unwrap();
-    let worker = connection.clone();
-    let target = path.display().to_string();
-    let write_session = session_id.clone();
-    let write = tokio::spawn(async move {
-        call(
-            &worker,
-            3,
-            Method::FsWriteFile {
-                session_id: write_session,
-                path: target,
-                data_base64: "YWZ0ZXI=".into(),
-                expected_revision: Some(metadata.revision),
-            },
-        )
-        .await
-    });
-    // The Client write completed while the exclusion held, and both real
-    // native callbacks hit WouldBlock before the lock is released.
-    for check in checks {
-        bounded(check).await.unwrap();
-    }
-    assert_eq!(capacity.available_permits(), 30);
-    bounded(write).await.unwrap();
-    release.send(()).unwrap();
-    bounded(lock).await.unwrap().unwrap();
+    let retired = connection.watch_retirement_for_test("file");
+    call(
+        &connection,
+        3,
+        Method::FsWriteFile {
+            session_id: session_id.clone(),
+            path: path.display().to_string(),
+            data_base64: "YWZ0ZXI=".into(),
+            expected_revision: Some(metadata.revision),
+        },
+    )
+    .await;
+    bounded(retired).await.unwrap();
     loop {
         if let NotificationMethod::FsChanged(change) =
             bounded(connection.next_notification()).await.notification
         {
-            if change.watch_id == "file" && change.retired {
+            if change.watch_id == "file" {
+                assert!(change.retired && change.resync_required);
+                assert_eq!(change.changed_paths, [] as [std::path::PathBuf; 0]);
                 break;
             }
-            assert!(
-                !change.retired,
-                "unchanged directory identity must remain live"
-            );
+            assert!(!change.retired, "the directory identity is unchanged");
         }
     }
-    let returned = bounded(capacity.acquire_many(31)).await.unwrap();
-    drop(returned);
-    // A native event for this unchanged child proves the same directory
-    // observer handles a new mutation after the file observer has settled.
-    // Hold I/O so its identity check must publish a pathless resync hint.
-    // Observe the event before its paths are discarded, so an earlier queued
-    // resync cannot stand in for post-retirement native observation.
-    let (held, locked) = tokio::sync::oneshot::channel();
-    let (release, unlocked) = std::sync::mpsc::channel();
-    let native = fixture.manager.environment.clone();
-    let source = directory.clone();
-    let lock = tokio::task::spawn_blocking(move || {
-        native.with_paths(&[source.to_str().unwrap()], |_| {
-            held.send(()).unwrap();
-            unlocked.recv().unwrap();
-            Ok(())
-        })
-    });
-    bounded(locked).await.unwrap();
-    let change = super::observed_mutation_hint(&connection, "directory", &directory, &next, || {
+    assert_eq!(capacity.available_permits(), 31);
+    super::observed_mutation_hint(&connection, "directory", &directory, &next, || {
         std::fs::write(&next, b"still observed").unwrap();
     })
     .await;
-    assert_eq!(change.changed_paths, [] as [std::path::PathBuf; 0]);
-    release.send(()).unwrap();
-    bounded(lock).await.unwrap().unwrap();
     let MethodResult::FileChunk { chunk } = call(
         &connection,
         4,
@@ -350,36 +294,21 @@ pub(crate) async fn watch_recheck() {
             .unwrap(),
         b"still observed"
     );
-    let (scheduled, recheck) = tokio::sync::oneshot::channel();
-    crate::app_server::filesystem::observe_recheck(directory.clone(), scheduled);
+
+    // Keep the data lane occupied while an independent control receipt
+    // proves the directory observer stopped and returns its capacity.
+    let endpoint = fixture.manager.execution_endpoint(&session_id).unwrap();
     let (held, locked) = tokio::sync::oneshot::channel();
     let (release, unlocked) = std::sync::mpsc::channel();
-    let native = fixture.manager.environment.clone();
-    let source = directory.clone();
     let lock = tokio::task::spawn_blocking(move || {
-        native.with_paths(&[source.to_str().unwrap()], |_| {
+        endpoint.hold_data_exchange_for_test(|| {
             held.send(()).unwrap();
             unlocked.recv().unwrap();
-            Ok(())
         })
     });
     bounded(locked).await.unwrap();
-    let (started, checking) = tokio::sync::oneshot::channel();
-    let (finish_check, finish_native) = std::sync::mpsc::channel();
-    // Install only while I/O is held, so no physical check can have passed
-    // this checkpoint. Its own I/O grant stays held through unwatch/drain.
-    crate::app_server::filesystem::hold_recheck(
-        directory.clone(),
-        Box::new(move || {
-            let _ = started.send(());
-            let _ = finish_native.recv();
-        }),
-    );
-    std::fs::write(&next, b"pending recheck").unwrap();
-    bounded(recheck).await.unwrap();
-    release.send(()).unwrap();
-    bounded(lock).await.unwrap().unwrap();
-    bounded(checking).await.unwrap();
+    assert_eq!(capacity.available_permits(), 31);
+    std::fs::write(&next, b"pending change").unwrap();
     call(
         &connection,
         5,
@@ -388,26 +317,21 @@ pub(crate) async fn watch_recheck() {
         },
     )
     .await;
+    assert_eq!(capacity.available_permits(), 32);
+    release.send(()).unwrap();
+    bounded(lock).await.unwrap().unwrap();
     execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,
         [] as [std::string::String; 0]
     );
-    let mut settled = Box::pin(fixture.host.settle_file_observers());
-    assert!(
-        settled.as_mut().now_or_never().is_none(),
-        "a blocked native recheck retains physical observer capacity after unwatch/disconnect"
-    );
-    finish_check.send(()).unwrap();
-    bounded(settled).await;
-    let returned = bounded(capacity.acquire_many(32)).await.unwrap();
-    drop(returned);
     unwatch_queued_retirement().await;
 }
 
 async fn unwatch_queued_retirement() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let _execution = fixture.start_execution(0).await;
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
@@ -419,6 +343,7 @@ async fn unwatch_queued_retirement() {
         &connection,
         1,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "retiring".into(),
             path: path.display().to_string(),
         },

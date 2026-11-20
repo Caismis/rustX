@@ -7845,10 +7845,11 @@ and [EXEC-01 evidence ledger](exec-01-evidence.md).
   configuration or Agent runtime initialization. The local Agent entry
   also launches the sibling through the same paired protocol and retains
   that binding for the lifetime of its selected Session. `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
-  `fs/writeFile`, `fs/createDirectory`, `fs/remove` and `fs/copy` require
-  `sessionId` and route through the endpoint. An uncomposed Session returns
-  `ExecutionUnavailable`. The remaining Server-side watcher still uses
-  configured root descriptors.
+  `fs/writeFile`, `fs/createDirectory`, `fs/remove`, `fs/copy` and
+  `fs/watch` require `sessionId` and route through the endpoint. A Session
+  without an admitted Client returns `ExecutionUnavailable`. The Client
+  retains native watcher descriptors. The Server retains UI subscriptions,
+  normalized change hints and connection-local publication fencing.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
   It uses the protocol, transport, confined filesystem, document decoder,

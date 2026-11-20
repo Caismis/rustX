@@ -81,7 +81,7 @@ for(const mode of [{name:'environment-one-client',clients:1,sessions:1,slow:fals
       const client=hosts[Math.abs(index)%activeClients].client,cwd=workspaces[0],path=join(cwd,`cycle-${index}`),watchId=`cycle-${index}`;
       const {metadata}=await client.call('fs/writeFile',{sessionId:sessionIds[0],path,dataBase64:Buffer.from('measured').toString('base64'),expectedRevision:null},'file_metadata');
       const {chunk}=await client.call('fs/readFile',{sessionId:sessionIds[0],path,offset:'0',maxBytes:64,expectedRevision:metadata.revision},'file_chunk');assert.equal(Buffer.from(chunk.dataBase64,'base64').toString(),'measured');
-      await client.call('fs/watch',{watchId,path:cwd},'environment_accepted');
+      await client.call('fs/watch',{sessionId:sessionIds[0],watchId,path:cwd},'environment_accepted');
       const {result}=await client.call('command/exec',{sessionId:sessionIds[0],command:['/usr/bin/printf','%s','measured'],cwd:workspaces[0],env:{EXPLICIT:'authorized'},processId:null,tty:false,streamStdin:false,streamStdoutStderr:false,outputBytesCap:65536,timeoutMs:10000,size:null},'command_exec');
       assert.equal(result.status,'completed');assert.equal(Buffer.from(result.stdoutBase64,'base64').toString(),'measured');
       await client.call('fs/unwatch',{watchId},'environment_accepted');await client.call('fs/remove',{sessionId:sessionIds[0],path,recursive:false,force:false},'environment_accepted');
@@ -96,7 +96,7 @@ for(const mode of [{name:'environment-one-client',clients:1,sessions:1,slow:fals
     const completions:Promise<unknown>[]=[],barriers:Promise<void>[]=[];
     for(let index=0;index<4;index++){const processId=`peak-${index}`;barriers.push(new Promise<void>(resolve=>ready.set(processId,{resolve,text:''})));completions.push(client.call('command/exec',{sessionId:sessionIds[0],command:['/bin/sh','-c','printf ready; read line; printf done'],cwd:workspaces[0],env:{},processId,tty:false,streamStdin:true,streamStdoutStderr:true,outputBytesCap:65536,timeoutMs:30000,size:null},'command_exec'));}
     await bounded(Promise.all(barriers));
-    for(let index=0;index<8;index++)await client.call('fs/watch',{watchId:`peak-${index}`,path:workspaces[0]},'environment_accepted');
+    for(let index=0;index<8;index++)await client.call('fs/watch',{sessionId:sessionIds[0],watchId:`peak-${index}`,path:workspaces[0]},'environment_accepted');
     const peak=counters(child.pid!),tree=processTree(child.pid!);let treeResidentKiB=0;for(const pid of tree)try{treeResidentKiB+=counters(pid).residentKiB;}catch{}
     for(let index=0;index<4;index++)await client.call('command/exec/write',{processId:`peak-${index}`,deltaBase64:Buffer.from('finish\n').toString('base64'),closeStdin:true},'environment_accepted');
     await bounded(Promise.all(completions));unsubscribe();

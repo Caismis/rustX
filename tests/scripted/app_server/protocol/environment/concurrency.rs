@@ -2,8 +2,9 @@
 use super::*;
 
 pub(crate) async fn watch_terminal_order() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let _execution = fixture.start_execution(0).await;
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let path = fixture.workspaces[0].join("watched");
@@ -13,6 +14,7 @@ pub(crate) async fn watch_terminal_order() {
         &connection,
         1,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: watch_id.into(),
             path: path.display().to_string(),
         },
@@ -75,6 +77,7 @@ pub(crate) async fn watch_terminal_order() {
         &connection,
         2,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: watch_id.into(),
             path: path.display().to_string(),
         },
@@ -214,8 +217,9 @@ pub(crate) async fn revocation_before_start() {
 
 pub(crate) async fn watch_immediate_successor() {
     for retire_first in [false, true] {
-        let fixture = Fixture::with_session_count(None, 0).await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         grant(&fixture);
+        let _execution = fixture.start_execution(0).await;
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
         let path = fixture.workspaces[0].join("watched-successor");
@@ -225,6 +229,7 @@ pub(crate) async fn watch_immediate_successor() {
             &connection,
             1,
             Method::FsWatch {
+                session_id: fixture.sessions[0].id.clone(),
                 watch_id: watch_id.into(),
                 path: path.display().to_string(),
             },
@@ -256,6 +261,7 @@ pub(crate) async fn watch_immediate_successor() {
             &connection,
             3,
             Method::FsWatch {
+                session_id: fixture.sessions[0].id.clone(),
                 watch_id: watch_id.into(),
                 path: path.display().to_string(),
             },

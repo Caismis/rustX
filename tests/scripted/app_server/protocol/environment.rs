@@ -528,131 +528,79 @@ pub(crate) async fn terminal_eof_scenario() {
 }
 
 pub(crate) async fn watch_registration_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
-    for (symlink, capture, directory) in [
-        (true, false, true),
-        (false, false, true),
-        (false, true, true),
-        (true, false, false),
-        (false, false, false),
-    ] {
-        let source = fixture.workspaces[0].join("watch-source");
-        let saved = fixture.workspaces[0].join("saved-source");
-        let outside_root = tempfile::tempdir().unwrap();
-        let outside = outside_root.path().join("outside");
+    let session_id = &fixture.sessions[0].id;
+    let root = &fixture.workspaces[0];
+    let source = root.join("exact-source");
+    let saved = root.join("retired-source");
+    let outside = tempfile::tempdir().unwrap();
+    let external = outside.path().join("outside");
+    std::fs::write(&external, b"private").unwrap();
+    std::os::unix::fs::symlink(&external, &source).unwrap();
+    let watch = || Method::FsWatch {
+        session_id: session_id.clone(),
+        watch_id: "inode".into(),
+        path: source.display().to_string(),
+    };
+    assert_eq!(
+        rejected(&connection, 0, watch()).await,
+        ErrorData::ExecutionUnavailable,
+    );
+    let _execution = fixture.start_execution(0).await;
+    assert_eq!(
+        rejected(&connection, 1, watch()).await,
+        ErrorData::EnvironmentUnauthorized,
+    );
+    std::fs::remove_file(&source).unwrap();
+    for directory in [true, false] {
         if directory {
             std::fs::create_dir(&source).unwrap();
-            std::fs::create_dir(&outside).unwrap();
         } else {
             std::fs::write(&source, b"inside").unwrap();
-            std::fs::write(&outside, b"outside").unwrap();
         }
-        crate::app_server::filesystem::expect_native_source(
-            source.clone(),
-            std::fs::metadata(if capture { &outside } else { &source }).unwrap(),
-        );
-        let (before_source, before_saved, before_outside) =
-            (source.clone(), saved.clone(), outside.clone());
-        let (after_source, after_saved, after_outside) =
-            (source.clone(), saved.clone(), outside.clone());
-        let before: Box<dyn FnOnce() + Send> = Box::new(move || {
-            std::fs::rename(&before_source, &before_saved).unwrap();
-            if symlink {
-                std::os::unix::fs::symlink(&before_outside, &before_source).unwrap();
-            } else {
-                std::fs::rename(&before_outside, &before_source).unwrap();
-            }
-        });
-        let after: Box<dyn FnOnce() + Send> = Box::new(move || {
-            if symlink {
-                std::fs::remove_file(&after_source).unwrap();
-            } else {
-                std::fs::rename(&after_source, &after_outside).unwrap();
-            }
-            std::fs::rename(&after_saved, &after_source).unwrap();
-        });
-        if capture {
-            crate::app_server::filesystem::registration_hooks(
-                source.clone(),
-                Box::new(|| {}),
-                after,
-            );
-            crate::app_server::filesystem::capture_hook(&source, before);
-        } else {
-            crate::app_server::filesystem::registration_hooks(source.clone(), before, after);
-        }
-        let watch = Method::FsWatch {
-            watch_id: "inode".into(),
-            path: source.display().to_string(),
-        };
-        if capture {
-            assert_eq!(
-                rejected(&connection, 1, watch).await,
-                ErrorData::EnvironmentUnauthorized
-            );
-            std::fs::remove_dir_all(&source).unwrap();
-            continue;
-        }
-        call(
-            &connection,
-            1,
-            Method::FsWatch {
-                watch_id: "inode".into(),
-                path: source.display().to_string(),
-            },
-        )
-        .await;
-        // The outside name must never be translated beneath the restored grant.
-        if directory {
-            std::fs::write(outside.join("outside-private-name"), b"outside").unwrap();
-        }
+        call(&connection, 2, watch()).await;
         let sentinel = if directory {
-            source.join("authorized-sentinel")
+            source.join("owned")
         } else {
             source.clone()
         };
-        std::fs::write(&sentinel, b"inside").unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let notification = connection.next_notification().await;
-                if let NotificationMethod::FsChanged(changed) = notification.notification {
-                    assert!(!changed.retired);
-                    assert!(
-                        changed
-                            .changed_paths
-                            .iter()
-                            .all(|path| path.starts_with(&source))
-                    );
-                    assert!(!changed.changed_paths.iter().any(|path| {
-                        path.file_name()
-                            .is_some_and(|name| name == "outside-private-name")
-                    }));
-                    if changed.changed_paths.contains(&sentinel)
-                        || cfg!(target_os = "macos") && changed.resync_required
-                    {
-                        break;
-                    }
+        observed_mutation_hint(&connection, "inode", &source, &sentinel, || {
+            std::fs::write(&sentinel, b"authorized").unwrap();
+        })
+        .await;
+        let retiring = connection.watch_retirement_for_test("inode");
+        std::fs::rename(&source, &saved).unwrap();
+        std::os::unix::fs::symlink(&external, &source).unwrap();
+        std::fs::write(&external, b"outside-private-name").unwrap();
+        bounded(retiring).await.unwrap();
+        loop {
+            if let NotificationMethod::FsChanged(changed) =
+                bounded(connection.next_notification()).await.notification
+            {
+                assert!(
+                    !changed
+                        .changed_paths
+                        .iter()
+                        .any(|path| path.starts_with(outside.path()))
+                );
+                if changed.retired {
+                    assert_eq!(changed.watch_id, "inode");
+                    assert!(changed.resync_required);
+                    assert_eq!(changed.changed_paths, [] as [std::path::PathBuf; 0]);
+                    break;
                 }
             }
-        })
-        .await
-        .expect("only the retained authorized directory must produce the sentinel hint");
-        call(
-            &connection,
-            2,
-            Method::FsUnwatch {
-                watch_id: "inode".into(),
-            },
-        )
-        .await;
-        if directory {
-            std::fs::remove_dir_all(&source).unwrap();
-        } else {
-            std::fs::remove_file(&source).unwrap();
         }
+        std::fs::remove_file(&source).unwrap();
+        if directory {
+            std::fs::remove_dir_all(&saved).unwrap();
+        } else {
+            std::fs::remove_file(&saved).unwrap();
+        }
+        bounded(fixture.host.settle_file_observers()).await;
     }
     connection.close();
 }
@@ -668,15 +616,8 @@ pub(crate) async fn observed_mutation_hint(
     let mut phases = FixturePhase::new("native filesystem mutation hint");
     phases.enter("drain earlier routed hints");
     while connection.next_notification().now_or_never().is_some() {}
-    let published = crate::app_server::filesystem::observe_native_change(
-        source.to_path_buf(),
-        expected.to_path_buf(),
-    );
-    phases.enter("fresh native callback publication");
+    phases.enter("fresh physical mutation and Client hint");
     mutation();
-    bounded(published)
-        .await
-        .expect("fresh native callback publication");
     phases.enter("routed hint after native publication");
     let mut last = None;
     let change = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -687,12 +628,15 @@ pub(crate) async fn observed_mutation_hint(
                 if change.watch_id != watch_id {
                     continue;
                 }
-                assert!(change.resync_required);
                 assert!(!change.retired);
-                // The receipt above proves observation of this exact native
-                // path even when a busy identity check discards routed paths.
-                if change.changed_paths.is_empty()
-                    || change.changed_paths.contains(&expected.to_path_buf())
+                assert!(
+                    change
+                        .changed_paths
+                        .iter()
+                        .all(|path| path.starts_with(source))
+                );
+                if change.changed_paths.contains(&expected.to_path_buf())
+                    || cfg!(target_os = "macos") && change.resync_required
                 {
                     return change;
                 }
@@ -728,21 +672,27 @@ pub(crate) async fn macos_watch_scenario() {
     std::fs::create_dir(&child_directory).unwrap();
     let outside = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(outside.path(), source.join("outside-symlink")).unwrap();
-    let capacity = fixture.manager.environment.watch_files.clone();
-    let _reserved = capacity.clone().acquire_many_owned(1021).await.unwrap();
-    let watch = || Method::FsWatch {
-        watch_id: "macos".into(),
-        path: source.display().to_string(),
-    };
-    call(&connection, 1, watch()).await;
-    assert_eq!(
-        capacity.available_permits(),
+    call(
+        &connection,
         1,
-        "only the two immediate native sources consume descriptors"
-    );
+        Method::FsWatch {
+            session_id: session_id.clone(),
+            watch_id: "macos".into(),
+            path: source.display().to_string(),
+        },
+    )
+    .await;
     macos_watch_existing(&connection, &session_id, &source).await;
-    macos_watch_membership(&connection, &session_id, &source, &capacity).await;
-    macos_watch_capacity(&connection, &source, &capacity).await;
+    macos_watch_membership(&connection, &session_id, &source).await;
+    call(
+        &connection,
+        2,
+        Method::FsUnwatch {
+            watch_id: "macos".into(),
+        },
+    )
+    .await;
+    assert_eq!(fixture.host.file_observers().available_permits(), 32);
     execution.kill().await.unwrap();
     connection.close();
 }
@@ -791,7 +741,6 @@ async fn macos_watch_membership(
     connection: &AppServerConnection,
     session_id: &crate::local_runtime::session::SessionId,
     source: &Path,
-    capacity: &tokio::sync::Semaphore,
 ) {
     let mut phases = FixturePhase::new("macOS descriptor membership refresh");
     let created = source.join("created");
@@ -800,7 +749,6 @@ async fn macos_watch_membership(
         std::fs::write(&created, b"new").unwrap();
     })
     .await;
-    assert_eq!(capacity.available_permits(), 0);
     macos_watch_read(connection, session_id, &created, b"new").await;
     phases.enter("created child contents");
     observed_mutation_hint(connection, "macos", source, &created, || {
@@ -813,7 +761,6 @@ async fn macos_watch_membership(
         std::fs::remove_file(&created).unwrap();
     })
     .await;
-    assert_eq!(capacity.available_permits(), 1);
     assert!(!created.exists());
     let existing = source.join("existing");
     let renamed = source.join("renamed");
@@ -822,7 +769,6 @@ async fn macos_watch_membership(
         std::fs::rename(&existing, &renamed).unwrap();
     })
     .await;
-    assert_eq!(capacity.available_permits(), 1);
     phases.enter("renamed child contents");
     observed_mutation_hint(connection, "macos", source, &renamed, || {
         std::fs::write(&renamed, b"changed again").unwrap();
@@ -830,78 +776,6 @@ async fn macos_watch_membership(
     .await;
     macos_watch_read(connection, session_id, &renamed, b"changed again").await;
     phases.finish();
-}
-
-#[cfg(target_os = "macos")]
-async fn macos_watch_capacity(
-    connection: &AppServerConnection,
-    source: &Path,
-    capacity: &Arc<tokio::sync::Semaphore>,
-) {
-    let mut phases = FixturePhase::new("macOS descriptor capacity and settlement");
-    let created = source.join("created");
-    let watch = || Method::FsWatch {
-        watch_id: "macos".into(),
-        path: source.display().to_string(),
-    };
-    phases.enter("unwatch physical settlement");
-    call(
-        connection,
-        2,
-        Method::FsUnwatch {
-            watch_id: "macos".into(),
-        },
-    )
-    .await;
-    let all = bounded(capacity.clone().acquire_many_owned(3))
-        .await
-        .unwrap();
-    drop(all);
-    // Initial refusal releases every partially registered source.
-    phases.enter("initial capacity refusal");
-    std::fs::write(&created, b"third").unwrap();
-    let held = capacity.clone().acquire_owned().await.unwrap();
-    assert_eq!(
-        rejected(connection, 3, watch()).await,
-        ErrorData::EnvironmentCapacityOrConflict
-    );
-    assert_eq!(capacity.available_permits(), 2);
-    drop(held);
-    std::fs::remove_file(&created).unwrap();
-    phases.enter("overflow physical retirement");
-    call(connection, 4, watch()).await;
-    let held = capacity.clone().acquire_owned().await.unwrap();
-    let queued = connection.watch_retirement_for_test("macos");
-    std::fs::write(&created, b"overflow").unwrap();
-    bounded(queued).await.unwrap();
-    macos_retirement_hint(connection).await;
-    drop(held);
-    let all = bounded(capacity.clone().acquire_many_owned(3))
-        .await
-        .unwrap();
-    drop(all);
-    phases.finish();
-}
-
-#[cfg(target_os = "macos")]
-async fn macos_retirement_hint(connection: &AppServerConnection) {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if let NotificationMethod::FsChanged(change) =
-                connection.next_notification().await.notification
-            {
-                if change.watch_id != "macos" {
-                    continue;
-                }
-                assert!(change.resync_required);
-                if change.retired {
-                    break;
-                }
-            }
-        }
-    })
-    .await
-    .expect("queued native descriptor retirement");
 }
 
 #[cfg(target_os = "macos")]
@@ -1170,6 +1044,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         11,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "watch".into(),
             path: directory.clone(),
         },
@@ -1425,6 +1300,7 @@ pub(crate) async fn host_drain_scenario() {
         &connection,
         2,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "drain-watch".into(),
             path: fixture.workspaces[0].to_str().unwrap().into(),
         },
@@ -1473,10 +1349,8 @@ pub(crate) async fn host_drain_scenario() {
     }
     execution.kill().await.unwrap();
     assert_eq!(*fixture.host.request_operations().borrow(), 0);
-    assert!(
-        fixture.host.finish_drain().is_err(),
-        "native watch is still owned"
-    );
+    // Pending watch publication cannot prevent physical Client drain.
+    assert!(fixture.host.file_observers().available_permits() >= 31);
     connection.close();
     bounded(fixture.host.settle_file_observers()).await;
     assert!(fixture.host.finish_drain().is_ok());
@@ -1949,8 +1823,9 @@ pub(crate) async fn partial_stdin_scenario() {
 
 #[cfg(target_os = "linux")]
 pub(crate) async fn idle_root_watch_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let _execution = fixture.start_execution(0).await;
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let root = fixture.workspaces[0].clone();
@@ -1958,19 +1833,47 @@ pub(crate) async fn idle_root_watch_scenario() {
         &connection,
         1,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "idle".into(),
             path: root.display().to_string(),
         },
     )
     .await;
-    let (observed, ignored) = tokio::sync::oneshot::channel();
-    crate::app_server::filesystem::observe_access(root.clone(), observed);
-    drop(std::fs::read_dir(&root).unwrap());
-    bounded(ignored).await.unwrap();
-    assert!(
-        connection.environment_events_idle_for_test(),
-        "native root opens never emit content hints or fill the connection queue"
-    );
+    let session_id = fixture.sessions[0].id.clone();
+    let page = call(
+        &connection,
+        4,
+        Method::FsReadDirectory {
+            session_id,
+            path: root.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await;
+    assert!(matches!(page, MethodResult::DirectoryPage { .. }));
+    assert!(connection.environment_events_idle_for_test());
+    let observed_file = root.join("first-real-change");
+    std::fs::write(&observed_file, b"changed").unwrap();
+    loop {
+        if let NotificationMethod::FsChanged(change) =
+            bounded(connection.next_notification()).await.notification
+        {
+            assert_eq!(change.watch_id, "idle");
+            assert!(!change.retired);
+            assert!(!change.resync_required);
+            assert!(
+                change
+                    .changed_paths
+                    .iter()
+                    .all(|path| path == &observed_file)
+            );
+            if change.changed_paths.contains(&observed_file) {
+                break;
+            }
+        }
+    }
     assert!(matches!(
         call(&connection, 2, Method::ServerInfo {}).await,
         MethodResult::ServerInfo { .. }

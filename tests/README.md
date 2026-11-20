@@ -548,6 +548,10 @@ summarizes them and the lane check below verifies them against Cargo:
   Vite configuration are its whole build configuration. Locally,
   `pnpm test:e2e` stays self-contained: `pnpm build && bash
   scripts/browser-tests.sh`, which runs `cargo build` itself.
+  Session-bound filesystem coverage also exercises a Client-mounted
+  directory watcher, exact descriptor authority across rename and restore,
+  and control-lane unwatch while the data lane is held. The explicit Linux
+  mount proof is `test-support/prove_execution_mount_view.sh`.
 
 ### Browser presentation matrices
 

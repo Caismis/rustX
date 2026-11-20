@@ -17,8 +17,6 @@ impl Watcher {
     ) -> io::Result<Self> {
         use notify::Watcher as _;
         let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", source.as_raw_fd()));
-        #[cfg(test)]
-        let registered = (authorized.clone(), source.try_clone()?);
         let prefix = descriptor_path.clone();
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -49,8 +47,6 @@ impl Watcher {
         watcher
             .watch(&descriptor_path, notify::RecursiveMode::NonRecursive)
             .map_err(io::Error::other)?;
-        #[cfg(test)]
-        super::native_registered(&registered.0, &registered.1);
         Ok(Self { _watcher: watcher })
     }
 }
@@ -312,8 +308,6 @@ mod macos {
             )?;
             let mut children = BTreeMap::new();
             refresh(&queue, &source, &mut children, &capacity)?;
-            #[cfg(test)]
-            super::super::native_registered(&authorized, &source);
             let retained_queue = queue.clone();
             std::thread::Builder::new()
                 .name("rustx descriptor watch".into())

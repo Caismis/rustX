@@ -220,6 +220,8 @@ pub enum Method {
     },
     #[serde(rename = "fs/watch")]
     FsWatch {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         #[serde(rename = "watchId")]
         watch_id: String,
         path: String,

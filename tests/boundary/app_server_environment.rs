@@ -32,7 +32,7 @@ async fn terminal_signals_preserve_program_handlers_and_settle_default_or_lost_o
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::terminal_signals()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn watch_identity_recheck_survives_atomic_write_lock_contention() {
+async fn watch_rechecks_atomic_writes_and_stops_while_the_data_lane_is_held() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::watch_recheck()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

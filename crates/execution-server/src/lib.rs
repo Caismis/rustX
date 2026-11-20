@@ -21,6 +21,9 @@ use constant_time_eq::constant_time_eq_32;
 use rustx_execution_protocol::process::ServerIncarnation;
 #[cfg(test)]
 use rustx_execution_protocol::transport::read_record;
+use rustx_execution_protocol::watch::{
+    MAX_WATCH_HINT_BYTES, MAX_WATCH_HINT_PATHS, WatchChange, WatchId, WatchReply, WatchRequest,
+};
 use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, BootstrapEndpoint, CancelDisposition, Capability,
     ClientInstanceId, ClientReply, ClientRequest, ConnectionId, ControlHello, ControlHelloReply,
@@ -1414,25 +1417,10 @@ impl ControlHandle {
         key: &rustx_execution_protocol::process::ProcessOperationKey,
         deadline: Instant,
     ) -> io::Result<ProcessCancelDisposition> {
-        let receipt = loop {
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "control budget stayed full to the deadline",
-                ));
-            }
-            match self
-                .shared
-                .enqueue(ControlRequest::CancelProcess { key: key.clone() })
-            {
-                Ok(receipt) => break receipt,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5).min(deadline - now));
-                }
-                Err(error) => return Err(error),
-            }
-        };
+        let receipt = self.enqueue_until(
+            &ControlRequest::CancelProcess { key: key.clone() },
+            deadline,
+        )?;
         match receipt.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok(ControlReply::ProcessCancelled {
                 key: echoed,
@@ -1447,6 +1435,48 @@ impl ControlHandle {
                 io::ErrorKind::TimedOut,
                 "control command outlived its budget",
             )),
+        }
+    }
+
+    fn enqueue_until(
+        &self,
+        request: &ControlRequest,
+        deadline: Instant,
+    ) -> io::Result<mpsc::Receiver<io::Result<ControlReply>>> {
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "control budget stayed full to the deadline",
+                ));
+            }
+            match self.shared.enqueue(request.clone()) {
+                Ok(receipt) => return Ok(receipt),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5).min(deadline - now));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Retire one exact native file observer without acquiring the data lock.
+    ///
+    /// # Errors
+    ///
+    /// A lost, late, or negative receipt leaves physical cleanup unconfirmed.
+    pub fn stop_watch(&self, id: WatchId) -> io::Result<()> {
+        let deadline = Instant::now() + CONTROL_COMMAND_TIMEOUT;
+        let receipt = self.enqueue_until(&ControlRequest::StopWatch { id }, deadline)?;
+        match receipt.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Ok(ControlReply::WatchStopped {
+                id: echoed,
+                settled: true,
+            })) if echoed == id => Ok(()),
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(_)) => Err(io::Error::other("native watch cleanup was not confirmed")),
+            Err(_) => Err(io::ErrorKind::TimedOut.into()),
         }
     }
 
@@ -1596,6 +1626,9 @@ fn receipt_matches(request: &ControlRequest, reply: &ControlReply) -> bool {
             ControlReply::ProcessCancelled { key: echoed, .. },
         ) => key == echoed,
         (ControlRequest::Revoke, ControlReply::Revoked) => true,
+        (ControlRequest::StopWatch { id }, ControlReply::WatchStopped { id: echoed, .. }) => {
+            id == echoed
+        }
         _ => false,
     }
 }
@@ -2274,6 +2307,97 @@ impl LocalConnection {
             Ok(_) => Err(self.retire(io::Error::other(WriteOutcomeUnknown))),
             Err(_) if admitted.get() => Err(io::Error::other(WriteOutcomeUnknown)),
             Err(error) => Err(error),
+        }
+    }
+
+    /// Register a descriptor watch under this Session's live binding.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a missing capability, a pre-wire authorization denial or a
+    /// typed physical refusal. An ambiguous registration retires the pair.
+    pub fn register_watch(
+        &mut self,
+        id: WatchId,
+        path: &Path,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        if !self.capabilities.contains(&Capability::FileWatches) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let admitted = std::cell::Cell::new(false);
+        let reply = self.exchange_admitted(
+            &ClientRequest::Watch(WatchRequest::Register {
+                id,
+                path: path.to_path_buf(),
+            }),
+            Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            || {
+                authorize()?;
+                admitted.set(true);
+                Ok(())
+            },
+            || (),
+        );
+        match reply {
+            Ok(ClientReply::Watch(WatchReply::Registered { id: echoed })) if echoed == id => Ok(()),
+            Ok(ClientReply::Watch(WatchReply::Refused { id: echoed, kind })) if echoed == id => {
+                Err(read_error(kind))
+            }
+            Ok(_) => Err(self.retire(io::Error::other(WatchOutcomeUnknown))),
+            Err(_) if admitted.get() => Err(io::Error::other(WatchOutcomeUnknown)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Poll exactly one live native watcher for bounded, workspace-relative hints.
+    ///
+    /// # Errors
+    ///
+    /// The receipt must describe paths under the registered source. A malformed
+    /// receipt or uncertain physical retirement retires the exact binding.
+    pub fn poll_watch(&mut self, id: WatchId, source: &Path) -> io::Result<WatchChange> {
+        let result = self.exchange_admitted(
+            &ClientRequest::Watch(WatchRequest::Poll { id }),
+            Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            || Ok(()),
+            || (),
+        )?;
+        let notice = match result {
+            ClientReply::Watch(WatchReply::Changed(notice)) if notice.id == id => notice,
+            ClientReply::Watch(WatchReply::Refused { id: echoed, kind }) if echoed == id => {
+                return Err(read_error(kind));
+            }
+            _ => {
+                return Err(self.retire(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "watch receipt did not prove a change or retirement",
+                )));
+            }
+        };
+        let valid = notice.changed_paths.len() <= MAX_WATCH_HINT_PATHS
+            && (!notice.retired || notice.resync_required && notice.changed_paths.is_empty())
+            && notice.changed_paths.iter().all(|path| {
+                !path.is_absolute()
+                    && path.starts_with(source)
+                    && path.to_str().is_some_and(|path| {
+                        !path.bytes().any(|byte| byte == 0)
+                            && !path.split('/').any(|part| part == "." || part == "..")
+                    })
+            })
+            && notice
+                .changed_paths
+                .iter()
+                .map(|p| p.as_os_str().len().saturating_mul(6) + 8)
+                .sum::<usize>()
+                <= MAX_WATCH_HINT_BYTES;
+        if valid {
+            Ok(notice)
+        } else {
+            Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "watch change exceeded its bounds or authority",
+            )))
         }
     }
 
@@ -3669,6 +3793,18 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 
 impl std::error::Error for WriteOutcomeUnknown {}
 
+/// The peer did not confirm the physical watch registration outcome.
+#[derive(Debug)]
+pub struct WatchOutcomeUnknown;
+
+impl std::fmt::Display for WatchOutcomeUnknown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the Client did not confirm watch registration")
+    }
+}
+
+impl std::error::Error for WatchOutcomeUnknown {}
+
 /// The commit was arbitrated cancelled on the independent control lane
 /// before the Client's publish crossing: the typed `WriteCancelled`
 /// reply proves nothing named by the ticket was written. Downcast the
@@ -4592,6 +4728,9 @@ mod tests {
                     disposition: CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::StopWatch { id } => {
+                    ControlReply::WatchStopped { id, settled: true }
+                }
                 ControlRequest::CancelProcess { key } => ControlReply::ProcessCancelled {
                     key,
                     disposition: rustx_execution_protocol::ProcessCancelDisposition::Unknown,
@@ -6963,6 +7102,9 @@ mod tests {
                     disposition: CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::StopWatch { id } => {
+                    ControlReply::WatchStopped { id, settled: true }
+                }
                 ControlRequest::CancelProcess { key } => ControlReply::ProcessCancelled {
                     key,
                     disposition: rustx_execution_protocol::ProcessCancelDisposition::Unknown,

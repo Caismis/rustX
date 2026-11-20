@@ -1743,6 +1743,9 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             force: false,
         },
         Method::FsWatch {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             watch_id: "watch-fixture".into(),
             path: "/workspace".into(),
         },

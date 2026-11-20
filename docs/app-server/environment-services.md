@@ -28,8 +28,8 @@ An empty list grants no environment access. Workspace-authored configuration
 cannot grant these roots. Public source authoring uses the existing User source
 validation, revision/CAS and automatic application owner. Grant removal fences
 new work and cancels commands and watches admitted under the removed root. A
-replacement directory at the same path does not inherit the old inode grant;
-remove the grant and explicitly grant the replacement. A configured but
+replacement directory at the same path cannot inherit a live Client binding
+to the old Workspace inode. A configured but
 unopenable root is unavailable. Root grants do not imply an OS sandbox: the
 existing Unix restrictions and the host user's OS permissions remain effective.
 The trusted host still owns user-to-process isolation and deployment policy.
@@ -151,7 +151,7 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 | `fs/createDirectory` | One directory or bounded path-wise parent creation. |
 | `fs/remove` | File/link unlink or bounded recursive removal; missing handling is explicit. |
 | `fs/copy` | Source and destination within one Session's Workspace. Individual files publish atomically, and recursive trees are bounded. |
-| `fs/watch`, `fs/unwatch`, `fs/changed` | Connection-local, non-recursive change hints with resync/retirement facts. |
+| `fs/watch`, `fs/unwatch`, `fs/changed` | Session-bound physical observation with connection-local, non-recursive change hints and resync/retirement facts. |
 | `conversation/changes`, `conversation/changeDiff` | Existing native captured file changes and Diff for the exact attached Conversation. |
 
 ```json
@@ -167,11 +167,9 @@ Read frames carry at most 64 KiB of decoded file data per range, and one
 write's decoded payload is bounded by the same 64 KiB (the encoded length is
 gated before decoding).
 `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, `fs/writeFile`,
-`fs/createDirectory`, `fs/remove` and `fs/copy` carry `sessionId` and dispatch
-through that Session's admitted Execution Client. A Session with no composed
-Client fails `ExecutionUnavailable`. Watch operations still use the Server's
-native observer. The write
-commits through a two-phase prepare/commit: the expected revision is verified
+`fs/createDirectory`, `fs/remove`, `fs/copy`, and `fs/watch` carry `sessionId`
+and dispatch through that Session's admitted Execution Client. A Session
+without an admitted Client fails `ExecutionUnavailable`. The write commits through a two-phase prepare/commit: the expected revision is verified
 against the retained target at prepare, the environment-root grant and the
 caller's open state are re-checked immediately before the commit frame, and a
 commit whose outcome crossed without an acknowledgement answers
@@ -207,44 +205,31 @@ destination before deciding the next action.
 Commands, Agent tools and file RPCs can share a Workspace under their own native
 owners, without a whole-Workspace lock or transaction guarantee.
 
-Native registration retains the descriptor for the exact authorized source;
-replacing and restoring its pathname cannot redirect the observer. Linux uses
-that descriptor through `/proc/self/fd` and translates only its exact event prefix
-back to authorized paths. macOS registers vnode descriptors directly, including
-immediate files and child-directory metadata without observing grandchildren.
-Directory membership is bounded to 4,096 names and the instance shares 1,024
-child-descriptor slots. Initial exhaustion refuses registration; subsequent
-reconciliation failure retires the watch with a resync hint. Coalesced vnode hints
-always require rereads. Native teardown retains these descriptors and admission
-through actual observer exit; macOS cancellation wakes its queue without polling.
-If concurrent environment I/O prevents a callback's identity check, the same
-watch owner schedules a single coalesced deferred check. Native callbacks never
-wait for the I/O gate. The owner preserves a valid directory identity or retires
-a replaced/unavailable source even if the old inode emits no more events. At
-most one blocking check and one pending recheck wake-up exist per watch; physical
-capacity remains held through that check, including after disconnect.
-Unwatch also cancels any pending retirement-notification receipt wait; a live
-client need not consume a withdrawn notice to return physical observer capacity.
+The Client retains the descriptor for the exact authorized watch source.
+Replacing and restoring the pathname cannot redirect the observer. Linux
+uses the descriptor through `/proc/self/fd` and translates its event prefix
+back to authorized paths. macOS registers vnode descriptors for the source,
+immediate files, and child-directory metadata. Directory membership is
+bounded to 4,096 names and each Client owns 1,024 child-descriptor slots.
+Admission refuses initial exhaustion. Exhaustion during reconciliation
+retires the watch with a resync hint.
 
-Watch IDs belong to one connection and cannot address another connection's watch.
-There are at most eight per connection and 32 shared native file-observation
-slots across the host. The native callback/retirement lifetime retains its slot. Unwatch, disconnect, root retirement and
-shutdown retire the native watcher. Graceful process shutdown waits for native
-callback destruction and returned observation capacity after transport teardown;
-dropping a notify handle alone is not a physical-settlement proof. Delayed retirement is fenced by exact watch
-incarnation, and queued old hints are discarded after unwatch. Automatic
-retirement closes a per-incarnation publication gate
-before dropping the native watcher and queuing its terminal notice. Ordinary
-callback admission and queue publication share that short gate, so the terminal
-notice is the incarnation's last visible event, including callbacks that passed
-identity validation earlier. Closing ordinary publication does not withdraw the
-terminal transport fence; unwatch/disconnect can still withdraw that notice.
-Unwatch closes the old gate and fence under the registry's identity-removal
-boundary before another watch can reuse the ID. Metadata inspection, native
-Drop and receipt waits stay outside the publication gate. Events contain at
-most 16 paths. Native overflow, unavailable coherent inspection or replacement
-requires authoritative reads. Events are not a canonical file journal; reconnect
-always requires a reread and fresh watch registration, never mutation replay.
+The Client coalesces notifications to 16 workspace-relative paths and a
+16 KiB escaped path budget. The Server checks each receipt against the
+registered source and its bounds. Polling rechecks the captured identity.
+If a source is replaced, physical observation stops before the Client
+reports retirement. Events are hints for an authoritative reread, including
+after reconnect.
+
+The Server owns UI watch IDs and notification delivery. Each connection
+can own eight watches, with 32 slots shared by the host. `fs/unwatch` uses
+the UI connection's existing ownership and sends an independent control
+request for the exact Client watch. A confirmed receipt proves the native
+observer exited. A lost receipt reports `OutcomeUnknown` and fences the
+execution pair. UI disconnect, root retirement, and Server shutdown also
+end owner admission. The exact watch incarnation fences delayed hints
+and any queued retirement notice when an ID is reused. Graceful Client
+exit waits for native callback destruction.
 
 ## Native management matrix
 
