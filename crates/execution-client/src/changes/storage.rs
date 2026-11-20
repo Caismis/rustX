@@ -91,7 +91,6 @@ impl SnapshotDirectory {
         &self.root
     }
 
-    #[allow(dead_code)] // used by the unported capture path
     pub fn contains(&self, path: &Path) -> bool {
         path.starts_with(&self.root)
     }

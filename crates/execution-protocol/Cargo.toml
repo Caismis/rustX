@@ -8,6 +8,7 @@ description = "Single wire definition for the rustX execution protocol between t
 publish = false
 
 [dependencies]
+schemars = "1.2.1"
 serde = { version = "1", features = ["derive"] }
 base64 = "0.22"
 sha2 = "0.10"

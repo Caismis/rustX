@@ -40,16 +40,15 @@ async fn change(
     attempt: &str,
     display: &str,
 ) -> (ChangedFile, FileComparison) {
-    let attempt = AttemptId::new(attempt);
     let summary = store
-        .summary(&attempt)
+        .summary(attempt)
         .expect("the recorded edit must be available");
     let index = summary
         .files
         .iter()
         .position(|file| file.display == display)
         .unwrap();
-    let comparison = store.comparison(&attempt, index).await.unwrap().unwrap();
+    let comparison = store.comparison(attempt, index).await.unwrap().unwrap();
     (summary.files[index].clone(), comparison)
 }
 
@@ -168,7 +167,7 @@ async fn baseline_and_final_snapshots_never_execute_hooks_or_required_filters() 
         fs::write(root.join(name), "after\n").unwrap();
     }
     record.finish().await;
-    assert_eq!(store.summary(&AttemptId::new("programs")).unwrap().total, 3);
+    assert_eq!(store.summary("programs").unwrap().total, 3);
     for name in ["clean.txt", "process.txt", "missing.txt"] {
         text_change(&store, "programs", name, "before\n", "after\n", (1, 1)).await;
     }
@@ -231,7 +230,7 @@ async fn raw_endpoints_preserve_text_and_binary_for_native_and_shell_equivalent_
         fs::write(root.join(name), b"new\0bytes").unwrap();
     }
     record.finish().await;
-    assert_eq!(store.summary(&AttemptId::new("raw")).unwrap().total, 4);
+    assert_eq!(store.summary("raw").unwrap().total, 4);
     for name in ["native.txt", "shell.txt"] {
         text_change(&store, "raw", name, before, after, (2, 2)).await;
     }
@@ -299,10 +298,7 @@ async fn built_in_attributes_normalize_snapshots_without_running_diff_drivers() 
     fs::write(root.join("encoded.txt"), b"n\0e\0w\0\n\0").unwrap();
     fs::write(root.join("forced.bin"), b"new\0bytes").unwrap();
     record.finish().await;
-    assert_eq!(
-        store.summary(&AttemptId::new("attributes")).unwrap().total,
-        6
-    );
+    assert_eq!(store.summary("attributes").unwrap().total, 6);
     for name in ["global.txt", "converted.txt"] {
         text_change(&store, "attributes", name, "before\n", "after\n", (1, 1)).await;
     }
@@ -351,7 +347,7 @@ async fn sha256_snapshots_keep_quoted_newline_paths_and_symlink_bytes_literal() 
     fs::remove_file(root.join("link")).unwrap();
     symlink("new-target", root.join("link")).unwrap();
     record.finish().await;
-    assert_eq!(store.summary(&AttemptId::new("sha256")).unwrap().total, 2);
+    assert_eq!(store.summary("sha256").unwrap().total, 2);
     text_change(&store, "sha256", name, "before\n", "after\n", (1, 1)).await;
     text_change(
         &store,
@@ -393,7 +389,7 @@ async fn real_git_lfs_does_not_write_objects_or_replace_text_and_binary_with_poi
     fs::write(root.join("text.lfs"), after).unwrap();
     fs::write(root.join("binary.lfs"), b"after\0bytes").unwrap();
     record.finish().await;
-    assert_eq!(store.summary(&AttemptId::new("lfs")).unwrap().total, 2);
+    assert_eq!(store.summary("lfs").unwrap().total, 2);
     text_change(&store, "lfs", "text.lfs", before, after, (2, 2)).await;
     binary_change(&store, "lfs", "binary.lfs").await;
     assert_eq!(git_files(root), metadata);
@@ -505,7 +501,7 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             record.finish().await;
             if symbolic {
                 assert!(
-                    store.summary(&AttemptId::new("replace-nested")).is_none(),
+                    store.summary("replace-nested").is_none(),
                     "Git check-ignore rejects the captured path beyond the replacement symlink"
                 );
                 assert_eq!(git_files(root), metadata);
@@ -546,7 +542,7 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
                     .repository
                     .as_ref()
                     .unwrap()
-                    .bytes(after, "nested")
+                    .bytes(after, "nested", &ProcessSignal::new())
                     .await
                     .unwrap(),
                 Some(bytes.to_vec())

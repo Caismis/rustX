@@ -3,7 +3,8 @@
 use super::*;
 
 const CHILD_ENV: &str = "RUSTX_WORKSPACE_CHANGES_GLOBAL_ATTRIBUTES_CHILD";
-const TEST_NAME: &str = "workspace_changes::tests::global_attributes::default_global_attributes_do_not_override_raw_endpoints";
+const TEST_NAME: &str =
+    "changes::tests::global_attributes::default_global_attributes_do_not_override_raw_endpoints";
 
 #[tokio::test]
 async fn default_global_attributes_do_not_override_raw_endpoints() {
@@ -82,8 +83,8 @@ async fn assert_raw_endpoints() {
     fs::write(root.join("binary.bin"), after_binary).unwrap();
     recording.finish().await;
 
-    let attempt = AttemptId::new("global-attributes");
-    let summary = store.summary(&attempt).unwrap();
+    let attempt = "global-attributes";
+    let summary = store.summary(attempt).unwrap();
     assert_eq!(summary.total, 2);
     assert_eq!((summary.added, summary.deleted), (2, 2));
     for (name, before, after, binary, counts) in [
@@ -110,13 +111,13 @@ async fn assert_raw_endpoints() {
         let file = &summary.files[index];
         assert_eq!(file.binary, binary, "{name}");
         assert_eq!((file.added, file.deleted), counts, "{name}");
-        let comparison = store.comparison(&attempt, index).await.unwrap().unwrap();
+        let comparison = store.comparison(attempt, index).await.unwrap().unwrap();
         assert_eq!(comparison.binary, binary, "{name}");
         assert!(!comparison.oversized && !comparison.truncated, "{name}");
         if binary {
             assert_eq!(
                 comparison.hunks,
-                [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+                [] as [rustx_execution_protocol::changes::ComparisonHunk; 0]
             );
         } else {
             assert_eq!(comparison.hunks.len(), 1);
@@ -124,22 +125,22 @@ async fn assert_raw_endpoints() {
             assert_eq!(comparison.hunks[0].new_text, after_text);
         }
 
-        let recorded = store
-            .records
-            .lock()
-            .unwrap()
-            .get(attempt.as_str())
-            .cloned()
-            .unwrap();
+        let recorded = store.records.lock().unwrap().get(attempt).cloned().unwrap();
         let repository = recorded.repository.as_ref().unwrap();
         let (old_tree, new_tree) = recorded.trees.as_ref().unwrap();
         assert_eq!(
-            repository.bytes(old_tree, name).await.unwrap(),
+            repository
+                .bytes(old_tree, name, &ProcessSignal::new())
+                .await
+                .unwrap(),
             Some(before.to_vec()),
             "{name} must retain its actual original bytes"
         );
         assert_eq!(
-            repository.bytes(new_tree, name).await.unwrap(),
+            repository
+                .bytes(new_tree, name, &ProcessSignal::new())
+                .await
+                .unwrap(),
             Some(after.to_vec()),
             "{name} must retain its actual final bytes"
         );

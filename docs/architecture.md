@@ -7856,6 +7856,12 @@ and [EXEC-01 evidence ledger](exec-01-evidence.md).
   text editor and process supervisor crates. Server appears only as a test
   dependency. Its `--workspace` is local launch policy checked byte for
   byte against the bootstrap record; the server cannot redirect it.
+- WorkspaceChanges leaves the canonical Attempt association and change card
+  publication with the Server. The bound Client observes the Git baseline,
+  captures pre-mutation files, takes the final snapshot, and projects bounded
+  physical comparison material. Private Git and captured files never enter
+  model input. Client revocation stops its physical observation workers and
+  releases their storage when the binding ends.
 - `rustx-confined-fs` holds the proven descriptor-relative primitives factored
   out of the root package I/O — `PackageDirectory`, `FileMetadata`,
   `FileChunk`, `DirectoryEntry`, `DirectoryPage`, the bounded

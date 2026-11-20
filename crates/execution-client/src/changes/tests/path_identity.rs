@@ -1,8 +1,8 @@
 use super::*;
 
 async fn assert_changes(store: &ChangesStore, id: &str, expected: &[(&Path, &str, &str, &str)]) {
-    let attempt = AttemptId::new(id);
-    let summary = store.summary(&attempt).unwrap();
+    let attempt = id;
+    let summary = store.summary(attempt).unwrap();
     assert_eq!(summary.total, expected.len());
     assert_eq!(summary.files.len(), expected.len());
     assert_eq!(
@@ -14,7 +14,7 @@ async fn assert_changes(store: &ChangesStore, id: &str, expected: &[(&Path, &str
         assert_eq!(file.path, path.to_string_lossy());
         assert_eq!(file.display, *display);
         assert_eq!((file.added, file.deleted), (1, 1));
-        let comparison = store.comparison(&attempt, index).await.unwrap().unwrap();
+        let comparison = store.comparison(attempt, index).await.unwrap().unwrap();
         assert!(!comparison.binary);
         assert!(!comparison.oversized);
         assert_eq!(comparison.hunks.len(), 1);

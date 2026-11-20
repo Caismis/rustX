@@ -17,8 +17,8 @@ fn unchanged_skipped_index(root: &Path, index: &[u8]) {
 }
 
 async fn deleted_file(store: &ChangesStore, id: &str, before: &str) {
-    let attempt = AttemptId::new(id);
-    let summary = store.summary(&attempt).unwrap();
+    let attempt = id;
+    let summary = store.summary(attempt).unwrap();
     let index = summary
         .files
         .iter()
@@ -27,7 +27,7 @@ async fn deleted_file(store: &ChangesStore, id: &str, before: &str) {
     let file = &summary.files[index];
     assert_eq!((file.added, file.deleted), (0, 2));
     assert!(!file.binary && !file.oversized);
-    let comparison = store.comparison(&attempt, index).await.unwrap().unwrap();
+    let comparison = store.comparison(attempt, index).await.unwrap().unwrap();
     assert!(!comparison.binary && !comparison.oversized && !comparison.truncated);
     assert_eq!(comparison.hunks.len(), 1);
     assert_eq!(comparison.hunks[0].old_text, before);
@@ -48,7 +48,7 @@ async fn skip_worktree_file_deletion_remains_hidden_by_git() {
     fs::remove_file(root.join("tracked.txt")).unwrap();
     record.finish().await;
 
-    assert!(store.summary(&AttemptId::new("deleted")).is_none());
+    assert!(store.summary("deleted").is_none());
     unchanged_skipped_index(root, &index);
 }
 
@@ -67,7 +67,7 @@ async fn skip_worktree_deletion_is_hidden_alongside_other_edits() {
     fs::write(root.join("other.txt"), "keep\nnew\n").unwrap();
     record.finish().await;
 
-    let summary = store.summary(&AttemptId::new("mixed")).unwrap();
+    let summary = store.summary("mixed").unwrap();
     assert_eq!((summary.total, summary.added, summary.deleted), (1, 1, 1));
     assert_eq!(
         summary
@@ -93,7 +93,7 @@ async fn sparse_file_already_absent_at_baseline_creates_no_changes_card() {
     record.before_tools().await;
     record.finish().await;
 
-    assert!(store.summary(&AttemptId::new("absent")).is_none());
+    assert!(store.summary("absent").is_none());
     unchanged_skipped_index(root, &index);
 }
 
@@ -111,7 +111,7 @@ async fn skip_worktree_materialization_remains_hidden_by_git() {
     fs::write(root.join("tracked.txt"), after).unwrap();
     record.finish().await;
 
-    assert!(store.summary(&AttemptId::new("materialized")).is_none());
+    assert!(store.summary("materialized").is_none());
     unchanged_skipped_index(root, &index);
 }
 
@@ -127,7 +127,7 @@ async fn adding_skip_worktree_during_an_attempt_does_not_hide_a_deletion() {
     fs::remove_file(root.join("tracked.txt")).unwrap();
     record.finish().await;
 
-    let summary = store.summary(&AttemptId::new("new-flag")).unwrap();
+    let summary = store.summary("new-flag").unwrap();
     assert_eq!((summary.total, summary.added, summary.deleted), (1, 0, 2));
     deleted_file(&store, "new-flag", "one\ntwo\n").await;
     unchanged_skipped_index(root, &index);

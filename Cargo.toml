@@ -114,7 +114,6 @@ sha2 = "0.10"
 constant_time_eq = "0.4"
 jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc_rs"] }
 # Bounded line comparisons for captured per-turn workspace changes.
-similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
 # Bounded validation of native managed PNG image outputs.

@@ -1,7 +1,6 @@
 //! Bounded whole-file captures outside Git's coverage.
 use sha2::{Digest, Sha256};
 use std::{
-    fs::OpenOptions,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -16,38 +15,34 @@ pub(super) enum Capture {
 }
 
 impl Capture {
-    pub(super) fn read(path: &Path, directory: &Path) -> Result<Option<Self>, String> {
-        match std::fs::metadata(path) {
-            Ok(metadata) if !metadata.is_file() => return Ok(None),
+    pub(super) fn read(
+        root: &rustx_confined_fs::PackageDirectory,
+        relative: &Path,
+        directory: &Path,
+    ) -> Result<Option<Self>, String> {
+        match root.entry_metadata(relative) {
+            Ok(metadata) if metadata.is_file => {}
+            Ok(_) => return Ok(None),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Some(Self::Missing));
             }
             Err(error) => return Err(error.to_string()),
-            Ok(_) => {}
         }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        // A regular file can be replaced after metadata(). A FIFO must not
-        // block open() before the handle's own type check can reject it.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK);
-        }
-        let file = match options.open(path) {
+        let file = match root.file(relative) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Some(Self::Missing));
             }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput
+                ) =>
+            {
+                return Ok(None);
+            }
             Err(error) => return Err(error.to_string()),
         };
-        if !file
-            .metadata()
-            .map_err(|error| error.to_string())?
-            .is_file()
-        {
-            return Ok(None);
-        }
         let mut bytes = Vec::new();
         file.take(MAX_FILE_BYTES as u64 + 1)
             .read_to_end(&mut bytes)

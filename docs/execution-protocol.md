@@ -1,11 +1,10 @@
 # Execution Protocol and Binding Arbitration
 
-Status: accepted — layers 1–3 implemented (binding arbitration; local
-bootstrap with authenticated handshake; and the first physical
-operations: bounded revision-checked range reading, entry metadata,
-and bounded directory pages of the bound workspace). Remaining
-contracts below are frozen in shape and pending implementation in
-later layers.
+Status: accepted. The current implementation includes binding arbitration,
+authenticated local and WebSocket bootstrap, bounded filesystem queries and
+mutations, watches, and supervised process execution. The
+[acceptance ledger](exec-01-evidence.md) records the evidence and open #576
+requirements for the current PR.
 
 This ADR grounds its decisions in the verified server/client separation
 plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
@@ -1167,6 +1166,33 @@ envelope.
   Data exchanges share the endpoint's finite permits and absolute deadline.
   Malformed or lost replies retire the pair when framing or ownership
   becomes uncertain.
+
+### WorkspaceChanges observation
+
+The Server associates a Workspace observation with one canonical Attempt. It
+uses an independent operation ID with the same authenticated Session,
+incarnation, instance and generation as the other Agent tool exchanges. The
+Client advertises `WorkspaceChanges` and owns the physical observation.
+`Begin` schedules the baseline while the model is running. The Server waits
+for `BaselineReady` before dispatching tools and sends `Capture` with a
+Workspace-relative file path before an approved native Write/Edit commit.
+
+Git runs under the same process supervisor on the Client. It uses a private
+index and object directory, literal path scopes for nested workspaces and a
+restricted copy of the repository configuration. A rename that crosses the
+Workspace edge is observed only through its in-scope endpoint. Files outside
+Git coverage use private, descriptor-relative captures. Summary and indexed
+comparison requests are bounded by 500 returned paths and 896 KiB of encoded
+reply content. There is one in-flight comparison per record and at most 32
+records per Client binding.
+
+`Finish` initiates the final physical snapshot. The Server checks the reply
+and publishes the normalized summary under the active Attempt's cancellation
+gate. The card is independent of canonical ToolResults and is excluded from
+model input. A dropped or evicted Server record sends `Release` to cancel
+remaining observation work and drop its comparison captures. Connection
+shutdown cancels the Client workers and disposes of the binding's private Git
+index and objects.
 
 ## Test ownership (T01–T73) and optional O-SUM
 

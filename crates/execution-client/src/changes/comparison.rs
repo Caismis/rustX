@@ -1,29 +1,9 @@
 //! Bounded line comparisons; raw file captures never travel through the RPC.
-use serde::{Deserialize, Serialize};
+pub(super) use rustx_execution_protocol::changes::{ComparisonHunk, FileComparison};
 use std::{borrow::Cow, time::Duration};
 
 const MAX_DIFF_BYTES: usize = 128 * 1024;
 const MAX_DIFF_LINES: usize = 2000;
-
-/// Three lines of shared context around one group of edits.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ComparisonHunk {
-    pub old_start: usize,
-    pub new_start: usize,
-    pub old_text: String,
-    pub new_text: String,
-}
-
-/// An immutable, bounded comparison of a recorded file's two endpoints.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FileComparison {
-    pub hunks: Vec<ComparisonHunk>,
-    pub binary: bool,
-    pub oversized: bool,
-    pub truncated: bool,
-}
 
 pub(super) struct FileContents {
     old_text: Option<String>,
@@ -176,7 +156,7 @@ mod tests {
         assert!(diff.truncated);
         assert!(
             serde_json::to_vec(&diff).unwrap().len()
-                < crate::app_server::transport::MAX_MESSAGE_BYTES
+                < rustx_execution_protocol::transport::MAX_RECORD_BYTES
         );
     }
 }

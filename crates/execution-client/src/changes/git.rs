@@ -1,7 +1,7 @@
 //! Session-private Git index and objects; worktree bytes stay in supervised Git.
 use super::{capture::MAX_FILE_BYTES, storage::SnapshotDirectory};
-use crate::runtime::cancellation::CancellationSignal;
 use rustx_process_supervisor::process_runner::SupervisedCommandSpec;
+use rustx_process_supervisor::signal::ProcessSignal;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -16,12 +16,14 @@ use std::{
 #[derive(Clone)]
 pub(super) struct Repository {
     pub root: PathBuf,
+    workspace: PathBuf,
+    pathspec: String,
     scratch: Arc<SnapshotDirectory>,
     objects: PathBuf,
     exclusion: PathBuf,
     gate: Arc<tokio::sync::Mutex<()>>,
     index_ready: Arc<AtomicBool>,
-    pub cancellation: CancellationSignal,
+    pub cancellation: ProcessSignal,
     #[cfg(test)]
     pub commands: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -117,7 +119,7 @@ impl Repository {
     pub async fn locate(
         cwd: &Path,
         scratch: Arc<OnceLock<Arc<SnapshotDirectory>>>,
-        cancellation: CancellationSignal,
+        cancellation: ProcessSignal,
     ) -> Result<Option<Self>, String> {
         if !may_have_repository(cwd) {
             return Ok(None);
@@ -147,7 +149,7 @@ impl Repository {
                 cwd: cwd.to_owned(),
                 command_environment: environment(),
                 timeout: Some(Duration::from_secs(30)),
-                cancellation: cancellation.child().physical(),
+                cancellation: cancellation.child(),
             },
             8 * 1024 * 1024,
             Arc::clone(&scratch),
@@ -167,6 +169,12 @@ impl Repository {
         let location = std::str::from_utf8(location).map_err(|error| error.to_string())?;
         let mut lines = location.lines();
         let root = PathBuf::from(lines.next().ok_or("missing Git root")?);
+        let workspace = cwd.canonicalize().map_err(|error| error.to_string())?;
+        let scope = workspace
+            .strip_prefix(&root)
+            .map_err(|_| "Git root does not contain the admitted Workspace")?;
+        let scope = scope.to_str().ok_or("Git scope is not a UTF-8 path")?;
+        let pathspec = format!(":(top,literal){scope}");
         let git_dir = PathBuf::from(lines.next().ok_or("missing Git directory")?);
         let objects = cwd
             .join(lines.next().ok_or("missing Git objects")?)
@@ -194,6 +202,8 @@ impl Repository {
         seed(&git_dir, &scratch.path().join("git"), config, format, &info)?;
         let repository = Self {
             root,
+            workspace,
+            pathspec,
             objects,
             exclusion: scratch.root().to_owned(),
             scratch,
@@ -224,7 +234,7 @@ impl Repository {
             format!(
                 "{}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi; {} > {}",
                 self.add_command(),
-                invocation(&["ls-files", "--cached", "-v", "-z"]),
+                invocation(&["ls-files", "--cached", "-v", "-z", "--", &self.pathspec]),
                 quote(&inventory.path().to_string_lossy())
             ),
             1024,
@@ -282,7 +292,7 @@ impl Repository {
         &self,
         command: String,
         limit: usize,
-        cancellation: &CancellationSignal,
+        cancellation: &ProcessSignal,
         keepalive: impl Send + 'static,
     ) -> Result<Vec<u8>, String> {
         if cancellation.is_cancelled() {
@@ -333,7 +343,7 @@ impl Repository {
                 cwd: self.root.clone(),
                 command_environment: environment,
                 timeout: Some(Duration::from_secs(30)),
-                cancellation: cancellation.child().physical(),
+                cancellation: cancellation.child(),
             },
             limit,
             (Arc::clone(&self.scratch), keepalive),
@@ -349,15 +359,18 @@ impl Repository {
     }
 
     fn add_command(&self) -> String {
-        let mut add = invocation(&["add", "--all", "--ignore-errors"]);
-        if let Ok(relative) = self.exclusion.strip_prefix(&self.root) {
-            // This one command needs exclude pathspec magic, all others are literal.
-            add = format!(
-                "GIT_LITERAL_PATHSPECS=0 {add} -- . {}",
-                quote(&format!(":(exclude){}", relative.to_string_lossy()))
-            );
+        let add = invocation(&["add", "--all", "--ignore-errors", "--", &self.pathspec]);
+        let exclusion = self.exclusion.strip_prefix(&self.root);
+        match exclusion {
+            Ok(relative) => format!(
+                "{add} {}",
+                quote(&format!(
+                    ":(top,literal,exclude){}",
+                    relative.to_string_lossy()
+                ))
+            ),
+            Err(_) => add,
         }
-        add
     }
 
     pub async fn snapshot(&self) -> Result<String, String> {
@@ -409,7 +422,9 @@ impl Repository {
                         "--numstat",
                         "-z",
                         before,
-                        after
+                        after,
+                        "--",
+                        &self.pathspec,
                     ])
                 ),
                 8 * 1024 * 1024,
@@ -420,8 +435,21 @@ impl Repository {
         parse_numstat(&output)
     }
 
-    pub async fn bytes(&self, tree: &str, path: &str) -> Result<Option<Vec<u8>>, String> {
-        let cancellation = CancellationSignal::new();
+    pub async fn bytes(
+        &self,
+        tree: &str,
+        path: &str,
+        cancellation: &ProcessSignal,
+    ) -> Result<Option<Vec<u8>>, String> {
+        // Diff endpoints are repository-relative. A rename crossing the Workspace
+        // edge is an addition/deletion, and comparisons may never read its far side.
+        let path = Path::new(path);
+        if !self.root.join(path).starts_with(&self.workspace)
+            || crate::relative_entry(path).is_err()
+        {
+            return Err("Git comparison path is outside the Workspace".to_owned());
+        }
+        let path = path.to_str().ok_or("Git source is not a UTF-8 path")?;
         let output = self
             .run(
                 format!(
@@ -429,7 +457,7 @@ impl Repository {
                     invocation(&["ls-tree", "-z", "-l", tree, "--", path])
                 ),
                 8 * 1024 * 1024,
-                &cancellation,
+                cancellation,
                 (),
             )
             .await?;
@@ -453,7 +481,7 @@ impl Repository {
         self.run(
             format!("exec {}", invocation(&["cat-file", "blob", fields[2]])),
             MAX_FILE_BYTES,
-            &cancellation,
+            cancellation,
             (),
         )
         .await

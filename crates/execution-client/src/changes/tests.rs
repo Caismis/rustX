@@ -74,11 +74,14 @@ fn repository() -> tempfile::TempDir {
     dir
 }
 fn start(cwd: &Path, store: &Arc<ChangesStore>, id: &str) -> Arc<ChangeRecording> {
+    let cwd = cwd.canonicalize().unwrap();
+    let root = rustx_confined_fs::PackageDirectory::open(&cwd).unwrap();
     ChangeRecording::start(
-        AttemptId::new(id),
-        cwd.canonicalize().unwrap(),
+        id.to_owned(),
+        cwd,
+        Arc::new(root),
         Arc::clone(store),
-        CancellationSignal::new(),
+        ProcessSignal::new(),
     )
 }
 
@@ -97,7 +100,7 @@ async fn snapshots_exclude_preexisting_edits_and_leave_index_objects_and_refs_un
     fs::write(root.join("tracked.txt"), "already dirty\nchanged\n").unwrap();
     fs::write(root.join("new.txt"), "created\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("a")).unwrap();
+    let summary = store.summary("a").unwrap();
     assert_eq!(summary.total, 2);
     assert_eq!(
         summary
@@ -112,11 +115,7 @@ async fn snapshots_exclude_preexisting_edits_and_leave_index_objects_and_refs_un
     assert_eq!(git(root, &["count-objects", "-v"]), objects);
     assert_eq!(git(root, &["rev-parse", "HEAD"]), head);
     fs::write(root.join("tracked.txt"), "a later turn\n").unwrap();
-    let diff = store
-        .comparison(&AttemptId::new("a"), 1)
-        .await
-        .unwrap()
-        .unwrap();
+    let diff = store.comparison("a", 1).await.unwrap().unwrap();
     assert_eq!(
         Some(diff.hunks[0].old_text.as_str()),
         Some("already dirty\ntwo\n")
@@ -141,14 +140,10 @@ async fn non_git_file_captures_coalesce_edits_and_use_final_content() {
     record.capture(&path);
     fs::write(&path, "final\nnew\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("a")).unwrap();
+    let summary = store.summary("a").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!((summary.added, summary.deleted), (2, 1));
-    let diff = store
-        .comparison(&AttemptId::new("a"), 0)
-        .await
-        .unwrap()
-        .unwrap();
+    let diff = store.comparison("a", 0).await.unwrap().unwrap();
     assert_eq!(Some(diff.hunks[0].old_text.as_str()), Some("original\n"));
     assert_eq!(Some(diff.hunks[0].new_text.as_str()), Some("final\nnew\n"));
 }
@@ -166,7 +161,7 @@ async fn ignored_files_are_captured_and_net_zero_edits_leave_no_card() {
     record.capture(&path);
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("a")).unwrap();
+    let summary = store.summary("a").unwrap();
     assert_eq!(summary.files[0].display, "ignored.txt");
     let record = start(root, &store, "b");
     record.before_tools().await;
@@ -174,7 +169,7 @@ async fn ignored_files_are_captured_and_net_zero_edits_leave_no_card() {
     fs::write(&path, "temporary\n").unwrap();
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("b")).is_none());
+    assert!(store.summary("b").is_none());
 }
 
 #[tokio::test]
@@ -192,43 +187,21 @@ async fn binary_oversized_deleted_and_renamed_files_keep_honest_comparisons() {
     )
     .unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("a")).unwrap();
+    let summary = store.summary("a").unwrap();
     assert_eq!(summary.total, 3);
-    assert!(
-        store
-            .comparison(&AttemptId::new("a"), 0)
-            .await
-            .unwrap()
-            .unwrap()
-            .binary
-    );
-    assert!(
-        store
-            .comparison(&AttemptId::new("a"), 1)
-            .await
-            .unwrap()
-            .unwrap()
-            .oversized
-    );
-    let renamed = store
-        .comparison(&AttemptId::new("a"), 2)
-        .await
-        .unwrap()
-        .unwrap();
+    assert!(store.comparison("a", 0).await.unwrap().unwrap().binary);
+    assert!(store.comparison("a", 1).await.unwrap().unwrap().oversized);
+    let renamed = store.comparison("a", 2).await.unwrap().unwrap();
     assert_eq!(
         renamed.hunks,
-        [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+        [] as [rustx_execution_protocol::changes::ComparisonHunk; 0]
     );
-    assert!(store.comparison(&AttemptId::new("a"), 3).await.is_err());
+    assert!(store.comparison("a", 3).await.is_err());
     let record = start(root, &store, "b");
     record.before_tools().await;
     fs::remove_file(root.join("renamed.txt")).unwrap();
     record.finish().await;
-    let deleted = store
-        .comparison(&AttemptId::new("b"), 0)
-        .await
-        .unwrap()
-        .unwrap();
+    let deleted = store.comparison("b", 0).await.unwrap().unwrap();
     assert_eq!(Some(deleted.hunks[0].new_text.as_str()), Some(""));
 }
 
@@ -239,38 +212,24 @@ async fn no_tools_missing_attempt_and_bounded_file_lists_have_no_fabricated_stat
     let store = Arc::default();
     let record = start(root, &store, "empty");
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("empty")).is_none());
-    assert!(
-        store
-            .comparison(&AttemptId::new("missing"), 0)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(store.summary("empty").is_none());
+    assert!(store.comparison("missing", 0).await.unwrap().is_none());
     let record = start(root, &store, "many");
     record.before_tools().await;
     for i in 0..503 {
         fs::write(root.join(format!("file-{i:03}")), "x\n").unwrap();
     }
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("many")).unwrap();
+    let summary = store.summary("many").unwrap();
     assert_eq!(summary.total, 503);
-    assert_ne!(
-        summary.files,
-        [] as [crate::workspace_changes::ChangedFile; 0]
-    );
-    assert!(summary.files.len() <= MAX_FILES);
+    assert_ne!(summary.files, [] as [ChangedFile; 0]);
+    assert!(summary.files.len() <= MAX_CHANGE_FILES);
     assert!(serde_json::to_vec(&summary).unwrap().len() <= 96 * 1024);
     assert_eq!(summary.added, 503);
     for (index, file) in summary.files.iter().enumerate() {
         assert_eq!(file.display, format!("file-{index:03}"));
     }
-    assert!(
-        store
-            .comparison(&AttemptId::new("many"), summary.files.len())
-            .await
-            .is_err()
-    );
+    assert!(store.comparison("many", summary.files.len()).await.is_err());
 }
 
 #[tokio::test]
@@ -285,13 +244,9 @@ async fn comparisons_treat_dynamic_route_and_unicode_file_names_literally() {
     record.before_tools().await;
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("route")).unwrap();
+    let summary = store.summary("route").unwrap();
     assert_eq!(summary.files[0].display, "[id]/页面.tsx");
-    let diff = store
-        .comparison(&AttemptId::new("route"), 0)
-        .await
-        .unwrap()
-        .unwrap();
+    let diff = store.comparison("route", 0).await.unwrap().unwrap();
     assert_eq!(diff.hunks[0].old_text, "before\n");
     assert_eq!(diff.hunks[0].new_text, "after\n");
 }
@@ -308,7 +263,7 @@ async fn a_failed_repository_baseline_never_becomes_a_capture_only_record() {
     record.capture(&path);
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("failed")).is_none());
+    assert!(store.summary("failed").is_none());
 }
 
 #[tokio::test]
@@ -323,7 +278,7 @@ async fn review_git_endpoints_win_over_intermediate_file_tool_captures() {
     record.capture(&path);
     fs::write(&path, "one\ntwo\n").unwrap();
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("restored")).is_none());
+    assert!(store.summary("restored").is_none());
 
     let shared = "shared\n".repeat(10);
     fs::write(&path, format!("{shared}old\n")).unwrap();
@@ -333,7 +288,7 @@ async fn review_git_endpoints_win_over_intermediate_file_tool_captures() {
     fs::write(&path, format!("{shared}changed\n")).unwrap();
     fs::rename(&path, root.join("renamed.txt")).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("renamed")).unwrap();
+    let summary = store.summary("renamed").unwrap();
     assert_eq!(summary.total, 1, "a rename must not add a second deletion");
     assert_eq!(summary.files[0].display, "renamed.txt");
 }
@@ -368,7 +323,7 @@ async fn review_empty_file_and_newline_changes_survive_zero_line_counts() {
                 None => fs::remove_file(&path).unwrap(),
             }
             record.finish().await;
-            let summary = store.summary(&AttemptId::new(id)).unwrap();
+            let summary = store.summary(id).unwrap();
             assert_eq!(summary.total, 1, "{id}, Git={git_workspace}");
             assert_eq!((summary.added, summary.deleted), (0, 0));
         }
@@ -409,7 +364,7 @@ async fn review_nested_repository_contents_do_not_leak_into_parent_changes() {
         fs::write(&path, "after\n").unwrap();
         fs::write(dir.path().join("tracked.txt"), format!("outer-{staged}\n")).unwrap();
         record.finish().await;
-        let summary = store.summary(&AttemptId::new(id)).unwrap();
+        let summary = store.summary(&id).unwrap();
         assert_eq!(summary.total, 1);
         assert_eq!(summary.files[0].display, "tracked.txt");
     }
@@ -427,7 +382,7 @@ async fn private_index_does_not_adopt_later_force_added_ignored_files() {
     git(root, &["add", "-f", "new.generated"]);
     let metadata = raw::git_files(root);
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("force-added")).is_none());
+    assert!(store.summary("force-added").is_none());
     assert_eq!(raw::git_files(root), metadata);
 }
 
@@ -449,7 +404,7 @@ async fn ignore_and_untrack_changes_do_not_report_unchanged_files_as_deleted() {
         }
         let index = fs::read(root.join(".git/index")).unwrap();
         record.finish().await;
-        let summary = store.summary(&AttemptId::new("ignored")).unwrap();
+        let summary = store.summary("ignored").unwrap();
         assert_eq!(summary.total, 1);
         assert_eq!(summary.files[0].display, ".gitignore");
         assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
@@ -468,7 +423,7 @@ async fn private_index_honors_git_assume_unchanged_and_skip_worktree_flags() {
         record.capture(&dir.path().join("tracked.txt"));
         fs::write(dir.path().join("tracked.txt"), "changed\n").unwrap();
         record.finish().await;
-        assert!(store.summary(&AttemptId::new("flagged")).is_none());
+        assert!(store.summary("flagged").is_none());
         assert_eq!(raw::git_files(dir.path()), metadata);
     }
 }
@@ -488,7 +443,7 @@ async fn newly_ignored_restored_file_keeps_its_attempt_baseline() {
     fs::write(root.join(".gitignore"), "generated.log\n").unwrap();
     let index = fs::read(root.join(".git/index")).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("restored")).unwrap();
+    let summary = store.summary("restored").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, ".gitignore");
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
@@ -511,7 +466,7 @@ async fn ignored_rename_source_is_also_listed_from_its_uncovered_capture() {
     fs::write(root.join(".gitignore"), "old.txt\n").unwrap();
     let index = fs::read(root.join(".git/index")).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("renamed")).unwrap();
+    let summary = store.summary("renamed").unwrap();
     assert_eq!(summary.total, 3);
     assert_eq!(
         summary
@@ -537,7 +492,7 @@ async fn absent_sparse_entries_do_not_become_physical_deletions() {
     record.before_tools().await;
     fs::write(root.join("new.txt"), "created\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("sparse")).unwrap();
+    let summary = store.summary("sparse").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, "new.txt");
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
@@ -576,7 +531,7 @@ async fn sparse_checkout_honors_git_coverage_even_for_materialized_excluded_file
     record.capture(&path);
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("sparse-checkout")).is_none());
+    assert!(store.summary("sparse-checkout").is_none());
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
 }
 
@@ -596,7 +551,7 @@ async fn review_non_regular_capture_does_not_discard_other_file_changes() {
     fs::create_dir(&path).unwrap();
     fs::write(&kept, "after\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("directory")).unwrap();
+    let summary = store.summary("directory").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, "kept.txt");
 }
@@ -681,7 +636,7 @@ async fn review_fifo_endpoints_never_block_other_file_changes() {
             .open(&path);
     }
     result.expect("a non-regular endpoint must not block completion");
-    let summary = store.summary(&AttemptId::new("fifo")).unwrap();
+    let summary = store.summary("fifo").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, "kept.txt");
 }
@@ -700,7 +655,7 @@ async fn review_supervised_git_treats_quoted_newline_paths_as_data() {
     record.capture(&path);
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("quoted")).unwrap();
+    let summary = store.summary("quoted").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, name);
     assert!(!root.join("injected").exists());
@@ -725,7 +680,7 @@ async fn cancellation_interrupts_a_blocked_git_configuration_read() {
     tokio::time::timeout(std::time::Duration::from_secs(1), record.finish())
         .await
         .unwrap();
-    assert!(store.summary(&AttemptId::new("config-fifo")).is_none());
+    assert!(store.summary("config-fifo").is_none());
 }
 
 async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {
@@ -746,7 +701,7 @@ async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {
     }
     let index = fs::read(root.join(".git/index")).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("visible")).unwrap();
+    let summary = store.summary("visible").unwrap();
     let position = summary
         .files
         .iter()
@@ -758,7 +713,7 @@ async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {
         if force_add { (1, 1) } else { (2, 0) }
     );
     let comparison = store
-        .comparison(&AttemptId::new("visible"), position)
+        .comparison("visible", position)
         .await
         .unwrap()
         .unwrap();
@@ -795,7 +750,7 @@ async fn restored_ignored_file_entering_git_has_no_fabricated_addition() {
     fs::write(&path, "unchanged\n").unwrap();
     git(root, &["add", "-f", "config.txt"]);
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("restored")).is_none());
+    assert!(store.summary("restored").is_none());
 }
 
 #[tokio::test]
@@ -826,7 +781,7 @@ async fn git_rename_wins_over_an_existing_ignored_destination_capture() {
         fs::write(root.join(".gitignore"), "").unwrap();
         let index = fs::read(root.join(".git/index")).unwrap();
         record.finish().await;
-        let summary = store.summary(&AttemptId::new("false-rename")).unwrap();
+        let summary = store.summary("false-rename").unwrap();
         assert_eq!(
             summary.total, 2,
             "Git's rename pairs the two snapshot endpoints"
@@ -840,7 +795,7 @@ async fn git_rename_wins_over_an_existing_ignored_destination_capture() {
         assert_eq!((file.added, file.deleted), (0, 0));
         assert!(!file.oversized);
         let comparison = store
-            .comparison(&AttemptId::new("false-rename"), destination_index)
+            .comparison("false-rename", destination_index)
             .await
             .unwrap()
             .unwrap();
@@ -866,18 +821,14 @@ async fn missing_destination_capture_does_not_split_a_real_git_rename() {
     record.capture(&destination);
     fs::rename(root.join("tracked.txt"), &destination).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("real-rename")).unwrap();
+    let summary = store.summary("real-rename").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, "renamed.txt");
     assert_eq!((summary.added, summary.deleted), (0, 0));
-    let comparison = store
-        .comparison(&AttemptId::new("real-rename"), 0)
-        .await
-        .unwrap()
-        .unwrap();
+    let comparison = store.comparison("real-rename", 0).await.unwrap().unwrap();
     assert_eq!(
         comparison.hunks,
-        [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+        [] as [rustx_execution_protocol::changes::ComparisonHunk; 0]
     );
 }
 
@@ -912,7 +863,7 @@ async fn newly_created_nested_repository_captures_stay_with_the_nested_owner() {
     let index = fs::read(root.join(".git/index")).unwrap();
     let nested_index = fs::read(nested.join(".git/index")).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("new-nested")).unwrap();
+    let summary = store.summary("new-nested").unwrap();
     assert_eq!(
         summary
             .files
@@ -958,7 +909,7 @@ async fn external_temporary_edits_are_excluded_while_workspace_files_are_kept() 
         fs::write(path, "after\n").unwrap();
     }
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("temporary-output")).unwrap();
+    let summary = store.summary("temporary-output").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, "kept.txt");
     assert_eq!((summary.added, summary.deleted), (1, 1));
@@ -978,27 +929,20 @@ async fn long_paths_bound_summary_bytes_without_losing_total_change_counts() {
         fs::write(path, "created\n").unwrap();
     }
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("long-paths")).unwrap();
+    let summary = store.summary("long-paths").unwrap();
     assert_eq!(summary.total, 256);
     assert_eq!((summary.added, summary.deleted), (256, 0));
-    assert_ne!(
-        summary.files,
-        [] as [crate::workspace_changes::ChangedFile; 0]
-    );
+    assert_ne!(summary.files, [] as [ChangedFile; 0]);
     assert!(
         summary.files.len() < summary.total,
         "the byte budget truncates before the 500-file limit"
     );
     assert!(serde_json::to_vec(&summary).unwrap().len() <= 96 * 1024);
-    let comparison = store
-        .comparison(&AttemptId::new("long-paths"), 0)
-        .await
-        .unwrap()
-        .unwrap();
+    let comparison = store.comparison("long-paths", 0).await.unwrap().unwrap();
     assert_eq!(comparison.hunks[0].new_text, "created\n");
     assert!(
         store
-            .comparison(&AttemptId::new("long-paths"), summary.files.len())
+            .comparison("long-paths", summary.files.len())
             .await
             .is_err()
     );
@@ -1028,7 +972,7 @@ async fn aliased_temporary_root_inside_repository_never_snapshots_private_storag
     let repo = Repository::locate(
         root,
         Arc::new(OnceLock::from(Arc::clone(&scratch))),
-        CancellationSignal::new(),
+        ProcessSignal::new(),
     )
     .await
     .unwrap()
@@ -1073,7 +1017,7 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
     let a = Repository::locate(
         root,
         Arc::new(OnceLock::from(Arc::clone(&scratch_a))),
-        CancellationSignal::new(),
+        ProcessSignal::new(),
     )
     .await
     .unwrap()
@@ -1092,7 +1036,7 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
     let b = Repository::locate(
         root,
         Arc::new(OnceLock::from(Arc::clone(&scratch_b))),
-        CancellationSignal::new(),
+        ProcessSignal::new(),
     )
     .await
     .unwrap()
@@ -1261,13 +1205,7 @@ async fn repository_absence_is_cached_for_the_runtime() {
     second.capture(&path);
     fs::write(&path, "captured\n").unwrap();
     second.finish().await;
-    assert_eq!(
-        store
-            .summary(&AttemptId::new("initialized-later"))
-            .unwrap()
-            .total,
-        1
-    );
+    assert_eq!(store.summary("initialized-later").unwrap().total, 1);
 }
 
 #[test]

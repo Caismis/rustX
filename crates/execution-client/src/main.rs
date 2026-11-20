@@ -52,6 +52,7 @@ use rustx_execution_protocol::{
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
 mod bash_capture;
+mod changes;
 mod mutation;
 mod process;
 mod search;
@@ -197,6 +198,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::DirectoryMetadata,
             Capability::TreeMutations,
             Capability::FileWatches,
+            Capability::WorkspaceChanges,
             Capability::ConditionalWrite,
             Capability::ConditionalEdit,
             Capability::ReadLines,
@@ -644,6 +646,7 @@ fn serve(
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
     // private stage — when the owner is dropped at EOF or revoke.
+    let changes = changes::Changes::default();
     let mut writes = mutation::Writes::new(arbitration.clone());
     loop {
         let Some(request) = channel
@@ -713,6 +716,9 @@ fn serve(
                 expected_revision.as_deref(),
             ),
             ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
+            ClientRequest::WorkspaceChanges(request) => ClientReply::WorkspaceChanges(
+                changes.dispatch(operations, operations.workspace(), request),
+            ),
             ClientRequest::MutateTree(request) => tree::mutate(root, arbitration, &request),
             ClientRequest::Watch(request) => {
                 ClientReply::Watch(watches.dispatch(root, workspace, request))

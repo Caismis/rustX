@@ -8,6 +8,7 @@ description = "Server-side binding arbitration for the rustX execution protocol:
 publish = false
 
 [dependencies]
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 rustx-execution-protocol = { path = "../execution-protocol" }
 rustx-execution-transport = { path = "../execution-transport" }
 getrandom = { version = "0.3.4", features = ["std"] }

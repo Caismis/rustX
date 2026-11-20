@@ -1020,6 +1020,8 @@ fn a_foreign_protocol_version_never_connects() {
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 #[allow(clippy::too_many_lines)] // One real namespace owns every asserted side effect.
 fn filesystem_operations_use_the_private_mount_view() {
+    use rustx_execution_protocol::changes::{ChangeReply, ChangeRequest};
+    use rustx_execution_protocol::process::{OperationId, ProcessOperationKey};
     use rustx_execution_protocol::watch::WatchId;
 
     assert!(
@@ -1043,12 +1045,27 @@ fn filesystem_operations_use_the_private_mount_view() {
         Capability::ReadRange,
         Capability::TreeMutations,
         Capability::FileWatches,
+        Capability::WorkspaceChanges,
     ]));
     // The marker lives only in the physical directory that the client's
     // private mount view substitutes for the workspace path.
     let physical = private_dir();
     let marker = b"mount-view-proof-marker";
     fs::write(physical.1.join("marker"), marker).unwrap();
+
+    let scratch = private_dir();
+    for args in [&["init", "-q"][..], &["add", "marker"]] {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(&physical.1)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fs::write(physical.1.join(".git/info/exclude"), "ignored\n").unwrap();
+    fs::write(physical.1.join("ignored"), b"pre-capture\n").unwrap();
 
     // `bwrap --ro-bind / / --bind <physical> <workspace> -- <client>`:
     // inside the namespace the same absolute workspace path resolves to a
@@ -1058,9 +1075,19 @@ fn filesystem_operations_use_the_private_mount_view() {
         .arg("--ro-bind")
         .arg("/")
         .arg("/")
+        .arg("--dev")
+        .arg("/dev")
+        .arg("--setenv")
+        .arg("PATH")
+        .arg(std::env::var_os("PATH").expect("Git fixture PATH"))
         .arg("--bind")
         .arg(&physical.1)
         .arg(&rig.workspace_path)
+        .arg("--tmpfs")
+        .arg(&scratch.1)
+        .arg("--setenv")
+        .arg("TMPDIR")
+        .arg(&scratch.1)
         .arg("--")
         .arg(env!("CARGO_BIN_EXE_rustx-execution-client"))
         .arg("--binding-file")
@@ -1090,6 +1117,104 @@ fn filesystem_operations_use_the_private_mount_view() {
     assert_eq!(range.bytes, marker);
     assert_eq!(range.offset, 0);
     assert_eq!(range.next_offset, None);
+
+    let admission = connection.admission();
+    let key = ProcessOperationKey {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        operation: OperationId::new(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut request = |request| {
+        connection
+            .workspace_changes(request, deadline, || Ok(()))
+            .unwrap()
+    };
+    assert_eq!(
+        request(ChangeRequest::Begin { key: key.clone() }),
+        ChangeReply::Accepted
+    );
+    loop {
+        match request(ChangeRequest::Baseline { key: key.clone() }) {
+            ChangeReply::BaselineReady => break,
+            ChangeReply::Pending => std::thread::yield_now(),
+            other => panic!("unexpected baseline state: {other:?}"),
+        }
+    }
+    assert_eq!(
+        request(ChangeRequest::Capture {
+            key: key.clone(),
+            path: "ignored".into(),
+        }),
+        ChangeReply::Accepted
+    );
+    fs::write(physical.1.join("ignored"), b"post-capture\n").unwrap();
+    fs::write(physical.1.join("marker"), b"changed-git-file\n").unwrap();
+    assert_eq!(
+        request(ChangeRequest::Finish { key: key.clone() }),
+        ChangeReply::Accepted
+    );
+    let summary = loop {
+        match request(ChangeRequest::Summary { key: key.clone() }) {
+            ChangeReply::Summary(Some(summary)) => break summary,
+            ChangeReply::Pending => std::thread::yield_now(),
+            other => panic!("unexpected summary state: {other:?}"),
+        }
+    };
+    assert_eq!(summary.total, 2);
+    assert_eq!(summary.added, 2);
+    assert_eq!(summary.deleted, 2);
+    assert_eq!(
+        summary
+            .files
+            .iter()
+            .map(|file| file.display.as_str())
+            .collect::<Vec<_>>(),
+        ["ignored", "marker"]
+    );
+    for (index, before, after) in [
+        (0, "pre-capture", "post-capture"),
+        (1, "mount-view-proof-marker", "changed-git-file"),
+    ] {
+        assert_eq!(
+            request(ChangeRequest::Compare {
+                key: key.clone(),
+                index
+            }),
+            ChangeReply::Accepted
+        );
+        let comparison = loop {
+            match request(ChangeRequest::Comparison {
+                key: key.clone(),
+                index,
+            }) {
+                ChangeReply::Comparison {
+                    index: found,
+                    comparison: Some(comparison),
+                } => {
+                    assert_eq!(found, index);
+                    break comparison;
+                }
+                ChangeReply::Pending => std::thread::yield_now(),
+                other => panic!("unexpected comparison state: {other:?}"),
+            }
+        };
+        assert_eq!(comparison.hunks.len(), 1);
+        assert_eq!(comparison.hunks[0].old_text.trim_end(), before);
+        assert_eq!(comparison.hunks[0].new_text.trim_end(), after);
+    }
+    assert_eq!(
+        request(ChangeRequest::Release { key: key.clone() }),
+        ChangeReply::Accepted
+    );
+    assert_eq!(
+        request(ChangeRequest::Summary { key }),
+        ChangeReply::Unavailable
+    );
+    assert!(!rig.workspace_path.join("ignored").exists());
+    fs::write(physical.1.join("marker"), marker).unwrap();
 
     let create = TreeMutation::CreateDirectory {
         path: "new/nested".into(),

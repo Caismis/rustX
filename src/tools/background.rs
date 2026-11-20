@@ -2976,6 +2976,7 @@ impl ConversationBackgroundRegistry {
             });
             let context = ToolExecutionContext {
                 stdout_capture: None,
+                #[cfg(test)]
                 workspace_changes: None,
                 model_invocation: None,
                 attempt_id: None,

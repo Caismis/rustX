@@ -4748,7 +4748,6 @@ dependencies = [
  "serde_path_to_error",
  "serde_yaml_ng",
  "sha2 0.10.9",
- "similar 3.2.0",
  "sse-stream",
  "strum 0.27.2",
  "tempfile",
@@ -4813,8 +4812,12 @@ dependencies = [
  "rustx-process-supervisor",
  "rustx-text-edit",
  "serde_json",
+ "sha2 0.10.9",
+ "similar 3.2.0",
  "tempfile",
  "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -4823,6 +4826,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nix",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4840,6 +4844,7 @@ dependencies = [
  "nix",
  "rustx-execution-protocol",
  "rustx-execution-transport",
+ "serde_json",
  "sha2 0.10.9",
  "tempfile",
 ]

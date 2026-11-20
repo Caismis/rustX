@@ -1,76 +1,37 @@
-//! Actual per-attempt workspace changes. Private snapshots and file captures live
-//! with the runtime, never enter model input, and never mutate the user's index.
-mod capture;
-mod command;
-mod comparison;
-use comparison::FileContents;
-pub use comparison::{ComparisonHunk, FileComparison};
-mod git;
-mod storage;
-use storage::SnapshotDirectory;
+//! Server ownership of the canonical WorkspaceChanges projection.
+use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
+use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
+use crate::runtime::identity::AttemptId;
+use crate::runtime::types::CancellationReason;
+use crate::tools::workspace::Workspace;
+use rustx_execution_protocol::changes::{ChangeReply, ChangeRequest};
+pub use rustx_execution_protocol::changes::{ChangesSummary, FileComparison};
+use rustx_execution_protocol::process::{OperationId, ProcessOperationKey};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::runtime::{cancellation::CancellationSignal, identity::AttemptId};
-use capture::Capture;
-use git::Repository;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_COMPLETED: usize = 16;
 
-const MAX_FILES: usize = 500;
-
-/// One file's actual net change during an attempt.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ChangedFile {
-    /// Absolute resolved Host path; never accepted from a comparison request.
-    pub path: String,
-    pub display: String,
-    pub added: usize,
-    pub deleted: usize,
-    pub binary: bool,
-    pub oversized: bool,
-}
-
-/// Bounded paths and counts; whole file content is read only on demand.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ChangesSummary {
-    pub files: Vec<ChangedFile>,
-    pub total: usize,
-    pub added: usize,
-    pub deleted: usize,
-}
-
-enum FileSource {
-    Git { before: String, after: String },
-    Captured(Capture, Capture),
-}
-struct Recorded {
-    summary: ChangesSummary,
-    sources: Vec<FileSource>,
-    repository: Option<Repository>,
-    trees: Option<(String, String)>,
-    _directory: Arc<SnapshotDirectory>,
-}
-
-/// One runtime's immutable completed records. Dropping it releases all snapshots.
 #[derive(Default)]
 pub(crate) struct ChangesStore {
-    records: Mutex<BTreeMap<String, Arc<Recorded>>>,
-    repository: tokio::sync::OnceCell<Option<Repository>>,
-    directory: Arc<OnceLock<Arc<SnapshotDirectory>>>,
+    records: Mutex<BTreeMap<String, Arc<Record>>>,
 }
+
+struct Record {
+    source: Arc<ClientRecord>,
+    summary: ChangesSummary,
+    comparison: tokio::sync::Mutex<()>,
+}
+
 impl ChangesStore {
     pub(crate) fn summary(&self, attempt: &AttemptId) -> Option<ChangesSummary> {
         self.records
             .lock()
-            .expect("workspace changes")
+            .expect("Workspace changes")
             .get(attempt.as_str())
             .map(|record| record.summary.clone())
     }
@@ -83,115 +44,194 @@ impl ChangesStore {
         let record = self
             .records
             .lock()
-            .expect("workspace changes")
+            .expect("Workspace changes")
             .get(attempt.as_str())
             .cloned();
         let Some(record) = record else {
             return Ok(None);
         };
-        let source = record
-            .sources
-            .get(index)
-            .ok_or("invalid changed file index")?;
-        if record.summary.files[index].binary {
-            return Ok(Some(FileComparison {
-                hunks: Vec::new(),
-                binary: true,
-                oversized: false,
-                truncated: false,
-            }));
+        if index >= record.summary.files.len() {
+            return Err("invalid changed file index".to_owned());
         }
-        let (before, after) = match source {
-            FileSource::Captured(before, after) => (before.bytes()?, after.bytes()?),
-            FileSource::Git { before, after } => {
-                let repo = record.repository.as_ref().ok_or("snapshot unavailable")?;
-                let (old, new) = record.trees.as_ref().ok_or("snapshot unavailable")?;
-                (
-                    repo.bytes(old, before).await?,
-                    repo.bytes(new, after).await?,
-                )
-            }
-        };
-        tokio::task::spawn_blocking(move || {
-            Some(FileContents::from_bytes(before, after).comparison())
-        })
-        .await
-        .map_err(|error| error.to_string())
+        let _comparison = record.comparison.lock().await;
+        let source = &record.source;
+        let cancellation = cancellation(CancellationSignal::new());
+        if source
+            .send(
+                ChangeRequest::Compare {
+                    key: source.key.clone(),
+                    index,
+                },
+                &cancellation,
+            )
+            .await
+            != Some(ChangeReply::Accepted)
+        {
+            return Err("Workspace comparison unavailable".to_owned());
+        }
+        match source
+            .wait(
+                || ChangeRequest::Comparison {
+                    key: source.key.clone(),
+                    index,
+                },
+                &cancellation,
+            )
+            .await
+        {
+            Some(ChangeReply::Comparison {
+                index: echoed,
+                comparison,
+            }) if index == echoed => Ok(comparison),
+            _ => Err("Workspace comparison unavailable".to_owned()),
+        }
+    }
+
+    fn record(&self, attempt: &AttemptId, record: Record) {
+        let mut records = self.records.lock().expect("Workspace changes");
+        if records.len() == MAX_COMPLETED {
+            records.pop_first();
+        }
+        records.insert(attempt.as_str().to_owned(), Arc::new(record));
     }
 }
 
-struct Baseline {
-    repository: Repository,
-    tree: String,
+struct ClientRecord {
+    scope: SessionExecutionScope,
+    key: ProcessOperationKey,
 }
+
+impl ClientRecord {
+    async fn send(
+        &self,
+        request: ChangeRequest,
+        cancellation: &ExecutionCancellation,
+    ) -> Option<ChangeReply> {
+        self.scope
+            .workspace_changes(request, cancellation)
+            .await
+            .ok()
+    }
+
+    async fn wait(
+        &self,
+        request: impl Fn() -> ChangeRequest,
+        cancellation: &ExecutionCancellation,
+    ) -> Option<ChangeReply> {
+        tokio::time::timeout(
+            rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT,
+            async {
+                loop {
+                    match self.send(request(), cancellation).await {
+                        Some(ChangeReply::Pending) => tokio::select! {
+                            biased;
+                            () = cancellation.cancelled() => return None,
+                            () = tokio::time::sleep(POLL_INTERVAL) => {}
+                        },
+                        reply => return reply,
+                    }
+                }
+            },
+        )
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
+impl Drop for ClientRecord {
+    fn drop(&mut self) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let scope = self.scope.clone();
+        let key = self.key.clone();
+        handle.spawn(async move {
+            let _ = scope
+                .workspace_changes(
+                    ChangeRequest::Release { key },
+                    &cancellation(CancellationSignal::new()),
+                )
+                .await;
+        });
+    }
+}
+
+fn cancellation(signal: CancellationSignal) -> ExecutionCancellation {
+    ExecutionCancellation::detached(signal, CancellationReason::UserRequested)
+}
+
 #[cfg(test)]
 type FinalObservationGate = (
     tokio::sync::oneshot::Sender<()>,
     tokio::sync::oneshot::Receiver<()>,
 );
-type BaselineTask = tokio_util::task::AbortOnDropHandle<Result<Option<Baseline>, String>>;
 
-/// Attempt-bound file capture authority, shared only with foreground file tools.
 pub(crate) struct ChangeRecording {
     attempt: AttemptId,
-    cancellation: CancellationSignal,
-    cwd: PathBuf,
-    directory: Arc<OnceLock<Arc<SnapshotDirectory>>>,
-    task: tokio::sync::Mutex<Option<BaselineTask>>,
-    baseline: Mutex<Option<Baseline>>,
-    captures: Mutex<BTreeMap<PathBuf, Capture>>,
+    workspace: PathBuf,
+    cancellation: ExecutionCancellation,
+    store: Arc<ChangesStore>,
+    source: tokio::sync::OnceCell<Option<Arc<ClientRecord>>>,
+    preparation:
+        tokio::sync::Mutex<Option<tokio_util::task::AbortOnDropHandle<Option<Arc<ClientRecord>>>>>,
     used: AtomicBool,
     failed: AtomicBool,
-    store: Arc<ChangesStore>,
     #[cfg(test)]
     final_observation_gate: Mutex<Option<FinalObservationGate>>,
 }
 
 impl ChangeRecording {
-    /// Start the baseline concurrently with model inference. Tools await it
-    /// before dispatch, so no operation can race ahead of its baseline.
     pub(crate) fn start(
         attempt: AttemptId,
-        cwd: PathBuf,
+        workspace: &Workspace,
         store: Arc<ChangesStore>,
-        cancellation: CancellationSignal,
+        signal: CancellationSignal,
     ) -> Arc<Self> {
-        let directory = Arc::clone(&store.directory);
-        let session = Arc::clone(&store);
-        let scratch = Arc::clone(&directory);
-        let root = cwd.clone();
-        let observation_cancellation = cancellation.clone();
-        let task = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
-            async move {
-                let repository = session
-                    .repository
-                    .get_or_try_init(|| {
-                        Repository::locate(&root, scratch, observation_cancellation.clone())
-                    })
-                    .await?
-                    .clone();
-                let Some(mut repository) = repository else {
-                    return Ok(None);
-                };
-                repository.cancellation = observation_cancellation;
-                let tree = repository.snapshot().await?;
-                Ok(Some(Baseline { repository, tree }))
-            },
-        )));
+        let cancellation = cancellation(signal);
+        let preparation = workspace.execution_scope().cloned().map(|scope| {
+            let cancellation = cancellation.clone();
+            tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                let key = scope
+                    .endpoint()
+                    .ok()?
+                    .process_key(OperationId::new())
+                    .ok()?;
+                let record = Arc::new(ClientRecord { scope, key });
+                (record
+                    .send(
+                        ChangeRequest::Begin {
+                            key: record.key.clone(),
+                        },
+                        &cancellation,
+                    )
+                    .await
+                    == Some(ChangeReply::Accepted))
+                .then_some(record)
+            }))
+        });
         Arc::new(Self {
             attempt,
+            workspace: workspace.root().to_path_buf(),
             cancellation,
-            cwd,
-            directory,
-            task: tokio::sync::Mutex::new(task),
-            baseline: Mutex::new(None),
-            captures: Mutex::new(BTreeMap::new()),
+            store,
+            source: tokio::sync::OnceCell::new(),
+            preparation: tokio::sync::Mutex::new(preparation),
             used: AtomicBool::new(false),
             failed: AtomicBool::new(false),
-            store,
             #[cfg(test)]
             final_observation_gate: Mutex::new(None),
         })
+    }
+
+    async fn source(&self) -> Option<&ClientRecord> {
+        self.source
+            .get_or_init(|| async {
+                let preparation = self.preparation.lock().await.take()?;
+                preparation.await.ok().flatten()
+            })
+            .await
+            .as_deref()
     }
 
     #[cfg(test)]
@@ -208,103 +248,47 @@ impl ChangeRecording {
     }
 
     pub(crate) async fn before_tools(&self) {
-        self.ready().await;
-        self.used.store(true, Ordering::Relaxed);
-    }
-
-    async fn ready(&self) {
-        let mut task = self.task.lock().await;
-        if let Some(task) = task.take() {
-            match task.await {
-                Ok(Ok(baseline)) => *self.baseline.lock().expect("workspace baseline") = baseline,
-                Ok(Err(error)) => {
-                    self.failed.store(true, Ordering::Relaxed);
-                    tracing::warn!(%error, "workspace snapshot unavailable");
-                }
-                Err(error) => {
-                    self.failed.store(true, Ordering::Relaxed);
-                    tracing::warn!(%error, "workspace snapshot task failed");
-                }
-            }
+        if let Some(source) = self.source().await {
+            let reply = source
+                .wait(
+                    || ChangeRequest::Baseline {
+                        key: source.key.clone(),
+                    },
+                    &self.cancellation,
+                )
+                .await;
+            self.used
+                .store(reply == Some(ChangeReply::BaselineReady), Ordering::Relaxed);
         }
     }
 
-    /// Resolved, guarded mutation target, captured once before its first edit.
-    #[allow(dead_code)] // callers return with the WorkspaceChanges migration
-    pub(crate) fn capture(&self, path: &Path) {
-        // Serialize initialization with captures so concurrent tools allocate at most
-        // one private directory, and only when a file actually needs capture.
-        let mut captures = self.captures.lock().expect("workspace captures");
-        if self.directory.get().is_none() {
-            match create_snapshot_directory(&std::env::temp_dir()) {
-                Ok(directory) => {
-                    let _ = self.directory.set(Arc::new(directory));
-                }
-                Err(error) => {
-                    self.failed.store(true, Ordering::Relaxed);
-                    tracing::warn!(%error, "workspace change recording unavailable");
-                    return;
-                }
-            }
-        }
-        let directory = self
-            .directory
-            .get()
-            .expect("snapshot directory initialized");
-        if directory.contains(path) {
-            return;
-        }
-        // Temporary output outside the workspace is not a user deliverable.
-        if (is_temporary_path(path, &std::env::temp_dir())
-            || is_temporary_path(path, Path::new("/tmp")))
-            && !path.starts_with(&self.cwd)
-            && !self
-                .baseline
-                .lock()
-                .expect("workspace baseline")
-                .as_ref()
-                .is_some_and(|base| path.starts_with(&base.repository.root))
-        {
-            return;
-        }
-        if captures.contains_key(path) {
-            return;
-        }
-        match Capture::read(path, directory.path()) {
-            Ok(Some(capture)) => {
-                captures.insert(path.to_owned(), capture);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%error, path=%path.display(), "workspace file capture unavailable");
-            }
-        }
-    }
-
-    /// The conversation runtime owns this optional observation before terminal
-    /// publication. Cancellation abandons the card immediately; command drivers
-    /// keep ownership of their children and scratch files until physical reaping.
-    pub(crate) async fn finish(&self) {
-        if self.cancellation.is_cancelled() {
-            self.task.lock().await.take();
-            return;
-        }
+    pub(crate) async fn capture(&self, path: &Path) {
         if !self.used.load(Ordering::Relaxed) {
-            // DSH samples at turn start, including while the model is waiting.
-            // Settle that work before a later turn reuses the session index.
-            self.ready().await;
             return;
         }
-        tokio::select! {
-            biased;
-            () = self.cancellation.cancelled() => {}
-            () = self.finish_active() => {}
+        if let Some(source) = self.source().await
+            && let Ok(path) = path.strip_prefix(&self.workspace)
+        {
+            let captured = source
+                .send(
+                    ChangeRequest::Capture {
+                        key: source.key.clone(),
+                        path: path.to_path_buf(),
+                    },
+                    &self.cancellation,
+                )
+                .await;
+            if captured != Some(ChangeReply::Accepted) {
+                self.failed.store(true, Ordering::Relaxed);
+            }
         }
     }
 
-    async fn finish_active(&self) {
-        self.ready().await;
-        if self.failed.load(Ordering::Relaxed) {
+    pub(crate) async fn finish(&self) {
+        if self.cancellation.is_cancelled()
+            || self.failed.load(Ordering::Relaxed)
+            || !self.used.load(Ordering::Relaxed)
+        {
             return;
         }
         #[cfg(test)]
@@ -312,231 +296,55 @@ impl ChangeRecording {
             let gate = self.final_observation_gate.lock().unwrap().take();
             if let Some((entered, waiting)) = gate {
                 let _ = entered.send(());
-                let _ = waiting.await;
+                tokio::select! {
+                    biased;
+                    () = self.cancellation.cancelled() => return,
+                    _ = waiting => {}
+                }
             }
         }
-        if let Err(error) = self.record().await {
-            tracing::warn!(%error, "workspace change summary unavailable");
-        }
-    }
-
-    async fn record(&self) -> Result<(), String> {
-        let baseline = self.baseline.lock().expect("workspace baseline").take();
-        let mut files = BTreeMap::<PathBuf, (ChangedFile, FileSource)>::new();
-        let mut captures = self.captures.lock().expect("workspace captures").clone();
-        let (mut repository, mut repository_root, mut trees) = (None, None, None);
-        if let Some(Baseline {
-            repository: repo,
-            tree: before,
-        }) = baseline
-        {
-            repository_root = Some(repo.root.clone());
-            let after = repo.snapshot().await?;
-            let changes = resolve_git_changes(&repo, &before, &after, &mut captures).await?;
-            for (_, change) in changes {
-                let path = repo.root.join(&change.path);
-                // Snapshot rows win over file-tool copies, as in DSH.
-                captures.remove(&path);
-                let display = display_path(&self.cwd, &path, Some(&repo.root));
-                files.insert(
-                    path.clone(),
-                    (
-                        ChangedFile {
-                            path: path.to_string_lossy().into_owned(),
-                            display,
-                            added: change.added,
-                            deleted: change.deleted,
-                            binary: change.binary,
-                            oversized: false,
-                        },
-                        FileSource::Git {
-                            before: change.old_path,
-                            after: change.path,
-                        },
-                    ),
-                );
-            }
-            if !files.is_empty() {
-                trees = Some((before, after));
-                repository = Some(repo);
-            }
-        }
-        let Some(directory) = self.directory.get() else {
-            return Ok(());
+        let Some(source) = self.source.get().and_then(Option::as_ref).cloned() else {
+            return;
         };
-        let cwd = self.cwd.clone();
-        let directory = Arc::clone(directory);
-        let files = tokio::task::spawn_blocking(move || {
-            capture_endpoints(
-                &mut files,
-                &captures,
-                &cwd,
-                directory.path(),
-                repository_root.as_deref(),
-            )?;
-            Ok::<_, String>(files)
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        if files.is_empty() {
-            return Ok(());
-        }
-        let total = files.len();
-        let added = files.values().map(|(file, _)| file.added).sum();
-        let deleted = files.values().map(|(file, _)| file.deleted).sum();
-        // Presentation may be lossy or shared by different paths; only the
-        // resolved path owns identity. Stable sorting keeps equal labels in
-        // deterministic path order without merging their comparison sources.
-        let mut files = files.into_values().collect::<Vec<_>>();
-        files.sort_by(|(left, _), (right, _)| left.display.cmp(&right.display));
-        let mut summary_bytes = 0;
-        let (files, sources) = files
-            .into_iter()
-            .take(MAX_FILES)
-            .take_while(|(file, _)| {
-                summary_bytes += file.path.len() + file.display.len() + 128;
-                summary_bytes <= 96 * 1024
-            })
-            .unzip();
-        let record = Recorded {
-            summary: ChangesSummary {
-                files,
-                total,
-                added,
-                deleted,
-            },
-            sources,
-            repository,
-            trees,
-            _directory: Arc::clone(self.directory.get().ok_or("snapshot unavailable")?),
-        };
-        // Cancellation and publication share a grant boundary. A detached
-        // blocking file comparison can never publish after cancellation wins.
-        let _ = self.cancellation.with_active(|| {
-            self.store
-                .records
-                .lock()
-                .expect("workspace changes")
-                .insert(self.attempt.as_str().to_owned(), Arc::new(record));
-        });
-        Ok(())
-    }
-}
-
-impl Drop for ChangeRecording {
-    fn drop(&mut self) {
-        self.cancellation.cancel();
-    }
-}
-
-async fn resolve_git_changes(
-    repo: &Repository,
-    before: &str,
-    after: &str,
-    captures: &mut BTreeMap<PathBuf, Capture>,
-) -> Result<BTreeMap<String, git::Change>, String> {
-    let changes = repo.changes(before, after).await?;
-    captures.retain(|path, _| {
-        !changes.contains_key(
-            path.strip_prefix(&repo.root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .as_ref(),
-        )
-    });
-    if !captures.is_empty() {
-        let paths = captures.keys().cloned().collect::<Vec<_>>();
-        let uncovered = repo.uncovered(&paths).await?;
-        captures.retain(|path, _| uncovered.contains(path));
-    }
-    Ok(changes)
-}
-
-fn capture_endpoints(
-    files: &mut BTreeMap<PathBuf, (ChangedFile, FileSource)>,
-    captures: &BTreeMap<PathBuf, Capture>,
-    cwd: &Path,
-    directory: &Path,
-    repository: Option<&Path>,
-) -> Result<(), String> {
-    for (path, before) in captures {
-        if files.contains_key(path) {
-            continue;
-        }
-        let Some(after) = Capture::read(path, directory)? else {
-            continue;
-        };
-        if before == &after && *before != Capture::Oversized {
-            continue;
-        }
-        let comparison = FileContents::from_bytes(before.bytes()?, after.bytes()?);
-        let (added, deleted) = comparison.counts();
-        files.insert(
-            path.clone(),
-            (
-                ChangedFile {
-                    path: path.to_string_lossy().into_owned(),
-                    display: display_path(cwd, path, repository),
-                    added,
-                    deleted,
-                    binary: comparison.binary,
-                    oversized: comparison.oversized,
+        if source
+            .send(
+                ChangeRequest::Finish {
+                    key: source.key.clone(),
                 },
-                FileSource::Captured(before.clone(), after),
-            ),
-        );
-    }
-    Ok(())
-}
-
-fn create_snapshot_directory(temporary_root: &Path) -> std::io::Result<SnapshotDirectory> {
-    SnapshotDirectory::create(temporary_root)
-}
-
-/// Native mutation paths are already resolved. Compare them with the physical
-/// temporary root too (for example macOS /var aliases /private/var).
-#[allow(dead_code)] // used by the unported capture path
-fn is_temporary_path(path: &Path, temporary_root: &Path) -> bool {
-    temporary_root
-        .canonicalize()
-        .is_ok_and(|root| path.starts_with(root))
-}
-
-fn display_path(cwd: &Path, path: &Path, repository: Option<&Path>) -> String {
-    if let Ok(relative) = path.strip_prefix(cwd) {
-        return relative
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/");
-    }
-    if repository.is_some_and(|root| path.starts_with(root)) {
-        let mut parent = cwd.parent();
-        let mut prefix = "../".to_owned();
-        while let Some(directory) = parent {
-            if let Ok(relative) = path.strip_prefix(directory) {
-                return format!(
-                    "{prefix}{}",
-                    relative
-                        .to_string_lossy()
-                        .replace(std::path::MAIN_SEPARATOR, "/")
-                );
-            }
-            parent = directory.parent();
-            prefix.push_str("../");
+                &self.cancellation,
+            )
+            .await
+            != Some(ChangeReply::Accepted)
+        {
+            return;
         }
+        let Some(ChangeReply::Summary(Some(summary))) = source
+            .wait(
+                || ChangeRequest::Summary {
+                    key: source.key.clone(),
+                },
+                &self.cancellation,
+            )
+            .await
+        else {
+            return;
+        };
+        if summary.files.iter().any(|file| {
+            let path = Path::new(&file.path);
+            !rustx_execution_protocol::is_normalized_absolute_path(path)
+                || !path.starts_with(&self.workspace)
+        }) {
+            return;
+        }
+        let _ = self.cancellation.with_active(|| {
+            self.store.record(
+                &self.attempt,
+                Record {
+                    source,
+                    summary,
+                    comparison: tokio::sync::Mutex::new(()),
+                },
+            );
+        });
     }
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-        && let Ok(relative) = path.strip_prefix(home)
-    {
-        return format!(
-            "~/{}",
-            relative
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/")
-        );
-    }
-    path.to_string_lossy()
-        .replace(std::path::MAIN_SEPARATOR, "/")
 }
-
-#[cfg(test)]
-mod tests;

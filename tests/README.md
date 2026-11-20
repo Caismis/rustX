@@ -553,6 +553,14 @@ summarizes them and the lane check below verifies them against Cargo:
   and control-lane unwatch while the data lane is held. The explicit Linux
   mount proof is `test-support/prove_execution_mount_view.sh`.
 
+The Client member tests in `crates/execution-client/src/changes` cover
+WorkspaceChanges baselines, Git metadata isolation, physical file captures,
+scoped rename endpoints and on-demand comparisons. The opt-in
+`filesystem_operations_use_the_private_mount_view` test exercises both the
+Git and fallback capture paths against the real Client. The Server's
+scripted and conversation-runtime suites exercise normalized publication
+and cancellation through an admitted Client.
+
 ### Browser presentation matrices
 
 A native browser workflow (a real App Server, provider emulator and Agent

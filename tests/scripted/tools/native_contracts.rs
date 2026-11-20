@@ -1350,7 +1350,7 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
         let mut policy = support::default_execution_policy();
         policy.workspace_changes = Some(crate::workspace_changes::ChangeRecording::start(
             attempt.clone(),
-            fixture.runtime.workspace().root().to_owned(),
+            fixture.runtime.workspace(),
             Arc::clone(&fixture.runtime.workspace_changes),
             cancellation.signal().child(),
         ));
@@ -1385,17 +1385,19 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
             message,
             MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
         )));
-        // The mutation itself commits through the admitted Execution
-        // Client — asserted above against the real file. The
-        // WorkspaceChanges baseline/capture port is the documented
-        // separate workstream: without a Server-side descriptor the
-        // recording cannot yet snapshot the pre-mutation bytes, so this
-        // non-git fixture honestly records no comparison sources.
-        let changes = fixture.runtime.workspace_changes.summary(&attempt);
-        assert!(
-            changes.is_none(),
-            "the unported capture path records no snapshot yet: {changes:?}"
-        );
+        let changes = fixture.runtime.workspace_changes.summary(&attempt).unwrap();
+        assert_eq!((changes.total, changes.added, changes.deleted), (1, 1, 1));
+        assert_eq!(changes.files[0].display, "changed.txt");
+        let comparison = fixture
+            .runtime
+            .workspace_changes
+            .comparison(&attempt, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(comparison.hunks.len(), 1);
+        assert_eq!(comparison.hunks[0].old_text, "before\n");
+        assert_eq!(comparison.hunks[0].new_text, "after\n");
         assert_eq!(
             audit.messages().len(),
             4,

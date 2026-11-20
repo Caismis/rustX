@@ -12,6 +12,11 @@ name = "rustx-execution-client"
 path = "src/main.rs"
 
 [dependencies]
+similar = "3.2.0"
+tracing = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
+sha2 = "0.10"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 rustx-execution-protocol = { path = "../execution-protocol" }
 rustx-execution-transport = { path = "../execution-transport" }
 rustx-confined-fs = { path = "../confined-fs" }
@@ -38,7 +43,6 @@ rustx-execution-server = { path = "../execution-server" }
 # this package's own test binary only; no production graph enables it.
 rustx-process-supervisor = { path = "../process-supervisor", features = ["test-support"] }
 rustx-execution-transport = { path = "../execution-transport" }
-serde_json = "1"
 tempfile = "3.27.0"
 
 [lints.rust]

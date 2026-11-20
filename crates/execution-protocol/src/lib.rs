@@ -19,6 +19,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+pub mod changes;
 pub mod process;
 pub mod save;
 pub mod transport;
@@ -441,6 +442,8 @@ pub enum Capability {
     TreeMutations,
     /// Non-recursive native workspace watch hints.
     FileWatches,
+    /// Client-owned Workspace baselines, file observations, and comparisons.
+    WorkspaceChanges,
     /// The implemented conditional write: one staged `PrepareWrite` plus a
     /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
     /// private commit kernel under the binding workspace.
@@ -1078,6 +1081,8 @@ pub enum ClientRequest {
     },
     /// A bounded mutation beneath the admitted workspace.
     MutateTree(TreeMutation),
+    /// Attempt-scoped Workspace baseline, capture, and comparison.
+    WorkspaceChanges(changes::ChangeRequest),
     /// Register a native observer or receive its bounded coalesced hints.
     Watch(crate::watch::WatchRequest),
     /// First phase of one conditional write: retain the exact named target
@@ -1339,6 +1344,8 @@ pub enum ClientReply {
     },
     /// The requested tree mutation finished.
     TreeMutated,
+    /// Reply from the Client-owned Workspace observation service.
+    WorkspaceChanges(changes::ChangeReply),
     /// A change crossed and the tree operation could not settle successfully.
     TreeOutcomeUnknown,
     /// Registration receipt or coalesced hints from one native observer.

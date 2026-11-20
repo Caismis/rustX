@@ -113,7 +113,7 @@ async fn local_and_included_config_seed_snapshot_ignore_membership() {
     record.before_tools().await;
     fs::write(root.join("generated.log"), "ignored change\n").unwrap();
     record.finish().await;
-    assert!(store.summary(&AttemptId::new("ignored")).is_none());
+    assert!(store.summary("ignored").is_none());
     assert!(record.directory.get().is_some());
     fs::write(&excludes, "").unwrap();
     edit(root, "generated.log", "ignored change\n").await;
@@ -182,7 +182,7 @@ async fn replacing_the_repository_object_store_abandons_the_attempt_record() {
     fs::write(root.join("tracked.txt"), "after replacement\n").unwrap();
     record.finish().await;
     assert!(
-        store.summary(&AttemptId::new("replacement")).is_none(),
+        store.summary("replacement").is_none(),
         "removed alternate objects make the original snapshot unavailable"
     );
 }
@@ -209,8 +209,31 @@ async fn removing_the_original_repository_does_not_rediscover_its_parent() {
         &["add", "inner/created.txt", "inner/tracked.txt"],
     );
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("enclosing")).unwrap();
+    let summary = store.summary("enclosing").unwrap();
     assert_eq!(summary.total, 1);
     assert_eq!(summary.files[0].display, "created.txt");
     assert_eq!((summary.added, summary.deleted), (1, 0));
+}
+
+#[tokio::test]
+async fn a_nested_workspace_never_compares_a_rename_source_outside_its_scope() {
+    let dir = repository();
+    let root = dir.path().join("bounded[1]");
+    fs::create_dir(&root).unwrap();
+    fs::write(dir.path().join("outside.txt"), "outside the binding\n").unwrap();
+    git(dir.path(), &["add", "outside.txt"]);
+    let store = Arc::default();
+    let record = start(&root, &store, "scoped");
+    record.before_tools().await;
+    fs::rename(dir.path().join("outside.txt"), root.join("inside.txt")).unwrap();
+    fs::write(dir.path().join("tracked.txt"), "outside edit\n").unwrap();
+    record.finish().await;
+
+    let summary = store.summary("scoped").unwrap();
+    assert_eq!((summary.total, summary.added, summary.deleted), (1, 1, 0));
+    assert_eq!(summary.files[0].display, "inside.txt");
+    let comparison = store.comparison("scoped", 0).await.unwrap().unwrap();
+    assert_eq!(comparison.hunks.len(), 1);
+    assert_eq!(comparison.hunks[0].old_text, "");
+    assert_eq!(comparison.hunks[0].new_text, "outside the binding\n");
 }

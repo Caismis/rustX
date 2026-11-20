@@ -1417,6 +1417,30 @@ impl SessionExecutionScope {
         .await
     }
 
+    pub(crate) async fn workspace_changes(
+        &self,
+        request: rustx_execution_protocol::changes::ChangeRequest,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_execution_protocol::changes::ChangeReply> {
+        self.dispatch_data(
+            cancellation,
+            DataCapacity::WaitForSlot,
+            move |endpoint, data, _writer, deadline, cancellation| {
+                if endpoint.process_key(request.key().operation)? != *request.key() {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                endpoint.with_connection(Some(data), true, |connection| {
+                    connection.workspace_changes(request, deadline, || {
+                        cancellation
+                            .with_active(|| ())
+                            .ok_or_else(cancelled_before_dispatch)
+                    })
+                })
+            },
+        )
+        .await
+    }
+
     /// The Session's bounded whole-file bytes for `path` — the physical
     /// backing of native `read_image`, assembled from at most four
     /// [`ReadRange`](rustx_execution_protocol::ClientRequest::ReadRange)

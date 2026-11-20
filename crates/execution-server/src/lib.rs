@@ -2401,6 +2401,73 @@ impl LocalConnection {
         }
     }
 
+    /// Dispatch one bounded Workspace observation command on this binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport or admission refusal. A malformed reply
+    /// retires the pair before its contents reach the caller.
+    pub fn workspace_changes(
+        &mut self,
+        request: rustx_execution_protocol::changes::ChangeRequest,
+        deadline: Instant,
+        permit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::changes::ChangeReply> {
+        use rustx_execution_protocol::changes::{
+            ChangeReply, ChangeRequest, MAX_CHANGE_BYTES, MAX_CHANGE_FILES,
+        };
+
+        if !self.capabilities.contains(&Capability::WorkspaceChanges) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        if request.key().incarnation != self.admission.server_incarnation
+            || request.key().session != self.admission.session
+            || request.key().instance != self.admission.instance
+            || request.key().generation != self.admission.generation
+        {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let request = ClientRequest::WorkspaceChanges(request);
+        let reply = self.exchange_admitted(&request, Some(deadline), permit, || ())?;
+        let ClientRequest::WorkspaceChanges(request) = &request else {
+            unreachable!();
+        };
+        let ClientReply::WorkspaceChanges(reply) = reply else {
+            return Err(self.retire(io::ErrorKind::InvalidData.into()));
+        };
+        let expected = match (request, &reply) {
+            (_, ChangeReply::Unavailable)
+            | (
+                ChangeRequest::Begin { .. }
+                | ChangeRequest::Capture { .. }
+                | ChangeRequest::Finish { .. }
+                | ChangeRequest::Compare { .. }
+                | ChangeRequest::Release { .. },
+                ChangeReply::Accepted,
+            )
+            | (ChangeRequest::Baseline { .. }, ChangeReply::BaselineReady | ChangeReply::Pending)
+            | (ChangeRequest::Summary { .. }, ChangeReply::Summary(None))
+            | (
+                ChangeRequest::Summary { .. } | ChangeRequest::Comparison { .. },
+                ChangeReply::Pending,
+            ) => true,
+            (ChangeRequest::Summary { .. }, ChangeReply::Summary(Some(summary))) => {
+                summary.files.len() <= MAX_CHANGE_FILES && summary.total >= summary.files.len()
+            }
+            (
+                ChangeRequest::Comparison { index, .. },
+                ChangeReply::Comparison { index: echoed, .. },
+            ) => index == echoed,
+            _ => false,
+        };
+        if !expected
+            || !serde_json::to_vec(&reply).is_ok_and(|encoded| encoded.len() <= MAX_CHANGE_BYTES)
+        {
+            return Err(self.retire(io::ErrorKind::InvalidData.into()));
+        }
+        Ok(reply)
+    }
+
     /// The metadata query: `relative_path` names one entry under the
     /// binding workspace, stat'ed without following a final symlink.
     ///

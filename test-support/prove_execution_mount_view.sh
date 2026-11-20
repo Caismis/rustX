@@ -9,7 +9,7 @@
 #  - `filesystem_operations_use_the_private_mount_view` spawns the real
 #    rustx-execution-client under
 #
-#      bwrap --ro-bind / / --bind <physical_dir> <workspace> --
+#      bwrap --ro-bind / / --dev /dev --bind <physical_dir> <workspace> --tmpfs <scratch> --
 #
 #    so the same absolute workspace path resolves to a different physical
 #    directory inside the client's mount namespace than the server sees;

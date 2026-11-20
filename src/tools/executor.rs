@@ -79,6 +79,7 @@ pub struct ToolExecutionContext<'a> {
     /// An invocation-local complete stdout channel requested by a native
     /// runtime consumer. It never changes the model-facing preview policy.
     pub(crate) stdout_capture: Option<crate::tools::output::BoundedStdoutCapture>,
+    #[cfg(test)]
     pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
@@ -179,6 +180,7 @@ impl<'a> ToolExecutionContext<'a> {
     ) -> ToolExecutionContext<'b> {
         ToolExecutionContext {
             stdout_capture: self.stdout_capture.clone(),
+            #[cfg(test)]
             workspace_changes: self.workspace_changes.clone(),
             conversation_id: self.conversation_id,
             execution_id: self.execution_id,
@@ -237,6 +239,7 @@ impl<'a> ToolExecutionContext<'a> {
             goal: None,
             schedule: None,
             subagent: None,
+            #[cfg(test)]
             workspace_changes: None,
             bound_mutation: None,
         }

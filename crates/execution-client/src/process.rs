@@ -269,11 +269,44 @@ impl Operations {
     /// The bound identity gate: a key naming any foreign
     /// incarnation/session/instance/generation is refused before lookup —
     /// including `Register`.
-    fn own_key(&self, key: &ProcessOperationKey) -> bool {
+    pub(crate) fn own_key(&self, key: &ProcessOperationKey) -> bool {
         key.incarnation == self.admission.server_incarnation
             && key.session == self.admission.session
             && key.instance == self.admission.instance
             && key.generation == self.admission.generation
+    }
+
+    pub(crate) fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    pub(crate) fn workspace_root(&self) -> &PackageDirectory {
+        &self.root
+    }
+
+    pub(crate) fn auxiliary_signal(&self) -> ProcessSignal {
+        self.revoke.child()
+    }
+
+    pub(crate) fn start_auxiliary(
+        &self,
+        future: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> bool {
+        let runtime = self.runtime.lock().expect("Client runtime");
+        let Some(runtime) = runtime.as_ref() else {
+            return false;
+        };
+        let mut workers = self.workers.live.lock().expect("worker count");
+        if self.revoke.is_cancelled() {
+            return false;
+        }
+        *workers += 1;
+        let guard = WorkerGuard(self.workers.clone());
+        runtime.spawn(async move {
+            let _guard = guard;
+            future.await;
+        });
+        true
     }
 
     /// The control-lane cancellation for one keyed operation.

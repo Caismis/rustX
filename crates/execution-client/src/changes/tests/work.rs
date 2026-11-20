@@ -117,12 +117,7 @@ async fn comparisons_report_missing_alternate_objects_after_repository_removal()
     fs::write(dir.path().join("tracked.txt"), "after\n").unwrap();
     record.finish().await;
     fs::remove_dir_all(dir.path().join(".git")).unwrap();
-    assert!(
-        store
-            .comparison(&AttemptId::new("retained"), 0)
-            .await
-            .is_err()
-    );
+    assert!(store.comparison("retained", 0).await.is_err());
 }
 
 #[tokio::test]
@@ -135,7 +130,7 @@ async fn failed_private_repository_setup_never_writes_the_real_object_store() {
         Repository::locate(
             dir.path(),
             Arc::new(OnceLock::from(scratch)),
-            CancellationSignal::new()
+            ProcessSignal::new()
         )
         .await
         .is_err()
@@ -191,12 +186,7 @@ async fn comparisons_reject_corrupted_private_trees() {
         .join(&after[2..]);
     fs::remove_file(&object).unwrap();
     fs::write(object, "corrupt compressed tree").unwrap();
-    assert!(
-        store
-            .comparison(&AttemptId::new("corrupt-tree"), 0)
-            .await
-            .is_err()
-    );
+    assert!(store.comparison("corrupt-tree", 0).await.is_err());
 }
 
 #[tokio::test]
@@ -220,12 +210,7 @@ async fn missing_private_blobs_are_errors_instead_of_oversized_files() {
             .join(&blob[2..]),
     )
     .unwrap();
-    assert!(
-        store
-            .comparison(&AttemptId::new("missing-blob"), 0)
-            .await
-            .is_err()
-    );
+    assert!(store.comparison("missing-blob", 0).await.is_err());
 }
 
 #[tokio::test]
@@ -250,14 +235,14 @@ async fn big_workspace_baselines_exclude_between_turn_edits_and_capture_current_
     let second = start(dir.path(), &store, "second");
     second.before_tools().await;
     second.finish().await;
-    assert!(store.summary(&AttemptId::new("second")).is_none());
+    assert!(store.summary("second").is_none());
     let third = start(dir.path(), &store, "third");
     third.before_tools().await;
     fs::write(dir.path().join("tracked.txt"), "current turn\n").unwrap();
     fs::write(dir.path().join("created.txt"), "current new\n").unwrap();
     fs::remove_file(dir.path().join("unchanged-0001.txt")).unwrap();
     third.finish().await;
-    let summary = store.summary(&AttemptId::new("third")).unwrap();
+    let summary = store.summary("third").unwrap();
     assert_eq!(
         summary
             .files
@@ -321,7 +306,7 @@ async fn unchanged_worktree_contents_are_not_reopened() {
         .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "workspace_changes::tests::work::unchanged_worktree_contents_are_not_reopened",
+            "changes::tests::work::unchanged_worktree_contents_are_not_reopened",
             "--test-threads=1",
         ])
         .env(CHILD, root)
@@ -371,7 +356,7 @@ async fn ambient_git_environment_cannot_redirect_snapshots_or_inject_configurati
     }
     let dir = repository();
     let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "workspace_changes::tests::work::ambient_git_environment_cannot_redirect_snapshots_or_inject_configuration", "--test-threads=1"])
+        .args(["--exact", "changes::tests::work::ambient_git_environment_cannot_redirect_snapshots_or_inject_configuration", "--test-threads=1"])
         .env(CHILD, dir.path())
         .env("GIT_DIR", "/nonexistent/injected-git")
         .env("GIT_INDEX_FILE", dir.path().join(".git/injected-index"))
@@ -449,7 +434,7 @@ exec /usr/bin/git "$@"
     .unwrap();
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
         let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "workspace_changes::tests::work::cancelled_git_reaps_before_the_next_snapshot_reuses_its_index", "--test-threads=1"])
+        .args(["--exact", "changes::tests::work::cancelled_git_reaps_before_the_next_snapshot_reuses_its_index", "--test-threads=1"])
         .env(CHILD, dir.path())
         .env("RUSTX_CHANGES_CANCEL_MATCH", phase)
         .env("RUSTX_CHANGES_CANCEL_MARKER", marker)
@@ -475,26 +460,18 @@ async fn captured_oversized_endpoints_have_no_counts_or_binary_comparison() {
     record.capture(&path);
     fs::write(&path, vec![0; capture::MAX_FILE_BYTES + 1]).unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("oversized")).unwrap();
+    let summary = store.summary("oversized").unwrap();
     let file = &summary.files[0];
     assert!(file.oversized && !file.binary);
     assert_eq!((summary.added, summary.deleted), (0, 0));
-    let comparison = store
-        .comparison(&AttemptId::new("oversized"), 0)
-        .await
-        .unwrap()
-        .unwrap();
+    let comparison = store.comparison("oversized", 0).await.unwrap().unwrap();
     assert!(comparison.oversized && !comparison.binary && comparison.hunks.is_empty());
     let record = start(dir.path(), &store, "both-oversized");
     record.before_tools().await;
     record.capture(&path);
     record.finish().await;
     assert!(
-        store
-            .summary(&AttemptId::new("both-oversized"))
-            .unwrap()
-            .files[0]
-            .oversized,
+        store.summary("both-oversized").unwrap().files[0].oversized,
         "two unread oversized sides are never assumed equal"
     );
 }
@@ -518,14 +495,14 @@ async fn host_tmp_stays_excluded_when_the_platform_temporary_root_is_custom() {
             fs::write(path, "created\n").unwrap();
         }
         record.finish().await;
-        let summary = store.summary(&AttemptId::new("custom-temp")).unwrap();
+        let summary = store.summary("custom-temp").unwrap();
         assert_eq!(summary.total, 1);
         assert_eq!(summary.files[0].display, "kept.txt");
         return;
     }
     let temporary_root = tempdir();
     let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "workspace_changes::tests::work::host_tmp_stays_excluded_when_the_platform_temporary_root_is_custom", "--test-threads=1"])
+        .args(["--exact", "changes::tests::work::host_tmp_stays_excluded_when_the_platform_temporary_root_is_custom", "--test-threads=1"])
         .env(CHILD, "1").env("TMPDIR", temporary_root.path()).output().await.unwrap();
     assert!(
         output.status.success(),
