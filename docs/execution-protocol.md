@@ -64,9 +64,10 @@ and directory-page readers —
   over `rustx-confined-fs`, preserving every existing semantic.
 
 The implemented Client supports authenticated local and WebSocket binding,
-bounded file queries and tree mutations, conditional writes and edits, and supervised process
-execution. Its negotiated capabilities name the individual services the
-Client provides. A connection does not grant the reserved umbrella
+bounded file queries and tree mutations, conditional writes and edits,
+supervised processes, workspace observation, file watches, and Workspace
+Python. Its negotiated capabilities name the individual services the Client
+provides. A connection does not grant the reserved umbrella
 `Files`, `Python`, `StdioMcp`, `ContentTransfer`, or `ManagedOutput` capabilities.
 
 ### Identities
@@ -1134,8 +1135,9 @@ envelope.
   Client's physical scratch path. UI job-output tails are bounded by the
   same preview limit. This capture capability is independent of the
   optional `Save` contract.
-- No readiness reporting exists; no file/config/MCP/Python readiness is
-  implied by a live connection.
+- An authenticated connection has no implied configuration, MCP, or
+  interpreter readiness. `WorkspacePythonStatus` reports only the Client's
+  interpreter readiness under the separate `WorkspacePython` capability.
 - No Client instance replacement, generation increment, or death-cleanup
   evidence path exists; a detached binding rejects every Hello with
   `RecoveryRequired` until #577 lands.
@@ -1166,6 +1168,38 @@ envelope.
   Data exchanges share the endpoint's finite permits and absolute deadline.
   Malformed or lost replies retire the pair when framing or ownership
   becomes uncertain.
+
+### Root, Subagent and Workflow dispatch
+
+The Root carries a non-owning `SessionExecutionScope` for the exact
+Session. Native Workflow calls reuse the Root's scope. A separately staged
+Subagent receives data and control Unix descriptors over its private startup
+IPC, along with the exact Client admission and connection identity. The
+parent retains the authenticated Client lanes and never provisions a second
+binding or sends a binding credential to the child.
+
+The parent checks the child's frozen native capabilities, Conversation and
+operation identities and prepared mutation tickets before forwarding. Data
+shares the Session's existing bounded admission and writer. The independent
+control lane carries keyed cancellation even when data stalls. Retirement
+aborts child preparations and settles or releases child process records
+before reporting cleanup. A lost physical commit or cleanup receipt retains
+its unknown disposition and fences the binding. The Server still owns
+canonical results and the order in which calls commit.
+
+### Workspace Python readiness
+
+`PrepareWorkspacePython` schedules one Client-owned preparation. The
+independent `WorkspacePythonStatus` reports `Unscheduled`, `Preparing`,
+`Ready`, or `Unavailable`. Configuration and management do not wait for
+preparation. The Client verifies the opened Workspace identity, resolves
+`.python-version`, `pyproject.toml` and `.venv` in its own view, and runs uv
+and interpreter probes with its process supervisor. Agent Shell START
+applies the verified interpreter or the guarded unready environment. An
+authorized Shell START may schedule preparation when the runtime loaded
+before admission. Session revocation drains the physical worker. UI argv
+commands have an independent environment contract. Managed Python remains
+under [#577](https://github.com/Caismis/rustX/issues/577).
 
 ### WorkspaceChanges observation
 

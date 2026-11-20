@@ -6,7 +6,11 @@ Rust 1.100 is the sole compiler baseline. Native companions follow one
 executable-sibling deployment contract; Cargo test preparation binds and stages
 actual emitted artifacts instead of inferring intermediate directory layouts.
 Workspace Python keeps guard, interpreter and preparation ownership in private
-modules. Session Controller operations and Workflow compilation/catalog modules
+Execution Client modules. Agent Bash applies this Client's verified Python
+selection at launch. Root and native Workflow tools dispatch through one
+Session execution scope. A separate Subagent process receives two scoped IPC
+descriptors from its parent and relays admitted operations through that same
+binding. Session Controller operations and Workflow compilation/catalog modules
 retain their original native authorities and public paths. See the
 [engineering report](evidence/issue-560-final-report.md) and its disposition maps.
 

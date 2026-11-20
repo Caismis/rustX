@@ -30,12 +30,11 @@ independently buildable `rustx-process-supervisor` package
 (`cargo build -p rustx-process-supervisor --bins --locked`): it owns the
 physical process-supervision halves (dedicated `bash-supervisor` and
 `interactive-supervisor` binaries plus their shared supervised-unit core,
-the `waitid` adapter, and the child-subreaper prerequisite) with no
-dependency on the root runtime. This is physical supervisor extraction
-only — the root runtime still owns the `process_runner` driver,
-cancellation, and nested containment, and Bash is not migrated behind the
-execution Server/Client boundary (T24 remains partial). A standalone Server needs no
-siblings to start: `cargo build -p rustx --bin rustx --locked` is sufficient
+the `waitid` adapter, and the child-subreaper prerequisite) without a
+dependency on the Agent runtime. The Execution Client runs the physical
+driver for Agent Bash and App Server `command/exec`. The Server owns
+Agent admission and canonical settlement. A standalone Server needs no
+siblings to start. `cargo build -p rustx --bin rustx --locked` is sufficient
 to run `rustx app-server` and list cold Sessions without mounting their
 Workspaces. Native paths/values pass through unchanged; native parsers own validation.
 User configuration and runtime-root bindings require absolute paths. Use an
@@ -75,12 +74,11 @@ target/debug/rustx app-server \
   --local-execution-workspace /independently/trusted/workspace
 ```
 
-The flags are paired and launch exactly one Client for the named Session;
-bare `app-server` discovers and spawns nothing. The Session must already
-exist in the runtime catalog. `--local-execution-workspace` is independently
-trusted: it is validated lexically and must byte-for-byte equal the
-workspace the Session's reserved binding claims — the Server never queries
-workspace metadata to establish it. The Client executable must be the
+These flags launch exactly one Client for the named Session. Supplying only
+`--local-execution-workspace` first enrolls a minimal Session under a
+configured environment root. Bare `app-server` discovers and spawns
+nothing. The trusted workspace path is validated lexically and must match
+the Session's reserved binding byte for byte. The Client executable is the
 `rustx-execution-client` built beside the `rustx` binary; it is never
 resolved from PATH or HOME. The child runs with an empty environment,
 `/` as its working directory, and sealed stdio — it receives only the
