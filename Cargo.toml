@@ -176,6 +176,7 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+rustx-process-supervisor = { path = "crates/process-supervisor", features = ["test-support"] }
 
 # The physical structured-document decoder — production code reaches it
 # only across the Execution Client process boundary; it is linked here

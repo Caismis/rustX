@@ -126,19 +126,19 @@ impl Environment {
         operation(&resolved)
     }
 
-    pub(crate) fn directory(
-        &self,
-        requested: &str,
-    ) -> std::io::Result<(PathBuf, (u64, u64), CancellationSignal)> {
-        self.with_paths(&[requested], |paths| {
-            let (absolute, root, relative) = &paths[0];
-            let directory = files::directory(&root.directory, relative)?;
-            let metadata = std::fs::File::from(directory.descriptor().try_clone()?).metadata()?;
-            Ok((
-                absolute.clone(),
-                (metadata.dev(), metadata.ino()),
-                root.cancelled.clone(),
-            ))
-        })
+    /// The LIVE retirement signal of the configured root containing
+    /// `path`, purely logical: the longest live root prefix's
+    /// cancellation family, `None` when no configured root is live for
+    /// the path. Removal of the root cancels it — a consumer races the
+    /// signal, never a second physical probe.
+    pub(crate) fn retirement(&self, path: &Path) -> Option<CancellationSignal> {
+        self.roots
+            .read()
+            .expect("environment roots")
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, root)| root.cancelled.clone())
+            .filter(|signal| !signal.is_cancelled())
     }
 }

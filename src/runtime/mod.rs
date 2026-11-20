@@ -47,9 +47,6 @@ pub mod monotonic;
 pub mod permission;
 pub(crate) mod read_layout;
 
-/// Generic containment of nested supervised process units created inside a
-/// subagent child (Issue #145).
-pub(crate) mod nested_containment;
 /// The runtime-owned semantic observation contract (Issue #61): the
 /// observation vocabulary and the leaf pending-observation queue. Runtime
 /// Client projection types never appear here; the Runtime Client adapter
@@ -60,13 +57,6 @@ pub(crate) mod observation;
 /// channel back to the owning parent test. Outside this crate's test build
 /// its two entry points are empty `const fn`s.
 pub(crate) mod process_death;
-/// The internal owned supervised command runner shared by native Bash and
-/// Managed Python: the M5 Bash process-group lifecycle extracted so
-/// package-manager work reuses the same rustX-owned supervisor/process-group
-/// domain instead of a second independent subprocess hierarchy. Internal
-/// coordination only — it is not part of
-/// the public runtime API.
-pub(crate) mod process_runner;
 /// Durable startup recovery (Issue #12, M9a): the reconstruct → classify →
 /// reconcile → resume pipeline the conversation runtime owns. Recovery policy
 /// lives here, above the durable store and below nothing: no client, no

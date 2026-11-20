@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::runtime::process_runner::{
+use rustx_process_supervisor::process_runner::{
     CapturedProcessResult, RunnerBackedProcessRunner, RunnerTestControl, SupervisedCommandSpec,
     SupervisedProcessRunner,
 };

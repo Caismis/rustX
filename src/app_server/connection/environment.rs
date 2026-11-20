@@ -97,8 +97,8 @@ impl AppServerConnection {
         match method {
             Method::CommandExec(params) => {
                 let received = self.commands.start(
-                    params,
-                    self.host.manager().environment.clone(),
+                    &params,
+                    self.host.manager().clone(),
                     self.service_events.clone(),
                     owner,
                 )?;

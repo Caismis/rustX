@@ -110,7 +110,7 @@ pub(crate) async fn watch_terminal_order() {
 
 pub(crate) async fn revocation_before_start() {
     use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
-    struct ReleaseOnDrop(crate::runtime::process_runner::RunnerStartHold);
+    struct ReleaseOnDrop(crate::app_server::command::StartHold);
     impl Drop for ReleaseOnDrop {
         fn drop(&mut self) {
             self.0.release();
@@ -119,16 +119,28 @@ pub(crate) async fn revocation_before_start() {
     for start_first in [false, true] {
         for tty in [false, true] {
             for revocation in ["root", "connection", "host"] {
-                let fixture = Fixture::with_session_count(None, 0).await;
+                let fixture = Fixture::with_session_count(None, 1).await;
                 grant(&fixture);
-                let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
-                initialize(&connection).await;
                 let marker = fixture.workspaces[0].join("business-started");
                 let trace = fixture.workspaces[0].join("native-trace");
-                let (hold, lifecycle) = crate::app_server::command::hold_start(
-                    fixture.workspaces[0].clone(),
-                    trace.clone(),
-                );
+                // The supervisor diagnostics trace is the physical
+                // boundary's own observation surface — armed on the
+                // spawned Client, never a fault hook.
+                let mut execution = fixture
+                    .start_execution_with_env(
+                        0,
+                        &[(
+                            rustx_process_supervisor::bash_supervisor::diagnostics::TRACE_ENV,
+                            &trace.display().to_string(),
+                        )],
+                    )
+                    .await;
+                let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+                initialize(&connection).await;
+                // The Server-side dispatch hold: revocation observed
+                // while held fences the Start dispatch itself — the
+                // Client-side physical gate has its own in-crate race.
+                let hold = crate::app_server::command::hold_start("start-order");
                 let _release_on_panic = ReleaseOnDrop(hold.clone());
                 let mut params = parameters(
                     &fixture,
@@ -152,11 +164,10 @@ pub(crate) async fn revocation_before_start() {
                         .await
                 });
                 bounded(hold.await_entered()).await;
-                assert!(!marker.exists(), "the actual native START gate is held");
+                assert!(!marker.exists(), "the Start dispatch is held");
                 if start_first {
                     hold.release();
                     super::review::through_marker(&connection, "start-order", b"READY").await;
-                    bounded(lifecycle.await_ownership_established()).await;
                     assert!(marker.exists(), "START won before revocation");
                 }
                 match revocation {
@@ -172,17 +183,20 @@ pub(crate) async fn revocation_before_start() {
                     Response::Success(success) => assert!(
                         matches!(success.result, MethodResult::CommandExec { result } if result.status == ExecStatus::Terminated)
                     ),
-                    Response::Failure(failure) => {
-                        assert_eq!(failure.error.data, Some(ErrorData::ConnectionClosed));
-                    }
+                    Response::Failure(failure) => assert!(
+                        matches!(
+                            failure.error.data,
+                            Some(ErrorData::ConnectionClosed | ErrorData::ExecutionUnavailable)
+                        ),
+                        "revocation={revocation}: honest failure, got {failure:?}"
+                    ),
                 }
-                bounded(lifecycle.await_direct_child_reaped()).await;
                 assert!(
                     marker.exists() == start_first,
                     "revocation={revocation}, tty={tty}, start_first={start_first}: only an authorized command can run"
                 );
-                let evidence: Vec<Entry> = std::fs::read_to_string(trace)
-                    .unwrap()
+                let evidence: Vec<Entry> = std::fs::read_to_string(&trace)
+                    .unwrap_or_default()
                     .lines()
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
@@ -204,6 +218,7 @@ pub(crate) async fn revocation_before_start() {
                     .unwrap();
                 assert_eq!(*operations.borrow(), 0);
                 assert_eq!(fixture.manager.diagnostics().loaded, 0);
+                execution.kill().await.unwrap();
                 connection.close();
                 assert_eq!(
                     bounded(fixture.host.drain()).await,

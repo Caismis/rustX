@@ -1,6 +1,7 @@
 //! Session-private Git index and objects; worktree bytes stay in supervised Git.
 use super::{capture::MAX_FILE_BYTES, storage::SnapshotDirectory};
-use crate::runtime::{cancellation::CancellationSignal, process_runner::SupervisedCommandSpec};
+use crate::runtime::cancellation::CancellationSignal;
+use rustx_process_supervisor::process_runner::SupervisedCommandSpec;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -146,7 +147,7 @@ impl Repository {
                 cwd: cwd.to_owned(),
                 command_environment: environment(),
                 timeout: Some(Duration::from_secs(30)),
-                cancellation: cancellation.child(),
+                cancellation: cancellation.child().physical(),
             },
             8 * 1024 * 1024,
             Arc::clone(&scratch),
@@ -332,7 +333,7 @@ impl Repository {
                 cwd: self.root.clone(),
                 command_environment: environment,
                 timeout: Some(Duration::from_secs(30)),
-                cancellation: cancellation.child(),
+                cancellation: cancellation.child().physical(),
             },
             limit,
             (Arc::clone(&self.scratch), keepalive),

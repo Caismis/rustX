@@ -1,0 +1,1989 @@
+//! Client-owned managed process operations.
+//!
+//! One binding owns a finite record map keyed by `OperationId`: a record
+//! is `Full` (complete spec, descended cwd descriptor, ordered output
+//! journal, worker wiring) or `Minimal` (fingerprint + settled snapshot
+//! only, after an exact `ReleaseOutput`). `Full` records — including
+//! settled-but-unreleased ones — occupy the per-Session slots.
+//!
+//! Every request is gated on the bound [`Admission`]: a key naming a
+//! foreign incarnation/session/instance/generation is refused before any
+//! lookup. Only `Start` may cross the physical spawn boundary: the outer
+//! supervisor spawn is *not* business START — `Running` is published only
+//! when the runner's [`ProcessWitness`] proves the complete START frame
+//! crossed its grant. Cancellation rides the operation's own
+//! [`ProcessSignal`]; `cancel_with` reads the crossing under the same
+//! grant, so `CancelledBeforeStart` vs `CancellationRequested` is atomic
+//! and containment is only ever claimed after real settlement.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+
+use base64::Engine as _;
+use rustx_confined_fs::PackageDirectory;
+use rustx_execution_protocol::process::{
+    InputOutcome, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION, MAX_PROCESS_DATA_BYTES,
+    MAX_PROCESS_OUTPUT_BYTES, OperationId, OperationState, ProcessOperationKey, ProcessProgram,
+    ProcessReply, ProcessRequest, ProcessSpec, ProcessStdin, ProcessStream, PtySpec,
+    SettledDisposition, SettledSnapshot, SpecFingerprint, SpecRefusal,
+};
+use rustx_execution_protocol::{Admission, DecimalU64, ProcessCancelDisposition};
+use rustx_process_supervisor::invocation::ProgramInvocation;
+use rustx_process_supervisor::process_runner::{
+    ProcessOutcomeIntent, ProcessWitness, SupervisedCommandRunner, SupervisedCommandSpec,
+};
+use rustx_process_supervisor::signal::ProcessSignal;
+
+use crate::terminal::Terminal;
+
+/// The bounded ordered segment journal of one operation — a metadata
+/// bound, never one event per byte. When the bound is met the retained
+/// prefix freezes and the stream is honestly marked truncated.
+const MAX_JOURNAL_SEGMENTS: usize = 128;
+
+/// The bounded accepted-input queue; a write refused for capacity is a
+/// `Conflict`, never silently queued.
+const INPUT_QUEUE_DEPTH: usize = 8;
+
+/// One journal segment: `bytes` covers the global output offsets
+/// `[start, end)` of `stream`, whose first byte is that stream's
+/// `stream_offset`.
+struct Segment {
+    start: u64,
+    end: u64,
+    stream: ProcessStream,
+    stream_offset: u64,
+    bytes: Vec<u8>,
+}
+
+#[derive(Default)]
+struct StreamStats {
+    retained: u64,
+    total: u64,
+    offset: u64,
+    truncated: bool,
+}
+
+/// The interleaved ordered-output journal. The global cursor is a byte
+/// boundary in the retained interleaved region `[base, end)`; every
+/// segment knows its own stream-local offset.
+#[derive(Default)]
+struct Journal {
+    segments: VecDeque<Segment>,
+    base: u64,
+    end: u64,
+    stdout: StreamStats,
+    stderr: StreamStats,
+    /// The metadata bound was hit: the retained prefix is frozen and no
+    /// further bytes are admitted — later totals still count truthfully.
+    frozen: bool,
+}
+
+impl Journal {
+    fn stream(&mut self, stream: ProcessStream) -> &mut StreamStats {
+        match stream {
+            ProcessStream::Stdout | ProcessStream::Pty => &mut self.stdout,
+            ProcessStream::Stderr => &mut self.stderr,
+        }
+    }
+
+    /// Append one drained chunk: totals always advance; the retained
+    /// prefix is bounded per stream and globally by segment count. Once
+    /// either bound is hit the prefix freezes and the stream is marked
+    /// truncated — the retained evidence is never silently edited.
+    fn push(&mut self, stream: ProcessStream, bytes: &[u8], cap: u32) {
+        if self.frozen {
+            self.stream(stream).total += bytes.len() as u64;
+            self.stream(stream).truncated = true;
+            return;
+        }
+        let stats = self.stream(stream);
+        stats.total += bytes.len() as u64;
+        let cap = u64::from(cap).min(MAX_PROCESS_OUTPUT_BYTES as u64);
+        let room = cap.saturating_sub(stats.retained);
+        let room = usize::try_from(room).unwrap_or(usize::MAX);
+        let kept = &bytes[..bytes.len().min(room)];
+        if kept.len() < bytes.len() {
+            stats.truncated = true;
+        }
+        if kept.is_empty() {
+            return;
+        }
+        let stream_offset = stats.offset;
+        stats.offset += kept.len() as u64;
+        stats.retained += kept.len() as u64;
+        if let Some(tail) = self.segments.back_mut()
+            && tail.stream == stream
+            && tail.end == self.end
+            && tail.bytes.len() + kept.len() <= MAX_PROCESS_DATA_BYTES
+        {
+            tail.bytes.extend_from_slice(kept);
+            tail.end += kept.len() as u64;
+            self.end = tail.end;
+            return;
+        }
+        if self.segments.len() >= MAX_JOURNAL_SEGMENTS {
+            self.frozen = true;
+            self.stream(stream).truncated = true;
+            return;
+        }
+        let start = self.end;
+        self.end += kept.len() as u64;
+        self.segments.push_back(Segment {
+            start,
+            end: self.end,
+            stream,
+            stream_offset,
+            bytes: kept.to_vec(),
+        });
+    }
+}
+
+enum InputKind {
+    Write { bytes: Vec<u8>, close: bool },
+    Close,
+    Resize(PtySpec),
+}
+
+/// One admitted ordered control — the data lane acknowledges admission
+/// only; the worker records the physical outcome into `receipts` for a
+/// later `InputReceipt` query.
+struct InputEvent {
+    kind: InputKind,
+    sequence: u64,
+}
+
+/// A record while the operation owns physical resources.
+struct Operation {
+    key: ProcessOperationKey,
+    fingerprint: SpecFingerprint,
+    spec: ProcessSpec,
+    /// The descended cwd descriptor retained at registration — the
+    /// spawn's cwd authority, never a Server-supplied path.
+    cwd: PackageDirectory,
+    state: OperationState,
+    journal: Journal,
+    input_sequence: u64,
+    input: Option<tokio::sync::mpsc::Sender<InputEvent>>,
+    /// The receiver half created at registration — `Start` takes it into
+    /// the worker so ordered input admitted while `Registered`/`Starting`
+    /// queues honestly instead of being refused for a missing sink.
+    input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
+    /// The bounded physical receipts for admitted input controls —
+    /// `Pending` on admission, `Applied`/`Failed` once the worker's
+    /// physical operation completes. Bounded like the input queue: the
+    /// oldest receipt is evicted past `INPUT_QUEUE_DEPTH`, and an
+    /// evicted sequence queries `Unknown` — never a guess.
+    receipts: BTreeMap<u64, InputOutcome>,
+    cancel: ProcessSignal,
+    witness: Option<ProcessWitness>,
+}
+
+/// A record after an exact `ReleaseOutput` consumed the journal: the
+/// complete immutable fingerprint and the settled snapshot — nothing
+/// else. A `None` fingerprint is the cancelled-before-register
+/// tombstone a control-lane cancel plants for an owned key whose
+/// `Register` has not landed yet: a later `Register` attaches the
+/// `Cancelled` snapshot and can never spawn.
+struct Minimal {
+    fingerprint: Option<SpecFingerprint>,
+    snapshot: SettledSnapshot,
+}
+
+enum Record {
+    Full(Box<Operation>),
+    Minimal(Minimal),
+}
+
+struct Inner {
+    records: BTreeMap<OperationId, Record>,
+}
+
+/// The finite per-binding operation registry, the bound identity, and
+/// the Client-owned physical runtime.
+pub(crate) struct Operations {
+    inner: Arc<Mutex<Inner>>,
+    admission: Admission,
+    root: PackageDirectory,
+    workspace: PathBuf,
+    /// The optional bounded supervisor diagnostics sink — the explicit
+    /// external observation capability the supervisor crate documents,
+    /// armed by the Client process's own environment. No fault seam.
+    diagnostics: Option<rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl>,
+    /// The independent generation authority bound to every runner's
+    /// START guard — a different signal family than each operation's
+    /// invocation cancellation, so the grants never share a mutex.
+    revoke: ProcessSignal,
+    runtime: Mutex<Option<tokio::runtime::Runtime>>,
+    workers: Arc<WorkerCount>,
+}
+
+struct WorkerCount {
+    live: Mutex<usize>,
+    drained: Condvar,
+}
+
+impl Operations {
+    /// Creates the registry for one admitted binding; the workspace root
+    /// descriptor is the Client's own — never the Server's view.
+    pub(crate) fn new(admission: Admission) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Inner {
+                records: BTreeMap::new(),
+            })),
+            root: PackageDirectory::open(&admission.workspace)?,
+            workspace: admission.workspace.clone(),
+            admission,
+            diagnostics: std::env::var_os(
+                rustx_process_supervisor::bash_supervisor::diagnostics::TRACE_ENV,
+            )
+            .map(|trace| {
+                rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl {
+                    trace: Some(PathBuf::from(trace)),
+                    ..Default::default()
+                }
+            }),
+            revoke: ProcessSignal::new(),
+            runtime: Mutex::new(Some(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()?,
+            )),
+            workers: Arc::new(WorkerCount {
+                live: Mutex::new(0),
+                drained: Condvar::new(),
+            }),
+        })
+    }
+
+    /// The bound identity gate: a key naming any foreign
+    /// incarnation/session/instance/generation is refused before lookup —
+    /// including `Register`.
+    fn own_key(&self, key: &ProcessOperationKey) -> bool {
+        key.incarnation == self.admission.server_incarnation
+            && key.session == self.admission.session
+            && key.instance == self.admission.instance
+            && key.generation == self.admission.generation
+    }
+
+    /// The control-lane cancellation for one keyed operation.
+    pub(crate) fn cancel(&self, key: &ProcessOperationKey) -> ProcessCancelDisposition {
+        if !self.own_key(key) {
+            return ProcessCancelDisposition::Unknown;
+        }
+        let mut inner = self.inner.lock().expect("operation registry");
+        match inner.records.get_mut(&key.operation) {
+            Some(Record::Full(operation)) if operation.key == *key => {
+                if matches!(operation.state, OperationState::Settled(_)) {
+                    ProcessCancelDisposition::AlreadySettled
+                } else {
+                    // The crossing read shares the START grant: either
+                    // cancellation won before any business spawn, or
+                    // START provably crossed and the worker performs
+                    // real containment.
+                    let crossed = operation.cancel.cancel_with(|| {
+                        operation
+                            .witness
+                            .as_ref()
+                            .is_some_and(ProcessWitness::start_crossed)
+                    });
+                    if crossed {
+                        ProcessCancelDisposition::CancellationRequested
+                    } else {
+                        // A `Registered` record has no worker to observe
+                        // the signal and nothing physical to retain —
+                        // demote it to the settled tombstone now so it
+                        // never pins a capacity slot waiting for a
+                        // `Start` or `ReleaseOutput` that cannot come.
+                        if matches!(operation.state, OperationState::Registered) {
+                            let minimal = Minimal {
+                                fingerprint: Some(operation.fingerprint),
+                                snapshot: SettledSnapshot {
+                                    disposition: SettledDisposition::Cancelled,
+                                    exit_code: None,
+                                    stdout_total: 0.into(),
+                                    stderr_total: 0.into(),
+                                    stdout_truncated: false,
+                                    stderr_truncated: false,
+                                    final_sequence: 0.into(),
+                                },
+                            };
+                            inner
+                                .records
+                                .insert(key.operation, Record::Minimal(minimal));
+                        }
+                        ProcessCancelDisposition::CancelledBeforeStart
+                    }
+                }
+            }
+            Some(Record::Minimal(_)) => ProcessCancelDisposition::AlreadySettled,
+            None => {
+                // The cancel outraced the `Register` on the data lane:
+                // plant the bounded tombstone so the operation can never
+                // spawn — a late `Register` attaches the `Cancelled`
+                // snapshot instead of starting an operation the caller
+                // already withdrew.
+                let minimal = inner
+                    .records
+                    .values()
+                    .filter(|r| matches!(r, Record::Minimal(_)))
+                    .count();
+                if minimal >= MAX_GENERATION_TOMBSTONES {
+                    return ProcessCancelDisposition::Unknown;
+                }
+                inner.records.insert(
+                    key.operation,
+                    Record::Minimal(Minimal {
+                        fingerprint: None,
+                        snapshot: SettledSnapshot {
+                            disposition: SettledDisposition::Cancelled,
+                            exit_code: None,
+                            stdout_total: 0.into(),
+                            stderr_total: 0.into(),
+                            stdout_truncated: false,
+                            stderr_truncated: false,
+                            final_sequence: 0.into(),
+                        },
+                    }),
+                );
+                ProcessCancelDisposition::CancelledBeforeStart
+            }
+            _ => ProcessCancelDisposition::Unknown,
+        }
+    }
+
+    /// The data-lane dispatch: one request, one honest reply.
+    pub(crate) fn dispatch(self: &Arc<Self>, request: ProcessRequest) -> ProcessReply {
+        match request {
+            ProcessRequest::Register {
+                key,
+                spec,
+                fingerprint,
+            } => self.register(key, spec, fingerprint),
+            ProcessRequest::Start { key } => self.start(key),
+            ProcessRequest::Query { key } => self.query(key),
+            ProcessRequest::OutputPage {
+                key,
+                cursor,
+                max_bytes,
+            } => self.output_page(key, cursor, max_bytes),
+            ProcessRequest::WriteStdin {
+                key,
+                sequence,
+                delta_base64,
+                close,
+            } => self.write_stdin(key, sequence, &delta_base64, close),
+            ProcessRequest::CloseStdin { key, sequence } => self.close_stdin(key, sequence),
+            ProcessRequest::Resize {
+                key,
+                sequence,
+                size,
+            } => self.resize(key, sequence, size),
+            ProcessRequest::InputReceipt { key, sequence } => self.input_receipt(key, sequence),
+            ProcessRequest::ReleaseOutput {
+                key,
+                final_sequence,
+            } => self.release(key, final_sequence),
+        }
+    }
+
+    fn register(
+        &self,
+        key: ProcessOperationKey,
+        spec: ProcessSpec,
+        fingerprint: SpecFingerprint,
+    ) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        if spec.fingerprint() != fingerprint {
+            return ProcessReply::Conflict { key };
+        }
+        if let Err(reason) = spec.validate() {
+            return ProcessReply::Refused { key, reason };
+        }
+        if matches!(spec.program, ProcessProgram::Shell(_)) {
+            return ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::ShellReserved,
+            };
+        }
+        // The cwd descends from the retained workspace root at
+        // registration: a directory the Client's physical view does not
+        // hold is refused here, never discovered at spawn.
+        let Ok(cwd) = self.root.descend(&spec.cwd) else {
+            return ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::InvalidCwd,
+            };
+        };
+        let mut inner = self.inner.lock().expect("operation registry");
+        match inner.records.get(&key.operation) {
+            Some(Record::Full(existing)) => {
+                return if existing.key == key && existing.fingerprint == fingerprint {
+                    ProcessReply::Registered { key }
+                } else {
+                    ProcessReply::Conflict { key }
+                };
+            }
+            Some(Record::Minimal(minimal)) => {
+                return if minimal.fingerprint.is_none() || minimal.fingerprint == Some(fingerprint)
+                {
+                    // Exact replay of a released record — or the
+                    // cancelled-before-register tombstone — returns the
+                    // actual settled snapshot, never a resurrection.
+                    ProcessReply::State {
+                        key,
+                        state: OperationState::Settled(minimal.snapshot),
+                    }
+                } else {
+                    ProcessReply::Conflict { key }
+                };
+            }
+            None => {}
+        }
+        let full = inner
+            .records
+            .values()
+            .filter(|r| matches!(r, Record::Full(_)))
+            .count();
+        if full >= MAX_OPERATIONS_PER_SESSION {
+            return ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::CapacityExhausted,
+            };
+        }
+        let minimal = inner
+            .records
+            .values()
+            .filter(|r| matches!(r, Record::Minimal(_)))
+            .count();
+        if minimal >= MAX_GENERATION_TOMBSTONES {
+            return ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::TombstonesSaturated,
+            };
+        }
+        let input = (spec.stdin == ProcessStdin::Streamed || spec.pty.is_some())
+            .then(|| tokio::sync::mpsc::channel::<InputEvent>(INPUT_QUEUE_DEPTH));
+        let (input_tx, input_rx) = match input {
+            Some((tx, rx)) => (Some(tx), Some(rx)),
+            None => (None, None),
+        };
+        inner.records.insert(
+            key.operation,
+            Record::Full(Box::new(Operation {
+                key: key.clone(),
+                fingerprint,
+                spec,
+                cwd,
+                state: OperationState::Registered,
+                journal: Journal::default(),
+                input_sequence: 1,
+                input: input_tx,
+                input_rx,
+                receipts: BTreeMap::new(),
+                cancel: ProcessSignal::new(),
+                witness: None,
+            })),
+        );
+        ProcessReply::Registered { key }
+    }
+
+    #[allow(clippy::too_many_lines)] // one coherent registration→START-admission path
+    fn start(self: &Arc<Self>, key: ProcessOperationKey) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let mut inner = self.inner.lock().expect("operation registry");
+        let operation = match inner.records.get_mut(&key.operation) {
+            Some(Record::Full(operation)) if operation.key == key => operation,
+            Some(Record::Minimal(minimal)) => {
+                // The settled tombstone is the authoritative answer —
+                // a second Start never resurrects or respawns.
+                return ProcessReply::State {
+                    key,
+                    state: OperationState::Settled(minimal.snapshot),
+                };
+            }
+            _ => return ProcessReply::Unknown { key },
+        };
+        match operation.state {
+            OperationState::Registered => {}
+            state => {
+                return ProcessReply::State {
+                    key: key.clone(),
+                    state,
+                };
+            }
+        }
+        // A cancel that already owns the signal settles the record — the
+        // tombstone is written once, never resurrected by a later Start.
+        if operation.cancel.is_cancelled() {
+            let snapshot = SettledSnapshot {
+                disposition: SettledDisposition::Cancelled,
+                exit_code: None,
+                stdout_total: 0.into(),
+                stderr_total: 0.into(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                final_sequence: 0.into(),
+            };
+            operation.state = OperationState::Settled(snapshot);
+            resolve_pending(operation);
+            return ProcessReply::State {
+                key: key.clone(),
+                state: operation.state,
+            };
+        }
+        // Verify the retained cwd descriptor right before the spawn is
+        // admitted; the trusted workspace path it names is what the
+        // supervisor chdir's into, and its dev/ino is the business-spawn
+        // identity check.
+        if operation.cwd.verify().is_err() {
+            operation.state = OperationState::Settled(SettledSnapshot {
+                disposition: SettledDisposition::Failed,
+                exit_code: None,
+                stdout_total: 0.into(),
+                stderr_total: 0.into(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                final_sequence: 0.into(),
+            });
+            resolve_pending(operation);
+            return ProcessReply::State {
+                key: key.clone(),
+                state: operation.state,
+            };
+        }
+        operation.state = OperationState::Starting;
+        let input_rx = operation.input_rx.take();
+        let spec = operation.spec.clone();
+        let signal = operation.cancel.clone();
+        let revoke = self.revoke.clone();
+        let inner_arc = Arc::clone(&self.inner);
+        let workers = Arc::clone(&self.workers);
+        let workspace = self.workspace.clone();
+        let diagnostics = self.diagnostics.clone();
+        let cwd_fd = operation.cwd.descriptor().try_clone();
+        let cwd_path = self.workspace.join(&spec.cwd);
+        drop(inner);
+        // The runtime handle comes first: a stopped runtime fails before
+        // the worker count ever reflects in-flight creation, so the
+        // count below always includes the worker it precedes.
+        let Some(runtime) = self
+            .runtime
+            .lock()
+            .expect("runtime")
+            .as_ref()
+            .map(|rt| rt.handle().clone())
+        else {
+            self.settle_failed(&key);
+            return ProcessReply::State {
+                key: key.clone(),
+                state: self.current_state(&key),
+            };
+        };
+        let Ok(cwd_fd) = cwd_fd else {
+            self.settle_failed(&key);
+            return ProcessReply::State {
+                key: key.clone(),
+                state: self.current_state(&key),
+            };
+        };
+        {
+            let mut live = self.workers.live.lock().expect("worker count");
+            *live += 1;
+        }
+        let worker_key = key.clone();
+        runtime.spawn(async move {
+            let _count = WorkerGuard(workers);
+            run_operation(
+                inner_arc,
+                cwd_fd,
+                cwd_path,
+                workspace,
+                worker_key,
+                spec,
+                signal,
+                revoke,
+                input_rx,
+                diagnostics,
+            )
+            .await;
+        });
+        ProcessReply::State {
+            key,
+            state: OperationState::Starting,
+        }
+    }
+
+    fn current_state(&self, key: &ProcessOperationKey) -> OperationState {
+        let inner = self.inner.lock().expect("operation registry");
+        match inner.records.get(&key.operation) {
+            Some(Record::Full(op)) => op.state,
+            Some(Record::Minimal(m)) => OperationState::Settled(m.snapshot),
+            None => OperationState::Registered,
+        }
+    }
+
+    fn settle_failed(&self, key: &ProcessOperationKey) {
+        let mut inner = self.inner.lock().expect("operation registry");
+        if let Some(Record::Full(op)) = inner.records.get_mut(&key.operation) {
+            resolve_pending(op);
+            op.state = OperationState::Settled(SettledSnapshot {
+                disposition: SettledDisposition::Failed,
+                exit_code: None,
+                stdout_total: op.journal.stdout.total.into(),
+                stderr_total: op.journal.stderr.total.into(),
+                stdout_truncated: op.journal.stdout.truncated,
+                stderr_truncated: op.journal.stderr.truncated,
+                final_sequence: op.journal.end.into(),
+            });
+        }
+    }
+
+    fn query(&self, key: ProcessOperationKey) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let inner = self.inner.lock().expect("operation registry");
+        match inner.records.get(&key.operation) {
+            Some(Record::Full(op)) if op.key == key => ProcessReply::State {
+                key,
+                state: op.state,
+            },
+            Some(Record::Minimal(m)) => ProcessReply::State {
+                key,
+                state: OperationState::Settled(m.snapshot),
+            },
+            _ => ProcessReply::Unknown { key },
+        }
+    }
+
+    fn output_page(
+        &self,
+        key: ProcessOperationKey,
+        cursor: DecimalU64,
+        max_bytes: u32,
+    ) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let inner = self.inner.lock().expect("operation registry");
+        let Some(Record::Full(op)) = inner.records.get(&key.operation) else {
+            return ProcessReply::Unknown { key };
+        };
+        if op.key != key {
+            return ProcessReply::Unknown { key };
+        }
+        let cursor = cursor.get();
+        if cursor < op.journal.base || cursor > op.journal.end || max_bytes == 0 {
+            return ProcessReply::Conflict { key };
+        }
+        if cursor == op.journal.end {
+            return match op.state {
+                OperationState::Settled(snapshot) => ProcessReply::OutputEnd {
+                    key,
+                    final_sequence: snapshot.final_sequence,
+                },
+                _ => ProcessReply::OutputPending { key },
+            };
+        }
+        let Some(segment) = op.journal.segments.iter().find(|s| s.end > cursor) else {
+            return ProcessReply::Conflict { key };
+        };
+        let within = usize::try_from(cursor - segment.start).unwrap_or(0);
+        let available = &segment.bytes[within..];
+        let take = available.len().min(usize::try_from(max_bytes).unwrap_or(0));
+        let delivered = &available[..take];
+        let next = cursor + delivered.len() as u64;
+        let stream_offset = segment.stream_offset + within as u64;
+        let stats = match segment.stream {
+            ProcessStream::Stdout | ProcessStream::Pty => &op.journal.stdout,
+            ProcessStream::Stderr => &op.journal.stderr,
+        };
+        ProcessReply::Output {
+            key,
+            sequence: DecimalU64::new(next),
+            stream: segment.stream,
+            offset: DecimalU64::new(stream_offset),
+            delta_base64: base64::engine::general_purpose::STANDARD.encode(delivered),
+            capped: stats.truncated,
+            last: next == op.journal.end && matches!(op.state, OperationState::Settled(_)),
+        }
+    }
+
+    /// One ordered input control: sequence-gated and admitted into the
+    /// bounded input queue — the reply acknowledges *admission* only;
+    /// the physical outcome is observed through `InputReceipt`, so the
+    /// data lane never waits on a full child pipe.
+    /// `Pending` is recorded under the registry hold itself, before the
+    /// admission leaves: a racing `InputReceipt` can never outrun the
+    /// record.
+    fn input_control(
+        &self,
+        key: ProcessOperationKey,
+        sequence: DecimalU64,
+        kind: InputKind,
+    ) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let admitted = sequence;
+        let mut inner = self.inner.lock().expect("operation registry");
+        let Some(Record::Full(op)) = inner.records.get_mut(&key.operation) else {
+            return ProcessReply::Unknown { key };
+        };
+        if op.key != key || sequence.get() != op.input_sequence {
+            return ProcessReply::Conflict { key };
+        }
+        if matches!(op.state, OperationState::Settled(_)) {
+            return ProcessReply::Conflict { key };
+        }
+        let Some(tx) = &op.input else {
+            return ProcessReply::Conflict { key };
+        };
+        if tx
+            .try_send(InputEvent {
+                kind,
+                sequence: sequence.get(),
+            })
+            .is_err()
+        {
+            return ProcessReply::Conflict { key };
+        }
+        op.input_sequence += 1;
+        if op.receipts.len() >= INPUT_QUEUE_DEPTH {
+            // Evict the oldest tracked receipt — an evicted sequence
+            // later queries `Unknown`, never a fabricated outcome.
+            if let Some(oldest) = op.receipts.keys().next().copied() {
+                op.receipts.remove(&oldest);
+            }
+        }
+        op.receipts.insert(sequence.get(), InputOutcome::Pending);
+        ProcessReply::InputAccepted {
+            key,
+            sequence: admitted,
+        }
+    }
+
+    /// The physical receipt of one admitted input sequence.
+    fn input_receipt(&self, key: ProcessOperationKey, sequence: DecimalU64) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let inner = self.inner.lock().expect("operation registry");
+        let Some(Record::Full(op)) = inner.records.get(&key.operation) else {
+            return ProcessReply::Unknown { key };
+        };
+        if op.key != key {
+            return ProcessReply::Unknown { key };
+        }
+        ProcessReply::InputReceipt {
+            key,
+            sequence,
+            status: op
+                .receipts
+                .get(&sequence.get())
+                .copied()
+                .unwrap_or(InputOutcome::Unknown),
+        }
+    }
+
+    fn write_stdin(
+        &self,
+        key: ProcessOperationKey,
+        sequence: DecimalU64,
+        delta_base64: &str,
+        close: bool,
+    ) -> ProcessReply {
+        // The encoding inflates by 4/3: an encoding too long to ever
+        // decode under the bound is refused before any allocation.
+        if delta_base64.len() > MAX_PROCESS_DATA_BYTES.div_ceil(3) * 4 {
+            return ProcessReply::Conflict { key };
+        }
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(delta_base64) else {
+            return ProcessReply::Conflict { key };
+        };
+        if (bytes.is_empty() && !close) || bytes.len() > MAX_PROCESS_DATA_BYTES {
+            return ProcessReply::Conflict { key };
+        }
+        self.input_control(key, sequence, InputKind::Write { bytes, close })
+    }
+
+    fn close_stdin(&self, key: ProcessOperationKey, sequence: DecimalU64) -> ProcessReply {
+        self.input_control(key, sequence, InputKind::Close)
+    }
+
+    fn resize(
+        &self,
+        key: ProcessOperationKey,
+        sequence: DecimalU64,
+        size: PtySpec,
+    ) -> ProcessReply {
+        // Only a genuine tty resize may be admitted; a pipe-mode
+        // operation gets an honest refusal, not a no-op ack.
+        {
+            let inner = self.inner.lock().expect("operation registry");
+            if let Some(Record::Full(op)) = inner.records.get(&key.operation)
+                && op.spec.pty.is_none()
+            {
+                return ProcessReply::Conflict { key };
+            }
+        }
+        self.input_control(key, sequence, InputKind::Resize(size))
+    }
+
+    fn release(&self, key: ProcessOperationKey, final_sequence: DecimalU64) -> ProcessReply {
+        if !self.own_key(&key) {
+            return ProcessReply::Unknown { key };
+        }
+        let mut inner = self.inner.lock().expect("operation registry");
+        let Some(Record::Full(op)) = inner.records.get(&key.operation) else {
+            return ProcessReply::Unknown { key };
+        };
+        if op.key != key {
+            return ProcessReply::Unknown { key };
+        }
+        // Release is valid only over the *complete* settled journal —
+        // the caller must have consumed through the snapshot's final
+        // sequence exactly.
+        let OperationState::Settled(snapshot) = op.state else {
+            return ProcessReply::Conflict { key };
+        };
+        if final_sequence.get() != op.journal.end || final_sequence != snapshot.final_sequence {
+            return ProcessReply::Conflict { key };
+        }
+        let fingerprint = op.fingerprint;
+        inner.records.insert(
+            key.operation,
+            Record::Minimal(Minimal {
+                fingerprint: Some(fingerprint),
+                snapshot,
+            }),
+        );
+        ProcessReply::OutputReleased { key }
+    }
+
+    /// Fences every operation: the generation authority cancels all
+    /// pending START grants and each invocation's own signal cancels —
+    /// workers then perform and prove real containment.
+    pub(crate) fn revoke(&self) {
+        self.revoke.cancel();
+        let inner = self.inner.lock().expect("operation registry");
+        for record in inner.records.values() {
+            if let Record::Full(op) = record {
+                op.cancel.cancel();
+            }
+        }
+    }
+
+    /// Await physical worker settlement within `budget` — including
+    /// registered-never-started records — and return the count still
+    /// unresolved when the budget lapses. The caller decides what an
+    /// unresolved remainder means; it is never silently reported away.
+    pub(crate) fn settle(&self, budget: Duration) -> usize {
+        let mut live = self.workers.live.lock().expect("worker count");
+        let deadline = std::time::Instant::now() + budget;
+        while *live != 0 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            live = self
+                .workers
+                .drained
+                .wait_timeout(live, remaining)
+                .expect("worker count")
+                .0;
+        }
+        *live
+    }
+
+    /// Signal every worker and await physical completion — including
+    /// registered-never-started records — then stop the runtime with a
+    /// bounded drain. A worker still live when the drain budget lapses
+    /// is reported honestly: the caller exits *unresolved*, never with
+    /// a forged clean shutdown.
+    pub(crate) fn shutdown(&self) -> io::Result<()> {
+        self.revoke();
+        let unresolved = self.settle(Duration::from_secs(30));
+        if let Some(runtime) = self.runtime.lock().expect("runtime").take() {
+            runtime.shutdown_timeout(Duration::from_secs(10));
+        }
+        if unresolved == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{unresolved} process workers unresolved at shutdown"),
+            ))
+        }
+    }
+}
+
+impl Drop for Operations {
+    fn drop(&mut self) {
+        // The teardown cannot propagate — the explicit `shutdown` call
+        // is where unresolved workers become a visible failure.
+        let _ = self.shutdown();
+    }
+}
+
+struct WorkerGuard(Arc<WorkerCount>);
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        let mut live = self.0.live.lock().expect("worker count");
+        *live = live.saturating_sub(1);
+        self.0.drained.notify_all();
+    }
+}
+
+/// Runtime-owned Git keys an override can never supply — the same
+/// pattern the product baseline owns.
+fn is_runtime_owned_git_key(key: &str) -> bool {
+    matches!(
+        key,
+        "GIT_CONFIG_PARAMETERS" | "GIT_CONFIG_COUNT" | "GIT_PAGER" | "GIT_EDITOR"
+    ) || key.starts_with("GIT_CONFIG_KEY_")
+        || key.starts_with("GIT_CONFIG_VALUE_")
+}
+
+/// The composition of the command environment: the fixed product
+/// baseline (PATH, HOME = workspace, UTF-8 locale) plus the spec's
+/// authorized non-baseline overrides and the deterministic Git
+/// execution guards — never a Server host value.
+fn command_environment(workspace: &Path, spec: &ProcessSpec) -> Vec<(String, String)> {
+    const GIT_GUARDS: &[(&str, &str)] = &[
+        ("GIT_CONFIG_COUNT", "5"),
+        ("GIT_CONFIG_KEY_0", "core.useBuiltinFSMonitor"),
+        ("GIT_CONFIG_VALUE_0", "false"),
+        ("GIT_CONFIG_KEY_1", "diff.orderFile"),
+        ("GIT_CONFIG_VALUE_1", "/dev/null"),
+        ("GIT_CONFIG_KEY_2", "core.editor"),
+        ("GIT_CONFIG_VALUE_2", "true"),
+        ("GIT_CONFIG_KEY_3", "core.pager"),
+        ("GIT_CONFIG_VALUE_3", "cat"),
+        ("GIT_CONFIG_KEY_4", "core.fsmonitor"),
+        ("GIT_CONFIG_VALUE_4", "false"),
+        ("GIT_PAGER", "cat"),
+        ("GIT_EDITOR", "true"),
+        ("GIT_CONFIG_PARAMETERS", ""),
+    ];
+    let mut entries = vec![
+        ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
+        ("HOME".to_owned(), workspace.display().to_string()),
+        ("LANG".to_owned(), "C.UTF-8".to_owned()),
+        ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+    ];
+    for (key, value) in &spec.env {
+        if let Some(value) = value
+            && !entries.iter().any(|(existing, _)| existing == key)
+        {
+            entries.push((key.clone(), value.clone()));
+        }
+    }
+    entries.retain(|(key, _)| !is_runtime_owned_git_key(key));
+    for (key, value) in GIT_GUARDS {
+        entries.push(((*key).to_owned(), (*value).to_owned()));
+    }
+    entries
+}
+
+/// One partially-delivered stdin/PTY write — the single in-flight input
+/// the worker advances nonblockingly.
+struct PendingInput {
+    bytes: Vec<u8>,
+    offset: usize,
+    close: bool,
+    sequence: u64,
+}
+
+/// The physical worker of one operation. The outer supervisor spawn is
+/// not business START: `Running` publishes only on the runner's own
+/// witness of the crossed grant, `Exited` only on `ShellExited`, and the
+/// settled snapshot only after real drain + reap.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one coherent physical worker
+async fn run_operation(
+    inner: Arc<Mutex<Inner>>,
+    cwd_fd: std::os::unix::io::OwnedFd,
+    cwd_path: PathBuf,
+    workspace: PathBuf,
+    key: ProcessOperationKey,
+    spec: ProcessSpec,
+    signal: ProcessSignal,
+    revoke: ProcessSignal,
+    mut input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
+    diagnostics: Option<rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl>,
+) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    // Verify the descended directory one final time immediately before
+    // the irreversible boundary: dev/ino must still match what Register
+    // retained.
+    let Ok(identity) = nix::sys::stat::fstat(&cwd_fd).map(|s| (s.st_dev, s.st_ino)) else {
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        return;
+    };
+    let Ok(temporary) = tempfile::tempdir() else {
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        return;
+    };
+    let input_socket = temporary.path().join("stdin");
+    let mut terminal = match spec.pty {
+        Some(size) => {
+            let Ok(terminal) = Terminal::open(size) else {
+                settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+                return;
+            };
+            Some(terminal)
+        }
+        None => None,
+    };
+    let listener = if spec.pty.is_none() && spec.stdin == ProcessStdin::Streamed {
+        let Ok(listener) = tokio::net::UnixListener::bind(&input_socket) else {
+            settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+            return;
+        };
+        Some(listener)
+    } else {
+        None
+    };
+    let ProcessProgram::Argv(argv) = spec.program.clone() else {
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        return;
+    };
+    let command_spec = SupervisedCommandSpec {
+        command: argv.join(" "),
+        cwd: cwd_path,
+        command_environment: command_environment(&workspace, &spec),
+        timeout: Some(Duration::from_millis(spec.timeout_ms)),
+        cancellation: signal.clone(),
+    };
+    let invocation = ProgramInvocation {
+        argv,
+        stdin_socket: listener.as_ref().map(|_| input_socket.clone()),
+        terminal: terminal.as_ref().map(|terminal| terminal.path.clone()),
+        cwd_identity: identity,
+    };
+    // Pre-START cancellation under the same grant decides: a revoked or
+    // already-cancelled signal admits zero spawn.
+    let spawn_blocked = signal.with_active(|| false).is_none() || revoke.is_cancelled();
+    if spawn_blocked {
+        settle_outcome(&inner, &key, SettledDisposition::Cancelled, None);
+        return;
+    }
+    let control = test_control(diagnostics);
+    let spawned = SupervisedCommandRunner::spawn_program(&command_spec, control, Some(&invocation));
+    let Ok((mut runner, mut stdout, mut stderr)) = spawned else {
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        return;
+    };
+    // The generation authority is an independent family — it never
+    // shares the invocation signal's grant mutex.
+    runner.guard_start(revoke);
+    let witness = runner.witness();
+    {
+        let mut guard = inner.lock().expect("operation registry");
+        if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
+            op.witness = Some(witness.clone());
+        }
+    }
+    let mut input_stream: Option<tokio::net::UnixStream> = None;
+    let mut input_closed = input_rx.is_none() && terminal.is_none();
+    let mut pending_input: Option<PendingInput> = None;
+    let mut stdout_buf = vec![0u8; 16 * 1024];
+    let mut stderr_buf = vec![0u8; 16 * 1024];
+    let mut terminal_buf = vec![0u8; 16 * 1024];
+    let mut stdout_done = stdout.is_none();
+    let mut stderr_done = stderr.is_none();
+    let mut terminal_done = terminal.is_none();
+    // A read error is physical loss, never EOF: the outcome must be
+    // honestly Failed/Unknown rather than a clean completion.
+    let mut output_failed = false;
+    let mut running_published = false;
+    let mut exit_published = false;
+    let settlement = tokio::spawn(async move { runner.settle().await });
+    tokio::pin!(settlement);
+    let mut termination = None;
+    loop {
+        if termination.is_some()
+            && stdout_done
+            && stderr_done
+            && terminal_done
+            && pending_input.is_none()
+        {
+            break;
+        }
+        // Publish lifecycle only from the physical witness — never from
+        // the outer helper's spawn or an assumption.
+        if !running_published && witness.start_crossed() {
+            running_published = true;
+            let mut guard = inner.lock().expect("operation registry");
+            if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation)
+                && matches!(op.state, OperationState::Starting)
+            {
+                op.state = OperationState::Running;
+            }
+        }
+        if !exit_published && witness.exited() {
+            exit_published = true;
+            let mut guard = inner.lock().expect("operation registry");
+            if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation)
+                && matches!(op.state, OperationState::Running | OperationState::Starting)
+            {
+                op.state = OperationState::Exited {
+                    exit_code: witness.exit_code(),
+                };
+            }
+        }
+        tokio::select! {
+            result = &mut settlement, if termination.is_none() => {
+                termination = result.ok();
+                if termination.is_none() {
+                    // A failed join is no settlement — the outcome stays
+                    // honestly Unknown rather than a fabricated one.
+                    settle_outcome(&inner, &key, SettledDisposition::Unknown, None);
+                    return;
+                }
+                if let Some(term) = &mut terminal { term.slave.take(); }
+                input_stream.take();
+                input_closed = true;
+                if let Some(pending) = pending_input.take() {
+                    record_input(&inner, &key, pending.sequence, InputOutcome::Failed);
+                }
+                // Orphaned queued controls are answered false — the
+                // physical operation can never apply them now.
+                if let Some(rx) = &mut input_rx {
+                    while let Ok(event) = rx.try_recv() {
+                        record_input(&inner, &key, event.sequence, InputOutcome::Failed);
+                    }
+                }
+            }
+            result = async { stdout.as_mut().expect("stdout").read(&mut stdout_buf).await }, if !stdout_done => {
+                match result {
+                    Ok(0) => stdout_done = true,
+                    Ok(n) => push(&inner, &key, ProcessStream::Stdout, &stdout_buf[..n]),
+                    Err(_) => {
+                        stdout_done = true;
+                        output_failed = true;
+                    }
+                }
+            }
+            result = async { stderr.as_mut().expect("stderr").read(&mut stderr_buf).await }, if !stderr_done => {
+                match result {
+                    Ok(0) | Err(_) => stderr_done = true,
+                    Ok(n) => push(&inner, &key, ProcessStream::Stderr, &stderr_buf[..n]),
+                }
+            }
+            result = async { terminal.as_ref().expect("terminal").read(&mut terminal_buf).await }, if !terminal_done => {
+                match result {
+                    Ok(0) | Err(_) => terminal_done = true,
+                    Ok(n) => push(&inner, &key, ProcessStream::Pty, &terminal_buf[..n]),
+                }
+            }
+            accepted = async { listener.as_ref().expect("stdin listener").accept().await }, if listener.is_some() && input_stream.is_none() && !input_closed && termination.is_none() => {
+                input_stream = accepted.ok().map(|(stream, _)| stream);
+            }
+            written = async {
+                let pending = pending_input.as_ref().expect("pending input");
+                let bytes = &pending.bytes[pending.offset..];
+                if let Some(term) = &terminal {
+                    term.write(bytes).await
+                } else {
+                    input_stream.as_mut().expect("stdin").write(bytes).await
+                }
+            }, if pending_input.is_some() && termination.is_none() && (terminal.is_some() || input_stream.is_some()) => {
+                let pending = pending_input.as_mut().expect("pending input");
+                match written {
+                    Ok(count) if count > 0 => {
+                        pending.offset += count;
+                        if pending.offset == pending.bytes.len() {
+                            let pending = pending_input.take().expect("finished input");
+                            if pending.close {
+                                input_closed = true;
+                                input_stream.take();
+                            }
+                            record_input(&inner, &key, pending.sequence, InputOutcome::Applied);
+                        }
+                    }
+                    _ => {
+                        let pending = pending_input.take().expect("failed input");
+                        record_input(&inner, &key, pending.sequence, InputOutcome::Failed);
+                        input_closed = true;
+                        input_stream.take();
+                    }
+                }
+            }
+            event = async { input_rx.as_mut().expect("input").recv().await }, if input_rx.is_some() && pending_input.is_none() && termination.is_none() => {
+                match event {
+                    Some(InputEvent { kind: InputKind::Write { bytes, close }, sequence }) => {
+                        if input_closed {
+                            record_input(&inner, &key, sequence, InputOutcome::Rejected);
+                            continue;
+                        }
+                        // Atomic write+close: an impossible EOF vetoes the
+                        // whole batch — no byte is written.
+                        let mut batch = bytes;
+                        let mut veto = false;
+                        if close && let Some(term) = &terminal {
+                            match term.eof() {
+                                Ok(eof) => batch.extend_from_slice(&eof),
+                                Err(_) => veto = true,
+                            }
+                        }
+                        if veto {
+                            record_input(&inner, &key, sequence, InputOutcome::Rejected);
+                        } else {
+                            pending_input = Some(PendingInput { bytes: batch, offset: 0, close, sequence });
+                        }
+                    }
+                    Some(InputEvent { kind: InputKind::Close, sequence }) => {
+                        if input_closed {
+                            record_input(&inner, &key, sequence, InputOutcome::Rejected);
+                        } else if let Some(term) = &terminal {
+                            match term.eof() {
+                                Ok(eof) => {
+                                    pending_input = Some(PendingInput { bytes: eof.to_vec(), offset: 0, close: true, sequence });
+                                }
+                                Err(_) => {
+                                    record_input(&inner, &key, sequence, InputOutcome::Rejected);
+                                }
+                            }
+                        } else {
+                            input_closed = true;
+                            input_stream.take();
+                            record_input(&inner, &key, sequence, InputOutcome::Applied);
+                        }
+                    }
+                    Some(InputEvent { kind: InputKind::Resize(size), sequence }) => {
+                        let outcome = if terminal.as_ref().is_some_and(|term| term.resize(size).is_ok()) {
+                            InputOutcome::Applied
+                        } else {
+                            InputOutcome::Failed
+                        };
+                        record_input(&inner, &key, sequence, outcome);
+                    }
+                    None => {
+                        input_rx = None;
+                    }
+                }
+            }
+        }
+        // AsyncFd readiness can stay immediately ready across small PTY
+        // fragments — cooperate so the input channel and settlement arm
+        // keep progressing.
+        tokio::task::yield_now().await;
+    }
+    let Some(termination) = termination else {
+        settle_outcome(&inner, &key, SettledDisposition::Unknown, None);
+        return;
+    };
+    let exit_code = termination.exit_status.and_then(|status| status.code());
+    let disposition = match &termination.intent {
+        ProcessOutcomeIntent::Completed if output_failed => SettledDisposition::Failed,
+        ProcessOutcomeIntent::Completed => SettledDisposition::Known,
+        ProcessOutcomeIntent::TimedOut => SettledDisposition::TimedOut,
+        ProcessOutcomeIntent::Cancelled => SettledDisposition::Cancelled,
+        ProcessOutcomeIntent::ProcessControlFailed(_) => SettledDisposition::Failed,
+    };
+    settle_outcome(&inner, &key, disposition, exit_code);
+}
+
+/// Records one admitted input's physical outcome — the only writer of
+/// `Applied`/`Failed` after admission's `Pending`.
+fn record_input(
+    inner: &Mutex<Inner>,
+    key: &ProcessOperationKey,
+    sequence: u64,
+    outcome: InputOutcome,
+) {
+    let mut guard = inner.lock().expect("operation registry");
+    if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation)
+        && let Some(slot) = op.receipts.get_mut(&sequence)
+        && *slot == InputOutcome::Pending
+    {
+        *slot = outcome;
+    }
+}
+
+/// The one optional diagnostic hookup: in production it carries only
+/// the external trace capability; under `cfg(test)` it additionally
+/// attaches the held-START seam the physical-boundary races arm.
+fn test_control(
+    diagnostics: Option<rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl>,
+) -> Option<rustx_process_supervisor::process_runner::RunnerTestControl> {
+    #[cfg(test)]
+    if let Some(hold) = START_HOLD.lock().expect("start hold").take() {
+        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
+        control.diagnostics = diagnostics.unwrap_or_default();
+        control.start_hold = Some(hold);
+        return Some(control);
+    }
+    diagnostics.map(|diagnostics| {
+        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
+        control.diagnostics = diagnostics;
+        control
+    })
+}
+
+#[cfg(test)]
+static START_HOLD: Mutex<Option<rustx_process_supervisor::process_runner::RunnerStartHold>> =
+    Mutex::new(None);
+
+#[cfg(test)]
+fn arm_start_hold() -> rustx_process_supervisor::process_runner::RunnerStartHold {
+    let hold = rustx_process_supervisor::process_runner::RunnerStartHold::new();
+    *START_HOLD.lock().expect("start hold") = Some(hold.clone());
+    hold
+}
+
+fn push(inner: &Mutex<Inner>, key: &ProcessOperationKey, stream: ProcessStream, bytes: &[u8]) {
+    let mut guard = inner.lock().expect("operation registry");
+    if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
+        let cap = op.spec.output_cap;
+        op.journal.push(stream, bytes, cap);
+    }
+}
+
+/// A settled operation can never physically apply a queued control —
+/// every `Pending` receipt resolves to `Failed`, never a guess.
+fn resolve_pending(operation: &mut Operation) {
+    for outcome in operation.receipts.values_mut() {
+        if *outcome == InputOutcome::Pending {
+            *outcome = InputOutcome::Failed;
+        }
+    }
+}
+
+fn settle_outcome(
+    inner: &Mutex<Inner>,
+    key: &ProcessOperationKey,
+    disposition: SettledDisposition,
+    exit_code: Option<i32>,
+) {
+    let mut guard = inner.lock().expect("operation registry");
+    if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
+        // The first settle wins: a later failure path never rewrites a
+        // proven outcome.
+        if matches!(op.state, OperationState::Settled(_)) {
+            return;
+        }
+        resolve_pending(op);
+        op.state = OperationState::Settled(SettledSnapshot {
+            disposition,
+            exit_code,
+            stdout_total: op.journal.stdout.total.into(),
+            stderr_total: op.journal.stderr.total.into(),
+            stdout_truncated: op.journal.stdout.truncated,
+            stderr_truncated: op.journal.stderr.truncated,
+            final_sequence: op.journal.end.into(),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use rustx_execution_protocol::{
+        Admission, ClientInstanceId, EnvironmentId, Generation, PROTOCOL_VERSION, SessionId,
+    };
+
+    use super::*;
+
+    /// Whether the physical `bash-supervisor` sibling is staged beside
+    /// this test binary — the tests exercise real spawn, so they require
+    /// the prepared staging.
+    fn supervisor_staged() -> bool {
+        rustx_process_supervisor::invocation::supervisor_binary().is_file()
+    }
+
+    fn admission(workspace: &std::path::Path) -> Admission {
+        Admission {
+            version: PROTOCOL_VERSION,
+            server_incarnation: rustx_execution_protocol::process::ServerIncarnation::generate(),
+            session: SessionId::new("session-1"),
+            environment: EnvironmentId::new("env-1"),
+            instance: ClientInstanceId::new("client-1"),
+            generation: Generation::try_from(1u64).unwrap(),
+            workspace: workspace.to_path_buf(),
+        }
+    }
+
+    fn fresh_key(admission: &Admission) -> ProcessOperationKey {
+        ProcessOperationKey {
+            incarnation: admission.server_incarnation,
+            session: admission.session.clone(),
+            instance: admission.instance.clone(),
+            generation: admission.generation,
+            operation: OperationId::new(),
+        }
+    }
+
+    fn spec(argv: &[&str]) -> ProcessSpec {
+        ProcessSpec {
+            cwd: PathBuf::new(),
+            program: ProcessProgram::Argv(argv.iter().map(|a| (*a).to_owned()).collect()),
+            env: BTreeMap::new(),
+            timeout_ms: 30_000,
+            pty: None,
+            stdin: ProcessStdin::Closed,
+            capture: true,
+            output_cap: 64 * 1024,
+        }
+    }
+
+    fn register(
+        ops: &Arc<Operations>,
+        key: &ProcessOperationKey,
+        spec: &ProcessSpec,
+    ) -> ProcessReply {
+        ops.dispatch(ProcessRequest::Register {
+            key: key.clone(),
+            spec: spec.clone(),
+            fingerprint: spec.fingerprint(),
+        })
+    }
+
+    /// Poll Query until the record settles — bounded, never busy-spins
+    /// forever.
+    fn await_settled(ops: &Arc<Operations>, key: &ProcessOperationKey) -> SettledSnapshot {
+        for _ in 0..400 {
+            match ops.dispatch(ProcessRequest::Query { key: key.clone() }) {
+                ProcessReply::State {
+                    state: OperationState::Settled(snapshot),
+                    ..
+                } => return snapshot,
+                _ => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+        panic!("operation never settled");
+    }
+
+    /// Drain the journal from cursor 0; returns (concatenated stdout/pty
+    /// bytes, final cursor).
+    fn drain(ops: &Arc<Operations>, key: &ProcessOperationKey) -> (Vec<u8>, u64) {
+        let mut out = Vec::new();
+        let mut cursor = 0u64;
+        for _ in 0..200 {
+            match ops.dispatch(ProcessRequest::OutputPage {
+                key: key.clone(),
+                cursor: DecimalU64::new(cursor),
+                max_bytes: 8192,
+            }) {
+                ProcessReply::Output {
+                    sequence,
+                    delta_base64,
+                    ..
+                } => {
+                    out.extend_from_slice(
+                        &base64::engine::general_purpose::STANDARD
+                            .decode(&delta_base64)
+                            .unwrap(),
+                    );
+                    cursor = sequence.get();
+                }
+                ProcessReply::OutputEnd { final_sequence, .. } => {
+                    return (out, final_sequence.get());
+                }
+                ProcessReply::OutputPending { .. } => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                other => panic!("unexpected page reply: {other:?}"),
+            }
+        }
+        panic!("journal never ended");
+    }
+
+    #[test]
+    fn a_foreign_key_is_refused_before_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let mut foreign = fresh_key(&adm);
+        foreign.instance = ClientInstanceId::new("other-client");
+        let spec = spec(&["/bin/pwd"]);
+        assert!(matches!(
+            register(&ops, &foreign, &spec),
+            ProcessReply::Unknown { .. }
+        ));
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::Start {
+                key: foreign.clone()
+            }),
+            ProcessReply::Unknown { .. }
+        ));
+        foreign.instance = adm.instance.clone();
+        foreign.generation = Generation::try_from(2u64).unwrap();
+        assert!(matches!(
+            register(&ops, &foreign, &spec),
+            ProcessReply::Unknown { .. }
+        ));
+        assert_eq!(ops.cancel(&foreign), ProcessCancelDisposition::Unknown);
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn argv_pwd_runs_in_the_workspace_and_settles_known() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut spec = spec(&["/bin/pwd"]);
+        spec.cwd = PathBuf::from("sub");
+        assert!(matches!(
+            register(&ops, &key, &spec),
+            ProcessReply::Registered { .. }
+        ));
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+            ProcessReply::State {
+                state: OperationState::Starting,
+                ..
+            }
+        ));
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Known);
+        assert_eq!(snapshot.exit_code, Some(0));
+        let (out, _) = drain(&ops, &key);
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.trim_end().ends_with("/sub"), "pwd output: {text}");
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn duplicate_register_attaches_and_second_start_cannot_spawn_twice() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let marker = dir.path().join("marker");
+        let spec = spec(&["/bin/sh", "-c", "touch marker; echo done"]);
+        assert!(matches!(
+            register(&ops, &key, &spec),
+            ProcessReply::Registered { .. }
+        ));
+        // Exact replay attaches; different fingerprint conflicts.
+        assert!(matches!(
+            register(&ops, &key, &spec),
+            ProcessReply::Registered { .. }
+        ));
+        let mut other = spec.clone();
+        other.timeout_ms = 31_000;
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::Register {
+                key: key.clone(),
+                fingerprint: other.fingerprint(),
+                spec: other,
+            }),
+            ProcessReply::Conflict { .. }
+        ));
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        // A second Start while Starting is a state reply, never a spawn.
+        let _ = ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Known);
+        assert!(marker.is_file());
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn cancel_before_start_admits_zero_business_spawn() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let spec = spec(&["/bin/sh", "-c", "touch spawned"]);
+        register(&ops, &key, &spec);
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        let reply = ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        assert!(matches!(
+            reply,
+            ProcessReply::State {
+                state: OperationState::Settled(_),
+                ..
+            }
+        ));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!dir.path().join("spawned").exists());
+        assert!(ops.shutdown().is_ok());
+    }
+
+    /// The barrier-gated race at the physical START boundary: the hold
+    /// parks the runner inside its own START transaction — cancellation
+    /// delivered while held must be classified by the actual crossing
+    /// flag, never assumed. Cancelled-before-crossing writes no marker.
+    #[test]
+    fn held_start_cancelled_before_crossing_writes_no_marker() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let marker = dir.path().join("business-marker");
+        register(
+            &ops,
+            &key,
+            &spec(&["/bin/sh", "-c", "touch business-marker; exec sleep 30"]),
+        );
+        let hold = arm_start_hold();
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        // Parked inside the physical START transaction — the grant is
+        // entered but the crossing has not been published.
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(hold.await_entered());
+        assert!(!marker.exists());
+        // Revoke cancels with the independent family — the runner's own
+        // grant evaluates the crossing atomically.
+        ops.revoke();
+        hold.release();
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(
+            snapshot.disposition,
+            SettledDisposition::Cancelled,
+            "cancel racing a held START is classified by the real crossing: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!marker.exists(), "no business spawn after a held cancel");
+        ops.shutdown().ok();
+    }
+
+    #[test]
+    fn streamed_stdin_reaches_the_process_in_order() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut spec = spec(&["/bin/cat"]);
+        spec.stdin = ProcessStdin::Streamed;
+        register(&ops, &key, &spec);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        // Wait for Running before input so the listener exists.
+        for _ in 0..200 {
+            if let ProcessReply::State {
+                state: OperationState::Running,
+                ..
+            } = ops.dispatch(ProcessRequest::Query { key: key.clone() })
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let payload = base64::engine::general_purpose::STANDARD.encode(b"hello-stdin\n");
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::WriteStdin {
+                key: key.clone(),
+                sequence: DecimalU64::new(1),
+                delta_base64: payload.clone(),
+                close: false,
+            }),
+            ProcessReply::InputAccepted { .. }
+        ));
+        // Out-of-order sequence is a conflict, not a reorder.
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::WriteStdin {
+                key: key.clone(),
+                sequence: DecimalU64::new(3),
+                delta_base64: payload,
+                close: false,
+            }),
+            ProcessReply::Conflict { .. }
+        ));
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::CloseStdin {
+                key: key.clone(),
+                sequence: DecimalU64::new(2),
+            }),
+            ProcessReply::InputAccepted { .. }
+        ));
+        // The physical close receipt resolves through the query, not
+        // the admission reply.
+        for _ in 0..200 {
+            match ops.dispatch(ProcessRequest::InputReceipt {
+                key: key.clone(),
+                sequence: DecimalU64::new(2),
+            }) {
+                ProcessReply::InputReceipt {
+                    status: InputOutcome::Applied,
+                    ..
+                } => break,
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Known);
+        let (out, _) = drain(&ops, &key);
+        assert!(out.windows(11).any(|w| w == b"hello-stdin"), "got {out:?}");
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn pty_output_resize_and_eof_work() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut spec = spec(&["/bin/cat"]);
+        spec.pty = Some(PtySpec { rows: 24, cols: 80 });
+        spec.stdin = ProcessStdin::Streamed;
+        register(&ops, &key, &spec);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        for _ in 0..200 {
+            if let ProcessReply::State {
+                state: OperationState::Running,
+                ..
+            } = ops.dispatch(ProcessRequest::Query { key: key.clone() })
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::Resize {
+                key: key.clone(),
+                sequence: DecimalU64::new(1),
+                size: PtySpec {
+                    rows: 40,
+                    cols: 120
+                },
+            }),
+            ProcessReply::InputAccepted { .. }
+        ));
+        let payload = base64::engine::general_purpose::STANDARD.encode(b"pty-input\r");
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::WriteStdin {
+                key: key.clone(),
+                sequence: DecimalU64::new(2),
+                delta_base64: payload,
+                close: false,
+            }),
+            ProcessReply::InputAccepted { .. }
+        ));
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::CloseStdin {
+                key: key.clone(),
+                sequence: DecimalU64::new(3),
+            }),
+            ProcessReply::InputAccepted { .. }
+        ));
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Known);
+        let (out, _) = drain(&ops, &key);
+        assert!(out.windows(9).any(|w| w == b"pty-input"), "got {out:?}");
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn four_concurrent_slots_refuse_a_fifth_until_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let spec = spec(&["/bin/pwd"]);
+        let keys: Vec<_> = (0..4).map(|_| fresh_key(&adm)).collect();
+        for key in &keys {
+            assert!(matches!(
+                register(&ops, key, &spec),
+                ProcessReply::Registered { .. }
+            ));
+        }
+        let fifth = fresh_key(&adm);
+        assert!(matches!(
+            register(&ops, &fifth, &spec),
+            ProcessReply::Refused {
+                reason: SpecRefusal::CapacityExhausted,
+                ..
+            }
+        ));
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn forged_or_early_release_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let spec = spec(&["/bin/pwd"]);
+        register(&ops, &key, &spec);
+        // Not settled.
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: DecimalU64::new(0),
+            }),
+            ProcessReply::Conflict { .. }
+        ));
+        // Wrong operation.
+        let other = fresh_key(&adm);
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: other,
+                final_sequence: DecimalU64::new(0),
+            }),
+            ProcessReply::Unknown { .. }
+        ));
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn release_requires_the_exact_final_cursor() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let spec = spec(&["/bin/echo", "done"]);
+        register(&ops, &key, &spec);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        // A sequence that is not the exact final boundary is rejected.
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: DecimalU64::new(snapshot.final_sequence.get() + 1),
+            }),
+            ProcessReply::Conflict { .. }
+        ));
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: snapshot.final_sequence,
+            }),
+            ProcessReply::OutputReleased { .. }
+        ));
+        // The minimal tombstone still answers Query with the real snapshot.
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::Query { key: key.clone() }),
+            ProcessReply::State {
+                state: OperationState::Settled(_),
+                ..
+            }
+        ));
+        // And a same-fingerprint replay returns that snapshot.
+        assert!(matches!(
+            register(&ops, &key, &spec),
+            ProcessReply::State {
+                state: OperationState::Settled(_),
+                ..
+            }
+        ));
+        // A different fingerprint is a conflict — no resurrection.
+        let mut other = spec.clone();
+        other.env.insert("X".into(), Some("1".into()));
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::Register {
+                key: key.clone(),
+                fingerprint: other.fingerprint(),
+                spec: other,
+            }),
+            ProcessReply::Conflict { .. }
+        ));
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn authorized_env_reaches_the_command_and_baseline_wins() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut spec = spec(&["/bin/sh", "-c", "echo M:$MARKER P:$OVERRIDE_PATH"]);
+        spec.env = BTreeMap::from([
+            ("MARKER".into(), Some("hello-env".into())),
+            // PATH is a fixed baseline — an override cannot replace it.
+            ("OVERRIDE_PATH".into(), Some("x".into())),
+        ]);
+        register(&ops, &key, &spec);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Known);
+        let (out, _) = drain(&ops, &key);
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("M:hello-env"), "env output: {text}");
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn sequential_released_operations_do_not_exhaust_capacity() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let spec = spec(&["/bin/true"]);
+        for _ in 0..5 {
+            let key = fresh_key(&adm);
+            assert!(matches!(
+                register(&ops, &key, &spec),
+                ProcessReply::Registered { .. }
+            ));
+            ops.dispatch(ProcessRequest::Start { key: key.clone() });
+            let snapshot = await_settled(&ops, &key);
+            assert!(matches!(
+                ops.dispatch(ProcessRequest::ReleaseOutput {
+                    key: key.clone(),
+                    final_sequence: snapshot.final_sequence,
+                }),
+                ProcessReply::OutputReleased { .. }
+            ));
+        }
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn revoke_fences_a_pending_start() {
+        if !supervisor_staged() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let spec = spec(&["/bin/sh", "-c", "touch fenced"]);
+        register(&ops, &key, &spec);
+        ops.revoke();
+        let reply = ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        assert!(matches!(reply, ProcessReply::State { .. }));
+        assert!(ops.shutdown().is_ok());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!dir.path().join("fenced").exists());
+    }
+}

@@ -1323,7 +1323,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
 
 #[tokio::test]
 async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
-    use crate::runtime::process_runner::{
+    use rustx_process_supervisor::process_runner::{
         CapturedProcessResult, RunnerTestControl, SupervisedCommandSpec, SupervisedProcessRunner,
     };
     use std::sync::{

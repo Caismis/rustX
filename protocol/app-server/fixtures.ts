@@ -5000,6 +5000,7 @@ export const fixtures = [
     "id": "environment-0",
     "method": "command/exec",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "command": [
         "/usr/bin/printf",
         "%s",

@@ -65,20 +65,22 @@
 //! ## Why the parent must already be a subreaper
 //!
 //! Parent-side containment reuses the *same* proven primitive the unit's own
-//! owner uses — [`emergency_contain_group`] — which retains the adopted
+//! owner uses — [`crate::supervised_unit::emergency_contain_group`] — which
+//! retains the adopted
 //! anchor with `WNOWAIT`, issues one anchored `SIGKILL`, and proves the
 //! group terminal by a group-scoped `ECHILD`. Every step requires the anchor
 //! to have been **adopted** by the containing process when the intermediate
 //! child died. On Linux that adoption is exactly `PR_SET_CHILD_SUBREAPER`,
 //! and it must be installed in the top-level parent *before* the child is
 //! spawned — a subreaper installed afterwards does not retroactively adopt.
-//! [`rustx_process_supervisor::process_supervision::ensure_child_subreaper`] is
+//! [`crate::process_supervision::ensure_child_subreaper`] is
 //! therefore consulted before staging, and preparation fails rather than
 //! claiming containment it cannot perform.
 //!
 //! macOS has no equivalent primitive: an orphaned anchor reparents to
 //! `init`, the anchor wait answers `ECHILD`, and containment reports
-//! [`EmergencyContainment::AnchorUnavailable`] — the existing explicit
+//! [`crate::supervised_unit::EmergencyContainment::AnchorUnavailable`] — the
+//! existing explicit
 //! "terminality unproven" semantics. That weaker contract is reported
 //! honestly and never fabricated into parity.
 //!
@@ -121,21 +123,21 @@
 //!   explicitly known state.
 //!
 //! In the **top-level** process no authority is installed, so
-//! [`retain`] resolves immediately into an unanchored lease and the
+//! [`retain_with`] resolves immediately into an unanchored lease and the
 //! existing single-level behaviour is bit-for-bit unchanged.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures_util::future::BoxFuture;
 
-use crate::runtime::identity::ProcessUnitId;
+use crate::identity::ProcessUnitId;
 
 /// A failure of the nested containment handshake.
 ///
 /// Every variant happens **before** the unit's local `START` gate opens, so
 /// no semantic command has been spawned when one is returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AnchorError {
+pub enum AnchorError {
     /// The parent control channel closed while the offer was outstanding.
     /// The parent is gone; nothing may start.
     ParentLost,
@@ -167,7 +169,7 @@ impl std::error::Error for AnchorError {}
 /// Exactly one implementation exists — the subagent child's control
 /// dispatcher — and it is installed once, before the child answers `Ready`.
 /// A unit owner never learns anything about the transport behind it.
-pub(crate) trait NestedAnchorAuthority: Send + Sync + std::fmt::Debug {
+pub trait NestedAnchorAuthority: Send + Sync + std::fmt::Debug {
     /// Offers one anchor and resolves when the parent has acknowledged
     /// retention of exactly this unit.
     fn offer(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, Result<(), AnchorError>>;
@@ -203,7 +205,7 @@ static NEXT_UNIT: AtomicU64 = AtomicU64::new(0);
 /// # Errors
 ///
 /// Returns an error when an authority is already installed.
-pub(crate) fn install_authority(
+pub fn install_authority(
     authority: std::sync::Arc<dyn NestedAnchorAuthority>,
 ) -> Result<(), String> {
     if INSTALLED.swap(true, Ordering::SeqCst) {
@@ -217,7 +219,7 @@ pub(crate) fn install_authority(
 
 /// The installed authority, if this process is a subagent child.
 #[must_use]
-pub(crate) fn authority() -> Option<std::sync::Arc<dyn NestedAnchorAuthority>> {
+pub fn authority() -> Option<std::sync::Arc<dyn NestedAnchorAuthority>> {
     AUTHORITY
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -229,8 +231,8 @@ pub(crate) fn authority() -> Option<std::sync::Arc<dyn NestedAnchorAuthority>> {
 /// The authority is process-global by design (a subagent child has exactly
 /// one parent), so tests that install one must not run concurrently with
 /// each other or with a test that relies on there being none.
-#[cfg(test)]
-pub(crate) fn test_authority_lock() -> &'static tokio::sync::Mutex<()> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_authority_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
@@ -240,8 +242,8 @@ pub(crate) fn test_authority_lock() -> &'static tokio::sync::Mutex<()> {
 /// The returned guard removes it again, so the process returns to its
 /// top-level (unanchored) shape. Hold [`test_authority_lock`] across the
 /// guard's lifetime.
-#[cfg(test)]
-pub(crate) fn install_authority_for_test(
+#[cfg(any(test, feature = "test-support"))]
+pub fn install_authority_for_test(
     authority: std::sync::Arc<dyn NestedAnchorAuthority>,
 ) -> TestAuthorityGuard {
     *AUTHORITY
@@ -251,10 +253,10 @@ pub(crate) fn install_authority_for_test(
 }
 
 /// Removes the test-installed authority on drop.
-#[cfg(test)]
-pub(crate) struct TestAuthorityGuard;
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestAuthorityGuard;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestAuthorityGuard {
     fn drop(&mut self) {
         *AUTHORITY
@@ -264,15 +266,15 @@ impl Drop for TestAuthorityGuard {
 }
 
 /// Whether this process anchors its supervised units in a parent.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
-pub(crate) fn is_nested() -> bool {
+pub fn is_nested() -> bool {
     authority().is_some()
 }
 
 /// Allocates the typed identity of one supervised process unit.
 #[must_use]
-pub(crate) fn allocate_unit_id() -> ProcessUnitId {
+pub fn allocate_unit_id() -> ProcessUnitId {
     let ordinal = NEXT_UNIT.fetch_add(1, Ordering::Relaxed);
     ProcessUnitId::new(format!("unit:{}:{ordinal}", std::process::id()))
 }
@@ -288,7 +290,7 @@ pub(crate) fn allocate_unit_id() -> ProcessUnitId {
 /// process-global authority. An explicit authority exists so one invocation
 /// can be anchored into a recording owner without perturbing every other
 /// supervised unit in the same process.
-pub(crate) fn retain_with(
+pub fn retain_with(
     unit: ProcessUnitId,
     pgid: i32,
     override_authority: Option<std::sync::Arc<dyn NestedAnchorAuthority>>,
@@ -322,7 +324,7 @@ pub(crate) fn retain_with(
 /// drop deliberately keeps the parent's retained anchor — and its
 /// catastrophic containment authority for that exact group — alive.
 #[derive(Debug)]
-pub(crate) struct ProcessUnitAnchor {
+pub struct ProcessUnitAnchor {
     unit: ProcessUnitId,
     pgid: i32,
     authority: Option<std::sync::Arc<dyn NestedAnchorAuthority>>,
@@ -330,15 +332,15 @@ pub(crate) struct ProcessUnitAnchor {
 
 impl ProcessUnitAnchor {
     /// Whether this lease is actually anchored in a parent.
-    #[cfg(test)]
-    pub(crate) const fn is_anchored(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn is_anchored(&self) -> bool {
         self.authority.is_some()
     }
 
     /// Reports the unit physically terminal and drops the parent's retained
     /// anchor. Called exactly at a proven-terminal settlement, and never
     /// from anywhere else: this is the one release-producing transition.
-    pub(crate) async fn release(mut self) {
+    pub async fn release(mut self) {
         if let Some(authority) = self.authority.take() {
             authority.release(self.unit.clone(), self.pgid).await;
         }
@@ -358,7 +360,7 @@ impl ProcessUnitAnchor {
 /// invocation deadline, and supervisor events while the parent decides, so
 /// the offer is polled as one arm of that loop rather than awaited inline.
 #[derive(Default)]
-pub(crate) enum AnchorGate {
+pub enum AnchorGate {
     /// No anchor has been offered yet.
     #[default]
     Idle,
@@ -385,7 +387,7 @@ impl core::fmt::Debug for AnchorGate {
 impl AnchorGate {
     /// Begins the handshake for one unit anchor, with an optional explicit
     /// authority override.
-    pub(crate) fn offer_with(
+    pub fn offer_with(
         &mut self,
         pgid: i32,
         override_authority: Option<std::sync::Arc<dyn NestedAnchorAuthority>>,
@@ -394,12 +396,12 @@ impl AnchorGate {
     }
 
     /// Whether the gate is waiting for the parent.
-    pub(crate) const fn is_pending(&self) -> bool {
+    pub const fn is_pending(&self) -> bool {
         matches!(self, Self::Pending(_))
     }
 
     /// Awaits the outstanding offer. Only valid while [`AnchorGate::is_pending`].
-    pub(crate) async fn settle_offer(&mut self) -> Result<(), AnchorError> {
+    pub async fn settle_offer(&mut self) -> Result<(), AnchorError> {
         let Self::Pending(pending) = self else {
             // Not pending: park forever so this select arm never fires.
             std::future::pending::<()>().await;
@@ -422,7 +424,7 @@ impl AnchorGate {
     /// This awaits the release's bounded delivery to the dispatcher: while
     /// the parent control plane is alive the release is never dropped under
     /// outbound backpressure.
-    pub(crate) async fn release(&mut self) {
+    pub async fn release(&mut self) {
         if let Self::Held(anchor) = std::mem::replace(self, Self::Released) {
             anchor.release().await;
         }
@@ -435,7 +437,7 @@ impl AnchorGate {
     /// unproven settlement must not drop the parent's containment authority
     /// for that exact group, so the lease is discarded without emitting a
     /// release.
-    pub(crate) fn retain_unproven(&mut self) {
+    pub fn retain_unproven(&mut self) {
         if let Self::Held(mut anchor) = std::mem::replace(self, Self::Released) {
             anchor.forget();
         }
@@ -492,14 +494,14 @@ mod tests {
         impl super::NestedAnchorAuthority for Refusing {
             fn offer(
                 &self,
-                _unit: crate::runtime::identity::ProcessUnitId,
+                _unit: crate::identity::ProcessUnitId,
                 _pgid: i32,
             ) -> futures_util::future::BoxFuture<'static, Result<(), AnchorError>> {
                 Box::pin(std::future::ready(Err(AnchorError::ParentLost)))
             }
             fn release(
                 &self,
-                _unit: crate::runtime::identity::ProcessUnitId,
+                _unit: crate::identity::ProcessUnitId,
                 _pgid: i32,
             ) -> futures_util::future::BoxFuture<'static, ()> {
                 Box::pin(std::future::ready(()))
@@ -519,8 +521,8 @@ mod tests {
 
 #[cfg(all(test, unix))]
 mod global_authority_tests {
-    use crate::runtime::identity::ProcessUnitId;
-    use crate::runtime::nested_containment::{AnchorError, NestedAnchorAuthority};
+    use crate::identity::ProcessUnitId;
+    use crate::nested_containment::{AnchorError, NestedAnchorAuthority};
     use std::sync::{Arc, Mutex};
 
     /// An authority that accepts every offer immediately and records it.
@@ -572,9 +574,9 @@ mod global_authority_tests {
 
         let dir = tempfile::tempdir().expect("lab");
         let marker = dir.path().join("started");
-        let result = crate::runtime::process_runner::SupervisedProcessRunner::run(
-            &crate::runtime::process_runner::RunnerBackedProcessRunner,
-            crate::runtime::process_runner::SupervisedCommandSpec {
+        let result = crate::process_runner::SupervisedProcessRunner::run(
+            &crate::process_runner::RunnerBackedProcessRunner,
+            crate::process_runner::SupervisedCommandSpec {
                 command: format!("touch {}", marker.display()),
                 cwd: std::env::temp_dir(),
                 command_environment: vec![(
@@ -582,7 +584,7 @@ mod global_authority_tests {
                     "/usr/local/bin:/usr/bin:/bin".to_owned(),
                 )],
                 timeout: Some(std::time::Duration::from_secs(30)),
-                cancellation: crate::runtime::cancellation::CancellationSignal::new(),
+                cancellation: crate::signal::ProcessSignal::new(),
             },
             None,
         )
@@ -590,7 +592,7 @@ mod global_authority_tests {
         .expect("a terminal result");
         assert_eq!(
             result.intent,
-            crate::runtime::process_runner::ProcessOutcomeIntent::Completed
+            crate::process_runner::ProcessOutcomeIntent::Completed
         );
         assert!(marker.exists());
 
@@ -632,7 +634,7 @@ mod global_authority_tests {
 
 #[cfg(all(test, unix))]
 mod containment_tests {
-    use rustx_process_supervisor::supervised_unit::{EmergencyContainment, contain_adopted_group};
+    use crate::supervised_unit::{EmergencyContainment, contain_adopted_group};
 
     /// A direct child of this process in its own process group is a valid
     /// adopted anchor: containment retains its identity, kills the group,

@@ -8,7 +8,7 @@ pub(crate) mod concurrency;
 pub(crate) mod review;
 
 fn parameters(fixture: &Fixture, command: &[&str]) -> ExecParams {
-    serde_json::from_value(serde_json::json!({"command":command,"cwd":fixture.workspaces[0],"env":{},"processId":null,"tty":false,"streamStdin":false,"streamStdoutStderr":false,"outputBytesCap":null,"timeoutMs":10_000,"size":null})).unwrap()
+    serde_json::from_value(serde_json::json!({"sessionId":fixture.sessions[0].id,"command":command,"cwd":fixture.workspaces[0],"env":{},"processId":null,"tty":false,"streamStdin":false,"streamStdoutStderr":false,"outputBytesCap":null,"timeoutMs":10_000,"size":null})).unwrap()
 }
 fn grant(fixture: &Fixture) {
     fixture
@@ -68,6 +68,15 @@ pub(crate) async fn buffered_scenario() {
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let params = parameters(&fixture, &["/usr/bin/printf", "%s", "literal;$(false)"]);
+    // Without an admitted Client the Session cannot resolve — honest
+    // unavailability, never a Server-local fallback.
+    assert_eq!(
+        rejected(&connection, 0, Method::CommandExec(params.clone())).await,
+        ErrorData::ExecutionUnavailable
+    );
+    // With the Client admitted but no environment grant, the workspace
+    // check refuses before anything is dispatched.
+    let mut execution = fixture.start_execution(0).await;
     assert_eq!(
         rejected(&connection, 1, Method::CommandExec(params.clone())).await,
         ErrorData::EnvironmentUnauthorized
@@ -141,12 +150,14 @@ pub(crate) async fn buffered_scenario() {
     assert!(environment.contains("GIT_CONFIG_KEY_4=core.fsmonitor\n"));
     assert!(environment.contains("GIT_CONFIG_VALUE_4=false\n"));
     assert_eq!(fixture.manager.diagnostics().loaded, 0);
+    execution.kill().await.unwrap();
     connection.close();
 }
 
 pub(crate) async fn connection_process_scenario() {
     let fixture = Fixture::new().await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let first = Arc::new(AppServerConnection::new(fixture.host.clone()));
     let second = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&first).await;
@@ -238,6 +249,7 @@ pub(crate) async fn connection_process_scenario() {
         .await
         .unwrap();
     process_gone(pid);
+    execution.kill().await.unwrap();
     second.close();
 }
 async fn rejected_or_result(
@@ -261,6 +273,7 @@ async fn rejected_or_result(
 pub(crate) async fn terminal_scenario() {
     let fixture = Fixture::new().await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut params = parameters(
@@ -315,6 +328,7 @@ pub(crate) async fn terminal_scenario() {
     };
     assert_eq!(result.status, ExecStatus::Completed);
     assert_eq!(result.stdout_base64, "");
+    execution.kill().await.unwrap();
     connection.close();
 }
 
@@ -345,8 +359,9 @@ async fn terminal_completion(
 }
 
 pub(crate) async fn terminal_descriptor_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     // /dev/fd and shell test are native on both supported Unix platforms.
@@ -409,13 +424,15 @@ pub(crate) async fn terminal_descriptor_scenario() {
     )
     .await;
     terminal_completion(&observer, other).await;
+    execution.kill().await.unwrap();
     observer.close();
     connection.close();
 }
 
 pub(crate) async fn terminal_eof_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let cases: [(&str, bool, &[u8], &[u8]); 5] = [
@@ -505,6 +522,7 @@ pub(crate) async fn terminal_eof_scenario() {
             "invalid EOF must leave stdin open and write none of its batch"
         );
     }
+    execution.kill().await.unwrap();
     connection.close();
 }
 
@@ -1275,8 +1293,9 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
 }
 
 pub(crate) async fn output_capacity_and_timeout_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut capped = parameters(
@@ -1339,6 +1358,7 @@ pub(crate) async fn output_capacity_and_timeout_scenario() {
     let (error, info) = tokio::join!(bounded(slow), call(&healthy, 5, Method::ServerInfo {}));
     assert_eq!(error.unwrap(), ErrorData::ConnectionClosed);
     assert!(matches!(info, MethodResult::ServerInfo { .. }));
+    execution.kill().await.unwrap();
     connection.close();
     healthy.close();
     bounded(
@@ -1352,8 +1372,9 @@ pub(crate) async fn output_capacity_and_timeout_scenario() {
 }
 
 pub(crate) async fn host_drain_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     call(
@@ -1399,10 +1420,14 @@ pub(crate) async fn host_drain_scenario() {
     match bounded(command).await.unwrap() {
         Response::Success(success) => assert!(matches!(success.result,
             MethodResult::CommandExec { result } if result.status == ExecStatus::Terminated)),
-        Response::Failure(failure) => {
-            assert_eq!(failure.error.data, Some(ErrorData::ConnectionClosed));
-        }
+        // A fenced endpoint mid-operation reports unavailability; a
+        // closed request context reports ConnectionClosed — both honest.
+        Response::Failure(failure) => assert!(matches!(
+            failure.error.data,
+            Some(ErrorData::ConnectionClosed | ErrorData::ExecutionUnavailable)
+        )),
     }
+    execution.kill().await.unwrap();
     assert_eq!(*fixture.host.request_operations().borrow(), 0);
     assert!(
         fixture.host.finish_drain().is_err(),
@@ -1577,8 +1602,9 @@ pub(crate) async fn mcp_capacity_scenario() {
 }
 
 pub(crate) async fn duplex_terminal_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut params = parameters(
@@ -1631,6 +1657,7 @@ pub(crate) async fn duplex_terminal_scenario() {
     assert_eq!(result.status, ExecStatus::Completed);
     assert!(output.ends_with(b"DONE"));
     assert_eq!(output.len(), 5 + 131_072 + 4);
+    execution.kill().await.unwrap();
     connection.close();
 }
 
@@ -1823,8 +1850,9 @@ pub(crate) async fn skill_large_resources_scenario() {
 }
 
 pub(crate) async fn partial_stdin_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut params = parameters(
@@ -1840,25 +1868,38 @@ pub(crate) async fn partial_stdin_scenario() {
     let worker = connection.clone();
     let command = tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
     assert!(output(&connection, "prefix").await.starts_with(b"READY"));
-    let error = rejected(
-        &connection,
-        2,
-        Method::CommandWrite(WriteParams {
-            process_id: "prefix".into(),
-            delta_base64: Some(base64::engine::general_purpose::STANDARD.encode(vec![b'x'; 65536])),
-            close_stdin: false,
-        }),
-    )
-    .await;
-    assert_eq!(
-        error,
-        ErrorData::OutcomeUnknown,
-        "a prefix may already have reached the child"
-    );
+    // The receipt is the physical answer: the 64 KiB write can fully
+    // apply into the PTY buffer before the one-byte reader exits, or
+    // the peer can be gone already — both outcomes are honest, a partial
+    // application is never reported as success.
+    match connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(2),
+            call: Method::CommandWrite(WriteParams {
+                process_id: "prefix".into(),
+                delta_base64: Some(
+                    base64::engine::general_purpose::STANDARD.encode(vec![b'x'; 65536]),
+                ),
+                close_stdin: false,
+            }),
+        })
+        .await
+    {
+        Response::Success(success) => assert!(matches!(
+            success.result,
+            MethodResult::EnvironmentAccepted {}
+        )),
+        Response::Failure(failure) => assert!(matches!(
+            failure.error.data,
+            Some(ErrorData::OperationFailed | ErrorData::OutcomeUnknown)
+        )),
+    }
     assert!(matches!(
         bounded(command).await.unwrap(),
         MethodResult::CommandExec { .. }
     ));
+    execution.kill().await.unwrap();
     connection.close();
 }
 

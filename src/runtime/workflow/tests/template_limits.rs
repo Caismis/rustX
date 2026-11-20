@@ -1,8 +1,8 @@
 use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
-use crate::runtime::process_runner::{RunnerTerminalHold, RunnerTestControl};
 use crate::runtime::types::CancellationReason;
 use crate::runtime::workflow::transform;
 use crate::runtime::workflow::{WorkflowRunError, WorkflowValue};
+use rustx_process_supervisor::process_runner::{RunnerTerminalHold, RunnerTestControl};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::Duration;

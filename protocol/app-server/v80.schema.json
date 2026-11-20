@@ -40465,6 +40465,10 @@
     "ExecParams": {
       "type": "object",
       "properties": {
+        "sessionId": {
+          "description": "The Session whose admitted Execution Client owns the process.",
+          "$ref": "#/$defs/SessionId"
+        },
         "command": {
           "type": "array",
           "items": {
@@ -40535,6 +40539,7 @@
       },
       "additionalProperties": false,
       "required": [
+        "sessionId",
         "command",
         "cwd"
       ]

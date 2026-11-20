@@ -9526,6 +9526,10 @@ export interface ProtocolTypes {
  */
 export interface ExecParams {
   /**
+   * The Session whose admitted Execution Client owns the process.
+   */
+  sessionId: string;
+  /**
    * @minItems 1
    * @maxItems 256
    */

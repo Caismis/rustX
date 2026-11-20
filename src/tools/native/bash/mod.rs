@@ -18,7 +18,7 @@
 //! result.
 //!
 //! The process-ownership half of this lifecycle is the shared internal
-//! supervised command runner (`crate::runtime::process_runner`): the same
+//! supervised command runner (`rustx_process_supervisor::process_runner`): the same
 //! supervisor unit, control protocol, process-group ownership, cancellation
 //! settlement, and catastrophic containment that native Bash uses is reused
 //! by Managed Python, so package-manager work never becomes a second

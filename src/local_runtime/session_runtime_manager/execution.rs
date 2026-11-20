@@ -72,6 +72,10 @@ pub struct LocalExecutionEndpoint {
     /// The reserved logical workspace — trusted catalog identity,
     /// recorded once at claim time, never probed on disk.
     workspace: PathBuf,
+    /// The committed pair's admission — set once when the Live
+    /// connection lands; the operation-identity source for every
+    /// managed process this endpoint dispatches.
+    admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
     /// The fd-and-dirfd proof of the bundle `create_new` wrote at
     /// reservation. `Drop` removes the file only while `fstatat` still
     /// matches this proof — a foreign replacement is never unlinked and
@@ -162,6 +166,7 @@ impl LocalExecutionEndpoint {
             connection: Mutex::new(None),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
+            admission: std::sync::OnceLock::new(),
             listener: ExecutionListener::Unix(listener),
             bootstrap: root.join("b"),
             bundle,
@@ -207,6 +212,7 @@ impl LocalExecutionEndpoint {
             connection: Mutex::new(None),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
+            admission: std::sync::OnceLock::new(),
             listener: ExecutionListener::WebSocket(listener),
             bootstrap,
             bundle,
@@ -319,6 +325,9 @@ impl LocalExecutionEndpoint {
         match admitted {
             rustx_execution_server::ChannelAccept::Pending => EndpointAdmission::Pending,
             rustx_execution_server::ChannelAccept::Live(connection) => {
+                // The pair's admission is the operation-identity source;
+                // it can land exactly once (the slot's own invariant).
+                let _ = self.admission.set(connection.admission().clone());
                 let mut slot = self.connection.lock().expect("endpoint connection");
                 assert!(
                     slot.replace(connection).is_none(),
@@ -333,11 +342,38 @@ impl LocalExecutionEndpoint {
     }
 
     /// The live pair's cloneable control handle — health, mutation
-    /// cancellation, and revocation independent of the data lane's
-    /// dispatch lock. `None` while no pair is live.
+    /// cancellation, process cancellation, and revocation independent
+    /// of the data lane's dispatch lock. `None` while no pair is live.
     #[must_use]
     pub fn control(&self) -> Option<rustx_execution_server::ControlHandle> {
         self.binding.control()
+    }
+
+    /// The committed pair's admission — the complete identity source
+    /// for managed-process operation keys. `None` before a pair lands.
+    #[must_use]
+    pub fn admission(&self) -> Option<&rustx_execution_protocol::Admission> {
+        self.admission.get()
+    }
+
+    /// One managed-process exchange through the admitted Client.
+    ///
+    /// Scheduled per RPC — the connection lock is released the moment
+    /// the reply arrives, so a caller driving one operation through
+    /// `Register`/`Start`/`Query`/`OutputPage`/`InputReceipt`/`Release`
+    /// exchanges never holds the lane across the process's lifetime; a
+    /// concurrent dispatch answers `WouldBlock` like every other
+    /// management exchange.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_range`](Self::read_range)
+    /// and the typed exchange's own errors.
+    pub fn process(
+        &self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        self.with_connection(None, false, |connection| connection.process(request))
     }
 
     /// One bounded, revision-checked range read through the admitted
@@ -776,14 +812,24 @@ impl LocalExecutionEndpoint {
         &self.binding
     }
 
-    /// Fences the endpoint: the binding is marked `Revoked` and its
+    /// Fences the endpoint: a live pair is first asked to revoke — the
+    /// Client fences its commits and proves physical process containment
+    /// before `Revoked` returns, and the local fence lands after that
+    /// bounded wait — then the binding is marked `Revoked` and its
     /// shutdown handle seized in one atomic step — new admissions die
-    /// at the gate immediately — then, and only for an idle stored
+    /// at the gate immediately — and, only for an idle stored
     /// connection, the bounded orderly Close. A busy exchange or a
     /// handshake still in flight is interrupted by the seized handle's
     /// raw shutdown instead; this never waits on the connection's data
     /// lock, so a stuck peer can never stall a fence or a drain.
     fn fence_connection(&self) {
+        // The awaited revoke runs first: physical containment on the
+        // Client is proven before this fence returns. No pair live — or
+        // a lane that cannot carry the request — falls through to the
+        // local fence, which is terminal either way.
+        if let Some(control) = self.binding.control() {
+            let _ = control.revoke();
+        }
         let fenced = self.binding.fence();
         match self.connection.try_lock() {
             Ok(mut guard) => match guard.as_mut() {
@@ -930,7 +976,7 @@ fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
 /// bare `.` spell the root — an embedded `.`/`..` anywhere is still
 /// refused. The result is the empty relative path the Client reads as
 /// "the root itself".
-fn workspace_entry(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn workspace_entry(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
     if path.as_os_str() == workspace.as_os_str() || path.as_os_str().as_bytes() == b"." {
         return Ok(PathBuf::new());
     }
@@ -2494,6 +2540,10 @@ mod tests {
                     disposition: rustx_execution_protocol::CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::CancelProcess { key } => ControlReply::ProcessCancelled {
+                    key,
+                    disposition: rustx_execution_protocol::ProcessCancelDisposition::Unknown,
+                },
             });
             if done {
                 let _ = write_record(

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use constant_time_eq::constant_time_eq_32;
+use rustx_execution_protocol::process::ServerIncarnation;
 #[cfg(test)]
 use rustx_execution_protocol::transport::read_record;
 use rustx_execution_protocol::{
@@ -29,8 +30,8 @@ use rustx_execution_protocol::{
     MAX_DOCUMENT_SOURCE_BYTES, MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES,
     MAX_RAW_CHUNK_BYTES, MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES,
     MAX_TEXT_LINES, MAX_WRITE_BYTES, PROTOCOL_VERSION, PageEntry, PairingNonce, PeerHello,
-    ReadError, Reject, SearchSpec, SessionId, TextReplacement, WriteExpectation,
-    is_normalized_absolute_path,
+    ProcessCancelDisposition, ReadError, Reject, SearchSpec, SessionId, TextReplacement,
+    WriteExpectation, is_normalized_absolute_path,
     transport::{
         CONTROL_COMMAND_TIMEOUT, CONTROL_FRAME_TIMEOUT, MAX_CONTROL_COMMANDS, PAGE_REQUEST_TIMEOUT,
         encode_record, write_record,
@@ -43,6 +44,16 @@ use sha2::{Digest, Sha256};
 /// connection — one shared budget owned by
 /// [`rustx_execution_protocol::transport`].
 pub use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+
+static SERVER_INCARNATION: std::sync::OnceLock<ServerIncarnation> = std::sync::OnceLock::new();
+
+/// The one process-wide Server incarnation — allocated once, never per
+/// runtime reload. Every [`Bootstrap`], [`Admission`], and process
+/// operation identity is keyed under it.
+#[must_use]
+pub fn server_incarnation() -> ServerIncarnation {
+    *SERVER_INCARNATION.get_or_init(ServerIncarnation::generate)
+}
 
 /// The fixed identity and requirements of one reserved binding.
 ///
@@ -398,6 +409,7 @@ impl Binding {
     fn admission(&self) -> Admission {
         Admission {
             version: PROTOCOL_VERSION,
+            server_incarnation: server_incarnation(),
             session: self.reservation.session.clone(),
             environment: self.reservation.environment.clone(),
             instance: self.reservation.instance.clone(),
@@ -1370,6 +1382,58 @@ impl ControlHandle {
         }
     }
 
+    /// Cancels one live process operation on the Client by its complete
+    /// operation key: the disposition is the Client's own arbitration —
+    /// [`ProcessCancelDisposition::CancelledBeforeStart`] proves zero
+    /// business spawn, [`ProcessCancelDisposition::CancellationRequested`]
+    /// that containment is physically underway (never already complete),
+    /// and `Unknown` that no record matched the exact key.
+    ///
+    /// # Errors
+    ///
+    /// The same error kinds as [`Self::health`].
+    pub fn cancel_process(
+        &self,
+        key: &rustx_execution_protocol::process::ProcessOperationKey,
+    ) -> io::Result<ProcessCancelDisposition> {
+        let receipt = self
+            .shared
+            .enqueue(ControlRequest::CancelProcess { key: key.clone() })?;
+        match receipt.recv_timeout(CONTROL_COMMAND_TIMEOUT) {
+            Ok(Ok(ControlReply::ProcessCancelled {
+                key: echoed,
+                disposition,
+            })) if echoed == *key => Ok(disposition),
+            Ok(Ok(_)) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "control cancel receipt answers a foreign process key",
+            )),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "control command outlived its budget",
+            )),
+        }
+    }
+
+    /// Queues one `CancelProcess` without awaiting its receipt — the
+    /// bounded-queue answer for callers that must never wait on the
+    /// lane: the command is still delivered and arbitrated on the
+    /// Client; the queue-full or dead-lane refusal is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the queue-full [`io::ErrorKind::WouldBlock`] or the
+    /// closed lane's terminal error.
+    pub fn request_process_cancel(
+        &self,
+        key: &rustx_execution_protocol::process::ProcessOperationKey,
+    ) -> io::Result<()> {
+        self.shared
+            .enqueue(ControlRequest::CancelProcess { key: key.clone() })
+            .map(drop)
+    }
+
     /// Requests terminal revocation from the Client — its local commits
     /// are fenced before `Revoked` is echoed — then revokes the binding
     /// locally. The peer's acknowledgement is awaited through the same
@@ -1516,6 +1580,10 @@ fn receipt_matches(request: &ControlRequest, reply: &ControlReply) -> bool {
             ControlRequest::CancelMutation { ticket },
             ControlReply::MutationCancelled { ticket: echoed, .. },
         ) => ticket == echoed,
+        (
+            ControlRequest::CancelProcess { key },
+            ControlReply::ProcessCancelled { key: echoed, .. },
+        ) => key == echoed,
         (ControlRequest::Revoke, ControlReply::Revoked) => true,
         _ => false,
     }
@@ -1949,6 +2017,58 @@ impl LocalConnection {
             return Err(self.retire(violation("image chunks contradict the stamped size")));
         }
         Ok(bytes)
+    }
+
+    /// One managed-process exchange: the typed request is sent and its
+    /// typed reply returned only after the exact key echo and the
+    /// bounded wire shapes are verified — an `Output` page's encoded
+    /// payload is length-checked against `MAX_PROCESS_DATA_BYTES`
+    /// before the reply is trusted, and a reply answering any other key
+    /// or shape retires the stream.
+    ///
+    /// The peer must have advertised [`Capability::Process`] at
+    /// admission or the call is [`io::ErrorKind::Unsupported`] and no
+    /// request is sent. Each call is one complete request/reply pair —
+    /// the caller observes operation progress through successive
+    /// `Query`/`OutputPage`/`InputReceipt` exchanges, so no exchange
+    /// ever awaits a process lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// process capability, [`io::ErrorKind::InvalidData`] for a reply
+    /// that fails the key echo or the bounded-shape checks — which
+    /// retires the stream — or the transport's own errors.
+    pub fn process(
+        &mut self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        if !self.capabilities.contains(&Capability::Process) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no process capability",
+            ));
+        }
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::Process(reply) = self.exchange_admitted(
+            &ClientRequest::Process(request.clone()),
+            Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            || Ok(()),
+            || (),
+        )?
+        else {
+            return Err(self.retire(violation("unexpected reply to process request")));
+        };
+        if reply.key() != request.key() {
+            return Err(self.retire(violation("process reply echoes a foreign key")));
+        }
+        if let rustx_execution_protocol::process::ProcessReply::Output { delta_base64, .. } = &reply
+            && delta_base64.len()
+                > rustx_execution_protocol::process::MAX_PROCESS_DATA_BYTES.div_ceil(3) * 4
+        {
+            return Err(self.retire(violation("process output exceeds the bounded page")));
+        }
+        Ok(reply)
     }
 
     /// Verifies a `Range` reply against the request before trusting it. Any
@@ -3671,6 +3791,7 @@ fn publish_bootstrap(
     let bootstrap = Bootstrap {
         endpoint,
         version: PROTOCOL_VERSION,
+        server_incarnation: server_incarnation(),
         session: reservation.session.clone(),
         environment: reservation.environment.clone(),
         instance: reservation.instance.clone(),
@@ -4327,6 +4448,10 @@ mod tests {
                     disposition: CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::CancelProcess { key } => ControlReply::ProcessCancelled {
+                    key,
+                    disposition: rustx_execution_protocol::ProcessCancelDisposition::Unknown,
+                },
             });
             if done {
                 let poll = ControlPoll {
@@ -6622,6 +6747,10 @@ mod tests {
                     disposition: CancelDisposition::Unknown,
                 },
                 ControlRequest::Revoke => ControlReply::Revoked,
+                ControlRequest::CancelProcess { key } => ControlReply::ProcessCancelled {
+                    key,
+                    disposition: rustx_execution_protocol::ProcessCancelDisposition::Unknown,
+                },
             });
             if done {
                 let poll = ControlPoll {

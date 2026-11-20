@@ -51,10 +51,10 @@ use std::sync::{Arc, Mutex};
 
 use tokio::io::AsyncReadExt;
 
-use crate::runtime::process_runner::{
+use rustx_process_supervisor::interactive_supervisor::RUSTX_CONTROL_ENV;
+use rustx_process_supervisor::process_runner::{
     MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, SupervisorEventReader,
 };
-use rustx_process_supervisor::interactive_supervisor::RUSTX_CONTROL_ENV;
 use rustx_process_supervisor::supervised_unit::{EmergencyContainment, emergency_contain_group};
 use rustx_process_supervisor::supervised_unit::{
     send_owner_attached, send_start, send_terminal_ack, send_terminate,
@@ -176,7 +176,7 @@ pub(crate) struct InteractiveTestControl {
     /// (Issue #145); see the equivalent seam on `RunnerTestControl`.
     #[cfg(test)]
     pub(crate) nested_authority:
-        Option<Arc<dyn crate::runtime::nested_containment::NestedAnchorAuthority>>,
+        Option<Arc<dyn rustx_process_supervisor::nested_containment::NestedAnchorAuthority>>,
 }
 
 #[cfg(unix)]
@@ -726,7 +726,7 @@ async fn run_interactive_unit(
     // holds START closed until the top-level parent has acknowledged
     // retention of this exact anchor. MCP stdio therefore uses exactly the
     // same generic mechanism as Bash and Managed Python.
-    let mut anchor_gate = crate::runtime::nested_containment::AnchorGate::Idle;
+    let mut anchor_gate = rustx_process_supervisor::nested_containment::AnchorGate::Idle;
     loop {
         tokio::select! {
             biased;
@@ -774,7 +774,7 @@ async fn run_interactive_unit(
                         let authority = test_control.nested_authority.clone();
                         #[cfg(not(test))]
                         let authority: Option<
-                            Arc<dyn crate::runtime::nested_containment::NestedAnchorAuthority>,
+                            Arc<dyn rustx_process_supervisor::nested_containment::NestedAnchorAuthority>,
                         > = None;
                         anchor_gate.offer_with(pgid, authority);
                     } else if !started {
@@ -980,7 +980,7 @@ mod interactive_tests {
     use std::time::{Duration, Instant};
 
     use super::{InteractiveProcessSpec, InteractiveTestControl, SupervisedInteractiveProcess};
-    use crate::runtime::process_runner::MAX_PROCESS_OUTPUT_BYTES;
+    use rustx_process_supervisor::process_runner::MAX_PROCESS_OUTPUT_BYTES;
     use std::sync::Arc;
 
     const DEADLINE: Duration = Duration::from_secs(20);
@@ -1066,27 +1066,34 @@ mod interactive_tests {
     /// future had not been polled yet.
     #[derive(Debug)]
     struct GatedAuthority {
-        offers: tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
-        releases:
-            tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
+        offers: tokio::sync::mpsc::UnboundedSender<(
+            rustx_process_supervisor::identity::ProcessUnitId,
+            i32,
+        )>,
+        releases: tokio::sync::mpsc::UnboundedSender<(
+            rustx_process_supervisor::identity::ProcessUnitId,
+            i32,
+        )>,
         gate: tokio::sync::watch::Sender<bool>,
     }
 
-    impl crate::runtime::nested_containment::NestedAnchorAuthority for GatedAuthority {
+    impl rustx_process_supervisor::nested_containment::NestedAnchorAuthority for GatedAuthority {
         fn offer(
             &self,
-            unit: crate::runtime::identity::ProcessUnitId,
+            unit: rustx_process_supervisor::identity::ProcessUnitId,
             pgid: i32,
         ) -> futures_util::future::BoxFuture<
             'static,
-            Result<(), crate::runtime::nested_containment::AnchorError>,
+            Result<(), rustx_process_supervisor::nested_containment::AnchorError>,
         > {
             let mut gate = self.gate.subscribe();
             let _ = self.offers.send((unit, pgid));
             Box::pin(async move {
                 while !*gate.borrow_and_update() {
                     if gate.changed().await.is_err() {
-                        return Err(crate::runtime::nested_containment::AnchorError::ParentLost);
+                        return Err(
+                            rustx_process_supervisor::nested_containment::AnchorError::ParentLost,
+                        );
                     }
                 }
                 Ok(())
@@ -1095,7 +1102,7 @@ mod interactive_tests {
 
         fn release(
             &self,
-            unit: crate::runtime::identity::ProcessUnitId,
+            unit: rustx_process_supervisor::identity::ProcessUnitId,
             pgid: i32,
         ) -> futures_util::future::BoxFuture<'static, ()> {
             let _ = self.releases.send((unit, pgid));

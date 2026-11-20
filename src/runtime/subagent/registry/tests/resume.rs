@@ -118,7 +118,9 @@ fn staged_rollback_wire_child() {
         super::super::super::ipc::write_child_frame(
             &mut control,
             &ChildFrame::AnchorOffered(super::super::super::ipc::ProcessUnitAnchorFrame {
-                unit_id: crate::runtime::identity::ProcessUnitId::new("unit-unproven-startup"),
+                unit_id: rustx_process_supervisor::identity::ProcessUnitId::new(
+                    "unit-unproven-startup",
+                ),
                 pgid: i32::MAX,
             }),
         )

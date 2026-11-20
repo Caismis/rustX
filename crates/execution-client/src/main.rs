@@ -52,7 +52,9 @@ use rustx_execution_protocol::{
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
 mod mutation;
+mod process;
 mod search;
+mod terminal;
 
 // The document decoder's policy constants and the wire's must be the
 // same values — the decoder crate cannot depend on the protocol crate,
@@ -195,6 +197,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::ReadLines,
             Capability::DocumentPages,
             Capability::BoundedSearch,
+            Capability::Process,
         ]),
         credential: bootstrap.credential,
     };
@@ -216,6 +219,10 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     // fallback exists. Both lanes share the one armed deadline.
     let control_channel = pair_control(&endpoint, deadline, &hello, success.challenge, ca_file)?;
     let arbitration = std::sync::Arc::new(mutation::Arbitration::new());
+    let operations = std::sync::Arc::new(
+        process::Operations::new(success.admission.clone())
+            .map_err(|error| handshake_error(&error))?,
+    );
     // The control worker holds a shutdown duplicate of the data lane:
     // its exit — protocol violation, EOF, a peer that stops answering —
     // fences the local commit arbitration and interrupts the data
@@ -223,13 +230,24 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     let data_shutdown = channel
         .shutdown_handle()
         .map_err(|error| handshake_error(&error))?;
-    let control = client_control_worker(control_channel, arbitration.clone(), data_shutdown);
-    let result = serve(&mut channel, &root, arbitration);
+    let control = client_control_worker(
+        control_channel,
+        arbitration.clone(),
+        data_shutdown,
+        operations.clone(),
+    );
+    let result = serve(&mut channel, &root, arbitration, &operations);
     // Teardown: stop the worker first so its lane ends cleanly, then
     // shut the data lane — never exit with a lane still live.
     control.stop();
     channel.shutdown();
-    result
+    // An unresolved worker is never reported as a clean exit.
+    let drained = operations.shutdown();
+    match (result, drained) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(format!("unresolved teardown: {error}")),
+    }
 }
 
 /// The validated connection target derived from the bootstrap endpoint.
@@ -327,11 +345,13 @@ impl ClientControlWorker {
 struct LaneFence {
     arbitration: std::sync::Arc<mutation::Arbitration>,
     data_shutdown: rustx_execution_transport::ChannelShutdown,
+    operations: std::sync::Arc<process::Operations>,
 }
 
 impl Drop for LaneFence {
     fn drop(&mut self) {
         self.arbitration.revoke();
+        self.operations.revoke();
         self.data_shutdown.shutdown();
     }
 }
@@ -350,10 +370,15 @@ fn client_control_worker(
     mut channel: RecordChannel,
     arbitration: std::sync::Arc<mutation::Arbitration>,
     data_shutdown: rustx_execution_transport::ChannelShutdown,
+    operations: std::sync::Arc<process::Operations>,
 ) -> ClientControlWorker {
     /// The idle poll period: commands wait at most this for the next
     /// turn, far inside the Server's command receipt budget.
     const POLL_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
+    /// Physical process containment the worker awaits before `Revoked`
+    /// is delivered — inside the Server's 5-second command budget so
+    /// the receipt is the honest settlement, not a hope.
+    const REVOKE_SETTLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
     let worker_arbitration = arbitration.clone();
     let join = std::thread::Builder::new()
         .name("execution-control".to_owned())
@@ -366,6 +391,7 @@ fn client_control_worker(
             let _fence = LaneFence {
                 arbitration: worker_arbitration.clone(),
                 data_shutdown,
+                operations: operations.clone(),
             };
             let mut sequence = 1_u64;
             let mut receipt: Option<ControlReply> = None;
@@ -415,8 +441,18 @@ fn client_control_worker(
                     },
                     ControlRequest::Revoke => {
                         worker_arbitration.revoke();
+                        // `Revoked` is only honest once the process
+                        // operations were signalled and their physical
+                        // containment actually settled — bounded so the
+                        // Server's own revoke budget still fences.
+                        operations.revoke();
+                        let _ = operations.settle(REVOKE_SETTLE_BUDGET);
                         ControlReply::Revoked
                     }
+                    ControlRequest::CancelProcess { ref key } => ControlReply::ProcessCancelled {
+                        key: key.clone(),
+                        disposition: operations.cancel(key),
+                    },
                 };
                 receipt = Some(reply);
                 if done {
@@ -553,6 +589,7 @@ fn serve(
     channel: &mut RecordChannel,
     root: &PackageDirectory,
     arbitration: std::sync::Arc<mutation::Arbitration>,
+    operations: &std::sync::Arc<process::Operations>,
 ) -> Result<(), String> {
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
@@ -567,6 +604,9 @@ fn serve(
         };
         let reply = match request {
             ClientRequest::Ping => ClientReply::Pong,
+            ClientRequest::Process(process_request) => {
+                ClientReply::Process(operations.dispatch(process_request))
+            }
             ClientRequest::ReadRange {
                 relative_path,
                 offset,

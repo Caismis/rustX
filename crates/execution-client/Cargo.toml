@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT"
-description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness, bounded revision-checked range reads, logical-text pages, and whitelisted document pages of its workspace — no process, MCP, or Python I/O."
+description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness, bounded revision-checked range reads, logical-text pages, whitelisted document pages, ticketed conditional writes, bounded workspace search, and managed process operations of its workspace — no MCP or Python I/O."
 publish = false
 
 [[bin]]
@@ -15,11 +15,16 @@ path = "src/main.rs"
 rustx-execution-protocol = { path = "../execution-protocol" }
 rustx-execution-transport = { path = "../execution-transport" }
 rustx-confined-fs = { path = "../confined-fs" }
+rustx-process-supervisor = { path = "../process-supervisor" }
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "process", "fs"] }
+rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
+libc = "0.2"
+tempfile = "3.27.0"
 rustx-text-edit = { path = "../text-edit" }
 rustx-document-reader = { path = "../document-reader" }
 base64 = "0.22"
 getrandom = { version = "0.3.4", features = ["std"] }
-nix = { version = "0.31.3", default-features = false, features = ["fs", "user", "socket"] }
+nix = { version = "0.31.3", default-features = false, features = ["fs", "user", "socket", "term"] }
 # The bounded glob/grep engines of the Search exchange — the same crates
 # the Agent Server's pre-migration search used, never a spawned `rg`.
 globset = "0.4.19"
@@ -28,6 +33,9 @@ grep-searcher = "0.1.17"
 
 [dev-dependencies]
 rustx-execution-server = { path = "../execution-server" }
+# The physical-START hold seam for in-crate race tests — enabled for
+# this package's own test binary only; no production graph enables it.
+rustx-process-supervisor = { path = "../process-supervisor", features = ["test-support"] }
 rustx-execution-transport = { path = "../execution-transport" }
 serde_json = "1"
 tempfile = "3.27.0"

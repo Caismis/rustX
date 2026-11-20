@@ -1,9 +1,6 @@
 use super::{BashTestControl, BashTool, NAME};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
-use crate::runtime::process_runner::{
-    MSG_ALL_CHILDREN_REAPED, SupervisorEvent, SupervisorEventReader,
-};
 use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
@@ -13,6 +10,9 @@ use crate::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
+use rustx_process_supervisor::process_runner::{
+    MSG_ALL_CHILDREN_REAPED, SupervisorEvent, SupervisorEventReader,
+};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -196,7 +196,7 @@ async fn start_supervisor_loss_fixture(
 ) -> (
     tempfile::TempDir,
     tokio::task::JoinHandle<ToolExecutionResult>,
-    crate::runtime::process_runner::RunnerChannelEofHook,
+    rustx_process_supervisor::process_runner::RunnerChannelEofHook,
     i32,
     i32,
     i32,
@@ -1552,7 +1552,7 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
     assert!(process_alive(shell_pid));
     assert_eq!(
         control.recorded_signals(),
-        [] as [crate::runtime::process_runner::RecordedSignal; 0]
+        [] as [rustx_process_supervisor::process_runner::RecordedSignal; 0]
     );
     assert!(
         !std::fs::read_to_string(&trace)

@@ -1,12 +1,11 @@
 //! Git uses the same physical process owner as Bash, Python and Skill setup.
 //! Dropping a snapshot waiter cancels its process tree without abandoning reaping.
-use crate::runtime::{
-    cancellation::CancellationSignal,
-    process_runner::{ProcessOutcomeIntent, SupervisedCommandRunner, SupervisedCommandSpec},
+use rustx_process_supervisor::process_runner::{
+    ProcessOutcomeIntent, SupervisedCommandRunner, SupervisedCommandSpec,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-struct CancelOnDrop(CancellationSignal);
+struct CancelOnDrop(rustx_process_supervisor::signal::ProcessSignal);
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.0.cancel();

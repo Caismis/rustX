@@ -393,6 +393,18 @@ impl Fixture {
     /// and reap it explicitly. Panics when the preparation stage did not
     /// place a client binary beside the harness — there is no fallback.
     pub(super) async fn start_execution(&self, index: usize) -> tokio::process::Child {
+        self.start_execution_with_env(index, &[]).await
+    }
+
+    /// [`start_execution`](Self::start_execution) with explicit
+    /// environment entries forwarded to the cleared child environment —
+    /// used to arm the supervisor diagnostics trace, an observation
+    /// capability, never a fault hook.
+    pub(super) async fn start_execution_with_env(
+        &self,
+        index: usize,
+        envs: &[(&str, &str)],
+    ) -> tokio::process::Child {
         let endpoint = self
             .manager
             .reserve_local_execution(&self.sessions[index].id)
@@ -420,6 +432,7 @@ impl Fixture {
             .arg(endpoint.workspace())
             .current_dir("/")
             .env_clear()
+            .envs(envs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

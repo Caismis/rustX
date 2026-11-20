@@ -1030,15 +1030,47 @@ envelope.
   real physical congestion proofs; what remains open under T11 is
   end-to-end proof at the product Agent-flow level (a real mid-commit
   cancel raced against a live composed Client), not the mechanism.
-- No spawn, MCP session, Python, managed output, or any file
+- No MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
   two-phase conditional write, the conditional edit, the two
   logical-text page
-  operations, and the bounded search exists
+  operations, the bounded search, and the typed process-operation
+  family (`Register`/`Start`/`Query`/`OutputPage`/`WriteStdin`/
+  `CloseStdin`/`Resize`/`InputReceipt`/`ReleaseOutput` on
+  `ClientRequest::Process`, with `ControlRequest::CancelProcess` on
+  the control lane) exists
   behind `Admission`;
   `Binding::status()` is observation only, and a `Live` phase is a
   connection fact, not an integration claim. `Capability::Files` and
   everything it implies stay unadvertised until that capability lands.
+  The process family is consumed by exactly one product path —
+  the App Server's `command/exec` group — which registers one
+  operation per UI `processId` on the Session's admitted endpoint,
+  drives it through the typed exchanges on the data lane, and cancels
+  it on the control lane; there is no Server-local spawn, PTY, or
+  drain path behind it. Process identity is the full
+  `ProcessOperationKey` — server incarnation, Session, Client
+  instance, generation, and operation — echoed on every reply
+  including `Unknown`; `Running` is published only after the
+  physical START witness inside the Client (the outer supervisor
+  helper's own spawn is not business START), exit only after the
+  real `ShellExited` event, and settlement — `Known`, `TimedOut`,
+  `Cancelled`, `Failed`, or `Unknown` — only after actual reap and
+  drain, with per-stream byte totals and truncation flags the Server
+  projects into the exact `ExecResult`. Output is an ordered
+  interleaved journal addressed by a global byte-boundary cursor with
+  validated per-stream offsets and capped retained prefixes;
+  `ReleaseOutput` at the exact final cursor frees the bulky buffers
+  while a minimal tombstone keeps replay honest. Input controls are
+  admitted as `InputAccepted` and their physical outcome — `Pending`,
+  `Applied`, `Failed`, `Rejected`, or `Unknown` — is correlated by
+  `InputReceipt`; a stale sequence is never reapplied and an
+  ambiguous write is never retried. The Client holds at most four
+  concurrent operations per Session plus a bounded tombstone budget.
+  The native Agent Bash path is *not* migrated: it still executes
+  inside the Server process, and its foreground/background capture
+  gap is unchanged — `command/exec` is the only consumer of this
+  boundary so far.
 - No readiness reporting exists; no file/config/MCP/Python readiness is
   implied by a live connection.
 - No Client instance replacement, generation increment, or death-cleanup
@@ -1062,8 +1094,8 @@ envelope.
   `/` cwd, sealed stdio and `kill_on_drop`), race its connect against
   `LOCAL_HANDSHAKE_TIMEOUT`, admit it through the blocking handshake, and
   stop+reap it inside the drain deadline; bare mode composes nothing.
-  `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and
-  `fs/writeFile` now route
+  `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
+  `fs/writeFile`, and the `command/exec` group now route
   through this owner: the App Server resolves the request's `sessionId`
   through the non-creating `execution_endpoint` lookup (absence is
   `ExecutionUnavailable`, never a fallback), authorizes the admitted
@@ -1269,6 +1301,34 @@ view, the listing shows the marker and never the Server-side decoy,
 the decoy read is `EnvironmentResourceNotFound` with no Server-local
 fallback, and the Server's own view keeps the marker `NotFound` and
 the decoy intact before and after.
+The process layer adds its own evidence inside the Client crate
+(`process::tests`, real spawns through the staged `bash-supervisor`
+sibling): foreign-key refusal before lookup, `/bin/pwd` observed in a
+non-root workspace subdirectory, authorized environment with the
+runtime baseline winning, duplicate-register attach plus a second
+`Start` producing exactly one marker, cancel-before-START writing
+nothing, the barrier-gated START-hold race where a cancel parked
+inside the runner's own transaction is classified by the real
+crossing flag, streamed stdin delivered in order with conflicting
+sequences refused, PTY write/resize/EOT, four-slot capacity refusing
+a fifth until release, forged or early `ReleaseOutput` rejected, an
+exact-cursor release answering later replays with the real settled
+snapshot, five sequential released operations never exhausting
+capacity, and generation revoke fencing a pending start. On the
+product side, the App Server environment scenarios drive the same
+operations through a real staged Client: PTY and piped commands,
+stdin bytes and close, resize, cap/timeout, output-before-final
+ordering, UI detach cancelling only the issuing connection's
+operation, host drain cancelling commands before waiting for request
+settlement, and `revocation_before_native_start` — the Server-side
+dispatch hold plus the supervisor's own diagnostics trace proving
+zero business spawn when revocation wins and exactly one when START
+does. This is a T05 fragment (cancel before dispatch → zero
+execution) and the first T29 implementation evidence (UI-direct
+commands create no Attempt; disconnect cleans only the issuing
+connection's operations); the process kernel's independent build and
+the supervisor-helper staging are a further T24 fragment, with Agent
+Bash still Server-side as documented above.
 T03/T24/T28's connection-singularity,
 dependency-boundary, and cross-instance rejection portions and T42's
 bounded-read portion have their first coverage here; the remainder of

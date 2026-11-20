@@ -1,7 +1,7 @@
 /** Measurements only. Uses the existing typed product protocol client, never a new SDK/demo.
- * fs/readFile and fs/writeFile dispatch through the Session's admitted Execution Client;
- * this benchmark does not compose one for dynamically started Sessions, so those steps
- * are not an end-to-end baseline until per-Session composition exists here. */
+ * fs/readFile and command/exec dispatch through the Session's admitted Execution Client;
+ * the benchmark composes the measured Session explicitly (the same paired flags an
+ * operator uses) and measures only that Session. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
@@ -34,11 +34,11 @@ for(const mode of [{name:'environment-one-client',clients:1,sessions:1,slow:fals
     for(let index=0;index<mode.sessions;index++) {const cwd=join(workspace,`session-${index}`);mkdirSync(cwd);workspaces.push(cwd);const {session}=await hosts[0].client.call('thread/start',{settings:{cwd},dynamicTools:[]},'session_transition');sessionIds.push(session.id);}
     const activeClients=mode.slow?hosts.length-1:hosts.length;
     const cycle=async(index:number)=>{
-      const client=hosts[Math.abs(index)%activeClients].client,cwd=workspaces[Math.abs(index)%workspaces.length],path=join(cwd,`cycle-${index}`),watchId=`cycle-${index}`;
-      const {metadata}=await client.call('fs/writeFile',{sessionId:sessionIds[Math.abs(index)%workspaces.length],path,dataBase64:Buffer.from('measured').toString('base64'),expectedRevision:null},'file_metadata');
-      const {chunk}=await client.call('fs/readFile',{sessionId:sessionIds[Math.abs(index)%workspaces.length],path,offset:'0',maxBytes:64,expectedRevision:metadata.revision},'file_chunk');assert.equal(Buffer.from(chunk.dataBase64,'base64').toString(),'measured');
+      const client=hosts[Math.abs(index)%activeClients].client,cwd=workspaces[0],path=join(cwd,`cycle-${index}`),watchId=`cycle-${index}`;
+      const {metadata}=await client.call('fs/writeFile',{sessionId:sessionIds[0],path,dataBase64:Buffer.from('measured').toString('base64'),expectedRevision:null},'file_metadata');
+      const {chunk}=await client.call('fs/readFile',{sessionId:sessionIds[0],path,offset:'0',maxBytes:64,expectedRevision:metadata.revision},'file_chunk');assert.equal(Buffer.from(chunk.dataBase64,'base64').toString(),'measured');
       await client.call('fs/watch',{watchId,path:cwd},'environment_accepted');
-      const {result}=await client.call('command/exec',{command:['/usr/bin/printf','%s','measured'],cwd,env:{EXPLICIT:'authorized'},processId:null,tty:false,streamStdin:false,streamStdoutStderr:false,outputBytesCap:65536,timeoutMs:10000,size:null},'command_exec');
+      const {result}=await client.call('command/exec',{sessionId:sessionIds[0],command:['/usr/bin/printf','%s','measured'],cwd:workspaces[0],env:{EXPLICIT:'authorized'},processId:null,tty:false,streamStdin:false,streamStdoutStderr:false,outputBytesCap:65536,timeoutMs:10000,size:null},'command_exec');
       assert.equal(result.status,'completed');assert.equal(Buffer.from(result.stdoutBase64,'base64').toString(),'measured');
       await client.call('fs/unwatch',{watchId},'environment_accepted');await client.call('fs/remove',{path,recursive:false,force:false},'environment_accepted');
     };
@@ -50,7 +50,7 @@ for(const mode of [{name:'environment-one-client',clients:1,sessions:1,slow:fals
     const client=hosts[0].client,ready=new Map<string,{resolve:()=>void;text:string}>();let outputBytes=0;
     const unsubscribe=client.onNotification(notification=>{if(notification.method!=='command/exec/outputDelta')return;const delta=notification.params;const bytes=Buffer.from(delta.deltaBase64,'base64');outputBytes+=bytes.length;const waiter=ready.get(delta.processId);if(waiter){waiter.text+=bytes.toString();if(waiter.text.includes('ready'))waiter.resolve();}});
     const completions:Promise<unknown>[]=[],barriers:Promise<void>[]=[];
-    for(let index=0;index<4;index++){const processId=`peak-${index}`;barriers.push(new Promise<void>(resolve=>ready.set(processId,{resolve,text:''})));completions.push(client.call('command/exec',{command:['/bin/sh','-c','printf ready; read line; printf done'],cwd:workspaces[0],env:{},processId,tty:false,streamStdin:true,streamStdoutStderr:true,outputBytesCap:65536,timeoutMs:30000,size:null},'command_exec'));}
+    for(let index=0;index<4;index++){const processId=`peak-${index}`;barriers.push(new Promise<void>(resolve=>ready.set(processId,{resolve,text:''})));completions.push(client.call('command/exec',{sessionId:sessionIds[0],command:['/bin/sh','-c','printf ready; read line; printf done'],cwd:workspaces[0],env:{},processId,tty:false,streamStdin:true,streamStdoutStderr:true,outputBytesCap:65536,timeoutMs:30000,size:null},'command_exec'));}
     await bounded(Promise.all(barriers));
     for(let index=0;index<8;index++)await client.call('fs/watch',{watchId:`peak-${index}`,path:workspaces[0]},'environment_accepted');
     const peak=counters(child.pid!),tree=processTree(child.pid!);let treeResidentKiB=0;for(const pid of tree)try{treeResidentKiB+=counters(pid).residentKiB;}catch{}

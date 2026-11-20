@@ -40,7 +40,7 @@
 //! waiter lifetime is distinct from the physical supervised invocation
 //! lifetime. Once ownership begins, the runtime-owned driver continues
 //! `settle()` even if the waiter is dropped. An explicit
-//! [`CancellationSignal`] or the command timeout controls invocation
+//! [`ProcessSignal`] or the command timeout controls invocation
 //! termination; dropping the waiter only discards result delivery.
 //!
 //! # Two consumption shapes
@@ -70,54 +70,53 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use tokio::io::AsyncReadExt;
 
-use crate::runtime::cancellation::CancellationSignal;
 #[cfg(unix)]
-use rustx_process_supervisor::invocation::{
-    PROGRAM_INVOCATION_ENV, ProgramInvocation, supervisor_binary,
-};
-use rustx_process_supervisor::supervised_unit::{
+use crate::invocation::{PROGRAM_INVOCATION_ENV, ProgramInvocation, supervisor_binary};
+use crate::signal::ProcessSignal;
+use crate::supervised_unit::{
     EmergencyContainment, emergency_contain_group, send_terminal_ack, send_terminate,
 };
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::Mutex;
 
 /// The supervisor role env var (mirrors `bash_supervisor::ROLE_OUTER`).
-pub(crate) const SUPERVISOR_ROLE_ENV: &str = "RUSTX_SUPERVISOR_ROLE";
+pub const SUPERVISOR_ROLE_ENV: &str = "RUSTX_SUPERVISOR_ROLE";
 /// The outer supervisor role value (mirrors `bash_supervisor::ROLE_OUTER`).
-pub(crate) const ROLE_OUTER: &str = "outer";
+pub const ROLE_OUTER: &str = "outer";
 /// The command env var (mirrors `bash_supervisor::COMMAND_ENV`).
-pub(crate) const COMMAND_ENV: &str = "RUSTX_SUPERVISOR_COMMAND";
+pub const COMMAND_ENV: &str = "RUSTX_SUPERVISOR_COMMAND";
 /// The anchor-pid-file env var (mirrors `bash_supervisor::ANCHOR_PID_FILE_ENV`).
-#[cfg(test)]
-pub(crate) const ANCHOR_PID_FILE_ENV: &str = "RUSTX_SUPERVISOR_ANCHOR_PID_FILE";
+#[cfg(any(test, feature = "test-support"))]
+pub const ANCHOR_PID_FILE_ENV: &str = "RUSTX_SUPERVISOR_ANCHOR_PID_FILE";
 /// The injected signal-failure env var (mirrors `bash_supervisor::FAIL_SIGNAL_ENV`).
-#[cfg(test)]
-pub(crate) const FAIL_SIGNAL_ENV: &str = "RUSTX_TEST_FAIL_SIGNAL";
+#[cfg(any(test, feature = "test-support"))]
+pub const FAIL_SIGNAL_ENV: &str = "RUSTX_TEST_FAIL_SIGNAL";
 /// The injected wait-failure env var (mirrors `bash_supervisor::FAIL_WAIT_ENV`).
-#[cfg(test)]
-pub(crate) const FAIL_WAIT_ENV: &str = "RUSTX_TEST_FAIL_WAIT";
+#[cfg(any(test, feature = "test-support"))]
+pub const FAIL_WAIT_ENV: &str = "RUSTX_TEST_FAIL_WAIT";
 /// The injected command-spawn-failure env var (mirrors `bash_supervisor::FAIL_BASH_SPAWN_ENV`).
-#[cfg(test)]
-pub(crate) const FAIL_COMMAND_SPAWN_ENV: &str = "RUSTX_TEST_FAIL_BASH_SPAWN";
+#[cfg(any(test, feature = "test-support"))]
+pub const FAIL_COMMAND_SPAWN_ENV: &str = "RUSTX_TEST_FAIL_BASH_SPAWN";
 /// The injected SIGTERM-handler-failure env var (mirrors `bash_supervisor::FAIL_SIGTERM_HANDLER_ENV`).
-#[cfg(test)]
-pub(crate) const FAIL_SIGTERM_HANDLER_ENV: &str = "RUSTX_TEST_FAIL_SIGTERM_HANDLER";
+#[cfg(any(test, feature = "test-support"))]
+pub const FAIL_SIGTERM_HANDLER_ENV: &str = "RUSTX_TEST_FAIL_SIGTERM_HANDLER";
 /// The injected anchor-loss env var (mirrors `bash_supervisor::FORCE_ANCHOR_LOSS_ENV`).
-#[cfg(test)]
-pub(crate) const FORCE_ANCHOR_LOSS_ENV: &str = "RUSTX_TEST_FORCE_ANCHOR_LOSS";
+#[cfg(any(test, feature = "test-support"))]
+pub const FORCE_ANCHOR_LOSS_ENV: &str = "RUSTX_TEST_FORCE_ANCHOR_LOSS";
 
 /// The bound on one captured output stream of the convenience runner.
 ///
 /// The convenience path retains only bounded diagnostics; full output
 /// streaming remains the consumer's concern (native Bash spools to the
 /// artifact store).
-pub(crate) const MAX_PROCESS_OUTPUT_BYTES: usize = 64 * 1024;
+pub const MAX_PROCESS_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// The explicit specification of one owned supervised command.
 #[derive(Debug, Clone)]
-pub(crate) struct SupervisedCommandSpec {
+pub struct SupervisedCommandSpec {
     /// The command executed by the owned `/bin/bash -c <command>` shell.
     pub command: String,
     /// The explicit working directory of the supervisor unit.
@@ -127,12 +126,12 @@ pub(crate) struct SupervisedCommandSpec {
     /// The finite invocation deadline; `None` means no deadline.
     pub timeout: Option<Duration>,
     /// The runtime cancellation signal owning the invocation.
-    pub cancellation: CancellationSignal,
+    pub cancellation: ProcessSignal,
 }
 
 /// The settlement kind when cancellation/timeout owns the invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Settled {
+pub enum Settled {
     /// Attempt cancellation won the invocation.
     Cancelled,
     /// The invocation deadline expired.
@@ -141,7 +140,7 @@ pub(crate) enum Settled {
 
 /// The outcome intent of a settled invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProcessOutcomeIntent {
+pub enum ProcessOutcomeIntent {
     /// The command completed naturally; `exit_status` carries its status.
     Completed,
     /// Attempt cancellation owned the settlement.
@@ -154,7 +153,7 @@ pub(crate) enum ProcessOutcomeIntent {
 
 /// The terminal outcome of one owned supervised command.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProcessTermination {
+pub struct ProcessTermination {
     /// The shell's canonical exit status, when the shell exited naturally.
     pub exit_status: Option<ExitStatus>,
     /// The outcome intent owning the settlement.
@@ -163,7 +162,7 @@ pub(crate) struct ProcessTermination {
 
 /// A bounded captured supervised-command result (convenience path).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CapturedProcessResult {
+pub struct CapturedProcessResult {
     /// The shell exit code, when the shell exited naturally with a code.
     pub exit_code: Option<i32>,
     /// The outcome intent owning the settlement.
@@ -179,7 +178,7 @@ pub(crate) struct CapturedProcessResult {
 /// This is a real current boundary: native Bash and Managed Python consume
 /// the same owned process lifecycle, and deterministic Managed Python tests
 /// inject scripted fakes instead of invoking real package managers.
-pub(crate) trait SupervisedProcessRunner: Send + Sync {
+pub trait SupervisedProcessRunner: Send + Sync {
     /// Waits for one rustX-owned supervised command to reach terminal state.
     ///
     /// The returned future is only the result waiter. Once physical
@@ -198,7 +197,7 @@ pub(crate) trait SupervisedProcessRunner: Send + Sync {
 
 /// The production supervised process runner backed by the shared runner.
 #[derive(Clone, Default)]
-pub(crate) struct RunnerBackedProcessRunner;
+pub struct RunnerBackedProcessRunner;
 
 impl SupervisedProcessRunner for RunnerBackedProcessRunner {
     fn run(
@@ -228,7 +227,7 @@ impl SupervisedProcessRunner for RunnerBackedProcessRunner {
 /// fail: a failure that undermines ownership or settlement surfaces as an
 /// explicit failure, never as an ordinary success, cancellation, or timeout.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProcessControlError {
+pub enum ProcessControlError {
     /// The supervisor exited before reporting terminal child ownership.
     UnexpectedSupervisorExit,
     /// The owned process tree did not become terminal within the bounded
@@ -255,7 +254,7 @@ impl std::error::Error for ProcessControlError {}
 /// A supervised-command spawn failure, staged so consumers can map each
 /// stage to their own diagnostic text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RunnerSpawnError {
+pub enum RunnerSpawnError {
     /// The runtime child-subreaper capability could not be established.
     Subreaper(String),
     /// The supervisor control channel could not be created.
@@ -270,7 +269,7 @@ pub(crate) enum RunnerSpawnError {
 /// One event reported by the invocation supervisor over the control
 /// channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SupervisorEvent {
+pub enum SupervisorEvent {
     /// The inner completed setup and is gated before spawning the command.
     AnchorReady { pgid: i32 },
     /// The command was successfully spawned inside the fixed invocation
@@ -324,9 +323,9 @@ enum SupervisorChannel {
 /// `emitted` is `true` only when the signal actually reached the kernel
 /// (`killpg` was invoked by the supervisor); a refused attempt (ownership
 /// lost, injected failure) is recorded with `emitted == false`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RecordedSignal {
+pub struct RecordedSignal {
     /// The numeric process-group id the signal targeted.
     pub pgid: i32,
     /// The signal name (`SIGTERM`/`SIGKILL`).
@@ -339,30 +338,31 @@ pub(crate) struct RecordedSignal {
 /// only by in-crate tests.
 #[cfg_attr(not(test), allow(dead_code))] // empty in non-test builds
 #[derive(Clone)]
-pub(crate) struct RunnerLifecycleHook {
-    #[cfg(all(test, target_os = "linux"))]
+pub struct RunnerLifecycleHook {
+    #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
     shell_exit_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
     proceed_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
     proceed_rx: tokio::sync::watch::Receiver<bool>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     ownership_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     ownership_rx: tokio::sync::watch::Receiver<bool>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     terminal_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     terminal_rx: tokio::sync::watch::Receiver<bool>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     direct_child_reaped_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     direct_child_reaped_rx: tokio::sync::watch::Receiver<bool>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl RunnerLifecycleHook {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)] // test-seam construction
+    pub fn new() -> Self {
         #[cfg(target_os = "linux")]
         let (shell_exit_tx, _) = tokio::sync::watch::channel(false);
         #[cfg(target_os = "linux")]
@@ -398,7 +398,7 @@ impl RunnerLifecycleHook {
     /// Test side: waits until the runner provably observed the shell's
     /// natural exit and parked at the boundary.
     #[cfg(target_os = "linux")]
-    pub(crate) async fn await_shell_exit(&self) {
+    pub async fn await_shell_exit(&self) {
         let mut rx = self.shell_exit_tx.subscribe();
         if !*rx.borrow() {
             let _ = rx.changed().await;
@@ -407,7 +407,7 @@ impl RunnerLifecycleHook {
 
     /// Test side: releases the parked runner.
     #[cfg(target_os = "linux")]
-    pub(crate) fn release(&self) {
+    pub fn release(&self) {
         let _ = self.proceed_tx.send(true);
     }
 
@@ -427,7 +427,7 @@ impl RunnerLifecycleHook {
     }
 
     /// Test side: waits for physical supervisor ownership to be established.
-    pub(crate) async fn await_ownership_established(&self) {
+    pub async fn await_ownership_established(&self) {
         let mut rx = self.ownership_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
@@ -436,7 +436,7 @@ impl RunnerLifecycleHook {
 
     /// Test side: waits for the supervisor's authoritative group terminal
     /// event, before or after the result waiter is released.
-    pub(crate) async fn await_terminal(&self) {
+    pub async fn await_terminal(&self) {
         let mut rx = self.terminal_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
@@ -444,7 +444,7 @@ impl RunnerLifecycleHook {
     }
 
     /// Test side: waits for rustX to reap the direct outer supervisor child.
-    pub(crate) async fn await_direct_child_reaped(&self) {
+    pub async fn await_direct_child_reaped(&self) {
         let mut rx = self.direct_child_reaped_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
@@ -455,9 +455,9 @@ impl RunnerLifecycleHook {
 /// Holds the authoritative terminal event outside the state machine so the
 /// quiescence watchdog can expire while `children_terminal` remains false,
 /// without relying on scheduler timing.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-pub(crate) struct RunnerTerminalHold {
+pub struct RunnerTerminalHold {
     held_tx: tokio::sync::watch::Sender<bool>,
     held_rx: tokio::sync::watch::Receiver<bool>,
     watchdog_tx: tokio::sync::watch::Sender<bool>,
@@ -467,28 +467,29 @@ pub(crate) struct RunnerTerminalHold {
 }
 
 /// Pauses a real ready supervisor immediately before the START transaction.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-pub(crate) struct RunnerStartHold {
+pub struct RunnerStartHold {
     entered: tokio::sync::watch::Sender<bool>,
     released: tokio::sync::watch::Sender<bool>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl RunnerStartHold {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)] // test-seam construction
+    pub fn new() -> Self {
         Self {
             entered: tokio::sync::watch::channel(false).0,
             released: tokio::sync::watch::channel(false).0,
         }
     }
-    pub(crate) async fn await_entered(&self) {
+    pub async fn await_entered(&self) {
         self.entered
             .subscribe()
             .wait_for(|entered| *entered)
             .await
             .unwrap();
     }
-    pub(crate) fn release(&self) {
+    pub fn release(&self) {
         self.released.send_replace(true);
     }
     async fn pause(&self) {
@@ -501,9 +502,10 @@ impl RunnerStartHold {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl RunnerTerminalHold {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)] // test-seam construction
+    pub fn new() -> Self {
         let (held_tx, held_rx) = tokio::sync::watch::channel(false);
         let (watchdog_tx, watchdog_rx) = tokio::sync::watch::channel(false);
         let (release_tx, release_rx) = tokio::sync::watch::channel(false);
@@ -517,35 +519,35 @@ impl RunnerTerminalHold {
         }
     }
 
-    pub(crate) async fn await_release(&self) {
+    pub async fn await_release(&self) {
         let mut rx = self.release_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
         }
     }
 
-    pub(crate) async fn await_held(&self) {
+    pub async fn await_held(&self) {
         let mut rx = self.held_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
         }
     }
 
-    pub(crate) async fn await_watchdog(&self) {
+    pub async fn await_watchdog(&self) {
         let mut rx = self.watchdog_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
         }
     }
 
-    pub(crate) fn release(&self) {
+    pub fn release(&self) {
         let _ = self.release_tx.send(true);
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-pub(crate) struct RunnerChannelEofHook {
+pub struct RunnerChannelEofHook {
     seen_tx: tokio::sync::watch::Sender<bool>,
     seen_rx: tokio::sync::watch::Receiver<bool>,
     #[cfg(target_os = "linux")]
@@ -557,9 +559,10 @@ pub(crate) struct RunnerChannelEofHook {
     timeout_rx: tokio::sync::watch::Receiver<bool>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl RunnerChannelEofHook {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)] // test-seam construction
+    pub fn new() -> Self {
         let (seen_tx, seen_rx) = tokio::sync::watch::channel(false);
         let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
         #[cfg(target_os = "linux")]
@@ -579,7 +582,7 @@ impl RunnerChannelEofHook {
         }
     }
 
-    pub(crate) async fn await_seen(&self) {
+    pub async fn await_seen(&self) {
         let mut rx = self.seen_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
@@ -587,16 +590,16 @@ impl RunnerChannelEofHook {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn release_emergency_containment(&self) {
+    pub fn release_emergency_containment(&self) {
         let _ = self.proceed_tx.send(true);
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn force_timeout(&self) {
+    pub fn force_timeout(&self) {
         let _ = self.timeout_tx.send(true);
     }
 
-    pub(crate) async fn pause_before_emergency(&self) {
+    pub async fn pause_before_emergency(&self) {
         let mut rx = self.proceed_rx.clone();
         if !*rx.borrow() {
             let _ = rx.changed().await;
@@ -604,7 +607,7 @@ impl RunnerChannelEofHook {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
 async fn wait_for_forced_timeout(control: Option<&RunnerTestControl>) {
     if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
         let mut rx = hook.timeout_rx.clone();
@@ -616,12 +619,12 @@ async fn wait_for_forced_timeout(control: Option<&RunnerTestControl>) {
     }
 }
 
-#[cfg(any(not(test), not(target_os = "linux")))]
+#[cfg(not(all(any(test, feature = "test-support"), target_os = "linux")))]
 async fn wait_for_forced_timeout(_control: Option<&RunnerTestControl>) {
     std::future::pending::<()>().await;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn wait_for_terminal_release(control: Option<&RunnerTestControl>) {
     if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
         hold.await_release().await;
@@ -630,18 +633,18 @@ async fn wait_for_terminal_release(control: Option<&RunnerTestControl>) {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 async fn wait_for_terminal_release(_control: Option<&RunnerTestControl>) {
     std::future::pending::<()>().await;
 }
 
 // The frame protocol constants come from the shared supervisor-unit core
-// (`rustx_process_supervisor::supervised_unit`), so the runner and both supervisor
+// (`crate::supervised_unit`), so the runner and both supervisor
 // units share one wire protocol.
 #[cfg(unix)]
-pub(crate) use rustx_process_supervisor::supervised_unit::MSG_ALL_CHILDREN_REAPED;
+pub use crate::supervised_unit::MSG_ALL_CHILDREN_REAPED;
 #[cfg(unix)]
-pub(crate) use rustx_process_supervisor::supervised_unit::{
+pub use crate::supervised_unit::{
     MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
     MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START,
 };
@@ -656,46 +659,49 @@ pub(crate) use rustx_process_supervisor::supervised_unit::{
 /// ownership release transition, record every process-group signal attempt,
 /// and locate the invocation's process-group id — without an operating
 /// system mocking framework.
-#[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
+#[cfg_attr(
+    any(test, feature = "test-support"),
+    allow(clippy::struct_excessive_bools)
+)] // a bounded test-seam bundle
 #[derive(Clone)]
-pub(crate) struct RunnerTestControl {
-    #[cfg(test)]
-    pub(crate) anchor_stop_socket: Option<std::path::PathBuf>,
-    pub(crate) diagnostics: rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) pause_at_shell_exit: bool,
-    #[cfg(test)]
-    pub(crate) lifecycle: RunnerLifecycleHook,
-    #[cfg(test)]
-    pub(crate) fail_supervisor_spawn: bool,
-    #[cfg(test)]
-    pub(crate) fail_command_spawn: bool,
-    #[cfg(test)]
-    pub(crate) fail_signal: bool,
-    #[cfg(test)]
-    pub(crate) fail_wait: bool,
-    #[cfg(test)]
-    pub(crate) interrupt_direct_wait: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(test)]
-    pub(crate) fail_sigterm_handler: bool,
-    #[cfg(test)]
-    pub(crate) fail_subreaper_init: bool,
-    #[cfg(test)]
-    pub(crate) force_anchor_loss: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(test)]
-    pub(crate) force_emergency_anchor_unavailable: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(test)]
-    pub(crate) anchor_pid_file: Option<std::path::PathBuf>,
-    #[cfg(test)]
-    pub(crate) recorded_signals: Arc<Mutex<Vec<RecordedSignal>>>,
-    #[cfg(test)]
-    pub(crate) terminal_hold: Option<RunnerTerminalHold>,
-    #[cfg(test)]
-    pub(crate) start_hold: Option<RunnerStartHold>,
-    #[cfg(test)]
-    pub(crate) start_write_limit: Option<usize>,
-    #[cfg(test)]
-    pub(crate) channel_eof: Option<RunnerChannelEofHook>,
+pub struct RunnerTestControl {
+    #[cfg(any(test, feature = "test-support"))]
+    pub anchor_stop_socket: Option<std::path::PathBuf>,
+    pub diagnostics: crate::bash_supervisor::diagnostics::FixtureControl,
+    #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+    pub pause_at_shell_exit: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub lifecycle: RunnerLifecycleHook,
+    #[cfg(any(test, feature = "test-support"))]
+    pub fail_supervisor_spawn: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub fail_command_spawn: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub fail_signal: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub fail_wait: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub interrupt_direct_wait: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub fail_sigterm_handler: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub fail_subreaper_init: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub force_anchor_loss: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub force_emergency_anchor_unavailable: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub anchor_pid_file: Option<std::path::PathBuf>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub recorded_signals: Arc<Mutex<Vec<RecordedSignal>>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub terminal_hold: Option<RunnerTerminalHold>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub start_hold: Option<RunnerStartHold>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub start_write_limit: Option<usize>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub channel_eof: Option<RunnerChannelEofHook>,
     /// Overrides the process-global nested containment authority for this
     /// one invocation (Issue #145).
     ///
@@ -705,20 +711,19 @@ pub(crate) struct RunnerTestControl {
     /// receive every other test's offers too. This seam scopes a recording
     /// authority to exactly the invocation under test; the global path is
     /// covered separately.
-    #[cfg(test)]
-    pub(crate) nested_authority:
-        Option<Arc<dyn crate::runtime::nested_containment::NestedAnchorAuthority>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub nested_authority: Option<Arc<dyn crate::nested_containment::NestedAnchorAuthority>>,
 }
 
 impl RunnerTestControl {
     /// A control bundle without failures.
     #[must_use]
-    #[cfg(test)]
-    pub(crate) fn new() -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(clippy::new_without_default)] // test-seam construction
+    pub fn new() -> Self {
         Self {
             anchor_stop_socket: None,
-            diagnostics:
-                rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl::default(),
+            diagnostics: crate::bash_supervisor::diagnostics::FixtureControl::default(),
             #[cfg(target_os = "linux")]
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
@@ -744,16 +749,16 @@ impl RunnerTestControl {
     /// A control bundle with external diagnostics disabled.
     #[cfg_attr(not(test), allow(dead_code))] // test-only seams
     #[must_use]
-    #[cfg(not(test))]
-    pub(crate) fn new() -> Self {
+    #[cfg(not(any(test, feature = "test-support")))]
+    #[allow(clippy::new_without_default)] // test-seam construction
+    pub fn new() -> Self {
         Self {
-            diagnostics:
-                rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl::default(),
+            diagnostics: crate::bash_supervisor::diagnostics::FixtureControl::default(),
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn record_signal(&self, recorded: RecordedSignal) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_signal(&self, recorded: RecordedSignal) {
         self.recorded_signals
             .lock()
             .expect("recorded signals lock")
@@ -761,9 +766,9 @@ impl RunnerTestControl {
     }
 
     /// The recorded process-group signal attempts so far.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub(crate) fn recorded_signals(&self) -> Vec<RecordedSignal> {
+    pub fn recorded_signals(&self) -> Vec<RecordedSignal> {
         self.recorded_signals
             .lock()
             .expect("recorded signals lock")
@@ -777,15 +782,15 @@ impl RunnerTestControl {
 /// the child stdout/stderr pipes to the caller; [`SupervisedCommandRunner::settle`]
 /// drives the lifecycle to its terminal state and returns the outcome
 /// intent. The child is reaped by the runner.
-pub(crate) struct SupervisedCommandRunner {
+pub struct SupervisedCommandRunner {
     child: tokio::process::Child,
     _environment_snapshot: tempfile::NamedTempFile,
     stream: tokio::net::unix::OwnedWriteHalf,
     incoming: tokio::net::unix::OwnedReadHalf,
     event_reader: SupervisorEventReader,
-    cancellation: CancellationSignal,
+    cancellation: ProcessSignal,
     /// A separate native authority, such as the standalone command's root.
-    start_guard: Option<CancellationSignal>,
+    start_guard: Option<ProcessSignal>,
     start_write: StartWrite,
     timeout: Option<Duration>,
     start: tokio::time::Instant,
@@ -796,7 +801,7 @@ pub(crate) struct SupervisedCommandRunner {
     settled: Option<Settled>,
     exit_status: Option<ExitStatus>,
     terminate_sent: bool,
-    trace: Option<rustx_process_supervisor::bash_supervisor::diagnostics::Trace>,
+    trace: Option<crate::bash_supervisor::diagnostics::Trace>,
     terminate_deadline: Option<tokio::time::Instant>,
     terminal_event_held: bool,
     /// The nested containment gate of this unit (Issue #145).
@@ -805,8 +810,9 @@ pub(crate) struct SupervisedCommandRunner {
     /// behaves exactly as it did before. Inside a subagent child it holds
     /// the unit's `START` closed until the top-level parent has
     /// acknowledged retention of this exact `pgid`.
-    anchor_gate: crate::runtime::nested_containment::AnchorGate,
+    anchor_gate: crate::nested_containment::AnchorGate,
     control: Option<RunnerTestControl>,
+    witness: ProcessWitness,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -815,27 +821,90 @@ enum StartWrite {
     Pending,
 }
 
+/// The physical lifecycle witness one owner reads without holding the
+/// runner. `start_crossed` is set **inside the same signal grant** that
+/// writes the complete 5-byte START frame, so a `cancel_with` closure
+/// can classify CancelledBeforeStart vs already-crossed atomically —
+/// never inferred after the fact. `exited`/`exit_code` are set only when
+/// the supervisor reports the actual `ShellExited` event.
+#[derive(Clone, Debug, Default)]
+pub struct ProcessWitness {
+    inner: Arc<WitnessState>,
+}
+
+#[derive(Debug, Default)]
+struct WitnessState {
+    start_crossed: std::sync::atomic::AtomicBool,
+    exited: std::sync::atomic::AtomicBool,
+    /// -1 = no code observed (signal or unset), otherwise the exit code.
+    exit_code: std::sync::atomic::AtomicI64,
+}
+
+impl ProcessWitness {
+    /// Whether the complete START frame provably crossed its grant.
+    #[must_use]
+    pub fn start_crossed(&self) -> bool {
+        self.inner
+            .start_crossed
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Whether the actual `ShellExited` event was observed.
+    #[must_use]
+    pub fn exited(&self) -> bool {
+        self.inner.exited.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The observed exit code — `None` before `ShellExited` or when the
+    /// platform reported no code.
+    #[must_use]
+    pub fn exit_code(&self) -> Option<i32> {
+        let code = self
+            .inner
+            .exit_code
+            .load(std::sync::atomic::Ordering::Acquire);
+        self.exited().then(|| i32::try_from(code).ok()).flatten()
+    }
+}
+
 impl SupervisedCommandRunner {
     /// Bind an independently owned authority to the native START transaction.
     /// It must not be a child of this invocation's cancellation family: that
     /// family already shares one commit mutex and is acquired exactly once.
-    pub(crate) fn guard_start(&mut self, authority: CancellationSignal) {
+    pub fn guard_start(&mut self, authority: ProcessSignal) {
         self.start_guard = Some(authority);
+    }
+
+    /// The shared lifecycle witness of this invocation.
+    #[must_use]
+    pub fn witness(&self) -> ProcessWitness {
+        self.witness.clone()
     }
 
     fn try_start(&self) -> Option<std::io::Result<usize>> {
         let frame = [1u8, 0, 0, 0, MSG_START];
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let count = self
             .control
             .as_ref()
             .and_then(|control| control.start_write_limit)
             .unwrap_or(frame.len());
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let count = frame.len();
+        let witness = self.witness.clone();
         let write = || {
-            self.cancellation
-                .with_active(|| self.stream.try_write(&frame[..count]))
+            self.cancellation.with_active(|| {
+                let written = self.stream.try_write(&frame[..count]);
+                if matches!(written, Ok(5)) {
+                    // The crossing observation shares the START grant:
+                    // a concurrent `cancel_with` sees exactly one side.
+                    witness
+                        .inner
+                        .start_crossed
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+                written
+            })
         };
         // Root and invocation are distinct native owners. No registry, Host
         // or environment-I/O lock is acquired under these short grants.
@@ -859,10 +928,7 @@ impl SupervisedCommandRunner {
         self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
     }
 
-    fn trace_event(
-        &mut self,
-        event: rustx_process_supervisor::bash_supervisor::diagnostics::Event,
-    ) {
+    fn trace_event(&mut self, event: crate::bash_supervisor::diagnostics::Event) {
         if let Some(trace) = &mut self.trace {
             trace.record(event);
         }
@@ -872,7 +938,7 @@ impl SupervisedCommandRunner {
     ///
     /// The runtime child-subreaper capability is a pre-ownership
     /// prerequisite, consulted lazily, one-time, idempotently (see
-    /// `rustx_process_supervisor::process_supervision`) before the supervisor unit
+    /// `crate::process_supervision`) before the supervisor unit
     /// spawns, so `START` — which authorizes the command spawn — is never
     /// sent before catastrophic fallback authority exists.
     ///
@@ -881,7 +947,7 @@ impl SupervisedCommandRunner {
     /// owns the supervisor child.
     #[cfg(unix)]
     #[allow(clippy::too_many_lines)] // one coherent spawn/settle pipeline
-    pub(crate) fn spawn(
+    pub fn spawn(
         spec: &SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
     ) -> Result<
@@ -897,7 +963,7 @@ impl SupervisedCommandRunner {
 
     #[cfg(unix)]
     #[allow(clippy::too_many_lines)] // The single shared supervisor spawn boundary.
-    pub(crate) fn spawn_program(
+    pub fn spawn_program(
         spec: &SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
         program: Option<&ProgramInvocation>,
@@ -909,9 +975,9 @@ impl SupervisedCommandRunner {
         ),
         RunnerSpawnError,
     > {
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let _ = control;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(control) = &control
             && control.fail_subreaper_init
         {
@@ -919,8 +985,7 @@ impl SupervisedCommandRunner {
                 "injected child-subreaper initialization failure".to_owned(),
             ));
         }
-        if let Err(error) = rustx_process_supervisor::process_supervision::ensure_child_subreaper()
-        {
+        if let Err(error) = crate::process_supervision::ensure_child_subreaper() {
             return Err(RunnerSpawnError::Subreaper(error));
         }
         let (stream_a, stream_b) = std::os::unix::net::UnixStream::pair()
@@ -945,20 +1010,18 @@ impl SupervisedCommandRunner {
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
         let environment_snapshot =
-            rustx_process_supervisor::supervised_unit::snapshot_command_environment(
-                &spec.command_environment,
-            )
-            .map_err(RunnerSpawnError::ControlChannel)?;
+            crate::supervised_unit::snapshot_command_environment(&spec.command_environment)
+                .map_err(RunnerSpawnError::ControlChannel)?;
         supervisor.env(
-            rustx_process_supervisor::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
             environment_snapshot.path(),
         );
         if let Some(control) = &control {
             control.diagnostics.configure(&mut supervisor);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if let Some(path) = &control.anchor_stop_socket {
                 supervisor.env(
-                    rustx_process_supervisor::bash_supervisor::diagnostics::ANCHOR_STOP_GATE_ENV,
+                    crate::bash_supervisor::diagnostics::ANCHOR_STOP_GATE_ENV,
                     path,
                 );
             }
@@ -972,7 +1035,7 @@ impl SupervisedCommandRunner {
                     .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
             );
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(control) = &control {
             if let Some(path) = &control.anchor_pid_file {
                 supervisor.env(ANCHOR_PID_FILE_ENV, path);
@@ -999,7 +1062,7 @@ impl SupervisedCommandRunner {
         supervisor.stdin(Stdio::from(OwnedFd::from(stream_b)));
         supervisor.stdout(Stdio::piped());
         supervisor.stderr(Stdio::piped());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(control) = &control
             && control.fail_supervisor_spawn
         {
@@ -1032,6 +1095,7 @@ impl SupervisedCommandRunner {
                 cancellation: spec.cancellation.clone(),
                 start_guard: None,
                 start_write: StartWrite::Idle,
+                witness: ProcessWitness::default(),
                 timeout: spec.timeout,
                 start: tokio::time::Instant::now(),
                 lifecycle: ProcessLifecycle::PreOwnership,
@@ -1044,10 +1108,10 @@ impl SupervisedCommandRunner {
                 trace: control
                     .as_ref()
                     .and_then(|control| control.diagnostics.trace.as_ref())
-                    .map(rustx_process_supervisor::bash_supervisor::diagnostics::Trace::new),
+                    .map(crate::bash_supervisor::diagnostics::Trace::new),
                 terminate_deadline: None,
                 terminal_event_held: false,
-                anchor_gate: crate::runtime::nested_containment::AnchorGate::Idle,
+                anchor_gate: crate::nested_containment::AnchorGate::Idle,
                 control,
             },
             stdout_pipe,
@@ -1066,7 +1130,7 @@ impl SupervisedCommandRunner {
     /// outcome — success, failure, cancelled, or timed out — is produced.
     #[cfg(unix)]
     #[allow(clippy::too_many_lines)] // one coherent spawn/settle pipeline
-    pub(crate) async fn settle(&mut self) -> ProcessTermination {
+    pub async fn settle(&mut self) -> ProcessTermination {
         loop {
             let outcome_intent =
                 self.failure.is_some() || self.settled.is_some() || self.exit_status.is_some();
@@ -1089,7 +1153,7 @@ impl SupervisedCommandRunner {
                     self.settled = Some(Settled::Cancelled);
                     let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
-                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                    self.trace_event(crate::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = async {
@@ -1101,14 +1165,14 @@ impl SupervisedCommandRunner {
                     self.settled = Some(Settled::TimedOut);
                     let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
-                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                    self.trace_event(crate::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = wait_for_forced_timeout(self.control.as_ref()), if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::TimedOut);
                     let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
-                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                    self.trace_event(crate::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 event = self.event_reader.read(&mut self.incoming), if self.supervisor_channel == SupervisorChannel::Connected => match event {
@@ -1125,15 +1189,15 @@ impl SupervisedCommandRunner {
                             // anchor. The offer is polled as its own select
                             // arm so cancellation and the invocation deadline
                             // stay authoritative while the parent decides.
-                            #[cfg(test)]
+                            #[cfg(any(test, feature = "test-support"))]
                             let authority = self
                                 .control
                                 .as_ref()
                                 .and_then(|control| control.nested_authority.clone());
-                            #[cfg(not(test))]
+                            #[cfg(not(any(test, feature = "test-support")))]
                             let authority: Option<
                                 std::sync::Arc<
-                                    dyn crate::runtime::nested_containment::NestedAnchorAuthority,
+                                    dyn crate::nested_containment::NestedAnchorAuthority,
                                 >,
                             > = None;
                             self.anchor_gate.offer_with(pgid, authority);
@@ -1142,7 +1206,7 @@ impl SupervisedCommandRunner {
                     Ok(Some(SupervisorEvent::OwnershipEstablished)) => {
                         if let ProcessLifecycle::OwnershipPossible { pgid } = self.lifecycle {
                             self.lifecycle = ProcessLifecycle::Owned { pgid };
-                            #[cfg(test)]
+                            #[cfg(any(test, feature = "test-support"))]
                             if let Some(control) = self.control.as_ref() {
                                 control.lifecycle.mark_ownership_established();
                             }
@@ -1159,7 +1223,15 @@ impl SupervisedCommandRunner {
                     }
                     Ok(Some(SupervisorEvent::ShellExited { status })) => {
                         self.exit_status = Some(status);
-                        #[cfg(all(test, target_os = "linux"))]
+                        self.witness
+                            .inner
+                            .exit_code
+                            .store(i64::from(status.code().unwrap_or(-1)), std::sync::atomic::Ordering::Release);
+                        self.witness
+                            .inner
+                            .exited
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
                         if let Some(control) = self.control.as_ref()
                             && control.pause_at_shell_exit
                             && self.settled.is_none()
@@ -1175,20 +1247,20 @@ impl SupervisedCommandRunner {
                         if self.failure.is_none() && self.settled.is_none() && self.exit_status.is_none() {
                             self.failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
                         }
-                        self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminalObserved);
+                        self.trace_event(crate::bash_supervisor::diagnostics::Event::TerminalObserved);
                         send_terminal_ack(&mut self.stream).await;
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         if let Some(control) = self.control.as_ref() {
                             control.lifecycle.mark_terminal();
                         }
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         if let Some(hold) = self.control.as_ref().and_then(|control| control.terminal_hold.as_ref()) {
                             let _ = hold.held_tx.send(true);
                             self.terminal_event_held = true;
                         } else {
                             self.lifecycle = ProcessLifecycle::Terminal;
                         }
-                        #[cfg(not(test))]
+                        #[cfg(not(any(test, feature = "test-support")))]
                         {
                             self.lifecycle = ProcessLifecycle::Terminal;
                         }
@@ -1197,7 +1269,7 @@ impl SupervisedCommandRunner {
                         self.failure = Some(message);
                     }
                     Ok(Some(SupervisorEvent::SignalAttempt { pgid, signal, emitted })) => {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         if let Some(control) = self.control.as_ref() {
                             use nix::sys::signal::Signal;
                             let signal_name = Signal::try_from(signal)
@@ -1208,11 +1280,11 @@ impl SupervisedCommandRunner {
                                 emitted,
                             });
                         }
-                        #[cfg(not(test))]
+                        #[cfg(not(any(test, feature = "test-support")))]
                         let _ = (pgid, signal, emitted);
                     }
                     Ok(None) => {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         if let Some(hook) = self.control.as_ref().and_then(|control| control.channel_eof.as_ref()) {
                             let _ = hook.seen_tx.send(true);
                         }
@@ -1234,14 +1306,14 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
-                                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::DirectChildReaped);
+                                    self.trace_event(crate::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
                         }
                     }
                     Err(error) => {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         if let Some(hook) = self.control.as_ref().and_then(|control| control.channel_eof.as_ref()) {
                             let _ = hook.seen_tx.send(true);
                         }
@@ -1261,7 +1333,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
-                                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::DirectChildReaped);
+                                    self.trace_event(crate::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1283,7 +1355,7 @@ impl SupervisedCommandRunner {
                             if !self.terminate_sent {
                                 let sent = send_terminate(&mut self.stream).await;
                                 self.terminate_sent = true;
-                                self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                                self.trace_event(crate::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                                 self.terminate_deadline = Some(
                                     tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION,
                                 );
@@ -1297,7 +1369,7 @@ impl SupervisedCommandRunner {
                         self.fail_start(format!("cannot prepare the ownership gate: {error}"));
                         continue;
                     }
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     if let Some(hold) = self.control.as_ref().and_then(|control| control.start_hold.as_ref()) {
                         hold.pause().await;
                     }
@@ -1326,7 +1398,7 @@ impl SupervisedCommandRunner {
                 }, if self.terminate_sent && !self.lifecycle.is_terminal() && self.terminate_deadline.is_some() => {
                     self.failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
                     self.terminate_deadline = None;
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     if let Some(hold) = self.control.as_ref().and_then(|control| control.terminal_hold.as_ref()) {
                         let _ = hold.watchdog_tx.send(true);
                     }
@@ -1348,13 +1420,13 @@ impl SupervisedCommandRunner {
         // required; it is never abandoned.
         if !self.direct_child_reaped {
             let wait = loop {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 let interrupted = self.control.as_ref().is_some_and(|control| {
                     control
                         .interrupt_direct_wait
                         .swap(false, std::sync::atomic::Ordering::SeqCst)
                 });
-                #[cfg(not(test))]
+                #[cfg(not(any(test, feature = "test-support")))]
                 let interrupted = false;
                 let result = if interrupted {
                     Err(std::io::ErrorKind::Interrupted.into())
@@ -1369,8 +1441,8 @@ impl SupervisedCommandRunner {
             match wait {
                 Ok(_) => {
                     self.direct_child_reaped = true;
-                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::DirectChildReaped);
-                    #[cfg(test)]
+                    self.trace_event(crate::bash_supervisor::diagnostics::Event::DirectChildReaped);
+                    #[cfg(any(test, feature = "test-support"))]
                     if let Some(control) = self.control.as_ref() {
                         control.lifecycle.mark_direct_child_reaped();
                     }
@@ -1406,30 +1478,30 @@ impl SupervisedCommandRunner {
     /// Returns whether the direct outer supervisor was reaped.
     #[cfg(unix)]
     async fn emergency_containment_after_supervisor_loss(&mut self, pgid: i32) -> bool {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let control = self.control.clone();
         if let Err(error) = self.child.wait().await {
             self.failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
             return false;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(control) = control.as_ref() {
             control.lifecycle.mark_direct_child_reaped();
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(hook) = control
             .as_ref()
             .and_then(|control| control.channel_eof.as_ref())
         {
             hook.pause_before_emergency().await;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let anchor_unavailable = control.is_some_and(|control| {
             control
                 .force_emergency_anchor_unavailable
                 .load(std::sync::atomic::Ordering::SeqCst)
         });
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let anchor_unavailable = false;
         match tokio::task::spawn_blocking(move || emergency_contain_group(pgid, anchor_unavailable))
             .await
@@ -1454,7 +1526,7 @@ impl SupervisedCommandRunner {
 
 /// The bounded confirmation window of the owned process tree.
 ///
-/// Mirrors `crate::tools::limits::BASH_TERMINATION_CONFIRMATION`; the
+/// Mirrors `the root Bash termination-confirmation bound`; the
 /// runner lives below the tools layer, so the value is mirrored here.
 #[cfg(unix)]
 const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
@@ -1464,7 +1536,7 @@ const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 /// cancellation-safe; its byte count commits before another await can yield.
 #[cfg(unix)]
 #[derive(Default)]
-pub(crate) struct SupervisorEventReader {
+pub struct SupervisorEventReader {
     header: [u8; 4],
     header_read: usize,
     frame: Vec<u8>,
@@ -1475,7 +1547,7 @@ pub(crate) struct SupervisorEventReader {
 impl SupervisorEventReader {
     /// Reads one `[u32 LE length][kind][payload]` frame. Header EOF still means
     /// channel closure; EOF inside a declared payload is a protocol failure.
-    pub(crate) async fn read<R: tokio::io::AsyncRead + Unpin>(
+    pub async fn read<R: tokio::io::AsyncRead + Unpin>(
         &mut self,
         stream: &mut R,
     ) -> Result<Option<SupervisorEvent>, String> {
@@ -1602,15 +1674,13 @@ fn decode_supervisor_event(frame: &[u8]) -> Result<Option<SupervisorEvent>, Stri
 /// command, captures bounded stdout/stderr concurrently, settles the owned
 /// process tree, and returns the terminal outcome.
 #[cfg(unix)]
-pub(crate) async fn run_supervised_command(
+pub async fn run_supervised_command(
     spec: SupervisedCommandSpec,
     control: Option<RunnerTestControl>,
 ) -> Result<CapturedProcessResult, String> {
-    #[cfg(test)]
-    crate::local_runtime::static_effects::observe(
-        crate::local_runtime::static_effects::Effect::Process,
-    );
-    #[cfg(not(test))]
+    #[cfg(any(test, feature = "test-support"))]
+    crate::effects::observe_process();
+    #[cfg(not(any(test, feature = "test-support")))]
     let _ = control;
     let (mut runner, stdout_pipe, stderr_pipe) =
         SupervisedCommandRunner::spawn(&spec, control).map_err(|error| error.to_string())?;
@@ -1651,15 +1721,13 @@ pub(crate) async fn run_supervised_command(
 /// arguments; the supervisor still clears the process environment and applies
 /// only `spec.command_environment`.
 #[cfg(unix)]
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) async fn run_supervised_program(
+#[cfg_attr(any(test, feature = "test-support"), allow(dead_code))]
+pub async fn run_supervised_program(
     spec: SupervisedCommandSpec,
     program: ProgramInvocation,
 ) -> Result<CapturedProcessResult, String> {
-    #[cfg(test)]
-    crate::local_runtime::static_effects::observe(
-        crate::local_runtime::static_effects::Effect::Process,
-    );
+    #[cfg(any(test, feature = "test-support"))]
+    crate::effects::observe_process();
     let (mut runner, stdout_pipe, stderr_pipe) =
         SupervisedCommandRunner::spawn_program(&spec, None, Some(&program))
             .map_err(|error| error.to_string())?;
@@ -1729,7 +1797,7 @@ async fn await_capture(
 
 /// The signal number of a signal-terminated child, where known.
 #[cfg(unix)]
-pub(crate) fn unix_signal_of(exit: ExitStatus) -> String {
+pub fn unix_signal_of(exit: ExitStatus) -> String {
     use std::os::unix::process::ExitStatusExt;
     exit.signal()
         .map_or_else(|| "unknown".to_owned(), |signal| signal.to_string())
@@ -1752,11 +1820,11 @@ mod tests {
         ProcessOutcomeIntent, RunnerBackedProcessRunner, RunnerTestControl, SupervisedCommandSpec,
         SupervisedProcessRunner,
     };
-    use crate::runtime::cancellation::CancellationSignal;
+    use crate::signal::ProcessSignal;
     use std::time::Duration;
 
     #[cfg(unix)]
-    fn spec(command: &str, cancellation: CancellationSignal) -> SupervisedCommandSpec {
+    fn spec(command: &str, cancellation: ProcessSignal) -> SupervisedCommandSpec {
         SupervisedCommandSpec {
             command: command.to_owned(),
             cwd: std::env::temp_dir(),
@@ -1786,7 +1854,7 @@ mod tests {
     async fn large_environment_reaches_the_real_supervisor_as_individual_entries() {
         let mut command = spec(
             "printf '%s' \"$LARGE_099\"; test -z \"${RUSTX_COMMAND_ENVIRONMENT_FILE+x}\"",
-            CancellationSignal::new(),
+            ProcessSignal::new(),
         );
         command
             .command_environment
@@ -1817,22 +1885,21 @@ mod tests {
     #[cfg(unix)]
     #[derive(Debug)]
     struct GatedAuthority {
-        offers: tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
-        releases:
-            tokio::sync::mpsc::UnboundedSender<(crate::runtime::identity::ProcessUnitId, i32)>,
+        offers: tokio::sync::mpsc::UnboundedSender<(crate::identity::ProcessUnitId, i32)>,
+        releases: tokio::sync::mpsc::UnboundedSender<(crate::identity::ProcessUnitId, i32)>,
         gate: tokio::sync::watch::Sender<bool>,
         accept: bool,
     }
 
     #[cfg(unix)]
-    impl crate::runtime::nested_containment::NestedAnchorAuthority for GatedAuthority {
+    impl crate::nested_containment::NestedAnchorAuthority for GatedAuthority {
         fn offer(
             &self,
-            unit: crate::runtime::identity::ProcessUnitId,
+            unit: crate::identity::ProcessUnitId,
             pgid: i32,
         ) -> futures_util::future::BoxFuture<
             'static,
-            Result<(), crate::runtime::nested_containment::AnchorError>,
+            Result<(), crate::nested_containment::AnchorError>,
         > {
             let mut gate = self.gate.subscribe();
             let _ = self.offers.send((unit, pgid));
@@ -1840,20 +1907,20 @@ mod tests {
             Box::pin(async move {
                 while !*gate.borrow_and_update() {
                     if gate.changed().await.is_err() {
-                        return Err(crate::runtime::nested_containment::AnchorError::ParentLost);
+                        return Err(crate::nested_containment::AnchorError::ParentLost);
                     }
                 }
                 if accept {
                     Ok(())
                 } else {
-                    Err(crate::runtime::nested_containment::AnchorError::ParentLost)
+                    Err(crate::nested_containment::AnchorError::ParentLost)
                 }
             })
         }
 
         fn release(
             &self,
-            unit: crate::runtime::identity::ProcessUnitId,
+            unit: crate::identity::ProcessUnitId,
             pgid: i32,
         ) -> futures_util::future::BoxFuture<'static, ()> {
             let _ = self.releases.send((unit, pgid));
@@ -1864,10 +1931,8 @@ mod tests {
     #[cfg(unix)]
     struct GatedHarness {
         control: RunnerTestControl,
-        offers:
-            tokio::sync::mpsc::UnboundedReceiver<(crate::runtime::identity::ProcessUnitId, i32)>,
-        releases:
-            tokio::sync::mpsc::UnboundedReceiver<(crate::runtime::identity::ProcessUnitId, i32)>,
+        offers: tokio::sync::mpsc::UnboundedReceiver<(crate::identity::ProcessUnitId, i32)>,
+        releases: tokio::sync::mpsc::UnboundedReceiver<(crate::identity::ProcessUnitId, i32)>,
         gate: tokio::sync::watch::Sender<bool>,
     }
 
@@ -1909,7 +1974,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("lab");
         let marker = dir.path().join("started");
         let runner = RunnerBackedProcessRunner;
-        let cancellation = CancellationSignal::new();
+        let cancellation = ProcessSignal::new();
         let control = harness.control.clone();
         let invocation = tokio::spawn({
             let marker = marker.clone();
@@ -1990,7 +2055,7 @@ mod tests {
                                 "/usr/local/bin:/usr/bin:/bin".to_owned(),
                             )],
                             timeout: Some(Duration::from_secs(30)),
-                            cancellation: CancellationSignal::new(),
+                            cancellation: ProcessSignal::new(),
                         },
                         Some(control),
                     )
@@ -2029,14 +2094,14 @@ mod tests {
     #[cfg(unix)]
     #[allow(clippy::too_many_lines)] // One native cancellation/readiness ordering proof.
     async fn cancel_at_nested_readiness(acknowledge_first: bool) {
-        use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
+        use crate::bash_supervisor::diagnostics::{Entry, Event};
 
         let mut harness = gated_authority(true);
         let directory = tempfile::tempdir().expect("fixture directory");
         let marker = directory.path().join("started");
         let trace = directory.path().join("trace.jsonl");
         harness.control.diagnostics.trace = Some(trace.clone());
-        let cancellation = CancellationSignal::new();
+        let cancellation = ProcessSignal::new();
         let mut command = spec("touch started; sleep 30", cancellation.clone());
         command.cwd = directory.path().to_path_buf();
         let control = harness.control.clone();
@@ -2119,7 +2184,7 @@ mod tests {
             );
             assert_eq!(
                 harness.control.recorded_signals(),
-                [] as [crate::runtime::process_runner::RecordedSignal; 0]
+                [] as [crate::process_runner::RecordedSignal; 0]
             );
             // A late parent acknowledgement cannot replay START after settlement.
             harness.gate.send_replace(true);
@@ -2133,12 +2198,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn incomplete_start_frames_fail_closed_and_physically_settle() {
-        use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
+        use crate::bash_supervisor::diagnostics::{Entry, Event};
         for bytes in 0..5 {
             let directory = tempfile::tempdir().unwrap();
             let marker = directory.path().join("business-started");
             let trace = directory.path().join("trace");
-            let mut command = spec("touch business-started", CancellationSignal::new());
+            let mut command = spec("touch business-started", ProcessSignal::new());
             command.cwd = directory.path().to_owned();
             let mut control = RunnerTestControl::new();
             control.start_write_limit = Some(bytes);
@@ -2220,7 +2285,7 @@ mod tests {
                         "/usr/local/bin:/usr/bin:/bin".to_owned(),
                     )],
                     timeout: Some(Duration::from_secs(30)),
-                    cancellation: CancellationSignal::new(),
+                    cancellation: ProcessSignal::new(),
                 },
                 None,
             )
@@ -2237,7 +2302,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn dropping_runner_waiter_does_not_abandon_owned_invocation() {
-        let cancellation = CancellationSignal::new();
+        let cancellation = ProcessSignal::new();
         let control = RunnerTestControl::new();
         let hook = control.lifecycle.clone();
         let runner = std::sync::Arc::new(RunnerBackedProcessRunner);
@@ -2271,7 +2336,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn explicit_cancellation_still_settles_through_the_driver() {
-        let cancellation = CancellationSignal::new();
+        let cancellation = ProcessSignal::new();
         let control = RunnerTestControl::new();
         let hook = control.lifecycle.clone();
         let runner = std::sync::Arc::new(RunnerBackedProcessRunner);
@@ -2313,7 +2378,7 @@ mod tests {
                         "/usr/local/bin:/usr/bin:/bin".to_owned(),
                     )],
                     timeout: Some(Duration::from_secs(30)),
-                    cancellation: CancellationSignal::new(),
+                    cancellation: ProcessSignal::new(),
                 },
                 None,
             )
@@ -2330,7 +2395,7 @@ mod tests {
         use super::super::{
             MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, SupervisorEvent, SupervisorEventReader,
         };
-        use crate::runtime::cancellation::CancellationSignal;
+        use crate::signal::ProcessSignal;
         use tokio::io::AsyncWriteExt;
 
         async fn resume_after_cancellation(split: usize) {
@@ -2347,7 +2412,7 @@ mod tests {
                 // This poll consumes exactly the available prefix and then
                 // waits for the suffix. Cancellation drops that pending read.
                 assert!(futures_util::poll!(reading.as_mut()).is_pending());
-                let cancellation = CancellationSignal::new();
+                let cancellation = ProcessSignal::new();
                 cancellation.cancel();
                 tokio::select! {
                     biased;
@@ -2435,9 +2500,7 @@ mod tests {
     mod strict_no_ownership {
         use tokio::io::AsyncWriteExt;
 
-        use crate::runtime::process_runner::{
-            MSG_NO_OWNERSHIP, SupervisorEvent, SupervisorEventReader,
-        };
+        use crate::process_runner::{MSG_NO_OWNERSHIP, SupervisorEvent, SupervisorEventReader};
 
         /// Parses one hand-written `MSG_NO_OWNERSHIP` frame with the given
         /// payload: `[u32 LE length][kind][payload]`.
@@ -2519,12 +2582,12 @@ mod tests {
     mod sibling_contract {
         use std::path::Path;
 
-        use crate::runtime::cancellation::CancellationSignal;
-        use crate::runtime::process_runner::{
+        use crate::invocation::supervisor_binary;
+        use crate::process_runner::{
             CapturedProcessResult, ProcessOutcomeIntent, RunnerBackedProcessRunner,
             SupervisedCommandSpec, SupervisedProcessRunner,
         };
-        use rustx_process_supervisor::invocation::supervisor_binary;
+        use crate::signal::ProcessSignal;
 
         const MODE_ENV: &str = "RUSTX_TEST_COMPANION_MODE";
         const WITNESS_ENV: &str = "RUSTX_TEST_COMPANION_WITNESS";
@@ -2541,7 +2604,7 @@ mod tests {
                 cwd: cwd.to_path_buf(),
                 command_environment: Vec::new(),
                 timeout: None,
-                cancellation: CancellationSignal::default(),
+                cancellation: ProcessSignal::default(),
             };
             RunnerBackedProcessRunner.run(spec, None).await
         }

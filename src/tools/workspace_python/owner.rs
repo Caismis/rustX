@@ -759,15 +759,16 @@ impl ProgramProbe for SupervisedProbe {
                 terminal: None,
                 cwd_identity: request.cwd_identity,
             };
-            let spec = crate::runtime::process_runner::SupervisedCommandSpec {
+            let spec = rustx_process_supervisor::process_runner::SupervisedCommandSpec {
                 command: "workspace-python".to_owned(),
                 cwd: request.cwd,
                 command_environment: request.env,
                 timeout: Some(request.timeout),
-                cancellation: request.cancellation,
+                cancellation: request.cancellation.physical(),
             };
             let result =
-                crate::runtime::process_runner::run_supervised_program(spec, invocation).await?;
+                rustx_process_supervisor::process_runner::run_supervised_program(spec, invocation)
+                    .await?;
             let status = result
                 .exit_code
                 .ok_or_else(|| "the workspace python program did not exit normally".to_owned())?;

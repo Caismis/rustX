@@ -223,9 +223,9 @@ pub async fn run_subagent_child() -> i32 {
     // The nested containment authority is installed BEFORE any composition
     // step can create a supervised process unit, so no unit can ever slip
     // past the anchor gate.
-    if let Err(detail) =
-        crate::runtime::nested_containment::install_authority(dispatcher.anchor_authority())
-    {
+    if let Err(detail) = rustx_process_supervisor::nested_containment::install_authority(
+        dispatcher.anchor_authority(),
+    ) {
         eprintln!("subagent child: {detail}");
         return 2;
     }

@@ -54,9 +54,16 @@ pub mod interactive_supervisor {
         1
     }
 }
+pub mod effects;
+pub mod identity;
 pub mod invocation;
+#[cfg(unix)]
+pub mod nested_containment;
+#[cfg(unix)]
+pub mod process_runner;
 pub mod process_supervision;
 #[cfg(unix)]
 pub mod process_wait;
+pub mod signal;
 #[cfg(unix)]
 pub mod supervised_unit;

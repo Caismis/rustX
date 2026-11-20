@@ -13,17 +13,6 @@ use super::capture::{
     SpillCapture, await_drain, capture_stream, consume_background, consume_combined,
 };
 use super::input::BashInput;
-#[cfg(all(test, target_os = "linux"))]
-use crate::runtime::process_runner::RunnerLifecycleHook as BashLifecycleHook;
-use crate::runtime::process_runner::RunnerTestControl;
-use crate::runtime::process_runner::{
-    ProcessOutcomeIntent, RunnerSpawnError, SupervisedCommandRunner, SupervisedCommandSpec,
-    unix_signal_of,
-};
-#[cfg(test)]
-use crate::runtime::process_runner::{
-    RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
-};
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::limits::{BASH_TERMINATION_CONFIRMATION, FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
@@ -31,6 +20,17 @@ use crate::tools::native::support::failed_result;
 use crate::tools::types::{
     ManagedOutputContinuation, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
     ToolInvocation, ToolInvocationMode, ToolResultContent, TruncationState,
+};
+#[cfg(all(test, target_os = "linux"))]
+use rustx_process_supervisor::process_runner::RunnerLifecycleHook as BashLifecycleHook;
+use rustx_process_supervisor::process_runner::RunnerTestControl;
+use rustx_process_supervisor::process_runner::{
+    ProcessOutcomeIntent, RunnerSpawnError, SupervisedCommandRunner, SupervisedCommandSpec,
+    unix_signal_of,
+};
+#[cfg(test)]
+use rustx_process_supervisor::process_runner::{
+    RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
 
 /// The native Bash executor.
@@ -118,7 +118,7 @@ impl ToolExecutor for BashTool {
 /// without an operating-system mocking framework.
 ///
 /// The process-ownership seams live in the shared supervised command runner
-/// (`crate::runtime::process_runner::RunnerTestControl`); this type wraps
+/// (`rustx_process_supervisor::process_runner::RunnerTestControl`); this type wraps
 /// them together with the Bash-local capture seams.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
@@ -145,7 +145,7 @@ pub(crate) struct BashTestControl {
 /// (`killpg` was invoked by the supervisor); a refused attempt (ownership
 /// lost, injected failure) is recorded with `emitted == false`.
 #[cfg(test)]
-pub(crate) use crate::runtime::process_runner::RecordedSignal;
+pub(crate) use rustx_process_supervisor::process_runner::RecordedSignal;
 
 #[cfg(test)]
 impl BashTestControl {
@@ -552,7 +552,7 @@ async fn run_bash_unix(
         cwd: context.workspace.root().to_path_buf(),
         command_environment,
         timeout,
-        cancellation: context.cancellation.child_signal(),
+        cancellation: context.cancellation.child_signal().physical(),
     };
     let (mut runner, stdout_pipe, stderr_pipe) =
         match SupervisedCommandRunner::spawn(&spec, runner_control) {

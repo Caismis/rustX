@@ -1659,6 +1659,9 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     };
     let path = "/workspace/file".to_owned();
     let params = super::command::ExecParams {
+        session_id: crate::local_runtime::session::SessionId::new(
+            "ses_00000000-0000-7000-8000-000000000001",
+        ),
         command: vec!["/usr/bin/printf".into(), "%s".into(), "literal".into()],
         cwd: "/workspace".into(),
         env: std::collections::BTreeMap::new(),

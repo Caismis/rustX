@@ -76,8 +76,9 @@ async fn completion(
 }
 
 pub(crate) async fn terminal_signals() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let id = "terminal-signal";
@@ -146,6 +147,7 @@ pub(crate) async fn terminal_signals() {
     let result = completion(&connection, command).await;
     assert_eq!(result.status, ExecStatus::ProcessControlFailed);
     assert_eq!(result.exit_code, None);
+    execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,
@@ -154,8 +156,9 @@ pub(crate) async fn terminal_signals() {
 }
 
 pub(crate) async fn output_after_cap() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let id = "post-cap";
@@ -193,6 +196,7 @@ pub(crate) async fn output_after_cap() {
         assert_eq!(result.status, ExecStatus::Terminated);
         assert!(result.stdout_truncated);
     }
+    execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,

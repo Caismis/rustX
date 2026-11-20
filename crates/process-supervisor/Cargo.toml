@@ -19,13 +19,20 @@ path = "src/bin/bash_supervisor.rs"
 name = "interactive-supervisor"
 path = "src/bin/interactive_supervisor.rs"
 
+[features]
+# Root consumer tests enable the physical fixture seams through their own
+# dev-dependency; no production dependency ever selects this feature.
+test-support = []
+
 [dependencies]
+futures-util = "0.3"
 libc = "0.2"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "poll", "socket", "user"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1" }
 tempfile = "3.27.0"
-tokio = { version = "1", features = ["io-util", "process"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "process", "time"] }

@@ -1167,7 +1167,7 @@ impl StagedChild {
     #[cfg(test)]
     pub(crate) fn retain_for_test(
         &mut self,
-        unit_id: crate::runtime::identity::ProcessUnitId,
+        unit_id: rustx_process_supervisor::identity::ProcessUnitId,
         pgid: i32,
     ) {
         self.retained.retain(unit_id, pgid).expect("test retention");
@@ -2140,12 +2140,13 @@ mod tests {
     };
 
     use crate::runtime::cancellation::CancellationSignal;
-    use crate::runtime::identity::{ConversationId, ProcessUnitId};
+    use crate::runtime::identity::ConversationId;
     use crate::runtime::subagent::anchors::RetainedProcessUnits;
     use crate::runtime::subagent::ipc::{
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
         write_child_frame,
     };
+    use rustx_process_supervisor::identity::ProcessUnitId;
 
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -2338,7 +2339,10 @@ mod tests {
         ));
         assert_eq!(
             settled.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(
             matches!(
@@ -2849,7 +2853,10 @@ mod tests {
         assert_eq!(settled.nested.contained, vec![unit]);
         assert_eq!(
             settled.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
@@ -2923,7 +2930,10 @@ mod tests {
         assert_eq!(settled.nested.contained, vec![unit]);
         assert_eq!(
             settled.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
@@ -3093,7 +3103,10 @@ mod tests {
         let settlement = tokio::time::timeout(DEADLINE, task).await.unwrap().unwrap();
         assert_eq!(
             settlement.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),

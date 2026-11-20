@@ -490,11 +490,14 @@ def stage_binary_beside(source: Path, dest_dir: Path) -> None:
         raise PreparationError(f"checksum mismatch after staging `{dest}` from `{source}`")
 
 
-# Companion packages whose binaries the root test harnesses compose
-# through the executable-sibling contract: the Execution Client the process
-# tests drive, and the physical supervisor helpers
-# (`rustx-process-supervisor`: `bash-supervisor`, `interactive-supervisor`).
-COMPANION_PACKAGES = ("rustx-execution-client", "rustx-process-supervisor")
+# Packages whose test harnesses compose foreign-package binaries: the root
+# package stages the Execution Client and the physical supervisor helpers;
+# the Execution Client's own tests spawn `bash-supervisor` directly, so its
+# harnesses stage the supervisor helpers too.
+COMPANION_PACKAGES = {
+    "rustx": ("rustx-execution-client", "rustx-process-supervisor"),
+    "rustx-execution-client": ("rustx-process-supervisor",),
+}
 
 
 def companion_bin_command(bin_cmd: list[str], package: str) -> list[str]:
@@ -588,15 +591,16 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
         libraries=libraries,
         has_lib=has_lib,
     )
-    if pkg_name == "rustx":
-        # The root package's tests compose companion-package binaries — the
-        # Execution Client and the physical supervisor helpers; each trusted
-        # sibling is built with the same target, target-dir, profile, and
-        # lock flags — never the root crate's feature selectors — and staged
-        # beside every emitted harness.
+    companions = COMPANION_PACKAGES.get(pkg_name, ())
+    if companions:
+        # These harnesses compose companion-package binaries (for example
+        # the Execution Client's tests spawning `bash-supervisor`); each
+        # trusted sibling is built with the same target, target-dir,
+        # profile, and lock flags — never the testing crate's feature
+        # selectors — and staged beside every emitted harness.
         root_dir = Path(next(iter(binaries.values()))["executable"]).resolve().parent
         root_profile = profile_signature(next(iter(binaries.values())))
-        for companion in COMPANION_PACKAGES:
+        for companion in companions:
             companion_id, _, companion_manifest, companion_bin_targets, companion_targets = (
                 load_package_metadata(
                     test_cmd[0], metadata_flags, companion, work_dir

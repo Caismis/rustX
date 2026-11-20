@@ -246,9 +246,16 @@ jobs:
       - name: Run the Execution Client WebSocket boundary
         run: cargo test -p rustx-execution-client --test websocket --all-features --locked
 
-      # The binary's own unit tests (e.g. `mutation::`) live outside the
-      # `bootstrap` integration target; FULL's contracts lane already runs
-      # workspace `--bins`, but FAST must not skip them.
+      # The binary's own unit tests (`mutation::`, `process::`) live
+      # outside the `bootstrap` integration target; FULL's contracts lane
+      # already runs workspace `--bins` with staged companions, but FAST
+      # must not skip them — and the process tests exec the real
+      # `bash-supervisor`, which the preparation stage must place beside
+      # the test binary or the real-spawn cases would silently skip.
+      - name: Stage the Execution Client binary harness
+        run: >-
+          python3 test-support/prepare_native_tests.py --
+          cargo test -p rustx-execution-client --bins --all-features --locked --no-run
       - name: Run the Execution Client binary units
         run: cargo test -p rustx-execution-client --bins --all-features --locked
 

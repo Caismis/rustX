@@ -49,8 +49,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::context::SessionContextPolicy;
 use crate::model::deadline::ModelTimeoutPolicy;
-use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
+use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
 use crate::runtime::types::{ApprovalMode, CancellationReason};
+use rustx_process_supervisor::identity::ProcessUnitId;
 
 use super::resolver::ResolvedSubagentSpec;
 

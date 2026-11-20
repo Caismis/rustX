@@ -19,6 +19,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+pub mod process;
 pub mod transport;
 
 /// The only protocol revision this implementation speaks. Incompatible
@@ -693,6 +694,8 @@ impl fmt::Debug for Hello {
 pub struct Admission {
     /// The negotiated protocol revision — always [`PROTOCOL_VERSION`] in v1.
     pub version: u16,
+    /// The process-wide Server incarnation operations are keyed under.
+    pub server_incarnation: crate::process::ServerIncarnation,
     /// The bound Session.
     pub session: SessionId,
     /// The bound environment.
@@ -866,6 +869,13 @@ pub enum ControlRequest {
     /// commit — a commit that has not crossed never publishes — and
     /// acknowledges with `Revoked`.
     Revoke,
+    /// Cancels one live process operation: a `CancelProcess` delivered
+    /// before physical START must admit zero spawn; a later one awaits
+    /// actual physical containment before the honest disposition.
+    CancelProcess {
+        /// The complete operation identity to cancel.
+        key: crate::process::ProcessOperationKey,
+    },
 }
 
 /// What the Client reports for a [`ControlRequest::CancelMutation`].
@@ -880,6 +890,23 @@ pub enum CancelDisposition {
     AlreadyCrossed,
     /// No live or just-crossed ticket matches — the cancellation had no
     /// target. Never means "no effect" on a real ticket.
+    Unknown,
+}
+
+/// What the Client reports for a [`ControlRequest::CancelProcess`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ProcessCancelDisposition {
+    /// The signal arrived before physical START: zero spawn admitted,
+    /// the registration tombstoned `Cancelled`.
+    CancelledBeforeStart,
+    /// The operation was at or past START: cancellation was delivered and
+    /// the physical worker is performing real containment — completion is
+    /// observed through the operation's settled state, never claimed here.
+    CancellationRequested,
+    /// The operation had already settled — cancellation had no target.
+    AlreadySettled,
+    /// No record matches the exact supplied key.
     Unknown,
 }
 
@@ -901,6 +928,13 @@ pub enum ControlReply {
     },
     /// The `Revoke` was arbitrated: local commits are fenced.
     Revoked,
+    /// The `CancelProcess` outcome for the exact operation key.
+    ProcessCancelled {
+        /// The exact supplied operation key.
+        key: crate::process::ProcessOperationKey,
+        /// What arbitration proved.
+        disposition: ProcessCancelDisposition,
+    },
 }
 
 /// The Client's turn on the control lane: one continuous poll that
@@ -947,6 +981,9 @@ pub struct ControlTurn {
 pub enum ClientRequest {
     /// A liveness probe.
     Ping,
+    /// One managed-process operation request — register, start, query,
+    /// ordered output paging, stdin, resize, close, release.
+    Process(crate::process::ProcessRequest),
     /// A bounded revision-checked range read under the binding workspace.
     ReadRange {
         /// The workspace-relative file path: normal components only.
@@ -1205,6 +1242,8 @@ pub enum EditRefusal {
 pub enum ClientReply {
     /// The reply to a `Ping`.
     Pong,
+    /// The reply to a `Process` request.
+    Process(crate::process::ProcessReply),
     /// The verified range the Client physically read.
     Range {
         /// The returned bytes, base64. Never exceeds `max_bytes`.
@@ -1503,6 +1542,8 @@ pub struct Bootstrap {
     pub endpoint: BootstrapEndpoint,
     /// The protocol revision the Server expects.
     pub version: u16,
+    /// The process-wide Server incarnation that assigned this binding.
+    pub server_incarnation: crate::process::ServerIncarnation,
     /// The Session the binding belongs to.
     pub session: SessionId,
     /// The logical execution environment.

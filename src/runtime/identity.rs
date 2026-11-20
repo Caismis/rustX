@@ -334,20 +334,6 @@ id_type! {
 }
 
 id_type! {
-    /// Identifies one rustX-owned **supervised process unit** created
-    /// inside this process (Issue #145).
-    ///
-    /// The identity exists so a nested unit's containment anchor can be
-    /// offered to, acknowledged by, and released from the top-level parent
-    /// by exact typed correlation rather than by ordering or by an
-    /// approximate pgid match. It is allocated by
-    /// `crate::runtime::nested_containment` as
-    /// `unit:{process id}:{monotonic ordinal}`, so two units of one process
-    /// and two units of two sibling children can never collide.
-    ProcessUnitId
-}
-
-id_type! {
     /// The deterministic cross-process semantic identity of one canonical
     /// MCP Tool definition (Issue #145).
     ///

@@ -28,6 +28,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import uuid
 import threading
 import time
 
@@ -140,10 +141,13 @@ def sample(client, size, operation):
         listener.settimeout(10)
         identity = dict(version=1, session="probe", environment="probe-env",
                         instance="probe-client", generation="1", workspace=str(workspace))
+        # server_incarnation is Server-assigned: it exists in the bootstrap
+        # bundle and admission replies but never in a Client Hello.
+        server_identity = dict(identity, server_incarnation=str(uuid.uuid4()))
         secret = secrets.token_hex(32)
         bundle = private / "b"
         with os.fdopen(os.open(bundle, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
-            f.write(pack(dict(identity, endpoint={
+            f.write(pack(dict(server_identity, endpoint={
                 "transport": "unix", "socket_path": address}, credential=secret)))
         proc = subprocess.Popen([client, "--binding-file", bundle, "--workspace", workspace],
                                 cwd="/", env={}, stdin=subprocess.DEVNULL)
@@ -158,7 +162,7 @@ def sample(client, size, operation):
                 assert all(data_hello[k] == v for k, v in identity.items())
                 assert secrets.compare_digest(data_hello["credential"], secret)
                 challenge = secrets.token_hex(32)
-                conn.sendall(pack({"Ok": {"admission": identity, "challenge": challenge}}))
+                conn.sendall(pack({"Ok": {"admission": server_identity, "challenge": challenge}}))
 
                 # The control lane: a second connection whose `control`
                 # Hello must echo the exact challenge — no nonce, no pair.
@@ -171,7 +175,7 @@ def sample(client, size, operation):
                     assert all(pairing[k] == v for k, v in identity.items())
                     assert secrets.compare_digest(pairing["credential"], secret)
                     assert secrets.compare_digest(pairing["connection_nonce"], challenge)
-                    control.sendall(pack({"Ok": identity}))
+                    control.sendall(pack({"Ok": server_identity}))
                     responder = PollResponder(control)
                     responder.start()
                     try:

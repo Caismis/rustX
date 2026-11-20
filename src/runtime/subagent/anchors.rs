@@ -6,7 +6,7 @@
 //! deliberately outside the child's own process group. Killing the child's
 //! group therefore cannot reach them. This module is the parent half of the
 //! generic anchor protocol described in
-//! [`crate::runtime::nested_containment`]:
+//! [`rustx_process_supervisor::nested_containment`]:
 //!
 //! ```text
 //! child   ProcessUnitAnchorOffered { unit_id, pgid }
@@ -55,7 +55,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::runtime::identity::ProcessUnitId;
+use rustx_process_supervisor::identity::ProcessUnitId;
 
 /// The exact anchors one child currently has retained in this parent.
 #[derive(Debug, Default)]
@@ -234,7 +234,7 @@ async fn contain_one(_pgid: i32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{AnchorRefusal, NestedUnitSettlement, RetainedProcessUnits};
-    use crate::runtime::identity::ProcessUnitId;
+    use rustx_process_supervisor::identity::ProcessUnitId;
 
     fn unit(name: &str) -> ProcessUnitId {
         ProcessUnitId::new(name)
@@ -303,7 +303,7 @@ mod tests {
         assert!(retained.is_empty());
         assert_eq!(
             retained.take(),
-            [] as [(crate::runtime::identity::ProcessUnitId, i32); 0]
+            [] as [(rustx_process_supervisor::identity::ProcessUnitId, i32); 0]
         );
     }
 

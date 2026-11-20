@@ -71,7 +71,7 @@ async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_adm
                 let path=f.workspaces[0].join(format!("trusted-environment-{index}-{browser}"));
                 assert!(matches!(rpc(&mut socket,Method::FsWriteFile {session_id:session_id.clone(),path:path.display().to_string(),data_base64:"dHJ1c3RlZA==".into(),expected_revision:None}).await,MethodResult::FileMetadata {..}));
                 assert!(matches!(rpc(&mut socket,Method::FsGetMetadata {session_id:session_id.clone(),path:path.display().to_string()}).await,MethodResult::FileMetadata {..}));
-                let params=serde_json::from_value(serde_json::json!({"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
+                let params=serde_json::from_value(serde_json::json!({"sessionId":session_id,"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
                 let MethodResult::CommandExec {result}=rpc(&mut socket,Method::CommandExec(params)).await else {panic!("equal command eligibility")};
                 assert_eq!(result.exit_code,Some(0));
                 assert!(matches!(rpc(&mut socket,Method::SkillsList {target:crate::local_runtime::configuration::settings::SourceTarget::User,offset:0,limit:32,expected_revision:None}).await,MethodResult::Skills {..}));
