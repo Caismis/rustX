@@ -47,6 +47,17 @@ it('shows actual frozen binding and exact known usage while preserving unknown m
   expect(() => compactionRequestsPage(requestPage(cut, selected), cut, call('foreign'), '0')).toThrow();
 });
 
+it('retries a failed physical request read for the selected Call', async () => {
+  const selected = call('A');
+  const read = vi.fn(async () => requestPage(cut, selected)).mockRejectedValueOnce(new Error('read failed'));
+  render(<CompactionInspection initial={calls([selected])} cut={cut} reader={reader('scope', read)}/>);
+  expect((await screen.findByRole('alert')).textContent).toContain('read failed');
+  fireEvent.click(screen.getByRole('button', { name: 'Read again' }));
+  expect(await screen.findByText('historical-provider')).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
 it('retains a selected Call beyond the first page when the native cut advances', async () => {
   const a = call('A'), b = call('B', '20');
   const first = reader('same-source', vi.fn(async (_cut, requested) => requested === domain

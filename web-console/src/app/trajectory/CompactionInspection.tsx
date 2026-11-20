@@ -131,7 +131,7 @@ function PhysicalRequests({ call, cut, reader, owner }: { call: TraceInspectionC
       <div><dt>{tx('trajectory:compaction.previous-summary')}</dt><dd>{call.previous_summary?.call_id ?? '—'}</dd></div>
     </dl>
     {(!shown || shown.identity !== identity) && <p role="status">{tx(shown?.items ? 'trajectory:compaction.refreshing' : 'trajectory:compaction.loading')}</p>}
-    {shown?.error && <p role="alert">{shown.error} <Button onClick={() => { setLocated(undefined); setRetry(value => value + 1); }}>{tx('trajectory:compaction.retry')}</Button></p>}
+    {shown?.error && <p role="alert">{shown.error} <Button onClick={() => setRetry(value => value + 1)}>{tx('trajectory:compaction.retry')}</Button></p>}
     {shown?.items?.map(request => <div className={css.request} key={request.id} data-compaction-request={request.id}>
       <h4>{tx('trajectory:compaction.physical-request')} {request.ordinal + 1}</h4>
       <dl className={css.facts}>
