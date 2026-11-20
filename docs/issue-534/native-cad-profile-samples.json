@@ -1,0 +1,2400 @@
+{
+  "scope": "Native CPU/OS measurements, not browser display or integrated-GPU certification",
+  "environment": {
+    "timestampUTC": "2026-11-17T04:15:02.144Z",
+    "platform": "linux",
+    "arch": "x64",
+    "node": "v24.21.0",
+    "v8": "13.6.233.17-node.53",
+    "cpuModel": "Intel(R) Core(TM) i9-14900K",
+    "logicalCpus": 32,
+    "totalMemoryBytes": 134667956224
+  },
+  "runtimeAssets": [
+    {
+      "path": "/tmp/pr556-build-O3/build/Release",
+      "effectiveBuild": {
+        "optimization": "O3",
+        "lto": false,
+        "compileFlags": [
+          "-O3"
+        ],
+        "linkFlags": [
+          "-O3"
+        ],
+        "scope": "OcctImportJS target: importer and all OCCT sources",
+        "modifiedSourcesSha256": {
+          "importer-brep.cpp": "7780f7bda1ee1491e27b08574ebae71e8d81406495c5afc3cf30c12c893a7db3",
+          "importer-brep.hpp": "f68ac0189bed382103fe35b98478accf75181f75b4b08c6eb7551b726a03a7e7",
+          "importer-iges.cpp": "a24c258a65c3229847d689a137f373433fbef3ea798dfd05a9a15a59cede77f5",
+          "importer-step.cpp": "c25dad6df8e2bfecef055301dbb6c292a892b5c2b86fc0cdb0ab42d3f6ed1263",
+          "importer-utils.cpp": "e55e21a3818ad090d8d744a9b269655279a73dcfff319d704fb6090fda2247ed",
+          "importer-utils.hpp": "3bf00fd82fdaef8565c8b354a46cd35ec2d092fb7d4f4b03aa1e8336abc82658",
+          "importer.hpp": "a9479fc5555fbb3605ddaec35bf60af85e4e095121971a0a6ce762ade85cd921",
+          "js-interface.cpp": "f8d118460ee349f0686017b8b4435cc6b80c5f7a4e25adaaff56e5bd024f74c4",
+          "native-profile.hpp": "f4a1a1a1363663518e74cef3fa32e8c72baed385984f0cea7c1c5663026ff553"
+        },
+        "translationUnits": 4775,
+        "occtTranslationUnits": 4768,
+        "compileCommandsSha256": "83a64136ffc0519663b29f198781e12fa5fee6e2db1c62ebbfa0a7862002e068",
+        "effectiveLinkCommandSha256": "4981748d90e98bd23b59a99f78e67e6b7b8be57de80a0954bf7cdd344376eeed",
+        "effectiveOptimizationFlags": [
+          "-O3"
+        ],
+        "effectiveCompileLto": false,
+        "effectiveLinkLto": false
+      },
+      "js": {
+        "bytes": 97218,
+        "gzipBytes": 26960,
+        "sha256": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796"
+      },
+      "wasm": {
+        "bytes": 12134802,
+        "gzipBytes": 3985390,
+        "sha256": "40223e186a18c76b77aa42ec04b44ce0c7f430d6523cc71ed32bbe1d0554be0d"
+      }
+    }
+  ],
+  "samples": [
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step",
+      "tiers": 0,
+      "sourceBytes": 9206,
+      "sourceSha256": "e7b832a4747c7b1ca85b98495fbd9635e3e119a064ac2183c67696cc2de5ead9",
+      "compileMs": 24.449087000000006,
+      "initializeMs": 41.886081000000004,
+      "freshInstanceInitializeMs": 14.308826999999994,
+      "freshInstanceReadMs": 166.56408399999998,
+      "coldCodeToFinalMs": 208.45016499999997,
+      "cachedModuleToFinalMs": 180.872911,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.11841499999999883,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 43624
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 53.731994000000014,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 496576
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 45.175280000000015,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 523568
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 2,
+          "durationMs": 0.12779700000001526,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 41.242898999999994,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 43.93079599999999,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 655304
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 164.56839399999998,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 655304
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 323.147,
+      "importCpuSystemMs": 107.257,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 347492352,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87486464,
+        "heapTotal": 12189696,
+        "heapUsed": 6961176,
+        "external": 44670616,
+        "arrayBuffers": 12290663
+      },
+      "processAfter": {
+        "rss": 347230208,
+        "heapTotal": 12394496,
+        "heapUsed": 8118592,
+        "external": 44959594,
+        "arrayBuffers": 12579601
+      },
+      "meshes": 3,
+      "triangles": 6136,
+      "numericPayloadBytes": 298128,
+      "rawTypedBufferBytes": 298128,
+      "typedRawOutput": true,
+      "optional": [],
+      "finalDigest": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+      "finalNumericBitsDigest": "3e7f1830a48fa8db706cc86278df2add5e52cdd7eeb6718d7149b3e15d1f71ec",
+      "finalMetadataDigest": "00a1f92f61855f59e9e9674b00cf98d2a2e73b373d572f17f5bd3bfc57e97741"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step",
+      "tiers": 1,
+      "sourceBytes": 9206,
+      "sourceSha256": "e7b832a4747c7b1ca85b98495fbd9635e3e119a064ac2183c67696cc2de5ead9",
+      "compileMs": 22.318310000000004,
+      "initializeMs": 45.651131,
+      "freshInstanceInitializeMs": 18.545193999999995,
+      "freshInstanceReadMs": 135.545704,
+      "coldCodeToFinalMs": 181.196835,
+      "cachedModuleToFinalMs": 154.09089799999998,
+      "coarseMs": 106.83060799999998,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.11105500000000745,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 43624
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 41.57852600000001,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 496576
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 36.0462,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 523568
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 0.08543099999999981,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 10.924035999999973,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 26.84034300000002,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 11.078303000000005,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 431320
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 1.9385070000000155,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 431336
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 27.908027000000004,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 655312
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 105.574755,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 431336
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 133.72904,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 655312
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 306.35,
+      "importCpuSystemMs": 81.324,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 313991168,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87838720,
+        "heapTotal": 12189696,
+        "heapUsed": 6961232,
+        "external": 44670616,
+        "arrayBuffers": 12290663
+      },
+      "processAfter": {
+        "rss": 313991168,
+        "heapTotal": 12394496,
+        "heapUsed": 8604744,
+        "external": 44977114,
+        "arrayBuffers": 12597121
+      },
+      "meshes": 3,
+      "triangles": 6136,
+      "numericPayloadBytes": 298128,
+      "rawTypedBufferBytes": 298128,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 338,
+          "meshes": 3,
+          "hierarchyDigest": "691bf122782deba71c8ad91afe8834afec41f2dd76310e193dae034c26df8c8b"
+        }
+      ],
+      "finalDigest": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+      "finalNumericBitsDigest": "3e7f1830a48fa8db706cc86278df2add5e52cdd7eeb6718d7149b3e15d1f71ec",
+      "finalMetadataDigest": "00a1f92f61855f59e9e9674b00cf98d2a2e73b373d572f17f5bd3bfc57e97741"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step",
+      "tiers": 2,
+      "sourceBytes": 9206,
+      "sourceSha256": "e7b832a4747c7b1ca85b98495fbd9635e3e119a064ac2183c67696cc2de5ead9",
+      "compileMs": 23.394639999999995,
+      "initializeMs": 39.047573,
+      "freshInstanceInitializeMs": 11.346077000000008,
+      "freshInstanceReadMs": 149.358452,
+      "coldCodeToFinalMs": 188.406025,
+      "cachedModuleToFinalMs": 160.704529,
+      "coarseMs": 108.81391900000001,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.08263200000000381,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 43624
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 42.157758,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 496576
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 36.591458999999986,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 523568
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 0.09080000000000155,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 10.892154000000005,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 1,
+          "durationMs": 7.065518999999995,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 30.527242,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 11.05225999999999,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 431320
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 1,
+          "durationMs": 7.039326999999986,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 468544
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 1.9041210000000035,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 431336
+        },
+        {
+          "phase": "export",
+          "tier": 1,
+          "durationMs": 0.6960490000000163,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 468544
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 31.657399999999996,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 655312
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 107.646161,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 431336
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 147.418429,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 655312
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 322.814,
+      "importCpuSystemMs": 94.251,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 333766656,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87576576,
+        "heapTotal": 12189696,
+        "heapUsed": 6961232,
+        "external": 44670616,
+        "arrayBuffers": 12290663
+      },
+      "processAfter": {
+        "rss": 333504512,
+        "heapTotal": 12394496,
+        "heapUsed": 8265088,
+        "external": 45041050,
+        "arrayBuffers": 12661057
+      },
+      "meshes": 3,
+      "triangles": 6136,
+      "numericPayloadBytes": 298128,
+      "rawTypedBufferBytes": 298128,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 338,
+          "meshes": 3,
+          "hierarchyDigest": "691bf122782deba71c8ad91afe8834afec41f2dd76310e193dae034c26df8c8b"
+        },
+        {
+          "level": 1,
+          "triangles": 1294,
+          "meshes": 3,
+          "hierarchyDigest": "691bf122782deba71c8ad91afe8834afec41f2dd76310e193dae034c26df8c8b"
+        }
+      ],
+      "finalDigest": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+      "finalNumericBitsDigest": "3e7f1830a48fa8db706cc86278df2add5e52cdd7eeb6718d7149b3e15d1f71ec",
+      "finalMetadataDigest": "00a1f92f61855f59e9e9674b00cf98d2a2e73b373d572f17f5bd3bfc57e97741"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-curved-200.step",
+      "tiers": 0,
+      "sourceBytes": 403586,
+      "sourceSha256": "f58c4116d449387f9ec986b8af631990b19ce2994f16e459318efee8d39f3f6a",
+      "compileMs": 22.194088,
+      "initializeMs": 40.693113000000004,
+      "freshInstanceInitializeMs": 15.455244000000008,
+      "freshInstanceReadMs": 4056.676565,
+      "coldCodeToFinalMs": 4097.369678,
+      "cachedModuleToFinalMs": 4072.1318090000004,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.24294499999999175,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 438000
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 111.14725800000001,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 2148744
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 140.92052999999999,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3146568
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 2,
+          "durationMs": 1.3844420000006608,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 3713.8510770000025,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 3786.1524099999997,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 39971024
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 4054.03806,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 39971024
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 5585.589,
+      "importCpuSystemMs": 149.761,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 399556608,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 88436736,
+        "heapTotal": 12189696,
+        "heapUsed": 6961240,
+        "external": 45064996,
+        "arrayBuffers": 12685043
+      },
+      "processAfter": {
+        "rss": 300265472,
+        "heapTotal": 13705216,
+        "heapUsed": 8518840,
+        "external": 125412314,
+        "arrayBuffers": 60723073
+      },
+      "meshes": 200,
+      "triangles": 1001600,
+      "numericPayloadBytes": 48441600,
+      "rawTypedBufferBytes": 48441600,
+      "typedRawOutput": true,
+      "optional": [],
+      "finalDigest": "94e87d40e3b9aead867d173c58b160efea52c605096f6ba65c2b6eda737f4d31",
+      "finalNumericBitsDigest": "4b8c037cff64997b95e2d28b3ed32cd38a49887dc1e79fc4768bf5a83cf8e401",
+      "finalMetadataDigest": "d0f88437e38219cd292745302e3e595bf59b0c9369370224bbb546e3201527dd"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-curved-200.step",
+      "tiers": 1,
+      "sourceBytes": 403586,
+      "sourceSha256": "f58c4116d449387f9ec986b8af631990b19ce2994f16e459318efee8d39f3f6a",
+      "compileMs": 23.886671000000007,
+      "initializeMs": 38.955676999999994,
+      "freshInstanceInitializeMs": 12.094488999999996,
+      "freshInstanceReadMs": 4259.740027,
+      "coldCodeToFinalMs": 4298.695704,
+      "cachedModuleToFinalMs": 4271.834516,
+      "coarseMs": 497.90110599999997,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.24130399999999952,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 438000
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 117.13073299999999,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 2148744
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 140.05238799999998,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3146568
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 0.9037789999997017,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 202.10075100000046,
+          "calls": 400,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 3681.7277000000013,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 191.53990900000002,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3229688
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 30.651155000000017,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3263480
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 3759.6677080000004,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 39972408
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 496.59188,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3263480
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 4256.975395,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 39972408
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 5797.306,
+      "importCpuSystemMs": 152.14,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 400539648,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87818240,
+        "heapTotal": 12189696,
+        "heapUsed": 6961192,
+        "external": 45064996,
+        "arrayBuffers": 12685043
+      },
+      "processAfter": {
+        "rss": 400539648,
+        "heapTotal": 13180928,
+        "heapUsed": 9409208,
+        "external": 125412314,
+        "arrayBuffers": 60723073
+      },
+      "meshes": 200,
+      "triangles": 1001600,
+      "numericPayloadBytes": 48441600,
+      "rawTypedBufferBytes": 48441600,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 46800,
+          "meshes": 200,
+          "hierarchyDigest": "f604698d1c92725b5b047a490ab8119c3a086811f34bc18601309d02718f7113"
+        }
+      ],
+      "finalDigest": "94e87d40e3b9aead867d173c58b160efea52c605096f6ba65c2b6eda737f4d31",
+      "finalNumericBitsDigest": "4b8c037cff64997b95e2d28b3ed32cd38a49887dc1e79fc4768bf5a83cf8e401",
+      "finalMetadataDigest": "d0f88437e38219cd292745302e3e595bf59b0c9369370224bbb546e3201527dd"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-curved-200.step",
+      "tiers": 2,
+      "sourceBytes": 403586,
+      "sourceSha256": "f58c4116d449387f9ec986b8af631990b19ce2994f16e459318efee8d39f3f6a",
+      "compileMs": 24.239526999999995,
+      "initializeMs": 43.11999,
+      "freshInstanceInitializeMs": 14.645079999999993,
+      "freshInstanceReadMs": 4896.453238,
+      "coldCodeToFinalMs": 4939.573228,
+      "cachedModuleToFinalMs": 4911.098318,
+      "coarseMs": 481.62188,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.25499200000000144,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 438000
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 124.23700600000001,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 2148744
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 128.589552,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3146568
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 0.8179350000006025,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 192.96113799999966,
+          "calls": 400,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 1,
+          "durationMs": 602.9200950000019,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 3717.5588980000052,
+          "calls": 200,
+          "inclusive": false,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 186.36433999999997,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3229688
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 1,
+          "durationMs": 606.610259,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 8236552
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 24.180716000000075,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3263480
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 3805.6700519999995,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 39972696
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 480.252469,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 3263480
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 4893.686079,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 62259200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 39972696
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 6542.068,
+      "importCpuSystemMs": 189.141,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 363732992,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87572480,
+        "heapTotal": 12189696,
+        "heapUsed": 6961120,
+        "external": 45064996,
+        "arrayBuffers": 12685043
+      },
+      "processAfter": {
+        "rss": 363732992,
+        "heapTotal": 13705216,
+        "heapUsed": 9421088,
+        "external": 125412314,
+        "arrayBuffers": 60723073
+      },
+      "meshes": 200,
+      "triangles": 1001600,
+      "numericPayloadBytes": 48441600,
+      "rawTypedBufferBytes": 48441600,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 46800,
+          "meshes": 200,
+          "hierarchyDigest": "f604698d1c92725b5b047a490ab8119c3a086811f34bc18601309d02718f7113"
+        }
+      ],
+      "finalDigest": "94e87d40e3b9aead867d173c58b160efea52c605096f6ba65c2b6eda737f4d31",
+      "finalNumericBitsDigest": "4b8c037cff64997b95e2d28b3ed32cd38a49887dc1e79fc4768bf5a83cf8e401",
+      "finalMetadataDigest": "d0f88437e38219cd292745302e3e595bf59b0c9369370224bbb546e3201527dd"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 0,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 24.546785999999997,
+      "initializeMs": 43.00608599999998,
+      "freshInstanceInitializeMs": 14.111651999999992,
+      "freshInstanceReadMs": 25842.411326,
+      "coldCodeToFinalMs": 25885.417412000003,
+      "cachedModuleToFinalMs": 25856.522978,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 82.88391099999996,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 213975040,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 200796384
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 22772.790002,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 950468608,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 549213072
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 1105.9013110000014,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 633701720
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 2,
+          "durationMs": 42.34223699999711,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 1540.2650670000003,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 1586.0156260000003,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68020264
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 25840.689791,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68020264
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 26756.13,
+      "importCpuSystemMs": 382.305,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1313144832,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 287469568,
+        "heapTotal": 12189696,
+        "heapUsed": 6961160,
+        "external": 245423376,
+        "arrayBuffers": 213043423
+      },
+      "processAfter": {
+        "rss": 1313144832,
+        "heapTotal": 10035200,
+        "heapUsed": 6796512,
+        "external": 1068209974,
+        "arrayBuffers": 12292321
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 23.518940999999984,
+      "initializeMs": 38.52012300000001,
+      "freshInstanceInitializeMs": 11.926591999999971,
+      "freshInstanceReadMs": 27248.122278000003,
+      "coldCodeToFinalMs": 27286.642401,
+      "cachedModuleToFinalMs": 27260.048870000002,
+      "coarseMs": 25745.137462000002,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 85.328892,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 213975040,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 200796384
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 22714.881992000002,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 950468608,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 549213072
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 1056.485256,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 633701720
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 41.560420999998314,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 1557.4811379999992,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 1501.573221999999,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 1562.4244900000012,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68011584
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 38.87471200000073,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68011768
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 1502.0045309999987,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68020264
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 25743.952027,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68011768
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 27246.358078999998,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68020264
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 28187.517,
+      "importCpuSystemMs": 395.032,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1320439808,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 287305728,
+        "heapTotal": 12189696,
+        "heapUsed": 6961208,
+        "external": 245423376,
+        "arrayBuffers": 213043423
+      },
+      "processAfter": {
+        "rss": 1320439808,
+        "heapTotal": 10035200,
+        "heapUsed": 6858592,
+        "external": 1068210358,
+        "arrayBuffers": 12292705
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 2,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 24.023573000000027,
+      "initializeMs": 38.59699800000001,
+      "freshInstanceInitializeMs": 11.637775000000033,
+      "freshInstanceReadMs": 28861.592134,
+      "coldCodeToFinalMs": 28900.189132,
+      "cachedModuleToFinalMs": 28873.229908999998,
+      "coarseMs": 25766.338718,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 84.78959700000001,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 213975040,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 200796384
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 22732.604589,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 950468608,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 549213072
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 1056.4127859999971,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 633701720
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 40.27327800000057,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 1560.429836999996,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 1,
+          "durationMs": 1535.2472830000006,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 1558.0949939999991,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 1564.3422820000014,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68011584
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 1,
+          "durationMs": 1499.0615770000004,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68012504
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 38.59612600000037,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68011768
+        },
+        {
+          "phase": "export",
+          "tier": 1,
+          "durationMs": 36.69490700000097,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68012504
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 1558.2957690000003,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68020264
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 25765.209117000002,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68011768
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 28859.843682000002,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 1053491200,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 68020264
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 29771.499,
+      "importCpuSystemMs": 400.86,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1357406208,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 288509952,
+        "heapTotal": 12189696,
+        "heapUsed": 6961120,
+        "external": 245423376,
+        "arrayBuffers": 213043423
+      },
+      "processAfter": {
+        "rss": 1357406208,
+        "heapTotal": 10035200,
+        "heapUsed": 6889520,
+        "external": 1068211558,
+        "arrayBuffers": 12293905
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        },
+        {
+          "level": 1,
+          "triangles": 18,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-curved.iges",
+      "tiers": 0,
+      "sourceBytes": 12150,
+      "sourceSha256": "785a1a43ec7a56e76bca78a1c6ccdca5c5ecff8f082be995e4e41911c1210f41",
+      "compileMs": 22.956387,
+      "initializeMs": 37.724864000000004,
+      "freshInstanceInitializeMs": 11.752815999999996,
+      "freshInstanceReadMs": 157.068539,
+      "coldCodeToFinalMs": 194.79340299999998,
+      "cachedModuleToFinalMs": 168.82135499999998,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.8845970000000136,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 2,
+          "allocatorLiveSampledMaximumBytes": 63240
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 6.893482000000006,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 293936
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 29.409931,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 319352
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 2,
+          "durationMs": 1.0457159999999988,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 104.528706,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 108.35170300000001,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 807816
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 155.454969,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 807816
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 215.965,
+      "importCpuSystemMs": 8.102,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 106532864,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87101440,
+        "heapTotal": 12189696,
+        "heapUsed": 6961272,
+        "external": 44673560,
+        "arrayBuffers": 12293607
+      },
+      "processAfter": {
+        "rss": 105820160,
+        "heapTotal": 12189696,
+        "heapUsed": 7725208,
+        "external": 45416146,
+        "arrayBuffers": 13036153
+      },
+      "meshes": 1,
+      "triangles": 15050,
+      "numericPayloadBytes": 726000,
+      "rawTypedBufferBytes": 726000,
+      "typedRawOutput": true,
+      "optional": [],
+      "finalDigest": "068d41557e9aa72718a940f988cfd3f044860e9c7559fedceb572c7e4912e948",
+      "finalNumericBitsDigest": "6cb2ca73d3641e7277a9934de54704ef3359e256fdfa0174264bdf8b261ab5b0",
+      "finalMetadataDigest": "27add8c1790e70708af0c2acb4a3b6f6632fb01b4f54bfb9f73e10185c8df92d"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-curved.iges",
+      "tiers": 1,
+      "sourceBytes": 12150,
+      "sourceSha256": "785a1a43ec7a56e76bca78a1c6ccdca5c5ecff8f082be995e4e41911c1210f41",
+      "compileMs": 21.801769999999998,
+      "initializeMs": 40.038532999999994,
+      "freshInstanceInitializeMs": 15.092108000000003,
+      "freshInstanceReadMs": 161.989393,
+      "coldCodeToFinalMs": 202.027926,
+      "cachedModuleToFinalMs": 177.081501,
+      "coarseMs": 67.688759,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.893045000000015,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 2,
+          "allocatorLiveSampledMaximumBytes": 63240
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 7.216513000000006,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 293936
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 29.530185000000003,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 319352
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 1.0430490000000106,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 16.123897,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 91.83257799999998,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 16.81097100000001,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 256256
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 2.0974270000000104,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 256728
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 93.572329,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 807792
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 66.565224,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 256728
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 160.324281,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 807792
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 219.071,
+      "importCpuSystemMs": 14.255,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 107245568,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 88092672,
+        "heapTotal": 12189696,
+        "heapUsed": 6961128,
+        "external": 44673560,
+        "arrayBuffers": 12293607
+      },
+      "processAfter": {
+        "rss": 106651648,
+        "heapTotal": 12189696,
+        "heapUsed": 7777272,
+        "external": 45448354,
+        "arrayBuffers": 13068361
+      },
+      "meshes": 1,
+      "triangles": 15050,
+      "numericPayloadBytes": 726000,
+      "rawTypedBufferBytes": 726000,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 644,
+          "meshes": 1,
+          "hierarchyDigest": "cdeb32997ae5f508ac126138e5dfdd70f21bc3389c5620f59a7c2b266df9f4f0"
+        }
+      ],
+      "finalDigest": "068d41557e9aa72718a940f988cfd3f044860e9c7559fedceb572c7e4912e948",
+      "finalNumericBitsDigest": "6cb2ca73d3641e7277a9934de54704ef3359e256fdfa0174264bdf8b261ab5b0",
+      "finalMetadataDigest": "27add8c1790e70708af0c2acb4a3b6f6632fb01b4f54bfb9f73e10185c8df92d"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-curved.iges",
+      "tiers": 2,
+      "sourceBytes": 12150,
+      "sourceSha256": "785a1a43ec7a56e76bca78a1c6ccdca5c5ecff8f082be995e4e41911c1210f41",
+      "compileMs": 22.000345000000003,
+      "initializeMs": 37.092176,
+      "freshInstanceInitializeMs": 11.958945999999997,
+      "freshInstanceReadMs": 187.97278599999999,
+      "coldCodeToFinalMs": 225.06496199999998,
+      "cachedModuleToFinalMs": 199.93173199999998,
+      "coarseMs": 72.087587,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 1.006206000000006,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 2,
+          "allocatorLiveSampledMaximumBytes": 63240
+        },
+        {
+          "phase": "file-parse",
+          "tier": -1,
+          "durationMs": 7.159294000000003,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 293936
+        },
+        {
+          "phase": "document-transfer-healing",
+          "tier": -1,
+          "durationMs": 32.978897,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 319352
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 1.0472509999999886,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 16.608352000000025,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 1,
+          "durationMs": 24.134402999999992,
+          "calls": 2,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 88.85058799999999,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 17.288456999999994,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 256256
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 1,
+          "durationMs": 23.832773000000003,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 344928
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 2.1911580000000015,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 256728
+        },
+        {
+          "phase": "export",
+          "tier": 1,
+          "durationMs": 1.056810000000013,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 344928
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 90.094694,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 807792
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 70.923977,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 256728
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 186.19277700000004,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 807792
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 252.268,
+      "importCpuSystemMs": 13.583,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 107175936,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 86466560,
+        "heapTotal": 12189696,
+        "heapUsed": 6961224,
+        "external": 44673560,
+        "arrayBuffers": 12293607
+      },
+      "processAfter": {
+        "rss": 106491904,
+        "heapTotal": 12451840,
+        "heapUsed": 7824752,
+        "external": 45591394,
+        "arrayBuffers": 13211401
+      },
+      "meshes": 1,
+      "triangles": 15050,
+      "numericPayloadBytes": 726000,
+      "rawTypedBufferBytes": 726000,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 644,
+          "meshes": 1,
+          "hierarchyDigest": "cdeb32997ae5f508ac126138e5dfdd70f21bc3389c5620f59a7c2b266df9f4f0"
+        },
+        {
+          "level": 1,
+          "triangles": 2942,
+          "meshes": 1,
+          "hierarchyDigest": "cdeb32997ae5f508ac126138e5dfdd70f21bc3389c5620f59a7c2b266df9f4f0"
+        }
+      ],
+      "finalDigest": "068d41557e9aa72718a940f988cfd3f044860e9c7559fedceb572c7e4912e948",
+      "finalNumericBitsDigest": "6cb2ca73d3641e7277a9934de54704ef3359e256fdfa0174264bdf8b261ab5b0",
+      "finalMetadataDigest": "27add8c1790e70708af0c2acb4a3b6f6632fb01b4f54bfb9f73e10185c8df92d"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep",
+      "tiers": 0,
+      "sourceBytes": 2304,
+      "sourceSha256": "547818562fcb9fc9f33df5e8cfa84d123c4fb70f6d25c7cd86a3fcb044ca9cc6",
+      "compileMs": 23.535079000000003,
+      "initializeMs": 39.665558999999995,
+      "freshInstanceInitializeMs": 12.069258000000005,
+      "freshInstanceReadMs": 52.337576999999996,
+      "coldCodeToFinalMs": 92.00313599999998,
+      "cachedModuleToFinalMs": 64.406835,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.07770399999999711,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 36720
+        },
+        {
+          "phase": "file-parse-topology",
+          "tier": -1,
+          "durationMs": 3.3719540000000023,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 42472
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 2,
+          "durationMs": 1.340879000000001,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 43.17732000000001,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 2.495974999999987,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 283992
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 50.95903899999999,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 283968
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 93.654,
+      "importCpuSystemMs": 3.309,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 97669120,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87318528,
+        "heapTotal": 12189696,
+        "heapUsed": 6961160,
+        "external": 44663714,
+        "arrayBuffers": 12283761
+      },
+      "processAfter": {
+        "rss": 96276480,
+        "heapTotal": 12189696,
+        "heapUsed": 7296176,
+        "external": 44959594,
+        "arrayBuffers": 12579601
+      },
+      "meshes": 3,
+      "triangles": 6136,
+      "numericPayloadBytes": 298128,
+      "rawTypedBufferBytes": 298128,
+      "typedRawOutput": true,
+      "optional": [],
+      "finalDigest": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+      "finalNumericBitsDigest": "f10ae97bcb1c2ad48b8ad81785d394aad7f05530ea06ff8174157a5e17d6ed5e",
+      "finalMetadataDigest": "7c1b988821597b5780d38d09ddc2518b154ac02d0a5a2048d5184b3db0fb0457"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep",
+      "tiers": 1,
+      "sourceBytes": 2304,
+      "sourceSha256": "547818562fcb9fc9f33df5e8cfa84d123c4fb70f6d25c7cd86a3fcb044ca9cc6",
+      "compileMs": 24.059413,
+      "initializeMs": 41.34380099999999,
+      "freshInstanceInitializeMs": 14.294810999999996,
+      "freshInstanceReadMs": 49.55653099999999,
+      "coldCodeToFinalMs": 90.90033199999999,
+      "cachedModuleToFinalMs": 63.85134199999999,
+      "coarseMs": 20.812551999999997,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.07702599999998938,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 36720
+        },
+        {
+          "phase": "file-parse-topology",
+          "tier": -1,
+          "durationMs": 3.3238170000000054,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 42472
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 1.3229110000000048,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 13.243946999999991,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 27.340225999999987,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 0.19482699999998943,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 60032
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 1.0788040000000052,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 60032
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 0.6820569999999861,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 284008
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 19.695643000000004,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 60032
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 48.099894000000006,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 283984
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 86.919,
+      "importCpuSystemMs": 5.752,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 98152448,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 87916544,
+        "heapTotal": 12189696,
+        "heapUsed": 6961232,
+        "external": 44663714,
+        "arrayBuffers": 12283761
+      },
+      "processAfter": {
+        "rss": 98152448,
+        "heapTotal": 12189696,
+        "heapUsed": 7371672,
+        "external": 44977114,
+        "arrayBuffers": 12597121
+      },
+      "meshes": 3,
+      "triangles": 6136,
+      "numericPayloadBytes": 298128,
+      "rawTypedBufferBytes": 298128,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 338,
+          "meshes": 3,
+          "hierarchyDigest": "5e718051f63c181ab97dc029cc21cdb4e18e17841b4f7b21a3157888fe5124cd"
+        }
+      ],
+      "finalDigest": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+      "finalNumericBitsDigest": "f10ae97bcb1c2ad48b8ad81785d394aad7f05530ea06ff8174157a5e17d6ed5e",
+      "finalMetadataDigest": "7c1b988821597b5780d38d09ddc2518b154ac02d0a5a2048d5184b3db0fb0457"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep",
+      "tiers": 2,
+      "sourceBytes": 2304,
+      "sourceSha256": "547818562fcb9fc9f33df5e8cfa84d123c4fb70f6d25c7cd86a3fcb044ca9cc6",
+      "compileMs": 21.75083,
+      "initializeMs": 36.848504,
+      "freshInstanceInitializeMs": 12.138813000000013,
+      "freshInstanceReadMs": 60.771732,
+      "coldCodeToFinalMs": 97.620236,
+      "cachedModuleToFinalMs": 72.91054500000001,
+      "coarseMs": 20.756411999999997,
+      "spans": [
+        {
+          "phase": "input-copy",
+          "tier": -1,
+          "durationMs": 0.0780149999999935,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 36720
+        },
+        {
+          "phase": "file-parse-topology",
+          "tier": -1,
+          "durationMs": 3.486971000000011,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 42472
+        },
+        {
+          "phase": "bounding-box",
+          "tier": 0,
+          "durationMs": 1.290142000000003,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 0,
+          "durationMs": 13.054613000000003,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 1,
+          "durationMs": 6.717579999999998,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "tessellation",
+          "tier": 2,
+          "durationMs": 31.585612000000012,
+          "calls": 1,
+          "inclusive": false,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 0,
+          "allocatorLiveSampledMaximumBytes": null
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 0,
+          "durationMs": 0.1968740000000082,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 60032
+        },
+        {
+          "phase": "lod-preflight",
+          "tier": 1,
+          "durationMs": 0.035215999999991254,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 97184
+        },
+        {
+          "phase": "export",
+          "tier": 0,
+          "durationMs": 1.034003999999996,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 60032
+        },
+        {
+          "phase": "export",
+          "tier": 1,
+          "durationMs": 0.241185999999999,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 97184
+        },
+        {
+          "phase": "export",
+          "tier": 2,
+          "durationMs": 0.6012819999999977,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 284008
+        },
+        {
+          "phase": "first-complete-coarse",
+          "tier": 0,
+          "durationMs": 19.597136000000006,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 60032
+        },
+        {
+          "phase": "complete-final",
+          "tier": 2,
+          "durationMs": 59.223269,
+          "calls": 1,
+          "inclusive": true,
+          "wasmCommittedBytes": 29949952,
+          "allocatorLiveSamples": 1,
+          "allocatorLiveSampledMaximumBytes": 283984
+        }
+      ],
+      "profilingEnabled": true,
+      "importCpuUserMs": 102.76,
+      "importCpuSystemMs": 3.931,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 98246656,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 88141824,
+        "heapTotal": 12189696,
+        "heapUsed": 6961176,
+        "external": 44663714,
+        "arrayBuffers": 12283761
+      },
+      "processAfter": {
+        "rss": 98246656,
+        "heapTotal": 12189696,
+        "heapUsed": 7426984,
+        "external": 45041050,
+        "arrayBuffers": 12661057
+      },
+      "meshes": 3,
+      "triangles": 6136,
+      "numericPayloadBytes": 298128,
+      "rawTypedBufferBytes": 298128,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 338,
+          "meshes": 3,
+          "hierarchyDigest": "5e718051f63c181ab97dc029cc21cdb4e18e17841b4f7b21a3157888fe5124cd"
+        },
+        {
+          "level": 1,
+          "triangles": 1294,
+          "meshes": 3,
+          "hierarchyDigest": "5e718051f63c181ab97dc029cc21cdb4e18e17841b4f7b21a3157888fe5124cd"
+        }
+      ],
+      "finalDigest": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+      "finalNumericBitsDigest": "f10ae97bcb1c2ad48b8ad81785d394aad7f05530ea06ff8174157a5e17d6ed5e",
+      "finalMetadataDigest": "7c1b988821597b5780d38d09ddc2518b154ac02d0a5a2048d5184b3db0fb0457"
+    }
+  ]
+}

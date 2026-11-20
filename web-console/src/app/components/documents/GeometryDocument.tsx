@@ -30,8 +30,8 @@ export function GeometryDocument(props: GeometryDocumentProps) {
   const t = locale.active === 'zh' ? zh : en;
   // Suspense's fallback throttle delayed resolved code by ~300 ms in production.
   // The explicit module state starts the admitted import as soon as code arrives.
-  const { bytes, ...view } = props;
+  const { bytes: input, ...view } = props, bytes = props.source ? undefined : input;
   return <div className={css.root}>
-    {Viewer && bytes ? <Viewer {...view} bytes={bytes}/> : <p role={failed ? 'alert' : 'status'}>{failed ? t.invalid : <GeometryLoading stage="loading"/>}</p>}
+    {Viewer && (bytes || props.source) ? <Viewer {...view} bytes={bytes}/> : <p role={failed ? 'alert' : 'status'}>{failed ? t.invalid : <GeometryLoading stage="loading"/>}</p>}
   </div>;
 }

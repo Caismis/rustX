@@ -941,11 +941,13 @@ export class AppServerClient {
   refresh(id: string): Promise<void> {
     const observation = this.lifecycles.observe(id);
     if (!observation) return Promise.resolve();
-    this.observationChains.get(id)?.requireRecovery();
-    this.lifecycles.event(id, { type: 'OBSERVATION', proof: observation.proof, status: 'resynchronizing' });
     this.dirty.add(id);
     const existing = this.refreshes.get(id);
+    // Acquire another checkpoint after the existing handoff. Discarding its
+    // pending registration would also prevent the queued refresh from running.
     if (existing) return existing;
+    this.observationChains.get(id)?.requireRecovery();
+    this.lifecycles.event(id, { type: 'OBSERVATION', proof: observation.proof, status: 'resynchronizing' });
     const work = this.performRefresh(id, observation.proof);
     this.refreshes.set(id, work);
     void work.finally(() => { if (this.refreshes.get(id) === work) this.refreshes.delete(id); }).catch(() => {});

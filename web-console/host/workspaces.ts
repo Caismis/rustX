@@ -19,13 +19,13 @@ import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
 import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspaces/desktop.ts';
 import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench.ts';
-import { NativeFileReadError, readNativeDelivery, readNativeSource, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
+import { NativeFileReadError, readNativeDelivery, readNativeSource, openNativeDeliveryPreview, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
 
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
-import { FILE_PREVIEW_LIMITS } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, validateFileRead, type FilePreviewOperation } from '../shared/file-preview.ts';
 import { observeFile } from './file-observation.ts';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
-import { readWorkspacePreview } from './workspace-preview.ts';
+import { readWorkspacePreview, openWorkspaceBytePreview } from './workspace-preview.ts';
 import { observeNativeDelivery } from './native-file-observation.ts';
 
 export interface LocalHostConfig {
@@ -60,6 +60,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private documentReads = new Set<AbortController>();
   private readonly documents = new OfficeDocuments();
   private fileReads = new Set<AbortController>();
+  private previewOwners = new Set<AbortController>();
+  private previewRetirements = new Set<Promise<void>>();
   private fileObservations = new Set<AbortController>();
   private fileObservationTasks = new Set<Promise<void>>();
   private fileHints = new Map<AbortController, { session: string; changed: () => void }>();
@@ -106,7 +108,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const previous = new Set(this.registrations.map(row => row.location));
     this.registrations = rows;
     if (previous.size !== new Set(rows.map(row => row.location)).size || rows.some(row => !previous.has(row.location))) {
-      for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
+      for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations, ...this.previewOwners]) read.abort();
     }
   }
   private registered(id: string) {
@@ -146,9 +148,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   close(): Promise<void> {
     this.closed = true;
     this.folderPick?.abort.abort();
-    for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
+    for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations, ...this.previewOwners]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), this.folderPick?.selection.catch(() => {}), ...this.fileObservationTasks]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), this.folderPick?.selection.catch(() => {}), ...this.fileObservationTasks, ...this.previewRetirements]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -170,6 +172,115 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
    * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
+  }
+  async openDeliveryPreview(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal: AbortSignal): Promise<FilePreviewOperation> {
+    this.mutationScope(scope); validateDeliveryRead(read);
+    if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
+    return this.openPreviewOwner(scope, signal, async (active, acquire) => {
+      const roots = this.registrations.map(row => this.cwd(row.location));
+      if (!roots.length || roots.length > 32) throw new Error('Product Host file roots unavailable');
+      return acquire(() => openNativeDeliveryPreview(this.config.endpoint, this.config.productHostToken!, read, roots, active));
+    });
+  }
+  async openWorkspacePreview(scope: WorkspaceAuthorityScope, call: WorkbenchCall, signal: AbortSignal): Promise<FilePreviewOperation> {
+    this.mutationScope(scope);
+    if (call?.request?.kind !== 'preview' || typeof call.request.path !== 'string') throw new Error('Invalid workspace preview operation');
+    const path = call.request.path;
+    return this.openPreviewOwner(scope, signal, async (active, acquire) => {
+      const root = await this.resolveWorkbenchRoot(scope, call.target, active);
+      const check = async () => {
+        const current = await this.resolveWorkbenchRoot(scope, call.target, active);
+        if (current.cwd !== root.cwd) throw new WorkspaceHostError('source_changed', 'source_changed');
+      };
+      return acquire(() => {
+        const operation = openWorkspaceBytePreview(root.cwd, path, active);
+        return { ...operation,
+          read: async (range, signal) => { await check(); const value = await operation.read(range, signal); await check(); return value; },
+          close: async () => {
+            try { if (!active.aborted) await check(); } finally { await operation.close(); }
+            if (!active.aborted) await check();
+          },
+        };
+      });
+    });
+  }
+  private async physicalPreview<T>(scope: WorkspaceAuthorityScope, signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    this.mutationScope(scope); signal.throwIfAborted();
+    if (this.fileReads.size >= 2) throw new WorkspaceHostError('File read capacity reached', 'capacity');
+    const physical = new AbortController(); this.fileReads.add(physical);
+    let settled = true;
+    try {
+      const value = await work(); this.mutationScope(scope); signal.throwIfAborted();
+      for (const row of this.registrations) this.cwd(row.location);
+      return value;
+    } catch (error) {
+      if (error instanceof WorkspaceHostError && error.kind === 'file_settlement_unknown') settled = false;
+      throw error;
+    } finally { if (settled) this.fileReads.delete(physical); }
+  }
+  private async openPreviewOwner(scope: WorkspaceAuthorityScope, signal: AbortSignal,
+    open: (signal: AbortSignal, acquire: (work: () => FilePreviewOperation | Promise<FilePreviewOperation>) => Promise<FilePreviewOperation>) => Promise<FilePreviewOperation>,
+  ): Promise<FilePreviewOperation> {
+    signal.throwIfAborted();
+    if (this.previewOwners.size >= 2) throw new WorkspaceHostError('Preview owner capacity reached', 'capacity');
+    const owner = new AbortController(); this.previewOwners.add(owner);
+    const deadline = setTimeout(() => owner.abort(), 60_000); deadline.unref();
+    let retire!: () => void, failRetirement!: (error: unknown) => void;
+    const retirement = new Promise<void>((yes, no) => { retire = yes; failRetirement = no; }); void retirement.catch(() => {}); this.previewRetirements.add(retirement);
+    let operation: FilePreviewOperation | undefined, closing: Promise<void> | undefined;
+    const pending = new Set<Promise<import('../shared/file-preview.ts').FileBytes>>();
+    const release = () => { clearTimeout(deadline); signal.removeEventListener('abort', abort); owner.signal.removeEventListener('abort', retired); this.previewOwners.delete(owner); this.previewRetirements.delete(retirement); retire(); };
+    const close = () => closing ??= (async () => {
+      await Promise.allSettled([...pending]);
+      let settled = true;
+      try {
+        if (operation) {
+          if (owner.signal.aborted) await operation.close();
+          else {
+            let validating = false;
+            try { await this.physicalPreview(scope, owner.signal, () => { validating = true; return operation!.close(); }); }
+            catch (error) {
+              if (!validating) { owner.abort(); await operation.close().catch(() => {}); }
+              throw error;
+            }
+          }
+        }
+      } catch (error) {
+        if (error instanceof WorkspaceHostError && error.kind === 'file_settlement_unknown') { settled = false; clearTimeout(deadline); failRetirement(error); }
+        throw error;
+      } finally { if (settled) release(); }
+    })();
+    const retired = () => { if (operation) void close().catch(() => {}); };
+    const abort = () => owner.abort(); signal.addEventListener('abort', abort, { once: true }); owner.signal.addEventListener('abort', retired, { once: true });
+    try {
+      const source = await open(owner.signal, work => this.physicalPreview(scope, owner.signal, async () => {
+        const opened = await work();
+        // The resource belongs to this owner before physicalPreview revalidates scope and roots.
+        operation = opened;
+        return opened;
+      }));
+      owner.signal.throwIfAborted();
+      return { version: source.version, bytes: source.bytes, file: source.file,
+        read: (range, active = owner.signal) => {
+          validateFileRead({ kind: 'bytes', range });
+          if (closing || pending.size >= 2) return Promise.reject(new Error('Obsolete or full preview operation'));
+          const cancel = () => owner.abort(active.reason);
+          active.addEventListener('abort', cancel, { once: true }); if (active.aborted) cancel();
+          const task = this.physicalPreview(scope, owner.signal, () => source.read(range, AbortSignal.any([owner.signal, active])));
+          pending.add(task); void task.finally(() => { active.removeEventListener('abort', cancel); pending.delete(task); }).catch(() => {}); return task;
+        }, close,
+      };
+    } catch (error) {
+      if (operation) {
+        owner.abort();
+        try { await close(); }
+        catch (retirementError) {
+          if (retirementError instanceof WorkspaceHostError && retirementError.kind === 'file_settlement_unknown') throw retirementError;
+        }
+      } else if (error instanceof WorkspaceHostError && error.kind === 'file_settlement_unknown') { clearTimeout(deadline); failRetirement(error); }
+      else release();
+      throw error;
+    }
   }
   async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v80.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
@@ -333,6 +444,18 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     try { return await readWorkspacePreview(root, path, options, operation.signal, max); }
     finally { signal.removeEventListener('abort', abort); this.fileReads.delete(operation); }
   }
+  private async resolveWorkbenchRoot(scope: WorkspaceAuthorityScope, target: WorkbenchCall['target'], signal?: AbortSignal) {
+    this.mutationScope(scope); signal?.throwIfAborted();
+    if (!target || typeof target !== 'object' || Array.isArray(target)) throw new Error('Invalid workbench target');
+    const keys = 'workspace_id' in target ? ['workspace_id'] : ['session_id', 'active_node'];
+    if (Object.keys(target).length !== keys.length || !Object.entries(target).every(([key, value]) => keys.includes(key) && typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value))) throw new Error('Invalid workbench target');
+    if ('workspace_id' in target) return { cwd: this.cwd(this.registered(target.workspace_id).location) };
+    if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) throw new Error('Native filesystem mapping unavailable on this Product Host');
+    const native = await this.readSession(this.config.endpoint, this.config.transportToken, target);
+    this.mutationScope(scope); signal?.throwIfAborted();
+    if (!this.classifyLocation(native.cwd).authorized) throw new WorkspaceHostError('Workspace is not authorized', 'authorization_revoked');
+    return { ...native, cwd: realpathSync(native.cwd) };
+  }
   private async runWorkbench(scope: WorkspaceAuthorityScope, call: WorkbenchCall, signal?: AbortSignal): Promise<WorkbenchResult> {
     this.mutationScope(scope);
     const target = call?.target;
@@ -340,14 +463,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const keys = 'workspace_id' in target ? ['workspace_id'] : ['session_id', 'active_node'];
     if (Object.keys(target).length !== keys.length || !Object.entries(target).every(([key, value]) => keys.includes(key) && typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value))) throw new Error('Invalid workbench target');
     if ('session_id' in target && (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken)) throw new Error('Native filesystem mapping unavailable on this Product Host');
-    const read = async () => {
-      this.mutationScope(scope); signal?.throwIfAborted();
-      if ('workspace_id' in target) return { cwd: this.cwd(this.registered(target.workspace_id).location) };
-      const native = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
-      this.mutationScope(scope); signal?.throwIfAborted();
-      if (!this.classifyLocation(native.cwd).authorized) throw new WorkspaceHostError('Workspace is not authorized', 'authorization_revoked');
-      return { ...native, cwd: realpathSync(native.cwd) };
-    };
+    const read = () => this.resolveWorkbenchRoot(scope, target, signal);
     const check = (cwd: string) => {
       this.mutationScope(scope); signal?.throwIfAborted();
       if ('workspace_id' in target && this.cwd(this.registered(target.workspace_id).location) !== cwd) throw new Error('Workspace authority changed');

@@ -1,0 +1,406 @@
+{
+  "scope": "Correctness-only fresh-instance parser error/nested/scope corpus; no performance comparison",
+  "samples": [
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/empty.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/empty.step",
+        "sourceBytes": 0,
+        "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/empty.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/empty.step",
+        "sourceBytes": 0,
+        "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-args.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-args.step",
+        "sourceBytes": 15394,
+        "sourceSha256": "d1dc33c2a3b55bd13025225f69e627dde01aa07353d208e6a918b0fcee72e5fa",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-args.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-args.step",
+        "sourceBytes": 15394,
+        "sourceSha256": "d1dc33c2a3b55bd13025225f69e627dde01aa07353d208e6a918b0fcee72e5fa",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-header.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-header.step",
+        "sourceBytes": 95,
+        "sourceSha256": "e25dbc4e372ed400ddadcbe8fd843a1ae6d0070eb573a4eed23b9b1266bfb4c6",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-header.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/malformed-header.step",
+        "sourceBytes": 95,
+        "sourceSha256": "e25dbc4e372ed400ddadcbe8fd843a1ae6d0070eb573a4eed23b9b1266bfb4c6",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/nested-lists.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/nested-lists.step",
+        "sourceBytes": 430,
+        "sourceSha256": "01be19168a0660b3349c17dfee1999229ecfc9c6511e0ce5ab05f5f31197707d",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/nested-lists.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/nested-lists.step",
+        "sourceBytes": 430,
+        "sourceSha256": "01be19168a0660b3349c17dfee1999229ecfc9c6511e0ce5ab05f5f31197707d",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/scope-export.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/scope-export.step",
+        "sourceBytes": 419,
+        "sourceSha256": "4eb375c386c8693d964295b35aa6fe1a004ba44de7da9b3dccfa23c7f78371e5",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/scope-export.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/scope-export.step",
+        "sourceBytes": 419,
+        "sourceSha256": "4eb375c386c8693d964295b35aa6fe1a004ba44de7da9b3dccfa23c7f78371e5",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/scope.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/scope.step",
+        "sourceBytes": 414,
+        "sourceSha256": "a4501b6cf6bd9d0f37518777bd34da528ad044373552b7c354acc7719fdcc7a9",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/scope.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/scope.step",
+        "sourceBytes": 414,
+        "sourceSha256": "a4501b6cf6bd9d0f37518777bd34da528ad044373552b7c354acc7719fdcc7a9",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-header.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-header.step",
+        "sourceBytes": 100,
+        "sourceSha256": "af3cd5e2048d23bb28e89996cab9a61afda129bdeb74e25e4425c69b9e545001",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-header.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-header.step",
+        "sourceBytes": 100,
+        "sourceSha256": "af3cd5e2048d23bb28e89996cab9a61afda129bdeb74e25e4425c69b9e545001",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-model.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-model.step",
+        "sourceBytes": 7695,
+        "sourceSha256": "85eb66596c0310e85bb4998ad618058adaab12436163a1fee76a2d1ed5c57b00",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-model.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/truncated-model.step",
+        "sourceBytes": 7695,
+        "sourceSha256": "85eb66596c0310e85bb4998ad618058adaab12436163a1fee76a2d1ed5c57b00",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-buffer-boundary.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-buffer-boundary.step",
+        "sourceBytes": 31779,
+        "sourceSha256": "cb7ec1d378ce5a5ad6db98d3e6f8d46da5b7ed2be7df604e989ad29fe0eac97a",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-buffer-boundary.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-buffer-boundary.step",
+        "sourceBytes": 31779,
+        "sourceSha256": "cb7ec1d378ce5a5ad6db98d3e6f8d46da5b7ed2be7df604e989ad29fe0eac97a",
+        "success": false,
+        "finalDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03",
+        "finalNumericBitsDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "metadataDigest": "06e5f7e2d702e0110271dd33c198e1f312a785bcf41ca4fbed2fa6d67722dc03"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-crlf.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-crlf.step",
+        "sourceBytes": 15807,
+        "sourceSha256": "1be19d78ae49466f8c7d6e0532b92de2d98ffb716c35b1a212894ad4b4a7b3af",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-crlf.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-crlf.step",
+        "sourceBytes": 15807,
+        "sourceSha256": "1be19d78ae49466f8c7d6e0532b92de2d98ffb716c35b1a212894ad4b4a7b3af",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-eof-no-newline.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-eof-no-newline.step",
+        "sourceBytes": 15390,
+        "sourceSha256": "25dd99018d883b68edc3875d4fa36e7f0c2baacc6d1ae4ea499b9165fdad262f",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-eof-no-newline.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-eof-no-newline.step",
+        "sourceBytes": 15390,
+        "sourceSha256": "25dd99018d883b68edc3875d4fa36e7f0c2baacc6d1ae4ea499b9165fdad262f",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-build-O3/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-trailing-space.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-trailing-space.step",
+        "sourceBytes": 15396,
+        "sourceSha256": "7b571d2e7fe70eaf018079220e98b20838dc0d08d915fb28c876db22ef8cf271",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    },
+    {
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-step-lexer-only/cases/valid-trailing-space.step",
+      "status": 0,
+      "signal": null,
+      "stderr": "",
+      "value": {
+        "fixture": "/tmp/pr556-step-lexer-only/cases/valid-trailing-space.step",
+        "sourceBytes": 15396,
+        "sourceSha256": "7b571d2e7fe70eaf018079220e98b20838dc0d08d915fb28c876db22ef8cf271",
+        "success": true,
+        "meshes": 1,
+        "triangles": 12,
+        "finalDigest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "finalNumericBitsDigest": "2e7b2b0c76cb68486040e32bd6c7f2b63f3588f90ebcadf7269b8c1b55313c6e",
+        "metadataDigest": "5121c73b6e48754e93a1dfe84d824be1f7376a52854eac2cf388a3d997ca7019"
+      }
+    }
+  ],
+  "equivalence": true
+}

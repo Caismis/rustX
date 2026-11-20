@@ -1,0 +1,922 @@
+{
+  "scope": "Native allocation entrypoint traffic diagnostic only. Requested bytes are allocation attempts, not unique/live/peak bytes. Nested libc entrypoints counted only at wrapper depth zero; current phase attribution is exclusive.",
+  "samples": [
+    {
+      "name": "selftest",
+      "status": 0,
+      "value": {
+        "result": 0
+      },
+      "profile": {
+        "headers": 0,
+        "records": 0,
+        "parameters": 0,
+        "entities": 0,
+        "spans": [
+          {
+            "phase": "read-stream",
+            "durationMs": 0.047634,
+            "calls": 1
+          }
+        ],
+        "allocationEntryTraffic": [
+          {
+            "exclusivePhaseIndex": 0,
+            "entrypoint": "malloc",
+            "calls": "1",
+            "requestedByteTraffic": "32",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 0,
+            "entrypoint": "calloc",
+            "calls": "2",
+            "requestedByteTraffic": "8589934622",
+            "nullReturns": "1"
+          },
+          {
+            "exclusivePhaseIndex": 0,
+            "entrypoint": "realloc",
+            "calls": "1",
+            "requestedByteTraffic": "64",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 0,
+            "entrypoint": "free",
+            "calls": "2",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "small",
+      "status": 0,
+      "value": {
+        "runtime": "/tmp/pr556-step-experiments/allocation/build/Release",
+        "fixture": "/tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step",
+        "tiers": 1,
+        "sourceBytes": 9206,
+        "sourceSha256": "e7b832a4747c7b1ca85b98495fbd9635e3e119a064ac2183c67696cc2de5ead9",
+        "compileMs": 25.484388000000003,
+        "initializeMs": 43.592614000000005,
+        "freshInstanceInitializeMs": 15.065835000000007,
+        "freshInstanceReadMs": 152.155438,
+        "coldCodeToFinalMs": 195.748052,
+        "cachedModuleToFinalMs": 167.221273,
+        "coarseMs": 120.029495,
+        "spans": [],
+        "profilingEnabled": false,
+        "importCpuUserMs": 339.138,
+        "importCpuSystemMs": 98.74,
+        "ownedSourceReleased": true,
+        "peakRssBytes": 318353408,
+        "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+        "processBefore": {
+          "rss": 90906624,
+          "heapTotal": 12189696,
+          "heapUsed": 6965152,
+          "external": 46303710,
+          "arrayBuffers": 13923757
+        },
+        "processAfter": {
+          "rss": 317566976,
+          "heapTotal": 12394496,
+          "heapUsed": 8246624,
+          "external": 46610208,
+          "arrayBuffers": 14230215
+        },
+        "meshes": 3,
+        "triangles": 6136,
+        "numericPayloadBytes": 298128,
+        "rawTypedBufferBytes": 298128,
+        "typedRawOutput": true,
+        "optional": [
+          {
+            "level": 0,
+            "triangles": 338,
+            "meshes": 3,
+            "hierarchyDigest": "691bf122782deba71c8ad91afe8834afec41f2dd76310e193dae034c26df8c8b"
+          }
+        ],
+        "finalDigest": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+        "finalNumericBitsDigest": "3e7f1830a48fa8db706cc86278df2add5e52cdd7eeb6718d7149b3e15d1f71ec",
+        "finalMetadataDigest": "00a1f92f61855f59e9e9674b00cf98d2a2e73b373d572f17f5bd3bfc57e97741"
+      },
+      "profile": {
+        "headers": 7,
+        "records": 279,
+        "parameters": 605,
+        "entities": 158,
+        "spans": [
+          {
+            "phase": "read-stream",
+            "durationMs": 45.854075,
+            "calls": 1
+          },
+          {
+            "phase": "library-read-stream",
+            "durationMs": 42.7015,
+            "calls": 1
+          },
+          {
+            "phase": "step-file-read",
+            "durationMs": 42.396568,
+            "calls": 1
+          },
+          {
+            "phase": "scanner-parser",
+            "durationMs": 1.662194,
+            "calls": 1
+          },
+          {
+            "phase": "record-allocation",
+            "durationMs": 0.092785,
+            "calls": 1
+          },
+          {
+            "phase": "record-conversion",
+            "durationMs": 0.361777,
+            "calls": 1
+          },
+          {
+            "phase": "raw-recorder-cleanup",
+            "durationMs": 0.018688,
+            "calls": 1
+          },
+          {
+            "phase": "prepare-header",
+            "durationMs": 0.239851,
+            "calls": 1
+          },
+          {
+            "phase": "prepare-data",
+            "durationMs": 3.474335,
+            "calls": 1
+          },
+          {
+            "phase": "set-entity-numbers",
+            "durationMs": 0.755673,
+            "calls": 1
+          },
+          {
+            "phase": "set-entities",
+            "durationMs": 2.671567,
+            "calls": 1
+          },
+          {
+            "phase": "load-model",
+            "durationMs": 35.649529,
+            "calls": 1
+          },
+          {
+            "phase": "entity-load-loop",
+            "durationMs": 34.65235,
+            "calls": 1
+          },
+          {
+            "phase": "end-read",
+            "durationMs": 0.161892,
+            "calls": 1
+          },
+          {
+            "phase": "reader-cleanup",
+            "durationMs": 0.183477,
+            "calls": 1
+          },
+          {
+            "phase": "session-set-model",
+            "durationMs": 3.093783,
+            "calls": 1
+          },
+          {
+            "phase": "session-compute-graph",
+            "durationMs": 2.904012,
+            "calls": 4
+          },
+          {
+            "phase": "graph-construct",
+            "durationMs": 2.633461,
+            "calls": 1
+          },
+          {
+            "phase": "graph-check",
+            "durationMs": 0.268042,
+            "calls": 1
+          }
+        ],
+        "allocationEntryTraffic": [
+          {
+            "exclusivePhaseIndex": 0,
+            "entrypoint": "realloc",
+            "calls": "1",
+            "requestedByteTraffic": "4",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 1,
+            "entrypoint": "calloc",
+            "calls": "5",
+            "requestedByteTraffic": "244",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 1,
+            "entrypoint": "free",
+            "calls": "2",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 2,
+            "entrypoint": "malloc",
+            "calls": "14",
+            "requestedByteTraffic": "335078",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 2,
+            "entrypoint": "calloc",
+            "calls": "7",
+            "requestedByteTraffic": "200084",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 2,
+            "entrypoint": "free",
+            "calls": "28",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 4,
+            "entrypoint": "malloc",
+            "calls": "5",
+            "requestedByteTraffic": "4576",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 4,
+            "entrypoint": "calloc",
+            "calls": "5",
+            "requestedByteTraffic": "792",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 5,
+            "entrypoint": "calloc",
+            "calls": "716",
+            "requestedByteTraffic": "23892",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 5,
+            "entrypoint": "free",
+            "calls": "558",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 6,
+            "entrypoint": "free",
+            "calls": "4",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 7,
+            "entrypoint": "calloc",
+            "calls": "6",
+            "requestedByteTraffic": "172",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 7,
+            "entrypoint": "free",
+            "calls": "3",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 9,
+            "entrypoint": "malloc",
+            "calls": "2",
+            "requestedByteTraffic": "1132",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 9,
+            "entrypoint": "calloc",
+            "calls": "160",
+            "requestedByteTraffic": "4136",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 9,
+            "entrypoint": "free",
+            "calls": "166",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 10,
+            "entrypoint": "calloc",
+            "calls": "579",
+            "requestedByteTraffic": "11908",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 10,
+            "entrypoint": "realloc",
+            "calls": "122",
+            "requestedByteTraffic": "2592",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 10,
+            "entrypoint": "free",
+            "calls": "421",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "malloc",
+            "calls": "4",
+            "requestedByteTraffic": "32",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "calloc",
+            "calls": "97",
+            "requestedByteTraffic": "9836",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "realloc",
+            "calls": "10",
+            "requestedByteTraffic": "200",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "free",
+            "calls": "59",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "malloc",
+            "calls": "46",
+            "requestedByteTraffic": "648",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "calloc",
+            "calls": "1233",
+            "requestedByteTraffic": "18900",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "realloc",
+            "calls": "65",
+            "requestedByteTraffic": "1060",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "free",
+            "calls": "600",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 13,
+            "entrypoint": "malloc",
+            "calls": "1",
+            "requestedByteTraffic": "632",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 13,
+            "entrypoint": "calloc",
+            "calls": "1",
+            "requestedByteTraffic": "24",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 14,
+            "entrypoint": "calloc",
+            "calls": "1",
+            "requestedByteTraffic": "80",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 14,
+            "entrypoint": "free",
+            "calls": "169",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 15,
+            "entrypoint": "calloc",
+            "calls": "20",
+            "requestedByteTraffic": "360",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 15,
+            "entrypoint": "free",
+            "calls": "182",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 17,
+            "entrypoint": "malloc",
+            "calls": "1",
+            "requestedByteTraffic": "8",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 17,
+            "entrypoint": "calloc",
+            "calls": "1205",
+            "requestedByteTraffic": "24816",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 17,
+            "entrypoint": "free",
+            "calls": "924",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 18,
+            "entrypoint": "calloc",
+            "calls": "6",
+            "requestedByteTraffic": "532",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 18,
+            "entrypoint": "free",
+            "calls": "5",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dense",
+      "status": 0,
+      "value": {
+        "runtime": "/tmp/pr556-step-experiments/allocation/build/Release",
+        "fixture": "/tmp/pr556-large-bspline.step",
+        "tiers": 1,
+        "sourceBytes": 200761966,
+        "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+        "compileMs": 30.179744000000028,
+        "initializeMs": 46.04309999999998,
+        "freshInstanceInitializeMs": 12.63766400000003,
+        "freshInstanceReadMs": 30483.547344000002,
+        "coldCodeToFinalMs": 30529.590444,
+        "cachedModuleToFinalMs": 30496.185008000004,
+        "coarseMs": 28861.308289,
+        "spans": [],
+        "profilingEnabled": false,
+        "importCpuUserMs": 31441.173,
+        "importCpuSystemMs": 407.821,
+        "ownedSourceReleased": true,
+        "peakRssBytes": 1273425920,
+        "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+        "processBefore": {
+          "rss": 290803712,
+          "heapTotal": 12189696,
+          "heapUsed": 6965112,
+          "external": 247056470,
+          "arrayBuffers": 214676517
+        },
+        "processAfter": {
+          "rss": 1273163776,
+          "heapTotal": 10297344,
+          "heapUsed": 6835944,
+          "external": 1069843452,
+          "arrayBuffers": 13925799
+        },
+        "meshes": 1,
+        "triangles": 216,
+        "numericPayloadBytes": 10848,
+        "rawTypedBufferBytes": 10848,
+        "typedRawOutput": true,
+        "optional": [
+          {
+            "level": 0,
+            "triangles": 4,
+            "meshes": 1,
+            "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+          }
+        ],
+        "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+        "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+        "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+      },
+      "profile": {
+        "headers": 7,
+        "records": 4218202,
+        "parameters": 12668972,
+        "entities": 2108378,
+        "spans": [
+          {
+            "phase": "read-stream",
+            "durationMs": 25627.834728,
+            "calls": 1
+          },
+          {
+            "phase": "library-read-stream",
+            "durationMs": 24755.767874,
+            "calls": 1
+          },
+          {
+            "phase": "step-file-read",
+            "durationMs": 24755.326723,
+            "calls": 1
+          },
+          {
+            "phase": "scanner-parser",
+            "durationMs": 21932.950537,
+            "calls": 1
+          },
+          {
+            "phase": "record-allocation",
+            "durationMs": 11.946647,
+            "calls": 1
+          },
+          {
+            "phase": "record-conversion",
+            "durationMs": 903.670225,
+            "calls": 1
+          },
+          {
+            "phase": "raw-recorder-cleanup",
+            "durationMs": 0.448426,
+            "calls": 1
+          },
+          {
+            "phase": "prepare-header",
+            "durationMs": 0.220886,
+            "calls": 1
+          },
+          {
+            "phase": "prepare-data",
+            "durationMs": 581.421642,
+            "calls": 1
+          },
+          {
+            "phase": "set-entity-numbers",
+            "durationMs": 291.679772,
+            "calls": 1
+          },
+          {
+            "phase": "set-entities",
+            "durationMs": 289.68564,
+            "calls": 1
+          },
+          {
+            "phase": "load-model",
+            "durationMs": 1303.916164,
+            "calls": 1
+          },
+          {
+            "phase": "entity-load-loop",
+            "durationMs": 1251.761318,
+            "calls": 1
+          },
+          {
+            "phase": "end-read",
+            "durationMs": 42.548006,
+            "calls": 1
+          },
+          {
+            "phase": "reader-cleanup",
+            "durationMs": 19.708265,
+            "calls": 1
+          },
+          {
+            "phase": "session-set-model",
+            "durationMs": 871.990999,
+            "calls": 1
+          },
+          {
+            "phase": "session-compute-graph",
+            "durationMs": 871.689172,
+            "calls": 4
+          },
+          {
+            "phase": "graph-construct",
+            "durationMs": 741.329033,
+            "calls": 1
+          },
+          {
+            "phase": "graph-check",
+            "durationMs": 130.35511,
+            "calls": 1
+          }
+        ],
+        "allocationEntryTraffic": [
+          {
+            "exclusivePhaseIndex": 0,
+            "entrypoint": "realloc",
+            "calls": "1",
+            "requestedByteTraffic": "4",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 1,
+            "entrypoint": "calloc",
+            "calls": "5",
+            "requestedByteTraffic": "244",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 1,
+            "entrypoint": "free",
+            "calls": "2",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 2,
+            "entrypoint": "malloc",
+            "calls": "14",
+            "requestedByteTraffic": "335078",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 2,
+            "entrypoint": "calloc",
+            "calls": "7",
+            "requestedByteTraffic": "200084",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 2,
+            "entrypoint": "free",
+            "calls": "28",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 3,
+            "entrypoint": "malloc",
+            "calls": "6519",
+            "requestedByteTraffic": "141947010",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 3,
+            "entrypoint": "calloc",
+            "calls": "3375",
+            "requestedByteTraffic": "219383628",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 4,
+            "entrypoint": "malloc",
+            "calls": "5",
+            "requestedByteTraffic": "67491344",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 4,
+            "entrypoint": "calloc",
+            "calls": "5",
+            "requestedByteTraffic": "792",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 5,
+            "entrypoint": "calloc",
+            "calls": "8487549",
+            "requestedByteTraffic": "883195004",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 5,
+            "entrypoint": "free",
+            "calls": "8437950",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 6,
+            "entrypoint": "free",
+            "calls": "4222",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 7,
+            "entrypoint": "calloc",
+            "calls": "6",
+            "requestedByteTraffic": "172",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 7,
+            "entrypoint": "free",
+            "calls": "3",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 9,
+            "entrypoint": "malloc",
+            "calls": "2",
+            "requestedByteTraffic": "16878636",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 9,
+            "entrypoint": "calloc",
+            "calls": "2108380",
+            "requestedByteTraffic": "59046160",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 9,
+            "entrypoint": "free",
+            "calls": "2108386",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 10,
+            "entrypoint": "calloc",
+            "calls": "4216864",
+            "requestedByteTraffic": "160236644",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 10,
+            "entrypoint": "realloc",
+            "calls": "50",
+            "requestedByteTraffic": "1248",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 10,
+            "entrypoint": "free",
+            "calls": "2108486",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "malloc",
+            "calls": "4",
+            "requestedByteTraffic": "32",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "calloc",
+            "calls": "97",
+            "requestedByteTraffic": "35833580",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "realloc",
+            "calls": "10",
+            "requestedByteTraffic": "200",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 11,
+            "entrypoint": "free",
+            "calls": "59",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "malloc",
+            "calls": "36",
+            "requestedByteTraffic": "8543508",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "calloc",
+            "calls": "10542056",
+            "requestedByteTraffic": "151806404",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "realloc",
+            "calls": "18",
+            "requestedByteTraffic": "368",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 12,
+            "entrypoint": "free",
+            "calls": "4216838",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 13,
+            "entrypoint": "malloc",
+            "calls": "1",
+            "requestedByteTraffic": "8433512",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 13,
+            "entrypoint": "calloc",
+            "calls": "1",
+            "requestedByteTraffic": "24",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 14,
+            "entrypoint": "calloc",
+            "calls": "1",
+            "requestedByteTraffic": "80",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 14,
+            "entrypoint": "free",
+            "calls": "55286",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 15,
+            "entrypoint": "calloc",
+            "calls": "20",
+            "requestedByteTraffic": "360",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 15,
+            "entrypoint": "free",
+            "calls": "182",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 17,
+            "entrypoint": "malloc",
+            "calls": "1",
+            "requestedByteTraffic": "8",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 17,
+            "entrypoint": "calloc",
+            "calls": "10542105",
+            "requestedByteTraffic": "210843036",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 17,
+            "entrypoint": "free",
+            "calls": "8433640",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 18,
+            "entrypoint": "calloc",
+            "calls": "66",
+            "requestedByteTraffic": "1732",
+            "nullReturns": "0"
+          },
+          {
+            "exclusivePhaseIndex": 18,
+            "entrypoint": "free",
+            "calls": "65",
+            "requestedByteTraffic": "0",
+            "nullReturns": "0"
+          }
+        ]
+      }
+    }
+  ],
+  "selftestEntrypointsVerified": true
+}

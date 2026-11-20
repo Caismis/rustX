@@ -1,0 +1,534 @@
+[
+  {
+    "variant": "original",
+    "observation": {
+      "scope": "CPU sampled native Read only; profiling overhead included, not ordinary latency evidence",
+      "runtime": "/tmp/pr556-step-experiments/original-named/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "importMs": 28677.599887,
+      "peakRssBytes": 1353355264,
+      "wasmCommittedBytes": 1053491200,
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "numericDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "metadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef",
+      "samples": 27103
+    },
+    "weightedTotalMs": 28699.198,
+    "samples": 27103,
+    "topSelf": [
+      {
+        "function": "step::parser::parse()",
+        "demangled": "step::parser::parse()",
+        "selfSamples": 15575,
+        "selfWeightedMs": 16474.789,
+        "selfPercent": 57.405050134153576,
+        "inclusiveWeightedMs": 20605.216,
+        "inclusivePercent": 71.7971840188705
+      },
+      {
+        "function": "StepFile_ReadData::CreateNewArg()",
+        "demangled": "StepFile_ReadData::CreateNewArg()",
+        "selfSamples": 1998,
+        "selfWeightedMs": 2114.767,
+        "selfPercent": 7.368732046101078,
+        "inclusiveWeightedMs": 2175.762,
+        "inclusivePercent": 7.581264117554783
+      },
+      {
+        "function": "BSplCLib::FlatIndex(int, int, NCollection_Array1<int> const&, bool)",
+        "demangled": "BSplCLib::FlatIndex(int, int, NCollection_Array1<int> const&, bool)",
+        "selfSamples": 1877,
+        "selfWeightedMs": 1985.632,
+        "selfPercent": 6.9187717371056845,
+        "inclusiveWeightedMs": 1985.632,
+        "inclusivePercent": 6.9187717371056845
+      },
+      {
+        "function": "stepFlexLexer::LexerInput(char*, int)",
+        "demangled": "stepFlexLexer::LexerInput(char*, int)",
+        "selfSamples": 1242,
+        "selfWeightedMs": 1314.082,
+        "selfPercent": 4.578810878269142,
+        "inclusiveWeightedMs": 1729.896,
+        "inclusivePercent": 6.027680634141762
+      },
+      {
+        "function": "__memset",
+        "demangled": "__memset",
+        "selfSamples": 511,
+        "selfWeightedMs": 541.879,
+        "selfPercent": 1.8881329018323092,
+        "inclusiveWeightedMs": 541.879,
+        "inclusivePercent": 1.8881329018323092
+      },
+      {
+        "function": "BSplCLib::Bohm(double, int, int, double&, int, double&)",
+        "demangled": "BSplCLib::Bohm(double, int, int, double&, int, double&)",
+        "selfSamples": 421,
+        "selfWeightedMs": 445.204,
+        "selfPercent": 1.5512767987453866,
+        "inclusiveWeightedMs": 445.204,
+        "inclusivePercent": 1.5512767987453866
+      },
+      {
+        "function": "std::__2::basic_istream<char, std::__2::char_traits<char>>::sentry::sentry(std::__2::basic_istream<char, std::__2::char_traits<char>>&, bool)",
+        "demangled": "std::__2::basic_istream<char, std::__2::char_traits<char>>::sentry::sentry(std::__2::basic_istream<char, std::__2::char_traits<char>>&, bool)",
+        "selfSamples": 399,
+        "selfWeightedMs": 422.16,
+        "selfPercent": 1.4709818720369816,
+        "inclusiveWeightedMs": 422.16,
+        "inclusivePercent": 1.4709818720369816
+      },
+      {
+        "function": "Strtod",
+        "demangled": "Strtod",
+        "selfSamples": 296,
+        "selfWeightedMs": 313.319,
+        "selfPercent": 1.0917343404509072,
+        "inclusiveWeightedMs": 313.319,
+        "inclusivePercent": 1.0917343404509072
+      },
+      {
+        "function": "emscripten_builtin_free",
+        "demangled": "emscripten_builtin_free",
+        "selfSamples": 212,
+        "selfWeightedMs": 224.31,
+        "selfPercent": 0.7815897851919067,
+        "inclusiveWeightedMs": 224.31,
+        "inclusivePercent": 0.7815897851919067
+      },
+      {
+        "function": "BSplCLib::Hunt(NCollection_Array1<double> const&, double, int&)",
+        "demangled": "BSplCLib::Hunt(NCollection_Array1<double> const&, double, int&)",
+        "selfSamples": 177,
+        "selfWeightedMs": 187.13,
+        "selfPercent": 0.6520391266682783,
+        "inclusiveWeightedMs": 187.13,
+        "inclusivePercent": 0.6520391266682783
+      },
+      {
+        "function": "emscripten_builtin_malloc",
+        "demangled": "emscripten_builtin_malloc",
+        "selfSamples": 155,
+        "selfWeightedMs": 163.91,
+        "selfPercent": 0.5711309424047321,
+        "inclusiveWeightedMs": 164.97,
+        "inclusivePercent": 0.5748244254072884
+      },
+      {
+        "function": "Standard_MMgrRaw::Allocate(unsigned long)",
+        "demangled": "Standard_MMgrRaw::Allocate(unsigned long)",
+        "selfSamples": 148,
+        "selfWeightedMs": 156.516,
+        "selfPercent": 0.5453671562529379,
+        "inclusiveWeightedMs": 669.891,
+        "inclusivePercent": 2.3341802094957496
+      },
+      {
+        "function": "strcpy",
+        "demangled": "strcpy",
+        "selfSamples": 128,
+        "selfWeightedMs": 135.819,
+        "selfPercent": 0.4732501584190611,
+        "inclusiveWeightedMs": 135.819,
+        "inclusivePercent": 0.4732501584190611
+      },
+      {
+        "function": "PrepareEval(double, double, int, int, int, int, bool, bool, bool, bool, NCollection_Array2<gp_Pnt> const&, NCollection_Array2<double> const*, NCollection_Array1<double> const&, NCollection_Array1<double> const&, NCollection_Array1<int> const*, NCollection_Array1<int> const*, double&, double&, int&, int&, bool&, BSplSLib_DataContainer&)",
+        "demangled": "PrepareEval(double, double, int, int, int, int, bool, bool, bool, bool, NCollection_Array2<gp_Pnt> const&, NCollection_Array2<double> const*, NCollection_Array1<double> const&, NCollection_Array1<double> const&, NCollection_Array1<int> const*, NCollection_Array1<int> const*, double&, double&, int&, int&, bool&, BSplSLib_DataContainer&)",
+        "selfSamples": 127,
+        "selfWeightedMs": 134.211,
+        "selfPercent": 0.4676472143925416,
+        "inclusiveWeightedMs": 152.225,
+        "inclusivePercent": 0.5304155189284384
+      },
+      {
+        "function": "StepData_StepReaderData::SetRecord(int, char const*, char const*, int)",
+        "demangled": "StepData_StepReaderData::SetRecord(int, char const*, char const*, int)",
+        "selfSamples": 126,
+        "selfWeightedMs": 133.273,
+        "selfPercent": 0.4643788303770719,
+        "inclusiveWeightedMs": 405.164,
+        "inclusivePercent": 1.4117607049507097
+      }
+    ],
+    "topInclusive": [
+      {
+        "function": "(root)",
+        "demangled": "(root)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 28699.198,
+        "inclusivePercent": 100.0
+      },
+      {
+        "function": "",
+        "demangled": "",
+        "selfSamples": 11,
+        "selfWeightedMs": 11.664,
+        "selfPercent": 0.040642250699827916,
+        "inclusiveWeightedMs": 28643.284,
+        "inclusivePercent": 99.80517225603307
+      },
+      {
+        "function": "emscripten::internal::Invoker<emscripten::internal::rvp::default_tag, emscripten::val, emscripten::val const&, emscripten::val const&>::invoke(emscripten::val (*)(emscripten::val const&, emscripten::val const&), emscripten::_EM_VAL*, emscripten::_EM_VAL*)",
+        "demangled": "emscripten::internal::Invoker<emscripten::internal::rvp::default_tag, emscripten::val, emscripten::val const&, emscripten::val const&>::invoke(emscripten::val (*)(emscripten::val const&, emscripten::val const&), emscripten::_EM_VAL*, emscripten::_EM_VAL*)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 28622.097,
+        "inclusivePercent": 99.731347893415
+      },
+      {
+        "function": "ReadStepFile(emscripten::val const&, emscripten::val const&)",
+        "demangled": "ReadStepFile(emscripten::val const&, emscripten::val const&)",
+        "selfSamples": 1,
+        "selfWeightedMs": 1.155,
+        "selfPercent": 0.004024502705615676,
+        "inclusiveWeightedMs": 28622.097,
+        "inclusivePercent": 99.731347893415
+      },
+      {
+        "function": "js-to-wasm:iii:i",
+        "demangled": "js-to-wasm:iii:i",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 28622.097,
+        "inclusivePercent": 99.731347893415
+      },
+      {
+        "function": "ImportFile(std::__2::shared_ptr<Importer>, emscripten::val const&, ImportParams const&, emscripten::val const&)",
+        "demangled": "ImportFile(std::__2::shared_ptr<Importer>, emscripten::val const&, ImportParams const&, emscripten::val const&)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 28620.942,
+        "inclusivePercent": 99.72732339070939
+      },
+      {
+        "function": "ImporterXcaf::LoadFile(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&, ImportParams const&)",
+        "demangled": "ImporterXcaf::LoadFile(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&, ImportParams const&)",
+        "selfSamples": 1,
+        "selfWeightedMs": 0.68,
+        "selfPercent": 0.0023694041903191856,
+        "inclusiveWeightedMs": 25233.681,
+        "inclusivePercent": 87.92469043908474
+      },
+      {
+        "function": "ImporterStep::TransferToDocument(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&)",
+        "demangled": "ImporterStep::TransferToDocument(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 25233.001,
+        "inclusivePercent": 87.92232103489442
+      },
+      {
+        "function": "StepSelect_WorkLibrary::ReadStream(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>&, opencascade::handle<Interface_InterfaceModel>&, opencascade::handle<Interface_Protocol> const&) const",
+        "demangled": "StepSelect_WorkLibrary::ReadStream(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>&, opencascade::handle<Interface_InterfaceModel>&, opencascade::handle<Interface_Protocol> const&) const",
+        "selfSamples": 10,
+        "selfWeightedMs": 10.573,
+        "selfPercent": 0.0368407507415364,
+        "inclusiveWeightedMs": 23179.661,
+        "inclusivePercent": 80.7676263287915
+      },
+      {
+        "function": "StepFile_Read(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>*, opencascade::handle<StepData_StepModel> const&, opencascade::handle<StepData_Protocol> const&)",
+        "demangled": "StepFile_Read(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>*, opencascade::handle<StepData_StepModel> const&, opencascade::handle<StepData_Protocol> const&)",
+        "selfSamples": 118,
+        "selfWeightedMs": 124.766,
+        "selfPercent": 0.4347368870725935,
+        "inclusiveWeightedMs": 23166.96,
+        "inclusivePercent": 80.72337073670143
+      },
+      {
+        "function": "step::parser::parse()",
+        "demangled": "step::parser::parse()",
+        "selfSamples": 15575,
+        "selfWeightedMs": 16474.789,
+        "selfPercent": 57.405050134153576,
+        "inclusiveWeightedMs": 20605.216,
+        "inclusivePercent": 71.7971840188705
+      },
+      {
+        "function": "TriangulateShape(TopoDS_Shape&, ImportParams const&)",
+        "demangled": "TriangulateShape(TopoDS_Shape&, ImportParams const&)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 3287.4,
+        "inclusivePercent": 11.454675493022489
+      }
+    ]
+  },
+  {
+    "variant": "lexer",
+    "observation": {
+      "scope": "CPU sampled native Read only; profiling overhead included, not ordinary latency evidence",
+      "runtime": "/tmp/pr556-step-experiments/lexer-named/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "importMs": 13264.520311999999,
+      "peakRssBytes": 1305493504,
+      "wasmCommittedBytes": 1053491200,
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "numericDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "metadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef",
+      "samples": 12517
+    },
+    "weightedTotalMs": 13281.545,
+    "samples": 12517,
+    "topSelf": [
+      {
+        "function": "step::parser::parse()",
+        "demangled": "step::parser::parse()",
+        "selfSamples": 2404,
+        "selfWeightedMs": 2547.0,
+        "selfPercent": 19.176985810009302,
+        "inclusiveWeightedMs": 5006.036,
+        "inclusivePercent": 37.691669154454544
+      },
+      {
+        "function": "StepFile_ReadData::CreateNewArg()",
+        "demangled": "StepFile_ReadData::CreateNewArg()",
+        "selfSamples": 1978,
+        "selfWeightedMs": 2094.635,
+        "selfPercent": 15.771019109599072,
+        "inclusiveWeightedMs": 2149.674,
+        "inclusivePercent": 16.185421199115012
+      },
+      {
+        "function": "BSplCLib::FlatIndex(int, int, NCollection_Array1<int> const&, bool)",
+        "demangled": "BSplCLib::FlatIndex(int, int, NCollection_Array1<int> const&, bool)",
+        "selfSamples": 1809,
+        "selfWeightedMs": 1914.773,
+        "selfPercent": 14.416794130502137,
+        "inclusiveWeightedMs": 1914.773,
+        "inclusivePercent": 14.416794130502137
+      },
+      {
+        "function": "__memset",
+        "demangled": "__memset",
+        "selfSamples": 475,
+        "selfWeightedMs": 503.453,
+        "selfPercent": 3.790620744800398,
+        "inclusiveWeightedMs": 503.453,
+        "inclusivePercent": 3.790620744800398
+      },
+      {
+        "function": "BSplCLib::Bohm(double, int, int, double&, int, double&)",
+        "demangled": "BSplCLib::Bohm(double, int, int, double&, int, double&)",
+        "selfSamples": 408,
+        "selfWeightedMs": 431.396,
+        "selfPercent": 3.248085971925706,
+        "inclusiveWeightedMs": 431.396,
+        "inclusivePercent": 3.248085971925706
+      },
+      {
+        "function": "Strtod",
+        "demangled": "Strtod",
+        "selfSamples": 356,
+        "selfWeightedMs": 376.715,
+        "selfPercent": 2.836379351950394,
+        "inclusiveWeightedMs": 376.715,
+        "inclusivePercent": 2.836379351950394
+      },
+      {
+        "function": "emscripten_builtin_free",
+        "demangled": "emscripten_builtin_free",
+        "selfSamples": 246,
+        "selfWeightedMs": 261.167,
+        "selfPercent": 1.96639020535638,
+        "inclusiveWeightedMs": 261.167,
+        "inclusivePercent": 1.96639020535638
+      },
+      {
+        "function": "BSplCLib::Hunt(NCollection_Array1<double> const&, double, int&)",
+        "demangled": "BSplCLib::Hunt(NCollection_Array1<double> const&, double, int&)",
+        "selfSamples": 173,
+        "selfWeightedMs": 183.163,
+        "selfPercent": 1.3790790152802253,
+        "inclusiveWeightedMs": 183.163,
+        "inclusivePercent": 1.3790790152802253
+      },
+      {
+        "function": "emscripten_builtin_malloc",
+        "demangled": "emscripten_builtin_malloc",
+        "selfSamples": 167,
+        "selfWeightedMs": 176.676,
+        "selfPercent": 1.3302368060342378,
+        "inclusiveWeightedMs": 179.86,
+        "inclusivePercent": 1.354209920607881
+      },
+      {
+        "function": "PrepareEval(double, double, int, int, int, int, bool, bool, bool, bool, NCollection_Array2<gp_Pnt> const&, NCollection_Array2<double> const*, NCollection_Array1<double> const&, NCollection_Array1<double> const&, NCollection_Array1<int> const*, NCollection_Array1<int> const*, double&, double&, int&, int&, bool&, BSplSLib_DataContainer&)",
+        "demangled": "PrepareEval(double, double, int, int, int, int, bool, bool, bool, bool, NCollection_Array2<gp_Pnt> const&, NCollection_Array2<double> const*, NCollection_Array1<double> const&, NCollection_Array1<double> const&, NCollection_Array1<int> const*, NCollection_Array1<int> const*, double&, double&, int&, int&, bool&, BSplSLib_DataContainer&)",
+        "selfSamples": 156,
+        "selfWeightedMs": 165.033,
+        "selfPercent": 1.242573812007564,
+        "inclusiveWeightedMs": 196.296,
+        "inclusivePercent": 1.4779605836519774
+      },
+      {
+        "function": "Standard_MMgrRaw::Allocate(unsigned long)",
+        "demangled": "Standard_MMgrRaw::Allocate(unsigned long)",
+        "selfSamples": 145,
+        "selfWeightedMs": 153.436,
+        "selfPercent": 1.1552571632291273,
+        "inclusiveWeightedMs": 655.651,
+        "inclusivePercent": 4.936556703305225
+      },
+      {
+        "function": "StepData_StepReaderData::SetRecord(int, char const*, char const*, int)",
+        "demangled": "StepData_StepReaderData::SetRecord(int, char const*, char const*, int)",
+        "selfSamples": 145,
+        "selfWeightedMs": 153.116,
+        "selfPercent": 1.15284780498052,
+        "inclusiveWeightedMs": 526.883,
+        "inclusivePercent": 3.9670309440656184
+      },
+      {
+        "function": "StepFile_Read(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>*, opencascade::handle<StepData_StepModel> const&, opencascade::handle<StepData_Protocol> const&)",
+        "demangled": "StepFile_Read(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>*, opencascade::handle<StepData_StepModel> const&, opencascade::handle<StepData_Protocol> const&)",
+        "selfSamples": 138,
+        "selfWeightedMs": 146.723,
+        "selfPercent": 1.1047133447200608,
+        "inclusiveWeightedMs": 7699.63,
+        "inclusivePercent": 57.97239703663995
+      },
+      {
+        "function": "Standard::Free(void*)",
+        "demangled": "Standard::Free(void*)",
+        "selfSamples": 117,
+        "selfWeightedMs": 123.958,
+        "selfPercent": 0.9333100930652269,
+        "inclusiveWeightedMs": 320.862,
+        "inclusivePercent": 2.4158484573895582
+      },
+      {
+        "function": "strcpy",
+        "demangled": "strcpy",
+        "selfSamples": 115,
+        "selfWeightedMs": 122.948,
+        "selfPercent": 0.9257055560930599,
+        "inclusiveWeightedMs": 122.948,
+        "inclusivePercent": 0.9257055560930599
+      }
+    ],
+    "topInclusive": [
+      {
+        "function": "(root)",
+        "demangled": "(root)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 13281.545,
+        "inclusivePercent": 100.0
+      },
+      {
+        "function": "",
+        "demangled": "",
+        "selfSamples": 13,
+        "selfWeightedMs": 13.773,
+        "selfPercent": 0.10370028486896667,
+        "inclusiveWeightedMs": 13233.908,
+        "inclusivePercent": 99.64132937847215
+      },
+      {
+        "function": "emscripten::internal::Invoker<emscripten::internal::rvp::default_tag, emscripten::val, emscripten::val const&, emscripten::val const&>::invoke(emscripten::val (*)(emscripten::val const&, emscripten::val const&), emscripten::_EM_VAL*, emscripten::_EM_VAL*)",
+        "demangled": "emscripten::internal::Invoker<emscripten::internal::rvp::default_tag, emscripten::val, emscripten::val const&, emscripten::val const&>::invoke(emscripten::val (*)(emscripten::val const&, emscripten::val const&), emscripten::_EM_VAL*, emscripten::_EM_VAL*)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 13217.238,
+        "inclusivePercent": 99.51581687220877
+      },
+      {
+        "function": "ReadStepFile(emscripten::val const&, emscripten::val const&)",
+        "demangled": "ReadStepFile(emscripten::val const&, emscripten::val const&)",
+        "selfSamples": 1,
+        "selfWeightedMs": 1.185,
+        "selfPercent": 0.008922154764374175,
+        "inclusiveWeightedMs": 13217.238,
+        "inclusivePercent": 99.51581687220877
+      },
+      {
+        "function": "js-to-wasm:iii:i",
+        "demangled": "js-to-wasm:iii:i",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 13217.238,
+        "inclusivePercent": 99.51581687220877
+      },
+      {
+        "function": "ImportFile(std::__2::shared_ptr<Importer>, emscripten::val const&, ImportParams const&, emscripten::val const&)",
+        "demangled": "ImportFile(std::__2::shared_ptr<Importer>, emscripten::val const&, ImportParams const&, emscripten::val const&)",
+        "selfSamples": 1,
+        "selfWeightedMs": 1.062,
+        "selfPercent": 0.007996057687565715,
+        "inclusiveWeightedMs": 13216.053,
+        "inclusivePercent": 99.5068947174444
+      },
+      {
+        "function": "ImporterXcaf::LoadFile(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&, ImportParams const&)",
+        "demangled": "ImporterXcaf::LoadFile(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&, ImportParams const&)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 9828.482,
+        "inclusivePercent": 74.00104430621587
+      },
+      {
+        "function": "ImporterStep::TransferToDocument(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&)",
+        "demangled": "ImporterStep::TransferToDocument(std::__2::vector<unsigned char, std::__2::allocator<unsigned char>> const&)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 9828.482,
+        "inclusivePercent": 74.00104430621587
+      },
+      {
+        "function": "StepSelect_WorkLibrary::ReadStream(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>&, opencascade::handle<Interface_InterfaceModel>&, opencascade::handle<Interface_Protocol> const&) const",
+        "demangled": "StepSelect_WorkLibrary::ReadStream(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>&, opencascade::handle<Interface_InterfaceModel>&, opencascade::handle<Interface_Protocol> const&) const",
+        "selfSamples": 6,
+        "selfWeightedMs": 6.333,
+        "selfPercent": 0.04768270558884528,
+        "inclusiveWeightedMs": 7713.357,
+        "inclusivePercent": 58.075750976260665
+      },
+      {
+        "function": "StepFile_Read(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>*, opencascade::handle<StepData_StepModel> const&, opencascade::handle<StepData_Protocol> const&)",
+        "demangled": "StepFile_Read(char const*, std::__2::basic_istream<char, std::__2::char_traits<char>>*, opencascade::handle<StepData_StepModel> const&, opencascade::handle<StepData_Protocol> const&)",
+        "selfSamples": 138,
+        "selfWeightedMs": 146.723,
+        "selfPercent": 1.1047133447200608,
+        "inclusiveWeightedMs": 7699.63,
+        "inclusivePercent": 57.97239703663995
+      },
+      {
+        "function": "step::parser::parse()",
+        "demangled": "step::parser::parse()",
+        "selfSamples": 2404,
+        "selfWeightedMs": 2547.0,
+        "selfPercent": 19.176985810009302,
+        "inclusiveWeightedMs": 5006.036,
+        "inclusivePercent": 37.691669154454544
+      },
+      {
+        "function": "TriangulateShape(TopoDS_Shape&, ImportParams const&)",
+        "demangled": "TriangulateShape(TopoDS_Shape&, ImportParams const&)",
+        "selfSamples": 0,
+        "selfWeightedMs": 0.0,
+        "selfPercent": 0.0,
+        "inclusiveWeightedMs": 3284.985,
+        "inclusivePercent": 24.73345533219215
+      }
+    ]
+  }
+]

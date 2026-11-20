@@ -1,0 +1,34 @@
+
+ RUN  v5.0.0 /tmp/rustx-pr556/web-console
+
+ ❯ test/native-cad-policy-smoke.test.ts (5 tests | 2 failed) 27868ms
+   × production adapter coarse/final: test/fixtures/geometry/lod-assembly.step 154ms
+   × production adapter coarse/final: test/fixtures/geometry/lod-assembly.brep 36ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/native-cad-policy-smoke.test.ts > production adapter coarse/final: test/fixtures/geometry/lod-assembly.step
+ FAIL  test/native-cad-policy-smoke.test.ts > production adapter coarse/final: test/fixtures/geometry/lod-assembly.brep
+AssertionError: expected 6136 to be 12946 // Object.is equality
+
+- Expected
++ Received
+
+- 12946
++ 6136
+
+ ❯ test/native-cad-policy-smoke.test.ts:20:28
+     18|   const final = await importCad(source, format, module, undefined, tru…
+     19|   expect(levels).toEqual([0]); expect(source.byteLength).toBe(0);
+     20|   expect(triangles(final)).toBe(expectedTriangles);
+       |                            ^
+     21|   expect(coarse[0].root).toEqual(final.root);
+     22|   expect(coarse[0].meshes.map((mesh: any) => mesh.name)).toEqual(final…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 3 passed (5)
+   Start at  12:24:43
+   Duration  28.09s (tests 99%)
