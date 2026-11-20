@@ -75,6 +75,10 @@ impl RuntimeClientProjection {
                 && matches!(
                     event,
                     RuntimeEvent::CompactionStarted { .. }
+                        | RuntimeEvent::CompactionOperationUpdated { .. }
+                        | RuntimeEvent::CompactionChunkAccepted { .. }
+                        | RuntimeEvent::CompactionSkipped { .. }
+                        | RuntimeEvent::CompactionCancelled { .. }
                         | RuntimeEvent::CompactionCompleted { .. }
                         | RuntimeEvent::CompactionFailed { .. }
                 )
@@ -123,6 +127,10 @@ impl RuntimeClientProjection {
             if matches!(
                 event,
                 RuntimeEvent::CompactionStarted { .. }
+                    | RuntimeEvent::CompactionOperationUpdated { .. }
+                    | RuntimeEvent::CompactionChunkAccepted { .. }
+                    | RuntimeEvent::CompactionSkipped { .. }
+                    | RuntimeEvent::CompactionCancelled { .. }
                     | RuntimeEvent::CompactionCompleted { .. }
                     | RuntimeEvent::CompactionFailed { .. }
             ) {
@@ -547,6 +555,10 @@ impl RuntimeClientProjection {
                 }]
             }
             RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionOperationUpdated { .. }
+            | RuntimeEvent::CompactionChunkAccepted { .. }
+            | RuntimeEvent::CompactionSkipped { .. }
+            | RuntimeEvent::CompactionCancelled { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::CompactionFailed { .. } => {
                 self.fold_compaction_event(Some(attempt_id), event)
@@ -629,13 +641,75 @@ impl RuntimeClientProjection {
     /// Folds the shared automatic/manual compaction lifecycle. Manual
     /// maintenance carries no attempt identity; both paths update the exact
     /// same context read model and publish the same client vocabulary.
+    #[allow(clippy::too_many_lines)] // One exhaustive native operation lifecycle fold.
     pub(super) fn fold_compaction_event(
         &mut self,
         attempt_id: Option<&AttemptId>,
         event: &RuntimeEvent,
     ) -> Vec<RuntimeClientEvent> {
         match event {
-            RuntimeEvent::CompactionStarted { .. } => {
+            RuntimeEvent::CompactionOperationUpdated { status } => {
+                if attempt_id.is_some() || status.validate().is_err() {
+                    return Vec::new();
+                }
+                let operations = &mut self.snapshot.context.compaction_operations;
+                if let Some(existing) = operations.iter_mut().find(|entry| {
+                    entry.status.operation_id == status.operation_id
+                        && entry.status.admission_generation == status.admission_generation
+                }) {
+                    use crate::context::operation::CompactionOperationPhase as Phase;
+                    if existing.status.phase.is_terminal()
+                        || status.accepted_fragments < existing.status.accepted_fragments
+                        || matches!(existing.status.phase, Phase::Ready)
+                            && matches!(status.phase, Phase::Generating | Phase::Retrying)
+                        || existing.status.triggering_attempt_id != status.triggering_attempt_id
+                        || existing.status == *status
+                    {
+                        return Vec::new();
+                    }
+                    existing.status = status.clone();
+                    existing.live = !status.phase.is_terminal();
+                } else {
+                    if operations.iter().any(|entry| {
+                        entry.status.admission_generation >= status.admission_generation
+                            || entry.status.operation_id == status.operation_id
+                    }) {
+                        return Vec::new();
+                    }
+                    if operations.len() == 2 {
+                        operations.remove(0);
+                    }
+                    operations.push(super::super::snapshot::RuntimeClientCompactionOperation {
+                        status: status.clone(),
+                        live: !status.phase.is_terminal(),
+                    });
+                }
+                vec![RuntimeClientEvent::ContextCompactionOperationUpdated {
+                    context: Box::new(self.snapshot.context.owned()),
+                }]
+            }
+            RuntimeEvent::CompactionStarted { operation_id, mode } => {
+                if *mode == crate::context::operation::CompactionMode::Proactive {
+                    return Vec::new();
+                }
+                if self.snapshot.context.compaction_in_progress
+                    && self
+                        .snapshot
+                        .context
+                        .compaction_progress
+                        .as_ref()
+                        .is_some_and(|progress| &progress.operation_id == operation_id)
+                {
+                    return Vec::new();
+                }
+                self.snapshot.context.compaction_progress =
+                    Some(super::super::snapshot::RuntimeClientCompactionProgress {
+                        operation_id: operation_id.clone(),
+                        mode: *mode,
+                        accepted_fragments: 0,
+                        source_ranges: Vec::new(),
+                        generation: None,
+                    });
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
@@ -643,7 +717,82 @@ impl RuntimeClientProjection {
                     attempt_id: attempt_id.cloned(),
                 }]
             }
-            RuntimeEvent::CompactionFailed { error, .. } => {
+            RuntimeEvent::CompactionChunkAccepted {
+                operation_id,
+                accepted_fragments,
+                source_ranges,
+                generation,
+            } => {
+                let context = &mut *self.snapshot.context;
+                let Some(progress) = &mut context.compaction_progress else {
+                    return Vec::new();
+                };
+                if !context.compaction_in_progress
+                    || &progress.operation_id != operation_id
+                    || *accepted_fragments != progress.accepted_fragments.saturating_add(1)
+                    || *accepted_fragments > 256
+                    || crate::durable::auxiliary::validate_compaction_ranges(source_ranges).is_err()
+                {
+                    return Vec::new();
+                }
+                progress.accepted_fragments = *accepted_fragments;
+                progress.source_ranges.clone_from(source_ranges);
+                progress.generation.clone_from(generation);
+                vec![RuntimeClientEvent::ContextCompactionProgressed {
+                    context: Box::new(self.snapshot.context.owned()),
+                    attempt_id: attempt_id.cloned(),
+                }]
+            }
+            RuntimeEvent::CompactionSkipped { operation_id } => {
+                if self
+                    .snapshot
+                    .context
+                    .compaction_progress
+                    .as_ref()
+                    .is_some_and(|progress| &progress.operation_id != operation_id)
+                {
+                    return Vec::new();
+                }
+                self.snapshot.context.compaction_progress = None;
+                self.snapshot.context.compaction_error = None;
+                self.snapshot.context.compaction_in_progress = false;
+                vec![RuntimeClientEvent::ContextCompactionSkipped {
+                    context: Box::new(self.snapshot.context.owned()),
+                    attempt_id: attempt_id.cloned(),
+                }]
+            }
+            RuntimeEvent::CompactionCancelled { operation_id } => {
+                if self
+                    .snapshot
+                    .context
+                    .compaction_progress
+                    .as_ref()
+                    .is_some_and(|progress| &progress.operation_id != operation_id)
+                {
+                    return Vec::new();
+                }
+                self.snapshot.context.compaction_progress = None;
+                self.snapshot.context.compaction_error = None;
+                self.snapshot.context.compaction_in_progress = false;
+                vec![RuntimeClientEvent::ContextCompactionCancelled {
+                    context: Box::new(self.snapshot.context.owned()),
+                    attempt_id: attempt_id.cloned(),
+                }]
+            }
+            RuntimeEvent::CompactionFailed {
+                operation_id,
+                error,
+            } => {
+                if self
+                    .snapshot
+                    .context
+                    .compaction_progress
+                    .as_ref()
+                    .is_some_and(|progress| &progress.operation_id != operation_id)
+                {
+                    return Vec::new();
+                }
+                self.snapshot.context.compaction_progress = None;
                 self.snapshot.context.compaction_error = Some(error.clone());
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionFailed {
@@ -654,6 +803,7 @@ impl RuntimeClientProjection {
             }
             #[cfg(test)]
             RuntimeEvent::CompactionCompleted {
+                operation_id,
                 generation,
                 checkpoint_id,
                 activation_id,
@@ -664,6 +814,7 @@ impl RuntimeClientProjection {
             } => self.fold_compaction_completed(
                 attempt_id,
                 &RuntimeClientCompactionView {
+                    operation_id: operation_id.clone(),
                     generation: *generation,
                     checkpoint_id: checkpoint_id.clone(),
                     activation_id: *activation_id,
@@ -701,7 +852,17 @@ impl RuntimeClientProjection {
         compaction: &RuntimeClientCompactionView,
         occupancy: Option<&crate::observation::occupancy::RuntimeClientContextOccupancy>,
     ) -> Vec<RuntimeClientEvent> {
-        self.snapshot.context.compaction_in_progress = false;
+        if self
+            .snapshot
+            .context
+            .compaction_progress
+            .as_ref()
+            .is_some_and(|progress| progress.operation_id == compaction.operation_id)
+        {
+            self.snapshot.context.compaction_in_progress = false;
+            self.snapshot.context.compaction_progress = None;
+        }
+        self.snapshot.context.compaction_error = None;
         self.snapshot.context.occupancy = occupancy.cloned();
         self.snapshot.context.compaction_count = self
             .snapshot
@@ -730,6 +891,7 @@ impl RuntimeClientProjection {
                 outcome: outcome.clone(),
             };
             self.snapshot.context.compaction_in_progress = false;
+            self.snapshot.context.compaction_progress = None;
         }
         vec![RuntimeClientEvent::AttemptSettled {
             attempt_id: attempt_id.clone(),

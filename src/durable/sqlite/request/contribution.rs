@@ -24,6 +24,32 @@ pub(in crate::durable::sqlite) fn validate_contribution_emission_shape(
         .map_err(ConversationStoreError::InvalidReference)
 }
 
+fn is_permission_reminder(contribution: &crate::context::contribution::ContributionStart) -> bool {
+    contribution.producer
+        == crate::runtime::identity::ContextContributorIdentity::Native(
+            crate::runtime::identity::NativeContextContributor::PermissionReminder,
+        )
+        && contribution.metadata == crate::message::types::ContextKind::NativeEnvironment
+        && contribution.presentation.is_none()
+        && contribution.emissions.is_empty()
+}
+
+fn validate_permission_reminder(
+    snapshot: &RequestSnapshot,
+    message: &MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    let text = crate::runtime::permission::permission_reminder_text(snapshot.permission_mode);
+    let content = crate::context::assembly::permission_reminder_content(&text);
+    if !matches!(message, MessageBlock::User(user)
+        if user.source == crate::message::types::UserSource::Runtime && user.content == content)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "retry context is not the native permission reminder".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validates the exact status message/emission binding before a start chooses
 /// its fresh or idempotent path. This is the construction boundary that keeps
 /// a free-standing emission vector from entering durable storage.
@@ -57,30 +83,95 @@ pub(in crate::durable::sqlite) fn validate_contribution_start(
                 ));
             }
         }
-        if snapshot.identity.retry_number == 0 {
-            let message = context
-                .iter()
-                .find(|message| message.id() == &contribution.message_id)
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "accepted contribution has no canonical context".to_owned(),
-                    )
-                })?;
-            contribution.validate_message(message)?;
-        } else if context
+        let message = context
             .iter()
-            .any(|message| message.id() == &contribution.message_id)
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "retry must not recommit an accepted contribution".to_owned(),
-            ));
+            .find(|message| message.id() == &contribution.message_id);
+        if snapshot.identity.retry_number == 0 || message.is_some() {
+            let message = message.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "accepted contribution has no canonical context".to_owned(),
+                )
+            })?;
+            contribution.validate_message(message)?;
+            if snapshot.identity.retry_number != 0 {
+                if !is_permission_reminder(contribution) {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "retry may introduce only a native permission reminder".to_owned(),
+                    ));
+                }
+                validate_permission_reminder(snapshot, message)?;
+            }
         }
     }
-    if snapshot.identity.retry_number == 0
-        && context.iter().any(|message| !ids.contains(message.id()))
-    {
+    if context.iter().any(|message| !ids.contains(message.id())) {
         return Err(ConversationStoreError::InvalidReference(
             "canonical context has no accepted contribution record".to_owned(),
+        ));
+    }
+    if snapshot.identity.retry_number != 0 && context.len() > 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "retry may stage only one native permission reminder".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// A retry can extend only the emission-free native reminder lane. Previously
+/// accepted refreshes authenticate against the preceding immutable request;
+/// a new refresh additionally requires a newly activated checkpoint.
+fn verify_native_reminder_retry_tx(
+    transaction: &Transaction<'_>,
+    snapshot: &RequestSnapshot,
+    contribution: &crate::context::contribution::ContributionStart,
+    pending: Option<&MessageBlock>,
+    preceding: &mut Option<super::snapshot::StoredRequestMetadata>,
+) -> Result<(), ConversationStoreError> {
+    if !is_permission_reminder(contribution) {
+        return Err(ConversationStoreError::InvalidReference(
+            "retry changed its frozen accepted contribution".to_owned(),
+        ));
+    }
+    if preceding.is_none() {
+        let mut identity = snapshot.identity.clone();
+        identity.retry_number = identity
+            .retry_number
+            .checked_sub(1)
+            .ok_or_else(|| storage("reminder refresh requires a retry"))?;
+        let (previous, started, _) = read_request_snapshot_tx(transaction, &identity.request_id())?
+            .ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "reminder refresh has no preceding started request".to_owned(),
+                )
+            })?;
+        if started.is_none() {
+            return Err(ConversationStoreError::InvalidReference(
+                "reminder refresh has no preceding started request".to_owned(),
+            ));
+        }
+        *preceding = Some(previous);
+    }
+    let previous = preceding.as_ref().expect("preceding request loaded");
+    if previous.context_generation.id != snapshot.context_generation.id {
+        return Err(ConversationStoreError::InvalidReference(
+            "reminder refresh changed its logical context generation".to_owned(),
+        ));
+    }
+    if let Some(message) = pending {
+        validate_permission_reminder(snapshot, message)?;
+        if previous
+            .contributions
+            .iter()
+            .any(|entry| entry.message_id == contribution.message_id)
+            || snapshot.history_cut.checkpoint_id.is_none()
+            || previous.history_cut.checkpoint_id == snapshot.history_cut.checkpoint_id
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "new permission reminder requires a newly activated checkpoint".to_owned(),
+            ));
+        }
+    } else if !previous.contributions.contains(contribution) {
+        return Err(ConversationStoreError::InvalidReference(
+            "retry changed its frozen native reminder".to_owned(),
         ));
     }
     Ok(())
@@ -89,6 +180,7 @@ pub(in crate::durable::sqlite) fn validate_contribution_start(
 pub(in crate::durable::sqlite) fn verify_frozen_contributions_tx(
     transaction: &Transaction<'_>,
     snapshot: &RequestSnapshot,
+    context: &[MessageBlock],
 ) -> Result<(), ConversationStoreError> {
     let visible = |id: &MessageId| {
         snapshot.input.iter().any(|item| match item {
@@ -112,8 +204,17 @@ pub(in crate::durable::sqlite) fn verify_frozen_contributions_tx(
             crate::model::projected::FrozenModelInput::RequestOnly(_) => false,
         })
     };
+    let mut preceding = None;
     for contribution in &snapshot.contributions {
-        contribution.validate_message(&load_message_tx(transaction, &contribution.message_id)?)?;
+        let pending = context
+            .iter()
+            .find(|message| message.id() == &contribution.message_id);
+        if let Some(message) = pending {
+            contribution.validate_message(message)?;
+        } else {
+            contribution
+                .validate_message(&load_message_tx(transaction, &contribution.message_id)?)?;
+        }
         if !visible(&contribution.message_id) {
             return Err(ConversationStoreError::InvalidReference(
                 "frozen contribution is absent from exact typed request".to_owned(),
@@ -129,9 +230,24 @@ pub(in crate::durable::sqlite) fn verify_frozen_contributions_tx(
                 "retry has no original accepted contribution state".to_owned(),
             )
         })?;
-        if started.is_none() || !original.contributions.contains(contribution) {
+        if started.is_none() {
             return Err(ConversationStoreError::InvalidReference(
-                "retry changed its frozen accepted contribution".to_owned(),
+                "retry has no started original contribution state".to_owned(),
+            ));
+        }
+        if !original.contributions.contains(contribution) {
+            verify_native_reminder_retry_tx(
+                transaction,
+                snapshot,
+                contribution,
+                pending,
+                &mut preceding,
+            )?;
+            continue;
+        }
+        if pending.is_some() {
+            return Err(ConversationStoreError::InvalidReference(
+                "retry must not recommit an accepted contribution".to_owned(),
             ));
         }
         for emission in &contribution.emissions {
@@ -164,7 +280,7 @@ pub(in crate::durable::sqlite) fn verify_contribution_start_tx(
 ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
     validate_contribution_start(snapshot, context)?;
     if snapshot.identity.retry_number != 0 {
-        verify_frozen_contributions_tx(transaction, snapshot)?;
+        verify_frozen_contributions_tx(transaction, snapshot, context)?;
         return Ok(Vec::new());
     }
     let mut events = Vec::new();

@@ -17,7 +17,7 @@ use rustx::agent::{
 };
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy, SummaryRequest,
+    DefaultTokenEstimator, ModelBackedSummarizer, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -111,6 +111,7 @@ async fn make_execution<'a>(
         capability.into_lease(),
         cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: None,
             workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
@@ -261,11 +262,6 @@ async fn runtime_with_manual_clock(
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 status_clock: std::sync::Arc::new(rustx::context::SystemClock),
-                policy: SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator: Arc::new(DefaultTokenEstimator),
                 status_engine: Some(AgentStatusEngine::default()),
             },
@@ -762,6 +758,7 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: None,
             workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
@@ -865,6 +862,7 @@ async fn provider_progress_wins_when_ready_with_response_timeout() {
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: None,
             workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
@@ -958,6 +956,7 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: None,
             workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
@@ -1206,6 +1205,7 @@ async fn model_backed_summarizer_uses_the_same_deadlines_across_bounded_auxiliar
                         .into_iter()
                         .map(Into::into)
                         .collect(),
+                    ..Default::default()
                 },
                 rustx::runtime::CancellationSignal::new(),
             ),
@@ -1248,11 +1248,16 @@ async fn model_backed_summarizer_discards_a_degenerate_or_truncated_summary() {
         }),
     ];
 
-    for (script, expected) in [
-        (degenerate, "degenerated"),
+    for (script, expected_kind, expected) in [
+        (
+            degenerate,
+            rustx::context::ContextErrorKind::SummaryFailed,
+            "degenerated",
+        ),
         (
             truncated,
-            "terminated the generation at its total output limit",
+            rustx::context::ContextErrorKind::SummaryOutputExhausted,
+            "total output was exhausted",
         ),
     ] {
         let model = fake_model(vec![script]);
@@ -1269,6 +1274,7 @@ async fn model_backed_summarizer_discards_a_degenerate_or_truncated_summary() {
                         .into_iter()
                         .map(Into::into)
                         .collect(),
+                    ..Default::default()
                 },
                 rustx::runtime::CancellationSignal::new(),
             ),
@@ -1276,7 +1282,7 @@ async fn model_backed_summarizer_discards_a_degenerate_or_truncated_summary() {
         .await
         .expect("the summary must settle without wall-clock waiting")
         .expect_err("a discarded summary generation is a compaction failure");
-        assert_eq!(error.kind, rustx::context::ContextErrorKind::SummaryFailed);
+        assert_eq!(error.kind, expected_kind);
         assert!(
             error.message.contains(expected),
             "unexpected summary failure: {}",
@@ -1315,7 +1321,8 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     // parked next pull proves the summarizer consumed Started before the
     // single runtime-owned clock is advanced.
     let summary_runtime = runtime.clone();
-    let summary_task = tokio::spawn(async move { summary_runtime.compact_context(None).await });
+    let summary_task =
+        tokio::spawn(async move { summary_runtime.compact_context(None, None).await });
     let mut parked = model.parked();
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -1336,7 +1343,7 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     // The request timeout permits a bounded retry. Expire the original
     // auxiliary owner deadline while it settles/backoffs, using the same
     // clock; this must not consume the following primary fixture stream.
-    clock.advance(300_000);
+    clock.advance(rustx::context::compaction_budget::COMPACTION_MAX_DEADLINE_MILLIS);
     let summary_error = tokio::time::timeout(Duration::from_secs(2), summary_task)
         .await
         .expect("summary deadline must settle")

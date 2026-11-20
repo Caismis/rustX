@@ -19,13 +19,13 @@ pub use bounds::{
 pub(crate) use frozen::request_detail as frozen_request_detail;
 pub(crate) use frozen::request_outcome as frozen_request_outcome;
 pub use types::{
-    TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation,
-    TraceContextSource, TraceCursor, TraceDetail, TraceFieldKind, TraceFieldSource,
-    TraceGeneration, TraceGenerationTimeline, TraceInputProvenance, TraceKind, TraceLifecycle,
-    TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole, TracePage,
-    TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage, TraceRequestOption,
-    TraceRequestOutcome, TraceRequestPredecessor, TraceRequestSummary, TraceState,
-    TraceSystemPromptPresentation, TraceSystemPromptState, TraceTiming, TraceToolCall,
+    TraceArtifact, TraceCompaction, TraceCompactionOutcome, TraceContentBlock, TraceContextKind,
+    TraceContextPresentation, TraceContextSource, TraceCursor, TraceDetail, TraceFieldKind,
+    TraceFieldSource, TraceGeneration, TraceGenerationTimeline, TraceInputProvenance, TraceKind,
+    TraceLifecycle, TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole,
+    TracePage, TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage,
+    TraceRequestOption, TraceRequestOutcome, TraceRequestPredecessor, TraceRequestSummary,
+    TraceState, TraceSystemPromptPresentation, TraceSystemPromptState, TraceTiming, TraceToolCall,
     TraceToolCatalogState, TraceToolDefinition, TraceToolDetail, TraceToolLifecycle,
     TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource, TraceToolSummary,
     TraceToolTruncation,

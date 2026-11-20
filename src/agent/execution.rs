@@ -341,6 +341,8 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     pub(crate) permission_task_message: Option<MessageId>,
     /// One-shot candidate from an outstanding native adoption during recovery.
     pub(crate) recovered_permission_task_message: Option<MessageId>,
+    /// Session-owned asynchronous compaction; it never owns this Attempt.
+    pub(crate) asynchronous: Option<Arc<dyn crate::context::asynchronous::CompactionCoordinator>>,
 }
 
 /// One agent attempt execution.
@@ -352,6 +354,7 @@ pub(crate) struct AgentExecutionRuntimePolicy {
 /// bounded current read model, the retained continuation state, and the
 /// pending `FreshInbound` trigger and attempt-local `PostToolBatch` opportunity.
 pub struct AgentExecution<'a> {
+    asynchronous: Option<Arc<dyn crate::context::asynchronous::CompactionCoordinator>>,
     workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
@@ -410,6 +413,9 @@ pub struct AgentExecution<'a> {
     /// as one value at every logical-step boundary; the actual-request
     /// retries of the step reuse it.
     logical_step: LogicalStep,
+    /// Attempt-local compaction failure and refill evidence. A new Attempt
+    /// starts with a fresh tracker; it is never a Session circuit breaker.
+    compaction_control: compaction::CompactionControl,
     /// The Agent-Loop-owned staging buffer of deferred context.
     ///
     /// It is **not** canonical history and **not** a second transcript: a

@@ -26,8 +26,11 @@ pub enum TraceFactKind {
     ToolExecutionFailed,
     ToolMessageCommitted,
     CompactionStarted,
+    CompactionOperationUpdated,
     CompactionCompleted,
     CompactionFailed,
+    CompactionCancelled,
+    CompactionSkipped,
     BackgroundExecutionCommitted,
     BackgroundTerminalPublished,
     SubagentOwnershipCommitted,
@@ -59,6 +62,15 @@ pub struct TraceFactQuery {
     pub after: u64,
     pub ascending: bool,
     pub limit: usize,
+}
+
+/// One bounded, operation-owned page of original auxiliary Call starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceCompactionCallIds {
+    pub total: u64,
+    pub items: Vec<(u64, crate::runtime::identity::AuxiliaryCallId)>,
+    /// Exclusive original Journal coordinate for the next page.
+    pub next_offset: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceFactHeader {
@@ -120,6 +132,10 @@ pub enum TraceFactData {
     },
     CompactionStart {
         native_id: Option<String>,
+        mode: crate::context::operation::CompactionMode,
+    },
+    CompactionStatus {
+        status: crate::context::operation::CompactionOperationStatus,
     },
     BackgroundStart {
         native_id: Option<String>,
@@ -163,6 +179,7 @@ pub enum TraceTerminalClass {
     Completed,
     Failed,
     Cancelled,
+    Skipped,
     TimedOut,
     Limited,
     Denied,

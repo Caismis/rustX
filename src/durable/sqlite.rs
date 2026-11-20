@@ -357,7 +357,10 @@ fn count_conversation_store_open() {
 /// canonical Tool lookup an independent native Ledger position.
 /// Version 114 adds admission-bound Workflow run snapshots and the generated
 /// workflow-agent node index. Earlier stores are refused; there is no migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 114;
+/// Version 115 adds authenticated Compaction prefix coverage, invocation evidence,
+/// and independent asynchronous operation facts to the bounded native layout.
+/// Version 116 indexes foreground compaction independently of proactive work.
+pub const SQLITE_SCHEMA_VERSION: i64 = 116;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -450,6 +453,8 @@ pub struct SqliteConversationStore {
     pub(crate) checkpoint_read_counts: Arc<[AtomicUsize; 3]>,
     #[cfg(test)]
     fail_projection_history_remaining: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) fail_projected_history_when: Mutex<Option<Box<dyn Fn() -> bool + Send>>>,
     #[cfg(test)]
     projection_commit_return_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
@@ -797,6 +802,8 @@ impl SqliteConversationStore {
             checkpoint_read_counts: Arc::new(std::array::from_fn(|_| AtomicUsize::new(0))),
             #[cfg(test)]
             fail_projection_history_remaining: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_projected_history_when: Mutex::default(),
             #[cfg(test)]
             projection_commit_return_probe: Mutex::new(None),
             #[cfg(test)]

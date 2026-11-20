@@ -6,6 +6,6 @@
 pub mod manifest;
 
 pub use manifest::{
-    AgentManifest, AttemptLimitsManifest, CapabilitiesManifest, ContextManifest,
-    MANIFEST_SCHEMA_VERSION, McpBinding, ModelManifest, RuntimeManifest, SkillBinding, ToolBinding,
+    AgentManifest, AttemptLimitsManifest, CapabilitiesManifest, MANIFEST_SCHEMA_VERSION,
+    McpBinding, ModelManifest, RuntimeManifest, SkillBinding, ToolBinding,
 };

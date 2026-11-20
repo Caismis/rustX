@@ -13,6 +13,42 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
+fn prior_compaction_layouts_are_refused_without_rewriting() {
+    for version in [90, 114, 115] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preintegration.sqlite");
+        let id = ConversationId::generate();
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            store
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                    [version],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open_existing(id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 116 })
+                if stored == version
+        ));
+        let connection = Connection::open(path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT schema_version FROM rustx_store WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            version
+        );
+    }
+}
+
+#[test]
 fn frontier_schema_rejects_fake_primary_index_and_damaged_goal_index() {
     for damage in ["partial", "descending", "missing_goal", "wrong_goal"] {
         let directory = tempfile::tempdir().unwrap();
@@ -322,7 +358,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 116);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -387,7 +423,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 116);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -943,7 +979,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 116);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -1010,7 +1046,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 116);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");

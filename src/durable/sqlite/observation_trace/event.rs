@@ -342,16 +342,15 @@ fn terminal_owner(
             }
             event.tool_occurrence.as_ref().map(|occurrence|find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND observation_kind='tool_execution_started' AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])).transpose().map(Option::flatten)
         }
-        E::CompactionCompleted { .. } | E::CompactionFailed { .. } => find(
-            connection,
-            concat!(
-                "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
-                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
-                "='compaction_started'",
-                " AND sequence<?1 ORDER BY sequence DESC LIMIT 1"
-            ),
-            [before],
-        ),
+        E::CompactionCompleted { operation_id, .. }
+        | E::CompactionFailed { operation_id, .. }
+        | E::CompactionCancelled { operation_id }
+        | E::CompactionSkipped { operation_id } => {
+            compaction_start(connection, operation_id, before)
+        }
+        E::CompactionOperationUpdated { status } => {
+            compaction_start(connection, &status.operation_id, before)
+        }
         E::BackgroundTerminalPublished { execution_id, .. } => find(
             connection,
             "SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE event_execution_id=?1 AND event_kind='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
@@ -393,6 +392,17 @@ fn terminal_owner(
         ),
         _ => Ok(Some(before)),
     }
+}
+fn compaction_start(
+    connection: &Connection,
+    operation: &crate::runtime::identity::CompactionOperationId,
+    before: u64,
+) -> Result<Option<u64>, ConversationStoreError> {
+    find(
+        connection,
+        "SELECT sequence FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+        params![operation.as_str(), before],
+    )
 }
 /// A request owns its review, execution and result phases. Independently
 /// recorded executions retain their own original start as lifecycle owner.
@@ -571,7 +581,7 @@ fn core_data(
             ledger_position: position(connection, message_id)?
                 .ok_or_else(|| storage("native Tool C absent"))?,
         }),
-        E::CompactionStarted { operation_id } => {
+        E::CompactionStarted { operation_id, mode } => {
             alias(
                 fields,
                 event,
@@ -581,8 +591,12 @@ fn core_data(
             )?;
             Ok(TraceFactData::CompactionStart {
                 native_id: (operation_id.as_str().len() <= 512).then(|| operation_id.to_string()),
+                mode: *mode,
             })
         }
+        E::CompactionOperationUpdated { status } => Ok(TraceFactData::CompactionStatus {
+            status: status.clone(),
+        }),
         _ => Err(storage("not a typed native Trace start")),
     }
 }
@@ -805,7 +819,10 @@ fn terminal_data(
             )?);
             terminal(C::Failed)
         }
-        E::AttemptCancelled { .. } | E::WorkflowCancelled { .. } => terminal(C::Cancelled),
+        E::AttemptCancelled { .. }
+        | E::WorkflowCancelled { .. }
+        | E::CompactionCancelled { .. } => terminal(C::Cancelled),
+        E::CompactionSkipped { .. } => terminal(C::Skipped),
         E::AttemptTimedOut { .. } => terminal(C::TimedOut),
         E::AttemptLimitExceeded { .. } => terminal(C::Limited),
         _ => return Err(storage("not a typed native Trace terminal")),
@@ -867,7 +884,8 @@ fn data(
         | E::ToolCallRequested { .. }
         | E::ToolExecutionStarted { .. }
         | E::ToolMessageCommitted { .. }
-        | E::CompactionStarted { .. } => core_data(
+        | E::CompactionStarted { .. }
+        | E::CompactionOperationUpdated { .. } => core_data(
             connection,
             event,
             fields,

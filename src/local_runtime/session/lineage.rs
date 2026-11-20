@@ -569,6 +569,10 @@ fn inherit_projections(
         .filter(|p| ids.contains_key(&p.candidate.checkpoint_id))
     {
         let mut checkpoint = source.clone();
+        // Coverage coordinates are authenticated in the source Conversation's
+        // projection domain. A copied checkpoint is a new opaque root until
+        // this destination produces its own sealed native compaction.
+        checkpoint.candidate.prefix_coverage = None;
         checkpoint.candidate.checkpoint_id = ids[&source.candidate.checkpoint_id].clone();
         checkpoint.candidate.expected_head = source
             .candidate

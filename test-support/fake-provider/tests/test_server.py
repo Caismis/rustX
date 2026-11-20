@@ -9,6 +9,7 @@ import conftest
 from fake_provider import control
 from fake_provider.control import ScenarioRun
 from fake_provider.scenario import (
+    AdaptiveScenario,
     OPENAI_CHAT_COMPLETIONS,
     Disconnect,
     Expect,
@@ -146,6 +147,27 @@ def test_an_extra_request_fails_by_default():
         assert extra.status == 500
         assert harness.run.ok is False
         assert "unexpected provider request #2" in harness.run.failures[0]["detail"]
+
+    asyncio.run(scenario())
+
+
+def test_adaptive_steps_require_a_final_settled_request_and_reject_extras():
+    async def scenario() -> None:
+        def select(requests):
+            if len(requests) > 3:
+                raise ValueError("request limit")
+            return chat_step(model="m"), len(requests) == 3
+
+        harness = await serve(AdaptiveScenario("adaptive", select))
+        assert harness.run.ok is False
+        for _ in range(2):
+            assert (await harness.post(CHAT, {"model": "m"})).status == 200
+            assert harness.run.ok is False
+        assert (await harness.post(CHAT, {"model": "m"})).status == 200
+        assert harness.run.ok is True
+        assert harness.run.step_states == ["settled"] * 3
+        assert (await harness.post(CHAT, {"model": "m"})).status == 500
+        assert harness.run.ok is False
 
     asyncio.run(scenario())
 

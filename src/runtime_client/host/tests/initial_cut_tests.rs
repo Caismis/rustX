@@ -9,6 +9,7 @@ async fn t08_t14_t20_initial_checkpoint_pages_survive_activation() {
         status_engine(),
         true,
         None,
+        None,
     )
     .await;
     let initial = fixture.host.checkpoint().unwrap();

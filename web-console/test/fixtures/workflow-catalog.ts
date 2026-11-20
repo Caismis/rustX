@@ -1,5 +1,5 @@
 import { childConversation, type Server } from '../fixture';
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v80';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v82';
 import { installWorkflowChildStatus, workflowCatalogSnapshot, workflowChildHeader } from '../workflow-catalog-data';
 import { agentMetrics } from '../agent-statistics-fixture';
 

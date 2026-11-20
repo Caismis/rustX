@@ -163,7 +163,17 @@ pub(super) fn call_audit_at_tx(
         selected_message_ids: selected_message_ids.clone(),
     };
     validate_call_start_input(&start_projection)?;
-    validate_call_start_authority_tx(connection, conversation_id, &start_projection)?;
+    let admission_frontier = call.started_sequence.checked_sub(1).ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "auxiliary Call start has an invalid Journal sequence".into(),
+        )
+    })?;
+    validate_call_start_authority_tx(
+        connection,
+        conversation_id,
+        &start_projection,
+        admission_frontier,
+    )?;
     require_audit_fact(
         connection,
         call.started_sequence,
@@ -477,8 +487,29 @@ pub(super) fn request_audit_at_tx(
         ordinal: request.ordinal,
         request_id: request.request_id.clone(),
         model: request.model.clone(),
+        invocation: request.invocation.clone(),
     };
     validate_request_start_input(&start_input)?;
+    if request.ordinal > 0 {
+        let first = request_row_query(
+            connection,
+            "call_id=?1 AND ordinal=0",
+            [request.call_id.as_str()],
+        )?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "auxiliary retry lacks its original request identity".into(),
+            )
+        })?;
+        if first.started_sequence >= request.started_sequence
+            || first.model != request.model
+            || first.invocation != request.invocation
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "auxiliary retry changed its frozen model binding".into(),
+            ));
+        }
+    }
     if start.conversation_id != *conversation_id || !request_start_matches(&start, &start_input) {
         return Err(ConversationStoreError::InvalidReference(
             "auxiliary request index disagrees with its start event".into(),
@@ -589,6 +620,7 @@ pub(super) fn request_audit_at_tx(
         ordinal: request.ordinal,
         request_id: request.request_id,
         model: request.model,
+        invocation: request.invocation,
         started_sequence: request.started_sequence,
         terminal_sequence,
         local_terminal,

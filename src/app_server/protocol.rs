@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v80 envelope and method vocabulary.
+//! Rust authority for the App Server v82 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 80;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 82;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -440,6 +440,9 @@ pub enum Method {
     CompactContext {
         target: AttachmentTarget,
         request_id: crate::runtime::identity::ManualCompactionRequestId,
+        /// Optional focus hints; the native owner bounds their UTF-8 bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<String>,
     },
     /// Durable exact-node controls. These do not acquire a runtime attachment.
     #[serde(rename = "workflow/scheduled/getRecovery")]
@@ -1754,6 +1757,8 @@ pub enum MethodResult {
     ContextCompacted {
         compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
+    /// No eligible historical material was available to compact.
+    ContextCompactionSkipped,
     Projections {
         page: crate::runtime_client::projection_history::ProjectionPage,
     },

@@ -27,10 +27,15 @@ fn truncate_wal(store: &super::SqliteConversationStore) {
 }
 
 fn measure(tool: bool) -> (TurnWork, BTreeMap<(&'static str, String), PhaseWork>) {
+    // Physical page writes require stable bytes as well as stable SQL work.
+    // The override is current-thread-only and restores the ordinary clock on Drop.
+    let _adoption_time = crate::durable::inbox::adoption_time::scoped(
+        chrono::DateTime::from_timestamp(1_786_104_000, 123_456_789).unwrap(),
+    );
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation.sqlite");
     let store = super::SqliteConversationStore::open(
-        crate::runtime::identity::ConversationId::generate(),
+        crate::runtime::identity::ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         &path,
     )
     .unwrap();
@@ -103,14 +108,16 @@ fn report(tool: bool, phases: &BTreeMap<(&'static str, String), PhaseWork>) {
 #[test]
 fn warmed_turn_write_work_is_fixed() {
     // Include the bounded occurrence seeks that distinguish a requested tool
-    // from actual execution, alongside adoption and Workflow indexing. Keep
-    // the integrated baseline exact rather than using a tolerance.
+    // from actual execution, alongside adoption and Workflow indexing.
     // Adoption also moves the temporary pending header onto its canonical row.
+    // Schema 115's sparse Compaction Call index adds eight VM steps per
+    // native INSERT (six text / twelve tool). Keep the integrated baseline exact.
+
     let expected = [
         TurnWork {
             calls: 617,
             prepares: 18,
-            steps: 20_512,
+            steps: 20_560,
             commits: 7,
             wal_frames: 263,
             event_index_entries: 58,
@@ -118,7 +125,7 @@ fn warmed_turn_write_work_is_fixed() {
         TurnWork {
             calls: 1392,
             prepares: 38,
-            steps: 45_633,
+            steps: 45_729,
             commits: 13,
             wal_frames: 559,
             event_index_entries: 112,

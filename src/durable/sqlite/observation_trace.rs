@@ -29,6 +29,83 @@ pub(super) use event::{accepted_compare_work, accepted_identity_equal};
 pub(super) use inspection::{adoption_page, capture_definitions, tool_definition};
 pub(super) use request::{context, index_context, predecessor, retry_failure};
 
+/// Count and seek at most 1,025 operation-owned source rows. Native
+/// compaction admits at most 256 planned starts and 12 recovery starts.
+pub(super) fn compaction_call_ids(
+    connection: &Connection,
+    cut: &ObservationReadCut,
+    operation: &crate::runtime::identity::CompactionOperationId,
+    after: Option<u64>,
+    limit: usize,
+) -> Result<crate::durable::observation::TraceCompactionCallIds, ConversationStoreError> {
+    const PREDICATE: &str = "json_extract(event_json,'$.event.business_source.operation_id')=?1 AND event_kind='auxiliary_call_started'";
+    if limit == 0 || limit > 32 || after.is_some_and(|value| value == 0 || value > cut.read.journal)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid Compaction Call page".into(),
+        ));
+    }
+    if let Some(after) = after {
+        let sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_auxiliary_compaction_kind_idx WHERE {PREDICATE} AND sequence=?2 AND sequence<=?3)"
+        );
+        let valid: bool = connection
+            .query_row(
+                &sql,
+                params![operation.as_str(), after, cut.read.journal],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        if !valid {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign Compaction Call cursor".into(),
+            ));
+        }
+    }
+    let sql = format!(
+        "SELECT count(*) FROM (SELECT sequence FROM events INDEXED BY events_auxiliary_compaction_kind_idx WHERE {PREDICATE} AND sequence<=?2 LIMIT 1025)"
+    );
+    let total: u64 = connection
+        .query_row(&sql, params![operation.as_str(), cut.read.journal], |row| {
+            row.get(0)
+        })
+        .map_err(|error| storage(error.to_string()))?;
+    if total > 1024 {
+        return Err(ConversationStoreError::ObservationCapacityExceeded);
+    }
+    let sql = format!(
+        "SELECT sequence, json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_compaction_kind_idx WHERE {PREDICATE} AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT ?4"
+    );
+    let mut statement = connection
+        .prepare_cached(&sql)
+        .map_err(|error| storage(error.to_string()))?;
+    let rows = statement
+        .query_map(
+            params![
+                operation.as_str(),
+                after.unwrap_or(0),
+                cut.read.journal,
+                i64::try_from(limit + 1).expect("bounded page limit")
+            ],
+            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .map_err(|error| storage(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(error.to_string()))?;
+    let more = rows.len() > limit;
+    let items: Vec<_> = rows
+        .into_iter()
+        .take(limit)
+        .map(|(sequence, id)| (sequence, crate::runtime::identity::AuxiliaryCallId::new(id)))
+        .collect();
+    let next_offset = more.then(|| items.last().expect("positive page limit").0);
+    Ok(crate::durable::observation::TraceCompactionCallIds {
+        total,
+        items,
+        next_offset,
+    })
+}
+
 impl TraceFactKind {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -51,8 +128,11 @@ impl TraceFactKind {
             Self::ToolExecutionFailed => "tool_execution_failed",
             Self::ToolMessageCommitted => "tool_message_committed",
             Self::CompactionStarted => "compaction_started",
+            Self::CompactionOperationUpdated => "compaction_operation_updated",
             Self::CompactionCompleted => "compaction_completed",
             Self::CompactionFailed => "compaction_failed",
+            Self::CompactionCancelled => "compaction_cancelled",
+            Self::CompactionSkipped => "compaction_skipped",
             Self::BackgroundExecutionCommitted => "background_execution_committed",
             Self::BackgroundTerminalPublished => "background_terminal_published",
             Self::SubagentOwnershipCommitted => "subagent_ownership_committed",
@@ -68,7 +148,7 @@ impl TraceFactKind {
         }
     }
     /// Every native Trace fact kind.
-    pub(crate) const ALL: [Self; 33] = [
+    pub(crate) const ALL: [Self; 36] = [
         Self::AttemptStarted,
         Self::AttemptCompleted,
         Self::AttemptFailed,
@@ -87,8 +167,11 @@ impl TraceFactKind {
         Self::ToolExecutionFailed,
         Self::ToolMessageCommitted,
         Self::CompactionStarted,
+        Self::CompactionOperationUpdated,
         Self::CompactionCompleted,
         Self::CompactionFailed,
+        Self::CompactionCancelled,
+        Self::CompactionSkipped,
         Self::BackgroundExecutionCommitted,
         Self::BackgroundTerminalPublished,
         Self::SubagentOwnershipCommitted,

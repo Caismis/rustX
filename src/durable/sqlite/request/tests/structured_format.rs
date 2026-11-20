@@ -126,7 +126,7 @@ fn current_format_text_and_structured_requests_reconstruct_exactly_after_reopen(
                     restored
                         .response_schema
                         .as_ref()
-                        .map(|schema| schema.strategy),
+                        .map(|schema| schema.strategy.clone()),
                     structured.then_some(if native {
                         StructuredOutputStrategy::Native
                     } else {

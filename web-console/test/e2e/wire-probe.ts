@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, Notification, TraceDetail } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, Notification, TraceDetail } from '../../../protocol/app-server/v82';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { checkpointSnapshot, foldRuntimeEvent } from '../../../protocol/app-server/projection';

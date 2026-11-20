@@ -785,15 +785,10 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
 }
 
 fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         estimator,
         Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,
@@ -1353,11 +1348,39 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     assert_terminal_inbound_status(false).await;
 }
 
-/// Separate model generations establish an allocation order that differs
-/// from the completion order.
+/// Separate model generations and explicitly ordered background admission
+/// deterministically reverse allocation order relative to task completion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_inbound_status_survives_reversed_background_allocation() {
     assert_terminal_inbound_status(true).await;
+}
+
+/// Order this fixture's two admissions while the production batch remains concurrent.
+struct OrderedBackgroundAdmission {
+    first_started: tokio::sync::watch::Receiver<bool>,
+    second_tool: ToolId,
+}
+
+impl rustx::agent::lifecycle::PreToolPolicy for OrderedBackgroundAdmission {
+    fn evaluate<'a>(
+        &'a self,
+        view: &'a rustx::agent::lifecycle::PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<rustx::agent::lifecycle::PreToolDecision, rustx::agent::lifecycle::LifecycleError>,
+    > {
+        let wait = (view.tool_id == &self.second_tool).then(|| self.first_started.clone());
+        Box::pin(async move {
+            if let Some(mut first_started) = wait {
+                first_started
+                    .wait_for(|started| *started)
+                    .await
+                    .expect("first background executor starts before second admission");
+            }
+            Ok(rustx::agent::lifecycle::PreToolDecision::Allow)
+        })
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1436,6 +1459,16 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
     let mut started_b1 = tool_b1.started();
     let mut started_b2 = tool_b2.started();
     let mut model_parked = model.parked();
+    let lifecycle = rustx::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+        OrderedBackgroundAdmission {
+            first_started: if reverse_order {
+                started_b2.clone()
+            } else {
+                started_b1.clone()
+            },
+            second_tool: ToolId::new(if reverse_order { "tool-b1" } else { "tool-b2" }),
+        },
+    ));
     let mut tools = ToolRegistry::new();
     tool_b1.register(&mut tools);
     tool_b2.register(&mut tools);
@@ -1459,7 +1492,7 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
                     .map(|task| task.tool_name.as_ref())
                     .collect::<Vec<_>>(),
                 ["b2", "b1"],
-                "separate tool-call batches fix the reversed allocation order"
+                "separate call batches and explicit admission fix the reversed allocation order"
             );
         }
         let jobs = controller_registry.all_snapshots();
@@ -1492,10 +1525,22 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
         model_release_tx.send(true).expect("release the model");
         (completed_job, active_job)
     });
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        run_with_mailbox(&model, tools, &cancellation, &tool_runtime),
-    )
+    let result = tokio::time::timeout(Duration::from_secs(15), async {
+        let capability = common::capability_lease(tools, &tool_runtime).await;
+        let result = AgentExecution::new(
+            request(&model),
+            capability.into_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            runtime(&model),
+            &tool_runtime,
+            lifecycle,
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await;
+        common::durable_agent_result(result, tool_runtime.durable_store().as_ref())
+    })
     .await
     .expect("run terminates");
     let (completed_job, active_job) = controller.await.expect("controller task");

@@ -112,11 +112,6 @@ fn try_config(
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             status_clock: std::sync::Arc::new(rustx::context::SystemClock),
-            policy: rustx::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(AgentStatusEngine::default()),
         },

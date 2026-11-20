@@ -562,6 +562,26 @@ pub enum RuntimeEvent {
     /// Context compaction started.
     CompactionStarted {
         operation_id: crate::runtime::identity::CompactionOperationId,
+        mode: crate::context::operation::CompactionMode,
+    },
+    /// Session-owned operation state, independent of an Attempt lifecycle.
+    CompactionOperationUpdated {
+        status: crate::context::operation::CompactionOperationStatus,
+    },
+    /// One locally accepted Summary fragment; this does not commit a checkpoint.
+    CompactionChunkAccepted {
+        operation_id: crate::runtime::identity::CompactionOperationId,
+        accepted_fragments: u32,
+        source_ranges: Vec<crate::model::auxiliary::AuxiliarySourceRange>,
+        generation: Option<crate::context::checkpoint::SummaryGenerationRef>,
+    },
+    /// A real compaction command found no eligible history; no checkpoint committed.
+    CompactionSkipped {
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    },
+    /// Compaction was cancelled before a checkpoint commit.
+    CompactionCancelled {
+        operation_id: crate::runtime::identity::CompactionOperationId,
     },
     /// A local typed checkpoint, activation/head and operation receipt committed
     /// atomically with this real completion fact. Derived content is not a Ledger fact.

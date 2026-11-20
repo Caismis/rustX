@@ -29,6 +29,12 @@ async fn cold_attach(id: &ConversationId, path: &std::path::Path) -> ColdAttach 
         runtime
             .install_client_observation_bridge(Arc::new(PendingObservations::new()))
             .unwrap();
+        // Activation starts idle admission passes. With no asynchronous work,
+        // neither the explicit pass nor the admission worker may hydrate history.
+        runtime.activate();
+        runtime.inner.install_ready_async_when_idle().await;
+        tokio::task::yield_now().await;
+        assert!(runtime.inner.lifecycle.is_running());
         let statements = store.finish_query_work();
         // Attach left the active working set in the durable store; its
         // first consumer hydrates exactly the durable Surface head.

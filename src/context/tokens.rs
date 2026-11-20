@@ -260,6 +260,15 @@ pub trait TokenEstimator: Send + Sync {
         self.supports_monotone_compaction(&messages.to_vec())
     }
 
+    /// Whether the shortest valid structured Summary rendering is a lower
+    /// bound for replacing it with any other valid rendered Summary, including
+    /// its semantic JSON message wrapper. This is independent of the
+    /// monotonicity of deleting historical prefixes. Arbitrary estimators do
+    /// not provide that guarantee merely by accepting the synthetic value.
+    fn supports_summary_floor(&self) -> bool {
+        false
+    }
+
     /// Price final materialized input without selecting runtime resources again.
     fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
         let input = self.estimate_selected(
@@ -427,6 +436,14 @@ pub(crate) fn take_estimator_calls() -> u64 {
 }
 
 impl TokenEstimator for DefaultTokenEstimator {
+    fn supports_summary_floor(&self) -> bool {
+        // The structured Summary renderer has fixed headings. A one-byte
+        // nonempty goal and one one-byte item per section minimize its UTF-8
+        // semantic JSON representation; escaping and metadata can only add
+        // bytes. The default estimator rounds that exact byte count upward.
+        true
+    }
+
     fn supports_monotone_compaction(&self, _messages: &[ModelInputMessage]) -> bool {
         // JSON arrays contribute brackets plus independent item bytes and
         // separators. Prefix deletion only removes nonnegative bytes. Summary

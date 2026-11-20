@@ -1,7 +1,8 @@
 //! The checkpoint transaction is the sole historical projection mutation boundary.
 #[path = "auxiliary_lineage.rs"]
-mod auxiliary_lineage;
+pub(super) mod auxiliary_lineage;
 
+mod coverage;
 mod store;
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, decode, encode,
@@ -144,7 +145,7 @@ fn candidate(
     #[cfg(test)]
     CANDIDATE_DECODES.with(|n| n.set(n.get() + 1));
     let value: CheckpointCandidate = decode(&json, "checkpoint content")?;
-    value.validate_budget().map_err(invalid)?;
+    value.validate_budget()?;
     if value.checkpoint_id != *id || value.fingerprint() != fingerprint {
         return Err(invalid("corrupted checkpoint content"));
     }
@@ -853,6 +854,77 @@ pub(super) fn receipt(
     Ok(Some(receipt))
 }
 
+/// Resolve one operation's actual progress and atomic commit evidence without
+/// scanning unrelated Journal records. A damaged or missing half of a commit
+/// is an authority failure, never evidence that generation had no effect.
+pub(super) fn restart_evidence(
+    connection: &Connection,
+    scope: &ConversationId,
+    operation: &CompactionOperationId,
+) -> Result<crate::durable::projection::CompactionRestartEvidence, ConversationStoreError> {
+    let accepted: Option<Option<u64>> = connection.query_row(
+        "SELECT CASE WHEN typeof(json_extract(event_json,'$.event.accepted_fragments'))='integer' THEN json_extract(event_json,'$.event.accepted_fragments') END FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1",
+        [operation.as_str()], |row| row.get(0),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    let accepted_fragments = match accepted {
+        None => 0,
+        Some(Some(value)) if (1..=256).contains(&value) => {
+            u32::try_from(value).expect("bounded fragment count")
+        }
+        _ => return Err(invalid("invalid durable compaction fragment count")),
+    };
+    let completed: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_completed')",
+        [operation.as_str()], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    let stored: Option<Option<String>> = connection.query_row(
+        "SELECT CASE WHEN octet_length(candidate_fingerprint)=64 THEN CASE WHEN typeof(candidate_fingerprint)='text' AND length(candidate_fingerprint)=64 AND candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN candidate_fingerprint END END FROM compaction_operations WHERE operation_id=?1",
+        [operation.as_str()], |row| admitted_fingerprint(row, 0),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    let committed = match stored {
+        None if !completed => false,
+        None => return Err(invalid("compaction completion has no atomic receipt")),
+        Some(None) => return Err(invalid("invalid compaction receipt fingerprint encoding")),
+        Some(Some(fingerprint)) => {
+            let receipt = receipt(connection, operation, &fingerprint)?
+                .ok_or_else(|| invalid("compaction receipt disappeared during recovery"))?;
+            let checkpoint = checkpoint(connection, &receipt.checkpoint.candidate.checkpoint_id)?;
+            let event_json: Option<Option<String>> = connection.query_row(
+                "SELECT CASE WHEN octet_length(event_json)<=1048576 THEN event_json END FROM events WHERE sequence=?1 AND event_id=?2",
+                params![seq_to_i64(receipt.completed.sequence)?, receipt.completed.event_id.as_str()],
+                |row| row.get(0),
+            ).optional().map_err(|error| storage(error.to_string()))?;
+            let event: RuntimeEventEnvelope = decode(
+                &event_json
+                    .flatten()
+                    .ok_or_else(|| invalid("compaction receipt has no bounded completion event"))?,
+                "compaction completion",
+            )?;
+            if !completed
+                || checkpoint != receipt.checkpoint
+                || event != receipt.completed
+                || event.conversation_id != *scope
+                || checkpoint.activation.origin.conversation_id != *scope
+                || checkpoint.activation.origin.completed_journal.0 != event.sequence
+                || !matches!(&event.event, RuntimeEvent::CompactionCompleted { operation_id, checkpoint_id, activation_id, generation, .. }
+                    if operation_id == operation
+                        && checkpoint_id == &checkpoint.candidate.checkpoint_id
+                        && *activation_id == checkpoint.activation.activation
+                        && *generation == checkpoint.activation.activation.0)
+            {
+                return Err(invalid(
+                    "compaction receipt disagrees with its checkpoint or completion event",
+                ));
+            }
+            true
+        }
+    };
+    Ok(crate::durable::projection::CompactionRestartEvidence {
+        committed,
+        accepted_fragments,
+    })
+}
+
 pub(super) fn validate_dependencies(
     connection: &Connection,
     scope: &ConversationId,
@@ -887,9 +959,7 @@ pub(super) fn validate_dependencies(
             body_required,
             ResourceLimits::default(),
         )
-        .map_err(|e| e.to_string())
-    })
-    .map_err(invalid)?;
+    })?;
     if let Some(metadata) = &value.summary_metadata {
         validate_summary_metadata(connection, scope, value, metadata)?;
     }
@@ -1018,7 +1088,7 @@ pub(super) fn commit(
     if input.grant.operation_id() != &input.operation_id {
         return Err(invalid("foreign compaction commit grant"));
     }
-    input.candidate.validate_budget().map_err(invalid)?;
+    input.candidate.validate_budget()?;
     let fingerprint = input.candidate.fingerprint();
     if let Some(receipt) = receipt(transaction, &input.operation_id, &fingerprint)? {
         return Ok(receipt);
@@ -1026,7 +1096,7 @@ pub(super) fn commit(
     let actual = head(transaction)?;
     if actual.as_ref().map(|p| &p.candidate.checkpoint_id) != input.candidate.expected_head.as_ref()
     {
-        return Err(invalid("stale Projection Head"));
+        return Err(ConversationStoreError::ProjectionHeadChanged);
     }
     if owner(transaction, input.owner.attempt_id.as_ref())? != input.owner {
         return Err(invalid("lost execution fencing"));
@@ -1037,6 +1107,7 @@ pub(super) fn commit(
         &input.candidate,
         &input.operation_id,
     )?;
+    coverage::validate_commit(transaction, scope, &input, actual.as_ref())?;
     validate_dependencies(transaction, scope, &input.candidate)?;
     stage(super::CompactionFaultOperation::BeforeContentInsert)?;
     let candidate_json = encode(&input.candidate, "checkpoint")?;
@@ -1451,9 +1522,7 @@ fn compile_history_with_bodies(
                 body_required,
                 ResourceLimits::default(),
             )
-            .map_err(|e| e.to_string())
-        })
-        .map_err(invalid)?;
+        })?;
         let mut origins = std::collections::HashMap::new();
         for tool in &compiled.tools {
             let item = &checkpoint.candidate.items[tool.call.message.item_index as usize];
@@ -1645,6 +1714,11 @@ pub(super) fn install_lineage(
             || candidate.fingerprint() != checkpoint.fingerprint
         {
             return Err(invalid("inherited projection scope or integrity mismatch"));
+        }
+        if candidate.prefix_coverage.is_some() {
+            return Err(invalid(
+                "inherited checkpoints cannot install source-native coverage authority",
+            ));
         }
         let actual_cut = super::compaction_resources::cut(transaction, scope)?;
         if checkpoint.activation.checkpoint_id != candidate.checkpoint_id

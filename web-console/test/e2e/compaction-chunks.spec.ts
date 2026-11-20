@@ -1,0 +1,81 @@
+import { test, expect } from '@playwright/test';
+import { compactionPrompt, compactionSummary } from '../../../test-support/compaction-client-fixture.mts';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
+import { routeWorkspaceHost } from './workspace-host';
+import { connectRemote, openEmptySession } from './shell-actions';
+
+test('one native multi-call compaction survives fallback, inspection, and reconnect', async ({ page }) => {
+  // Up to 46 real tool/provider turns prepare the history before the held Summary.
+  test.setTimeout(480_000);
+  const fixture = await startDogfood('chunked_compaction');
+  let passed = false;
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    const input = page.getByLabel('Message', { exact: true });
+    await input.fill(compactionPrompt); await input.press('Enter');
+    await fixture.gate('first-prompt-summary', 300_000);
+    const operation = page.locator('[data-compaction-operation]');
+    await expect(operation).toHaveCount(1);
+    const operationId = await operation.getAttribute('data-compaction-operation');
+    expect(operationId).toBeTruthy();
+    await expect(page.locator('[data-compaction-marker]')).toHaveCount(0);
+    const draft = '保留输入草稿 / Unicode 🙂';
+    await input.fill(draft);
+    await fixture.release('first-prompt-summary');
+    await expect(page.getByText('chunked compaction complete', { exact: true })).toBeVisible({ timeout: 60_000 });
+    const marker = page.locator('[data-compaction-checkpoint]');
+    await expect(marker).toHaveCount(1);
+    const checkpoint = await marker.getAttribute('data-compaction-checkpoint');
+    await expect(page.locator('[data-compaction-operation]')).toHaveCount(0);
+    await marker.getByRole('button').click();
+    await expect(marker.getByText(compactionSummary, { exact: true })).toBeVisible();
+    await expect(input).toHaveValue(draft);
+    const { requests } = await fixture.control('requests') as { requests: { model: string; body: { response_format?: { type: string } } }[] };
+    const summaries = requests.filter(request => request.model === 'summary-model');
+    expect(summaries.length).toBeGreaterThan(13);
+    expect(summaries[0]!.body.response_format?.type).toBe('json_schema');
+    expect(summaries.slice(1).every(request => request.body.response_format === undefined)).toBe(true);
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    const rows = page.locator('[data-display-type="RecordRow"][data-kind="compaction"]');
+    await expect(rows).toHaveCount(1); await rows.click();
+    const inspector = page.getByRole('complementary', { name: 'Event details', exact: true });
+    await expect(inspector.locator('[data-inspected-checkpoint]')).toHaveAttribute('data-inspected-checkpoint', checkpoint!);
+    const select = inspector.getByLabel('Select Summary Call', { exact: true });
+    await expect(select).toBeVisible();
+    await expect(inspector.getByText('Native JSON Schema', { exact: true })).toBeVisible();
+    const physical = inspector.locator('[data-compaction-request]').first();
+    await expect(physical.getByText('fixture', { exact: true })).toBeVisible();
+    await expect(physical.getByText('fixture/summary-model', { exact: true })).toBeVisible();
+    await expect(physical.getByText('thinking', { exact: true })).toBeVisible();
+    await expect(physical).toContainText('Failed');
+    await select.selectOption({ index: 1 });
+    await expect(inspector.getByText('Prompt fallback', { exact: true })).toBeVisible();
+    await expect(inspector.locator('[data-compaction-request]').first()).toContainText('Completed');
+    const more = inspector.getByRole('button', { name: 'Load more Calls', exact: true });
+    while (await select.locator('option').count() < summaries.length) {
+      const before = await select.locator('option').count();
+      await more.click();
+      await expect.poll(() => select.locator('option').count()).toBeGreaterThan(before);
+    }
+    expect(await select.locator('option').count()).toBe(summaries.length);
+    await select.selectOption({ index: summaries.length - 1 });
+    await expect(inspector.locator('[data-compaction-request]').first()).toContainText('Completed');
+    await expect(inspector).not.toContainText('private-summary-reasoning-522');
+    await page.screenshot({ path: test.info().outputPath('multi-call-inspector.png') });
+    await inspector.getByRole('button', { name: 'Close details', exact: true }).click();
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await expect(input).toHaveValue(draft);
+    await page.reload(); await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(marker).toHaveCount(1);
+    await expect(marker).toHaveAttribute('data-compaction-checkpoint', checkpoint!);
+    await marker.getByRole('button').click();
+    await expect(marker.getByText(compactionSummary, { exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+    await test.info().attach('native-multi-call-facts', { body: JSON.stringify({ operationId, checkpoint, physicalRequests: summaries.length }), contentType: 'application/json' });
+    passed = true;
+  } finally { await stopDogfoodPage(page, fixture, passed); }
+});

@@ -110,6 +110,9 @@ impl RuntimeInner {
             )
         };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: Some(Arc::new(
+                super::asynchronous_compaction::RuntimeCompactionCoordinator(Arc::downgrade(self)),
+            )),
             workspace_changes: if record_changes && self.workflow_output.is_none() {
                 Some(crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
@@ -149,11 +152,6 @@ impl RuntimeInner {
                         crate::runtime::subagent::InheritedExecutionPolicy {
                             model_timeout: model_timeout_policy,
                             tool_deadline: tool_deadline_policy,
-                            context: resources
-                                .configuration()
-                                .map_or(self.context.policy, |generation| {
-                                    generation.config.context_policy()
-                                }),
                         },
                     )
                     .with_workflow_models(self.auxiliary.clone());
@@ -353,6 +351,9 @@ impl RuntimeInner {
                 gate.enter();
             }
         }
+        // The exact triggering Attempt has returned its capture future; if it
+        // never transferred that capture, no worker can now own the slot.
+        self.settle_abandoned_async_capture(Some(&attempt_id));
         // Test-only gate: the coordinator lock is released and the
         // current-attempt slot is already clear, but this task has not run
         // its final admission callback and has not returned, so it still
@@ -369,6 +370,9 @@ impl RuntimeInner {
         if let Some(gate) = attempt_exit_gate {
             gate.enter();
         }
+        // A ready independent Summary may have arrived while this Attempt
+        // held the conversation. Settlement opens the idle installation cut.
+        self.wake.notify.notify_one();
         self.admit_next_attempt();
     }
 }

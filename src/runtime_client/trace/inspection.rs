@@ -24,6 +24,11 @@ pub struct TraceInspectionHead {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TraceInspectionContent {
     Lifecycle,
+    Compaction {
+        page: TraceInspectionCompactionCalls,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<Box<crate::observation::head::RuntimeClientProjectionHeadView>>,
+    },
     Tool {
         definition: TraceToolDefinitionSelection,
     },
@@ -34,6 +39,31 @@ pub enum TraceInspectionContent {
         run_id: crate::runtime::workflow::WorkflowRunId,
         workflow_id: crate::runtime::workflow::WorkflowId,
     },
+}
+
+/// An operation-owned page; continuation is an exclusive Journal coordinate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceInspectionCompactionCalls {
+    pub domain: String,
+    pub total: u64,
+    pub items: Vec<TraceInspectionCompactionCall>,
+    pub next_offset: Option<u64>,
+}
+
+/// A Call's exact native causality; physical requests have their own page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceInspectionCompactionCall {
+    pub call_id: crate::runtime::identity::AuxiliaryCallId,
+    pub started_sequence: u64,
+    pub settled_sequence: Option<u64>,
+    pub outcome: Option<crate::model::auxiliary::AuxiliaryCallOutcome>,
+    pub preceding_call: Option<crate::model::auxiliary::AuxiliaryCallRef>,
+    pub previous_summary: Option<crate::context::checkpoint::SummaryGenerationRef>,
+    pub strategy: Option<crate::model::structured::StructuredOutputStrategy>,
+    pub requests_domain: String,
+    pub request_count: u64,
 }
 
 /// Absence is proved by the original catalog; unavailable means its relationship cannot be read.
@@ -160,8 +190,16 @@ impl super::TraceProjection<'_> {
                     workflow_id: nodes.workflow_id,
                 }
             }
-            TraceFactData::AttemptStart
-            | TraceFactData::CompactionStart { .. }
+            TraceFactData::CompactionStart {
+                native_id: Some(_), ..
+            } => TraceInspectionContent::Compaction {
+                page: self.inspection_compaction_calls(anchor.sequence, 0, 4)?,
+                checkpoint: self.inspection_compaction_checkpoint(anchor.sequence)?,
+            },
+            TraceFactData::CompactionStart {
+                native_id: None, ..
+            }
+            | TraceFactData::AttemptStart
             | TraceFactData::StepStart
             | TraceFactData::BackgroundStart { .. }
             | TraceFactData::SubagentStart { .. }
@@ -169,6 +207,7 @@ impl super::TraceProjection<'_> {
             | TraceFactData::Configuration { .. } => TraceInspectionContent::Lifecycle,
             TraceFactData::RequestStart { .. }
             | TraceFactData::CanonicalToolCommit { .. }
+            | TraceFactData::CompactionStatus { .. }
             | TraceFactData::Terminal(_) => {
                 return Err(ConversationStoreError::InvalidReference(
                     "native fact has a different inspection source".into(),
@@ -181,6 +220,173 @@ impl super::TraceProjection<'_> {
             record,
             content,
         })
+    }
+
+    fn compaction_operation(
+        &self,
+        sequence: u64,
+    ) -> Result<crate::runtime::identity::CompactionOperationId, ConversationStoreError> {
+        let anchor = self.inspection_anchor(sequence)?;
+        match anchor.fact {
+            TraceFactData::CompactionStart {
+                native_id: Some(id),
+                ..
+            } => Ok(crate::runtime::identity::CompactionOperationId::new(id)),
+            _ => Err(ConversationStoreError::InvalidReference(
+                "Trace anchor has no bounded Compaction identity".into(),
+            )),
+        }
+    }
+
+    /// Read one exact committed activation's finite immutable display header.
+    /// Ready/status facts cannot manufacture this relation or expose a future commit.
+    fn inspection_compaction_checkpoint(
+        &self,
+        sequence: u64,
+    ) -> Result<
+        Option<Box<crate::observation::head::RuntimeClientProjectionHeadView>>,
+        ConversationStoreError,
+    > {
+        use crate::durable::presentation::{FactQuery, FactScope};
+        use crate::events::types::RuntimeEvent;
+        let operation = self.compaction_operation(sequence)?;
+        let completion = self
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::Compaction(operation.clone()),
+                kinds: vec!["compaction_completed"],
+                before: None,
+                after: sequence,
+                ascending: true,
+                through: self.cut()?.read.journal,
+                limit: 1,
+            })?
+            .pop();
+        let Some(completion) = completion else {
+            return Ok(None);
+        };
+        let RuntimeEvent::CompactionCompleted {
+            operation_id,
+            checkpoint_id,
+            activation_id,
+            ..
+        } = completion.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "Compaction completion kind changed".into(),
+            ));
+        };
+        if operation_id != operation {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign Compaction completion".into(),
+            ));
+        }
+        let checkpoint = self
+            .store
+            .observation_projection_activation(activation_id)?;
+        if checkpoint.checkpoint_id != checkpoint_id || checkpoint.activation_id != activation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "Compaction checkpoint identity changed".into(),
+            ));
+        }
+        Ok(Some(Box::new(checkpoint)))
+    }
+
+    pub(crate) fn inspection_compaction_calls(
+        &self,
+        sequence: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<TraceInspectionCompactionCalls, ConversationStoreError> {
+        let operation = self.compaction_operation(sequence)?;
+        let cut = self.cut()?;
+        let source = self.store.observation_compaction_call_ids(
+            cut,
+            &operation,
+            (offset > 0).then_some(offset),
+            limit.min(8),
+        )?;
+        let audit_cut = crate::model::auxiliary::AuxiliaryAuditCut {
+            journal: cut.read.journal,
+        };
+        let mut items = Vec::with_capacity(source.items.len());
+        for (started_sequence, call_id) in source.items {
+            let call = self
+                .store
+                .load_auxiliary_call(&call_id, audit_cut)?
+                .filter(|call| call.started_sequence == started_sequence)
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "Compaction Call audit missing at cut".into(),
+                    )
+                })?;
+            let preceding_call = match call.business_source {
+                crate::model::auxiliary::AuxiliaryBusinessSource::Compaction {
+                    operation_id,
+                    preceding_call,
+                } if operation_id == operation => preceding_call,
+                _ => {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "foreign Compaction Call".into(),
+                    ));
+                }
+            };
+            let (previous_summary, strategy) = match call.input {
+                crate::model::auxiliary::AuxiliaryInputEvidence::Compaction {
+                    previous_summary,
+                    output_strategy,
+                    ..
+                } => (previous_summary, Some(output_strategy)),
+                _ => (None, None),
+            };
+            let requests = self
+                .store
+                .read_auxiliary_call_requests(&call_id, audit_cut, None, 3)?;
+            items.push(TraceInspectionCompactionCall {
+                requests_domain: format!(
+                    "trace.records.{sequence}.detail.calls.{call_id}.requests"
+                ),
+                request_count: requests.len() as u64,
+                call_id,
+                started_sequence,
+                settled_sequence: call.settled_sequence,
+                outcome: call.outcome,
+                preceding_call,
+                previous_summary,
+                strategy,
+            });
+        }
+        Ok(TraceInspectionCompactionCalls {
+            domain: format!("trace.records.{sequence}.detail.calls"),
+            total: source.total,
+            items,
+            next_offset: source.next_offset,
+        })
+    }
+
+    pub(crate) fn inspection_compaction_requests(
+        &self,
+        sequence: u64,
+        call_id: &crate::runtime::identity::AuxiliaryCallId,
+    ) -> Result<Vec<crate::model::auxiliary::AuxiliaryRequestAudit>, ConversationStoreError> {
+        let operation = self.compaction_operation(sequence)?;
+        let audit_cut = crate::model::auxiliary::AuxiliaryAuditCut {
+            journal: self.cut()?.read.journal,
+        };
+        let call = self
+            .store
+            .load_auxiliary_call(call_id, audit_cut)?
+            .ok_or_else(|| {
+                ConversationStoreError::InvalidReference("Compaction Call is absent at cut".into())
+            })?;
+        if !matches!(call.business_source, crate::model::auxiliary::AuxiliaryBusinessSource::Compaction { operation_id, .. } if operation_id == operation)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign Compaction request Call".into(),
+            ));
+        }
+        self.store
+            .read_auxiliary_call_requests(call_id, audit_cut, None, 3)
     }
 
     pub(crate) fn inspection_messages(

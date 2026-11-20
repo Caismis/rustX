@@ -181,6 +181,9 @@ test('skill cards render, edit and upload package display information from the w
 test('skill directories copy, move and delete from their exact scopes', async ({page}) => {
   const fixture = await startDogfood();
   const errors: string[] = [];
+  const wire = await wireProbe(page);
+  let deletingGlobal = false;
+  let catalogBeforeSourceRefresh: Set<string | number> | undefined;
   page.on('pageerror', error => errors.push(error.message));
   try {
     const user = join(fixture.directory, 'home/rustx/.agents/skills');
@@ -205,7 +208,13 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     const localShadow = seed(local, 'shadow-guide', 'Workspace shadow definition');
     writeFileSync(fixture.settings, readFileSync(fixture.settings, 'utf8') + '\n[agent]\nskills = "all"\n');
 
-    await routeWorkspaceHost(page, fixture);
+    await routeWorkspaceHost(page, fixture, undefined, request => {
+      if (!deletingGlobal || catalogBeforeSourceRefresh || !request.url().endsWith('/configuration')) return;
+      const body = request.postDataJSON();
+      if (body.operation?.expected_directory === fixture.workspaceA && body.operation.kind === 'read') {
+        catalogBeforeSourceRefresh = new Set(wire.requests.filter(row => row.method === 'skills/list').map(row => row.id));
+      }
+    });
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page).toHaveTitle(/rustX/);
@@ -301,8 +310,19 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     await deleteDialog.getByRole('button', {name: 'Cancel', exact: true}).click();
     expect(existsSync(globalShadow)).toBe(true);
     await action(card(global, 'shadow-guide'), 'Delete');
+    deletingGlobal = true;
     await deleteDialog.getByRole('button', {name: 'Delete', exact: true}).click();
     await expect(card(global, 'shadow-guide')).toHaveCount(0);
+    // Deletion rescans the catalogs immediately and again when the source read
+    // settles. Wait for the workspace catalog requested after that real Host
+    // response; the first rescan can remove the Global card before the source
+    // read starts the second, disabling an already opened Delete menu mid-click.
+    await expect.poll(() => wire.responses.some(reply => {
+      const request = wire.requests.find(row => row.id === reply.id);
+      return catalogBeforeSourceRefresh && !catalogBeforeSourceRefresh.has(reply.id)
+        && request?.method === 'skills/list' && request.params.target.kind === 'workspace'
+        && request.params.target.directory === fixture.workspaceA && reply.result?.type === 'skills';
+    })).toBe(true);
     expect(existsSync(globalShadow)).toBe(false);
     expect(existsSync(localShadow)).toBe(true);
     await action(workspaceCopy, 'Delete');

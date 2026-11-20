@@ -46,6 +46,13 @@ pub trait JournalStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
         snapshot: &crate::runtime::workflow::WorkflowRunDefinitionSnapshot,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Atomically admit a proactive Compaction Started fact and its initial
+    /// operation status; neither fact may be visible without the other.
+    fn append_compaction_admission(
+        &self,
+        started: RuntimeEventEnvelope,
+        status: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError>;
     /// Commits a non-success Workflow-owned child terminal fact without a
     /// parent inbound notification. Successful Workflow terminals must use
     /// [`JournalStore::commit_workflow_agent_terminal`] so their value

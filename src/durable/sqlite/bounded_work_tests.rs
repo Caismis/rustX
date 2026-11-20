@@ -23,6 +23,7 @@ pub(super) fn freeze_native_input(store: &SqliteConversationStore, snapshot: &mu
     let request = crate::model::types::ModelRequest {
         response_schema: None,
         response_byte_limit: None,
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         continuation_source: None,
         images: snapshot.images.clone(),
         invocation: snapshot.invocation.clone(),
@@ -86,11 +87,13 @@ fn select_fixed_seed(store: &SqliteConversationStore) {
             call_sources: vec![],
             result_call: None,
         }],
+        prefix_coverage: None,
         summary_metadata: None,
         summary_generation: None,
     };
     store
         .commit_projection(ProjectionCommitInput {
+            prefix_proof: None,
             grant: CancellationSignal::new()
                 .authorize_compaction_commit(operation_id.clone())
                 .unwrap(),
@@ -1066,6 +1069,8 @@ pub(crate) fn append_completed_turns(
         let request = crate::model::ModelRequest {
             response_schema: None,
             response_byte_limit: None,
+            prompt_fallback_authorization:
+                crate::model::types::PromptFallbackAuthorization::default(),
             continuation_source: None,
             images: snapshot.images.clone(),
             invocation: snapshot.invocation.clone(),
@@ -1087,7 +1092,11 @@ pub(crate) fn append_completed_turns(
             .unwrap();
         phase("commit_model_turn_start");
         store
-            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .commit_model_turn_start(
+                &[],
+                &snapshot,
+                chrono::DateTime::from_timestamp(1_786_104_000, 123_456_789).unwrap(),
+            )
             .unwrap();
         phase("event:model_request_completed");
         let mut event = envelope(

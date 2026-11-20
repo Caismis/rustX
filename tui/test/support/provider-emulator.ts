@@ -142,8 +142,8 @@ export class ProviderEmulator {
   }
 
   /** Await an exact provider frontier, without polling or sleeping. */
-  async awaitGate(name: string): Promise<void> {
-    await this.#control("GET", `/observations/await?kind=gate_reached&name=${encodeURIComponent(name)}`);
+  async awaitGate(name: string, timeoutMs = AWAIT_TIMEOUT_MS): Promise<void> {
+    await this.#control("GET", `/observations/await?kind=gate_reached&name=${encodeURIComponent(name)}&timeoutMs=${timeoutMs}`);
   }
 
   /** Release only the named scenario gate. */

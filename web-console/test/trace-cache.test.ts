@@ -225,6 +225,22 @@ it('native lifecycle patches repair selected history alongside a disjoint live t
   expect(updated.selection).toMatchObject({ state: 'completed', timing: { ...old.timing, duration_ms: '123' } });
 });
 
+it('repairs only the exact compaction row with its latest native phase', () => {
+  const generating = { mode: 'proactive', status: { operation_id: 'op-1', admission_generation: '1', triggering_attempt_id: null,
+    waiting_attempt_id: null, phase: 'generating', accepted_fragments: 0, diagnostic: null }, outcome: null } as const;
+  const ready = { ...generating, status: { ...generating.status, phase: 'ready' as const } };
+  const old = entry(1, { kind: 'compaction', request: null, state: 'running', compaction: generating });
+  const unrelated = entry(2, { kind: 'compaction', request: null, compaction: { ...generating, status: { ...generating.status, operation_id: 'op-2' } } });
+  const cache = selectTrace(replaceTrace({ records: [old, unrelated] }), old.id);
+  const next = refreshTrace(cache, { records: [old, unrelated] }, [{
+    fields: old.fields, collections: old.collections, id: old.id, location: old.location,
+    state: 'pending', timing: old.timing, attachments: [], truncated: false, compaction: ready,
+  }], undefined, true);
+  expect(next.page.records[0].compaction).toEqual(ready);
+  expect(next.selection?.compaction).toEqual(ready);
+  expect(next.page.records[1].compaction).toEqual(unrelated.compaction);
+});
+
 it('paging completion repairs newly loaded interests after a terminal notification raced the page', async () => {
   server = new Server();
   server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(100)], next_cursor: 'trace:100' } });
@@ -383,6 +399,26 @@ it('a body update retains readable detail and coalesces changes while the replac
   expect(failed.details[original.id]).toMatchObject({ loading: false, stale: false, error: 'Read failed', detail: { truncated: true } });
 });
 
+it('an advanced Journal cut refreshes a Compaction Call page with an unchanged record', () => {
+  const record = entry(1, { kind: 'compaction', request: null, state: 'running',
+    compaction: { mode: 'proactive', status: null, outcome: null } });
+  const before = { ...rootCut(), revision: '10', through: '10' };
+  const after = { ...before, revision: '11', through: '11' };
+  const page = { ...traceReceipt(detail(1)).page, cursor: before.revision, read_cut: before };
+  const cache = completeTraceDetail(replaceTrace({ records: [record], read_cut: before }), record.id, 1,
+    undefined, undefined, undefined, undefined, page);
+  const updated = refreshTrace(cache, { records: [record], read_cut: after });
+  expect(updated.readCuts?.[record.id]).toEqual(after);
+  expect(updated.details[record.id]).toMatchObject({ stale: true, page });
+  const loading = beginTraceDetail(updated, record.id);
+  expect(loading.details[record.id]).toMatchObject({ loading: true, stale: false, page });
+  const newer = { ...after, revision: '12', through: '12' };
+  const advanced = refreshTrace(loading, { records: [record], read_cut: newer });
+  const late = completeTraceDetail(advanced, record.id, advanced.epoch, undefined, undefined, undefined, undefined, { ...page, cursor: after.revision, read_cut: after });
+  expect(late.details[record.id]).toMatchObject({ stale: true, page: { read_cut: after } });
+  expect(late.readCuts?.[record.id]).toEqual(newer);
+});
+
 it('Session-only enrichment preserves pending Trace page and detail reads and their authority', async () => {
   server = new Server();
   server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(10)], next_cursor: 'trace:10' } });
@@ -438,7 +474,7 @@ it('native TraceChanged coalesces burst reads independently of Session enrichmen
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v80').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  const emit = (event: import('../../protocol/app-server/v82').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
   emit({ type: 'read_domains_updated', transcript: { entries: [] }, trace: {records:[],next_cursor:null} });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });
@@ -458,15 +494,19 @@ it('native TraceChanged coalesces burst reads independently of Session enrichmen
 
 it('a delayed summary cannot roll back a newer native head while retained detail stays readable', async () => {
   server = new Server();
-  const running = entry(1, { state: 'running' });
+  const generating = { mode: 'proactive', status: { operation_id: 'op-1', admission_generation: '1', triggering_attempt_id: null,
+    waiting_attempt_id: null, phase: 'generating', accepted_fragments: 0, diagnostic: null }, outcome: null } as const;
+  const committed = { ...generating, status: { ...generating.status, phase: 'committed' as const }, outcome: 'committed' as const };
+  const running = entry(1, { kind: 'compaction', request: null, state: 'running', compaction: generating });
   server.snapshots.set('A', { ...snapshot(), trace: { records: [running], next_cursor: null } });
   await server.attached('A'); server.held.add('session/trace');
   server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event: { type: 'trace_changed' } } });
   const stale = await server.waitFor('session/trace', 1);
-  await server.update('A', { ...snapshot(), trace: { records: [entry(1)], next_cursor: null } });
+  await server.update('A', { ...snapshot(), trace: { records: [entry(1, { kind: 'compaction', request: null, compaction: committed })], next_cursor: null } });
   server.socket.success(stale, {refreshed:traceRefreshed(stale), type: 'trace', page: { read_cut: rootCut(), records: [running], next_cursor: null } });
   await server.waitFor('session/trace', 2);
   expect(server.client.getSnapshot().views.A.trace!.page.records[0].state).toBe('completed');
+  expect(server.client.getSnapshot().views.A.trace!.page.records[0].compaction).toEqual(committed);
 });
 
 it('overlapping snapshot supersedes paging and unchanged pending detail without stranding loading', async () => {

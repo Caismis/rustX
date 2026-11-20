@@ -352,11 +352,6 @@ async fn child_fixture_scoped_at_with_mode(
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 status_clock: std::sync::Arc::new(rustx::context::SystemClock),
-                policy: rustx::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator: Arc::new(rustx::context::DefaultTokenEstimator),
                 status_engine: Some(rustx::context::AgentStatusEngine::default()),
             },
@@ -690,11 +685,6 @@ async fn compose_parent_runtime_plane(
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             status_clock: std::sync::Arc::new(rustx::context::SystemClock),
-            policy: rustx::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(rustx::context::DefaultTokenEstimator),
             status_engine: Some(rustx::context::AgentStatusEngine::default()),
         },
@@ -1365,23 +1355,10 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
         rustx::runtime::subagent::InheritedExecutionPolicy {
             model_timeout: inherited_policy(),
             tool_deadline: inherited_tool_deadline_policy(),
-            context: rustx::context::SessionContextPolicy {
-                reserve_tokens: 123,
-                keep_recent_tokens: 456,
-                summary_output_cap: Some(789),
-            },
         },
         &physical_root,
         &workspace_path,
         &rustx::runtime::subagent::SubagentTerminalMode::Normal,
-    );
-    assert_eq!(
-        spec.context,
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 123,
-            keep_recent_tokens: 456,
-            summary_output_cap: Some(789),
-        }
     );
     assert_eq!(spec.model_timeout_policy, inherited_policy());
     assert_ne!(

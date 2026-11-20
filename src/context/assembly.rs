@@ -435,6 +435,47 @@ pub struct AcceptedContext {
 }
 
 impl AcceptedContext {
+    /// Add an activation-dependent native User reminder to the frozen batch.
+    /// The caller reuses any reminder still staged for the upcoming start.
+    /// Generation identity and all previously accepted records remain unchanged.
+    pub(crate) fn refresh_permission_reminder(
+        &mut self,
+        text: &str,
+    ) -> Result<(), ContextAssemblyError> {
+        let entry = permission_reminder_entry(text)?;
+        let bytes = self
+            .user_messages
+            .iter()
+            .flat_map(|entry| &entry.content)
+            .chain(entry.content.iter())
+            .map(|block| match block {
+                UserContentBlock::Text(text) => text.text.len(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        if bytes > MAX_CONTEXT_TEXT_BYTES {
+            return Err(ContextAssemblyError::InvalidProposal(
+                "mandatory context exceeds the total contribution budget".to_owned(),
+            ));
+        }
+        let owner = entry.identity.clone();
+        self.user_messages.push(entry.into_accepted());
+        if !self
+            .generation
+            .contributors
+            .iter()
+            .any(|generation| generation.identity == owner)
+        {
+            self.generation.contributors.push(native_generation(
+                NativeContextContributor::PermissionReminder,
+            ));
+            self.generation
+                .contributors
+                .sort_by(|left, right| left.identity.cmp(&right.identity));
+        }
+        Ok(())
+    }
+
     /// Select frozen accepted records visible in this actual request.
     pub(crate) fn request_contributions(&self, active: &[MessageBlock]) -> Vec<ContributionStart> {
         self.user_messages
@@ -859,22 +900,7 @@ impl ContextAssembly {
         let mut entries = Vec::new();
         let mut native_sections = self.system_sections(native)?;
         if let Some(text) = &native.permission_reminder {
-            validate_text(text, "permission reminder")?;
-            entries.push(contribution_entry(
-                &ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder),
-                ContextProposal::NativeUserMessage {
-                    message: UserMessageProposal {
-                        content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
-                            text: format!("<system-reminder>\n{text}\n</system-reminder>"),
-                        })],
-                    },
-                    metadata: ContextKind::NativeEnvironment,
-                    presentation: None,
-                    emissions: Vec::new(),
-                },
-                ContributionPhase::RequestTime,
-                0,
-            )?);
+            entries.push(permission_reminder_entry(text)?);
         }
 
         // Deferred context. The Agent Loop already staged these in canonical
@@ -1030,15 +1056,7 @@ impl ContextAssembly {
             post_tool_batch_anchor: input.post_tool_batch_anchor,
             user_messages: entries
                 .into_iter()
-                .map(|entry| AcceptedUserContext {
-                    producer: entry.identity,
-                    message_id: None,
-                    presentation: entry.presentation,
-                    emissions: entry.emissions,
-                    source: entry.source,
-                    kind: entry.kind,
-                    content: entry.content,
-                })
+                .map(ContributionEntry::into_accepted)
                 .collect(),
             system_sections: native_sections,
             generation: ContextGeneration {
@@ -1047,6 +1065,31 @@ impl ContextAssembly {
             },
         })
     }
+}
+
+/// Canonical native wrapper shared by admission and durable retry validation.
+pub(crate) fn permission_reminder_content(text: &str) -> Vec<UserContentBlock> {
+    vec![UserContentBlock::Text(crate::message::content::TextBlock {
+        text: format!("<system-reminder>\n{text}\n</system-reminder>"),
+    })]
+}
+
+/// Shared construction for ordinary assembly and post-compaction rearm.
+fn permission_reminder_entry(text: &str) -> Result<ContributionEntry, ContextAssemblyError> {
+    validate_text(text, "permission reminder")?;
+    contribution_entry(
+        &ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder),
+        ContextProposal::NativeUserMessage {
+            message: UserMessageProposal {
+                content: permission_reminder_content(text),
+            },
+            metadata: ContextKind::NativeEnvironment,
+            presentation: None,
+            emissions: Vec::new(),
+        },
+        ContributionPhase::RequestTime,
+        0,
+    )
 }
 
 fn contribution_entry(
@@ -1141,6 +1184,20 @@ struct ContributionEntry {
     content: Vec<UserContentBlock>,
     phase: ContributionPhase,
     sequence: usize,
+}
+
+impl ContributionEntry {
+    fn into_accepted(self) -> AcceptedUserContext {
+        AcceptedUserContext {
+            producer: self.identity,
+            message_id: None,
+            presentation: self.presentation,
+            emissions: self.emissions,
+            source: self.source,
+            kind: self.kind,
+            content: self.content,
+        }
+    }
 }
 
 /// One request-time native effective-system-prompt section.

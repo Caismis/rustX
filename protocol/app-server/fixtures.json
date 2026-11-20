@@ -281,7 +281,7 @@
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 80,
+      "protocol_version": 82,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -299,7 +299,7 @@
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 80,
+      "protocol_version": 82,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -471,6 +471,7 @@
               "outcome": "success",
               "detail": null
             },
+            "compaction": null,
             "calls": [],
             "native_id": null,
             "agent_id": null,

@@ -467,6 +467,7 @@ fn spawn_supervised(
         selected_message_ids: Vec::new(),
     };
     let request_start = AuxiliaryRequestStart {
+        invocation: crate::model::auxiliary::fixture_invocation_identity(),
         call_id,
         ordinal: 0,
         request_id,
@@ -793,6 +794,7 @@ fn runtime_envelope(store: &SqliteConversationStore, event: RuntimeEvent) -> Run
 
 fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
     ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         images: crate::model::images::ResolvedImages::new(),
@@ -1409,6 +1411,7 @@ fn unfinished_blocked_writer_is_unknown_then_joined_commit_is_exact() {
 
     let call_id = AuxiliaryCallId::generate();
     let request_start = AuxiliaryRequestStart {
+        invocation: crate::model::auxiliary::fixture_invocation_identity(),
         call_id: call_id.clone(),
         ordinal: 0,
         request_id: RequestId::generate_auxiliary(&SystemUuidV7Generator).unwrap(),
@@ -1496,6 +1499,7 @@ fn actual_rolled_back_auxiliary_transaction_is_typed_known_not_committed() {
     let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let call_id = AuxiliaryCallId::generate();
     let request_start = AuxiliaryRequestStart {
+        invocation: crate::model::auxiliary::fixture_invocation_identity(),
         call_id: call_id.clone(),
         ordinal: 0,
         request_id: RequestId::generate_auxiliary(&SystemUuidV7Generator).unwrap(),

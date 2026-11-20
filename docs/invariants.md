@@ -370,7 +370,7 @@ reply receivers and observers never own their release.
 
 Each Call has at most three physical request starts. Technical retries retain
 the same frozen semantic input, invocation, selected occurrences and captured
-media; they never renew the original five-minute authority. Retry-After is never
+media; they never renew the original operation deadline. Retry-After is never
 shortened: a required delay over 60 seconds or beyond the original deadline
 declines retry. Failure observation precedes local stream teardown, and both
 teardown and confirmed settlement consume the same absolute backoff. A fresh
@@ -388,9 +388,10 @@ owner retains the exact submitted intent, completion evidence and real thread
 join; a lost reply cannot release its permits or establish noncommit.
 
 One Compaction budget spans all input shrink, technical retry and carryover
-re-entry, including repeated entry in one logical Agent step: twelve
-confirmed or unresolved starts, three shrinks and one five-minute monotonic
-deadline. Its learned Summary input limit is retained across re-entry and
+re-entry, including repeated entry in one logical Agent step. A finite plan
+permits at most 256 normal starts, plus twelve shared recovery actions and at
+most three input shrinks. The original monotonic deadline is five minutes plus
+30 seconds for each planned start after the first, capped at two hours. Its learned Summary input limit is retained across re-entry and
 reduced atomically with its shrink count; carryover degradation cannot restore
 the configured limit or charge again for the same reduction. A matching Store receipt confirms a start; only Store-proven
 noncommit refunds it. Dropping a reservation preserves logical uncertainty
@@ -493,9 +494,11 @@ writer-absent registry entry so a later load can attempt exclusive recovery.
 An unproven physical exit must retain isolation. Neither failure is promoted
 to successful quiescence, and recovery never redispatches an old RequestId.
 
-Cancellation winning Summary operation admission settles the Agent Attempt as
-cancelled with its native reason. It emits neither CompactionFailed nor
-AttemptFailed, including when compaction was recovering a provider overflow.
+Attempt cancellation winning foreground Summary operation admission settles
+that Agent Attempt as cancelled with its native reason. It emits neither
+CompactionFailed nor AttemptFailed, including during provider-overflow recovery.
+Independent asynchronous admission and cancellation belong to the matching
+Session-scoped operation; they cannot cancel or reopen its triggering Attempt.
 Capacity and lifecycle-boundary refusals both arbitrate under the cancellation
 grant: completed cancellation cannot become Busy when Call slots are occupied
 or another native commit holds the lifecycle boundary. Active, uncancelled
@@ -607,7 +610,7 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 114 is the only accepted store. It binds admission-captured Workflow
+SQLite schema 116 is the only accepted store. It binds admission-captured Workflow
 run definition snapshots (`workflow_definition_snapshots`, `workflow_snapshot_chunks`,
 and `workflow_run_snapshots`) atomically to `WorkflowStarted` events, and adds the
 generated workflow-agent node index, without staging tables or mutable YAML fallbacks.
@@ -618,7 +621,7 @@ change fingerprints for text requests. Schema 84 also admits bounded native
 `WorkflowNodeInputRecorded` / `WorkflowNodeOutputRecorded` and their data-node kinds.
 Exact run/type/sequence and full-instance/type/sequence indexes bound Workflow
 trace lookups to the selected run and visit, including absent I/O and terminals.
-Any store other than schema 114 fails with
+Any store other than schema 116 fails with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.
@@ -5180,6 +5183,29 @@ Delivery acceptance means the message was durably committed for delivery; it doe
 
 ## Compaction
 
+Asynchronous Summary lifetime belongs to the Session's active runtime. An
+Attempt's ordinary completion or cancellation cannot revoke that operation;
+blocking/manual work retains its native foreground owner. One proactive slot
+includes a retained ready result, with at most one competing foreground operation.
+The worker never installs. Current Safe Boundary, idle-maintenance or mandatory
+recovery authority validates before staging; ordinary late completion cannot
+change a frozen request or transient replay.
+
+Only a complete accepted ChunkPlan can seal source coverage. Comparable roots
+and strict continuous-prefix advancement permit current validation; equal
+coverage retains the active checkpoint, smaller coverage is superseded and
+incomparable coverage is refused. Installation preserves the exact current suffix
+and later appends, reprices the complete primary request and commits through
+current source/owner fences and Head CAS. Operation identity and admission
+generation fence all callbacks and progress. Clone/Fork/import does not transfer
+native installation coverage authority.
+
+Asynchronous generation retains its original Auxiliary deadline, request/EOF
+timeouts and cumulative work allowance, without an added compaction-wide
+deadline or ready-result TTL. Joining/retry/re-entry never renews it. A new
+blocking replacement keeps the separately derived blocking deadline. See
+[asynchronous compaction](asynchronous-compaction.md).
+
 Compaction preserves immutable canonical facts and commits a typed historical
 projection. It materializes Derived summary context with scoped provenance and
 retained Original references, makes a complete inclusion/exclusion decision
@@ -5193,22 +5219,12 @@ call-result combinations require explicit unambiguous pairing. Repeated wire
 labels across historical batches are valid; orphan or split batches reject.
 Projected tools never create execution events or statistics.
 
-The committed summary has two halves with different authorities (Issue #140):
-
-- **Semantic content** is the summary model's answer to one fixed structured
-  Markdown contract — Goal, Constraints & Preferences, Progress (Done / In
-  Progress / Blocked), Key Decisions, Next Steps, Critical Context — required
-  by the production summarizer instruction. Structured means exactly this
-  fixed contract: rustX never parses the generated Markdown back into fields,
-  and no free-form output is advertised.
-- **Canonical tool facts** are extracted deterministically from the retired
-  span's canonical tool-call structure into the typed
-  `CompactionSummaryMetadata` retained on the immutable checkpoint: native `read(path)` contributes a read, native
-  `edit(path)`/`write(path)` contribute a modification, and the owning native
-  tool module owns the argument decoding that identifies the path. Both lists
-  are unique, in canonical ascending order, and disjoint — modification wins
-  over read — and the durable round trip preserves the validated value
-  exactly.
+The committed summary combines a validated rolling JSON summary rendered as
+fixed Markdown sections with deterministic canonical tool facts. The runtime
+strict schema owns semantic fields; generated prose cannot create trusted paths.
+Native `read(path)` contributes a read and native `edit(path)`/`write(path)` a
+modification. Lists are unique, sorted and disjoint, with modification winning
+over read. Typed metadata is retained on the immutable checkpoint.
 
 Metadata accumulates over the selected compaction lineage only: the typed
 metadata of earlier compaction summaries inside the selected retired span is
@@ -5227,35 +5243,35 @@ Because canonical history has no System role, the whole structurally valid
 active prefix is eligible for replacement. Effective System authority remains
 outside Surface history and is carried exactly by each Request Snapshot.
 
-Planning bounds the actual summary-model request, not the raw retired span.
-`SummaryRequest::model_input()` is the shared deterministic assembly of the
-fixed instruction, the rendered retired transcript, and the canonical User
-wrapper. The transcript is a bounded plain-text rendering, never the canonical
-JSON encoding: JSON structure, field names, and escaping cost more model input
-than the conversation they describe, and tool results, replayed reasoning, and
-tool-call arguments are truncated with an explicit truncation notice, so a
-summary request is always smaller than the history it replaces. Its estimated
-input must fit the summary invocation's own effective context window minus the
-session reserve minus its effective output budget — the reserve applies to
-this request exactly as it applies to a primary one, because the estimate that
-sizes it is approximate. Tools, Agent Status, Skill catalog, and provider
-continuation are absent from this invocation. Retention remains a token
-target, not a message-count target.
+The runtime derives one deterministic policy from the frozen primary and Summary
+models. For context window C, the safety margin is `M(C) = clamp(ceil(C / 20),
+1, 65536)`. With primary window Cp and effective primary output Op, hard input
+limit `H = Cp - Op - M(Cp)` must be positive. Proactive compaction begins at
+`T = floor(0.9 * H)`; input above H requires compaction. The recent-history
+target is `min(ceil(0.15 * H), 20000)` tokens.
 
-A summary model that rejects the assembled request as larger than its own
-context window has measured that estimate, and the measurement is actionable:
-the pipeline replans the same compaction against a halved summary input budget
-(bounded, strictly decreasing, floored) rather than reporting failure. A
-compaction that recovers from a *primary* context overflow additionally plans
-against an `EstimateCorrection` — the exact integer ratio between the estimate
-of the rejected request and the provider-reported count for it, or a fixed
-three-quarters shrink when the provider reported no count. The correction
-scales the soft input limit and nothing else, so the recovery never targets
-the same budget the provider just rejected. It never scales the summary input
-limit, same summary model or not: a correction measures one request, and the
-summary request carries neither the continuation, the tools, nor the effective
-system prompt whose deviation the ratio may record. The summary budget is
-bounded by the summary model's own rejection.
+For Summary window Cs and output capability cap, initial total Summary output is
+`min(cap, max(1, floor(Cs / 4)), max(1, floor(H / 4)))`, raised when necessary
+to cover frozen explicit reasoning plus 1024 visible JSON tokens. An impossible
+reasoning/output combination is rejected. Summary input is independently limited
+to `Cs - M(Cs) - Summary output`; neither the primary nor Summary model borrows
+the other's window. Summary output can grow within the bounded derived ceiling
+when output is exhausted; frozen reasoning settings do not change.
+
+For example, Cp=256000, Op=16000, Cs=128000 and Summary cap=64000 give
+M(Cp)=12800, H=227200, T=204480, recent=20000, Summary output=32000 and
+Summary input=89600. With Cp=128000, Op=8000, Cs=16000, cap=8000 and an
+explicit 5000-token Summary reasoning budget, H=113600, recent=17040, Summary
+output=6024 and Summary input=9176. These are accounting values, not claims
+about the quality of a model's summary.
+
+Summary processing uses sequential largest-fitting UTF-8 source ranges and a
+private rolling JSON value validated against the runtime-owned strict schema.
+Each complete Summary request and the final complete primary request are priced
+independently. Summary input reductions and primary overflow corrections apply
+only to the respective measured request. No tools or spill-file fetching are
+available to Summary. One final checkpoint commits after all chunks and final
+fit validation; partial summaries never activate a projection.
 
 A provider-reported input measurement is authoritative for the request it
 measured and for every request context that measured one is an ordered prefix
@@ -5270,18 +5286,12 @@ The anti-loop compaction progress rule is unaffected: it compares two
 deterministic estimates of the actual request content and never a measurement
 of one provenance against a measurement of another.
 
-The primary request and summary side request have different lineages. A
-primary request uses the attempt-pinned Runtime Resource Snapshot and
-CapabilitySnapshot, current Effective System Prompt, active Surface, current
-Tools, and compatible primary continuation. The summary side request contains
-only runtime-owned summary guidance plus the exact selected retired messages.
-It has no Tools, primary System/project/Skill/extension guidance, primary
-continuation, prompt-prefix dependency, or provider-cache continuity. It does
-not recurse through the Agent Loop. The Pi-inspired organization of the
-guidance is optional free-form prompt guidance; the durable contract remains
-`Result<String, ContextError>`, with no JSON/schema/heading parser or typed
-summary fields. Any useful non-empty text is accepted, while empty or
-whitespace-only text fails.
+The primary request uses its frozen System, Tools, context and compatible
+continuation. The Summary side request has only runtime-owned guidance, the
+selected source range and previous private rolling summary. A typed native format
+rejection or completed contract violation can trigger one operation-local fallback
+only with sealed evidence of a real native execution. A locally validated JSON
+value is deterministically rendered to Markdown.
 
 Runtime observations in the retired span remain historical evidence. A
 summary may say that a task ran earlier and later completed, but summary text
@@ -5305,9 +5315,15 @@ Surface unchanged. The pending provider continuation is invalidated exactly
 once, only after the incompatible Surface rewrite succeeds. Overflow
 compact-and-retry remains bounded to one retry per model turn.
 
-`ContextWindowExceeded` is recovered through exactly one bounded
-compact-and-retry per model turn — the budget never persists across turns; a
-recoverable overflow never settles the attempt.
+Proactive work at or above T can defer only classified pre-commit failures, and
+only while the complete frozen primary request still fits H. Above H and after
+actual provider overflow, failure is terminal. A skipped compaction is distinct
+from completion; cancellation has its own typed fact. Rapid refill is evidenced
+by successive committed compactions at unchanged H, with at most one accepted
+Assistant step between them, both occupancies at least 80% of H, and each gain
+below 5% of H. Two rapid cycles suppress optional work; two consecutive mandatory
+cycles refuse the next mandatory compaction. Two accepted steps, restored
+headroom, meaningful gain, changed H or missing evidence reset the cycle counts.
 
 When a logical step has frozen unresolved-output carryover, the carryover is
 charged as the exact admitted request-only variant during fit planning and
@@ -7350,7 +7366,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   attempt's frozen primary invocation; `explicit` uses a separately resolved
   catalog model, also frozen at admission. There is no production path that
   injects an arbitrary unrelated summarizer beside the attempt's model, and
-  the context summary output cap flows through the runtime-owned protected
+  the derived Summary output allowance flows through the runtime-owned protected
   max-output field.
 
 ## Local runtime process (Issue #42, #428)
@@ -8068,10 +8084,10 @@ outside this historical rule.
 
 Default Summary planning renders history once. Exact monotone whole-request prices
 from `DefaultTokenEstimator` support complete binary interval selection without
-per-message rounded token sums: growing Summary transcript bytes cannot reduce its
-price; deleting a prefix with fixed core inputs cannot increase primary/recent
-prices. Production image/upload capture freezes validated resources for the logical
-generation (manual Compaction: operation lifetime). Shared upload-then-image
+per-message rounded token sums: deleting a prefix with fixed core inputs cannot
+increase primary/recent prices. Summary chunks are priced separately. Primary
+image/upload capture freezes validated resources for the logical generation;
+Compaction capture freezes its own resources for the operation lifetime. Shared upload-then-image
 materialization preserves surviving message bytes under prefix deletion: newest-16
 cannot promote an older omitted occurrence whose sixteen newer occurrences survive.
 Historical-only and complete-primary image unions are frozen separately for slot
@@ -8086,8 +8102,9 @@ Arbitrary estimators receive at most 64 descending complete-boundary queries. A
 preferred validated fit is conclusive; without it, only an exhaustive search can
 select the fallback or prove `CannotFit`. Unexamined candidates yield the distinct
 `SearchIncomplete` outcome, never inferred infeasibility. It admits no Summary or
-Checkpoint and settles once as runtime compaction failure, even after an actual
-provider overflow. Production planning bounds materialization to O(B log N), generic
+Checkpoint. It can be deferred only for eligible proactive work whose complete
+frozen request fits H; otherwise it settles as runtime compaction failure, even
+after actual provider overflow. Production planning bounds materialization to O(B log N), generic
 planning to O(64 B), with one O(N log N + B) preparation pass and O(N + B) retained
 memory. Cooperative yields observe existing Agent cancellation between full estimates
 and before Summary admission. Canonical facts, request starts, commit grants and
@@ -8124,7 +8141,7 @@ invented wire ID. Nullable `wire_id` distinguishes absence from explicit correla
 transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
-This required observation change is carried by App Server v50 and Runtime Client v72.
+This required observation change is carried by App Server v50 and Runtime Client v80.
 
 ## PR #477 bounded activation header integrity
 
@@ -8455,7 +8472,7 @@ See [the storage and lifecycle contract](issue-520/README.md).
   document. Graph/node/depth, editor, value, context and decoder safeguards
   remain independent; source admission does not promise arbitrary execution
   payload or model-context capacity.
-- Workflow file data crosses v72 control records through native-owned document
+- Workflow file data crosses v80 control records through native-owned document
   scratch and 65,536-byte chunks. A ready scratch document is neither a partial
   source file nor a source commit. Only the existing revision-fenced source
   transaction publishes the complete canonical file with one atomic replacement.
@@ -8503,7 +8520,7 @@ visibility cannot prove owner release. Revision/incarnation fences prevent old
 reads or delayed notifications from replacing newer status, and transport loss or
 observation gaps display unavailability rather than fabricated idle. Bounded
 read repair never loads a cold runtime or repeats semantic work. See the
-[status ownership matrix](app-server/shared-control.md#thread-runtime-status-v74-amendment).
+[status ownership matrix](app-server/shared-control.md#thread-runtime-status-v82-amendment).
 
 ## Workflow run snapshot identity, publication, and read authorization (Issue #552)
 

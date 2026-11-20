@@ -573,6 +573,7 @@ mod tests {
         let canonical = messages.clone();
         let summary = crate::context::summarizer::SummaryRequest {
             retired: canonical.clone(),
+            ..Default::default()
         }
         .model_input();
         let crate::model::projected::ModelMessageView::User(content) = summary.messages[0].view()

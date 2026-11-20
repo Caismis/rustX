@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
+import type { SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v82';
 import { useTranslation } from '../../locale/react';
 import { BundledIcon } from '../../presentation/primitives/BundledIcon';
 import { Button } from '../../presentation/primitives/Button';

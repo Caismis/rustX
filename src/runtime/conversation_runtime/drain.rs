@@ -239,6 +239,7 @@ impl RuntimeInner {
                             .cancellation
                             .request_cancel(CancellationReason::RuntimeShutdown);
                     }
+                    self.cancel_async_compaction();
                     let transitioned = self.lifecycle.begin_drain();
                     self.mailbox
                         .steering
@@ -270,6 +271,10 @@ impl RuntimeInner {
                     // external teardown under the manager registry lock.
                     first = !self.drain_started.load(Ordering::Acquire);
                     if first {
+                        // A physically settled Ready Summary is idle for
+                        // residency but still needs its durable terminal fact.
+                        // Running drain already requested this cancellation.
+                        self.cancel_async_compaction();
                         self.observe(ConversationObservation::Shutdown);
                     }
                     self.wake.close();
@@ -505,6 +510,10 @@ impl RuntimeInner {
         self.reap_manual_tail(true).await;
         loop {
             self.wait_for_foreground_operation().await;
+            // Foreground capture has now returned or transferred its worker.
+            // Only at this boundary can a workerless capture be abandoned.
+            self.settle_abandoned_async_capture(None);
+            self.reap_async_compaction(true).await;
 
             // The subagent plane (Issue #60): cancellation intent is already
             // committed (begin_drain); here the drain awaits every child's

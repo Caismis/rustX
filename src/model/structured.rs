@@ -167,11 +167,16 @@ impl ResponseSchema {
 }
 
 /// Preparation strategy, not another model capability or user-facing setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StructuredOutputStrategy {
     Native,
     Prompt,
+    /// Explicit Native-to-Prompt downgrade bound to one Compaction owner.
+    /// Auxiliary admission verifies this identity against its business source.
+    PromptFallback {
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    },
 }
 
 /// One frozen request contract; prompt mode retains the same validation schema.
@@ -185,7 +190,18 @@ pub struct PreparedResponseSchema {
 impl PreparedResponseSchema {
     #[must_use]
     pub const fn is_native(&self) -> bool {
-        matches!(self.strategy, StructuredOutputStrategy::Native)
+        matches!(&self.strategy, StructuredOutputStrategy::Native)
+    }
+    /// Provider isolation requires the strategy to agree with the frozen
+    /// capability, except for the explicitly identified Compaction fallback.
+    #[must_use]
+    pub(crate) const fn matches_capability(&self, supports_native: bool) -> bool {
+        match &self.strategy {
+            StructuredOutputStrategy::Prompt => !supports_native,
+            StructuredOutputStrategy::Native | StructuredOutputStrategy::PromptFallback { .. } => {
+                supports_native
+            }
+        }
     }
     #[must_use]
     pub fn name(&self) -> &str {

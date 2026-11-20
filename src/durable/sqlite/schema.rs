@@ -527,6 +527,10 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
         "(event_operation_id, event_kind) WHERE event_operation_id IS NOT NULL",
     ),
     (
+        "events_auxiliary_compaction_kind_idx",
+        "(json_extract(event_json, '$.event.business_source.operation_id'), event_kind) WHERE json_extract(event_json, '$.event.business_source.operation_id') IS NOT NULL",
+    ),
+    (
         "events_request_id_kind_idx",
         "(event_request_id, event_kind) WHERE event_request_id IS NOT NULL",
     ),

@@ -12,6 +12,7 @@ import { AgentTranscript } from './AgentTranscript';
 import { ContextSeat } from './ContextSeat';
 import { CompactionCheckpoint } from './CompactionCheckpoint';
 import { useCompactionHistory } from './useCompactionHistory';
+import { Button } from '../../presentation/primitives/Button';
 import { sameWorkflowView, useWorkflowContent } from './useWorkflowContent';
 import { ConversationStats } from './UsageStats';
 import { TodoDock } from '../composer/TodoDock';
@@ -23,7 +24,7 @@ import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import { SessionPanel } from './SessionPanel';
 import type { ResponseAction } from '../commands/native';
-import type { CanonicalContentLocator, CompletedResponseView, SessionMessageVersion } from '../../../../protocol/app-server/v80';
+import type { CanonicalContentLocator, CompletedResponseView, SessionMessageVersion } from '../../../../protocol/app-server/v82';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { useMessageVersions } from './message-version-reading';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -198,11 +199,16 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       }}/>}<SessionPanel key={view.id} client={client} sessionId={view.id}/></>}
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       initialHistoryLoading={readingPending || view.readingPreview || view.history?.initialLoading} historical={!!view.history?.window && !view.readingPreview} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript accepted={[...(view.submissions ?? []), ...(view.sendingSubmissions ?? [])].filter(value => value.messageId !== submission?.acceptedMessageId && value.placement !== 'queued')} publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} readable={!readingPending && view.readable && !view.readingPreview} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!readingPending && !view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!readingPending && !view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={readingPending ? undefined : () => client.loadLater(view.id)} loadEarlier={readingPending ? undefined : () => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript accepted={[...(view.submissions ?? []), ...(view.sendingSubmissions ?? [])].filter(value => value.messageId !== submission?.acceptedMessageId && value.placement !== 'queued')} publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.markers.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} readable={!readingPending && view.readable && !view.readingPreview} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!readingPending && !view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!readingPending && !view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={readingPending ? undefined : () => client.loadLater(view.id)} loadEarlier={readingPending ? undefined : () => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}
         editedMessage={view.retrying ? retry?.edited : undefined}
         userMessageHistory={messageControls && !view.readingPreview && !view.retrying ? {
           versions, retry: onRetryMessage, switchVersion,
         } : undefined}/>}
+      {(checkpoints.earlier || checkpoints.later || checkpoints.error) && <div data-compaction-history-navigation="">
+        {checkpoints.earlier && <Button onClick={checkpoints.earlier}>{tx('agent:context.earlier-summaries')}</Button>}
+        {checkpoints.later && <Button onClick={checkpoints.later}>{tx('agent:context.later-summaries')}</Button>}
+        {checkpoints.error && <p role="alert">{checkpoints.error} <Button onClick={checkpoints.retry}>{tx('agent:context.retry-summary')}</Button></p>}
+      </div>}
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>

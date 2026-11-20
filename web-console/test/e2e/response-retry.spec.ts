@@ -6,7 +6,7 @@ import { wireProbe } from './wire-probe';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { transitionFacts } from '../../../protocol/app-server/projection';
-import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v80';
+import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v82';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {

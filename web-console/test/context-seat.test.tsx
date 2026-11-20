@@ -1,10 +1,10 @@
-import { compactReceipt } from './fixture';
 // @vitest-environment jsdom
+import { compactReceipt } from './fixture';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v80';
+import type { CompactionOperationPhase, RuntimeClientContextView, RuntimeClientCompactionOperation } from '../../protocol/app-server/v82';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -14,6 +14,69 @@ async function observe(context: RuntimeClientContextView) {
 }
 function compact() { act(() => { expect(server.client.compact('A')).toBe(true); }); }
 const count = () => server.requests.filter(item => item.request.method === 'context/compact').length;
+const operation = (phase: CompactionOperationPhase, live = true): RuntimeClientCompactionOperation => ({
+  live, status: { operation_id: 'background-operation', admission_generation: '1',
+    triggering_attempt_id: 'ended-attempt', waiting_attempt_id: null,
+    phase, accepted_fragments: 2, diagnostic: null },
+});
+
+it('keeps one independent status across Attempt settlement, Ready and committed publication', async () => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  await observe({ ...base, compaction_operations: [operation('generating')] });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+  expect(screen.getByRole('status').textContent).toContain('Summarizing previous context');
+  expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
+  await observe({ ...base, compaction_operations: [operation('ready')] });
+  expect(screen.getByRole('status').textContent).toContain('Summary ready');
+  expect(view.container.querySelector('[data-shimmer]')).toBeNull();
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+  await observe({ ...base, projection_head: projectionHead(), compaction_operations: [operation('committed', false)] });
+  expect(view.container.innerHTML).toBe('');
+  expect(count()).toBe(0);
+});
+
+it('shows each competing operation once and does not turn repeated chunk progress into Chat markers', async () => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  const context = { ...base, compaction_in_progress: true, compaction_operations: [operation('retrying')],
+    compaction_progress: { operation_id: 'foreground-operation', mode: 'overflow' as const, accepted_fragments: 3, source_ranges: [], generation: null } };
+  await observe(context);
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(2);
+  expect(screen.getByRole('status').textContent).toContain('Context limit reached');
+  await observe({ ...context, compaction_progress: { ...context.compaction_progress, accepted_fragments: 4 } });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(2);
+  expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
+  await observe({ ...context, compaction_progress: { ...context.compaction_progress, operation_id: 'background-operation' } });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+});
+
+it('does not animate cold historical work and shows its typed failure once', async () => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  await observe({ ...base, compaction_operations: [operation('generating', false)] });
+  expect(screen.getByRole('status').textContent).toContain('no longer active');
+  expect(view.container.querySelector('[data-shimmer]')).toBeNull();
+  const failed = operation('failed', false);
+  failed.status.diagnostic = 'Exact independent failure';
+  await observe({ ...base, compaction_operations: [failed] });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+  expect(view.container.querySelectorAll('button')).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Context summary · Context summary failed' }));
+  expect(screen.getByRole('status').textContent).toContain('Exact independent failure');
+  expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
+});
+it('shows distinct foreground and background failures even when their diagnostics match', async () => {
+  const diagnostic = 'Summary generation failed';
+  const background = operation('failed', false);
+  background.status.diagnostic = diagnostic;
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  await observe({ ...base, compaction_operations: [background], compaction_in_progress: true,
+    compaction_progress: { operation_id: 'foreground-operation', mode: 'overflow', accepted_fragments: 0, source_ranges: [], generation: null } });
+  expect(view.container.querySelector('[data-compaction-foreground]')?.getAttribute('data-compaction-operation')).toBe('foreground-operation');
+  await observe({ ...base, compaction_operations: [background], compaction_error: diagnostic });
+  fireEvent.click(screen.getByRole('button', { name: 'Context summary · Context summary failed' }));
+  fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
+  expect(screen.getAllByText(diagnostic)).toHaveLength(2);
+});
+
 it.each([null, 'Exact pre-commit failure'])('exact native release frees only A while its RPC remains held: %s', async error => {
   server.held.add('context/compact');
   server.handlers.set('context/compact', () => (compactReceipt(base)));
@@ -22,16 +85,16 @@ it.each([null, 'Exact pre-commit failure'])('exact native release frees only A w
   const a = await server.waitFor('context/compact', 1);
   expect(screen.getByRole('status').textContent).toContain('Compacting context…');
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
-  await observe({ ...base, compaction_in_progress: true, manual_compaction: { request_id: requestId, released: false, error: null } });
+  await observe({ ...base, compaction_in_progress: true, manual_compaction: { request_id: requestId, released: false, skipped: false, cancelled: false, error: null } });
   view.unmount(); render(<ContextSeat client={server.client} sessionId="A"/>);
   expect(screen.getByRole('status').textContent).toContain('Compacting');
-  await observe({ ...base, compaction_count: 1, compaction_in_progress: true, manual_compaction: { request_id: requestId, released: false, error: null } });
+  await observe({ ...base, compaction_count: 1, compaction_in_progress: true, manual_compaction: { request_id: requestId, released: false, skipped: false, cancelled: false, error: null } });
   expect(screen.getByRole('status').textContent).toBe('compactCompacting context…');
   expect(server.client.compact('A')).toBe(false);
-  await observe({ ...base, compaction_count: 2, manual_compaction: { request_id: 'other-client', released: true, error: null } });
+  await observe({ ...base, compaction_count: 2, manual_compaction: { request_id: 'other-client', released: true, skipped: false, cancelled: false, error: null } });
   expect(server.client.compact('A')).toBe(false); // Neither idle nor unrelated release owns A.
   expect(count()).toBe(1);
-  await observe({ ...base, compaction_count: error ? 0 : 1, manual_compaction: { request_id: requestId, released: true, error } });
+  await observe({ ...base, compaction_count: error ? 0 : 1, manual_compaction: { request_id: requestId, released: true, skipped: false, cancelled: false, error } });
   if (error) fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
   expect(screen.getByRole('status').textContent).toContain(error ?? 'Context compacted');
   compact(); const b = await server.waitFor('context/compact', 2);
@@ -53,11 +116,11 @@ it.each(['missing', 'other-client', 'matching', 'failed'] as const)('lost reply 
   await server.waitFor('context/compact', 1);
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
   await act(async () => { await server.client.disconnect(); });
-  const context = { ...base, compaction_count: evidence === 'failed' ? 0 : 8, ...(evidence === 'missing' ? {} : { manual_compaction: { request_id: ['matching', 'failed'].includes(evidence) ? requestId : 'other-client', released: true, error: evidence === 'failed' ? 'Exact native failure' : null } }) };
+  const context = { ...base, compaction_count: evidence === 'failed' ? 0 : 8, ...(evidence === 'missing' ? {} : { manual_compaction: { request_id: ['matching', 'failed'].includes(evidence) ? requestId : 'other-client', released: true, skipped: false, cancelled: false, error: evidence === 'failed' ? 'Exact native failure' : null } }) };
   server.snapshots.set('A', { ...snapshot(), context });
   await act(async () => { await server.connect(); await server.client.waitForAttachment('A', () => true); });
   if (evidence === 'other-client') {
-    await observe({ ...context, compaction_in_progress: true, manual_compaction: { request_id: 'other-client', released: false, error: null } });
+    await observe({ ...context, compaction_in_progress: true, manual_compaction: { request_id: 'other-client', released: false, skipped: false, cancelled: false, error: null } });
     expect(screen.getByRole('status').textContent).toContain('Compacting context');
     expect(screen.getByRole('status').textContent).toContain('not yet confirmed');
     await observe(context);
@@ -67,6 +130,29 @@ it.each(['missing', 'other-client', 'matching', 'failed'] as const)('lost reply 
   if (evidence === 'failed') fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
   expect(screen.getByRole('status').textContent).toContain(evidence === 'matching' ? 'Context compacted' : evidence === 'failed' ? 'Exact native failure' : 'not yet confirmed');
 });
+it('a skipped receipt releases the gesture without inventing a checkpoint', async () => {
+  server.held.add('context/compact');
+  server.handlers.set('context/compact', () => ({ type: 'context_compaction_skipped' }));
+  render(<ContextSeat client={server.client} sessionId="A"/>);
+  compact(); const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.reply(pending));
+  expect(server.client.getSnapshot().views.A.compactionRequest).toMatchObject({ status: 'skipped' });
+  expect(server.client.getSnapshot().views.A.compactionRequest?.receipt).toBeUndefined();
+  compact(); await server.waitFor('context/compact', 2);
+});
+it.each(['skipped', 'cancelled'] as const)('exact native %s release repairs a lost reply', async outcome => {
+  server.held.add('context/compact');
+  compact(); await server.waitFor('context/compact', 1);
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await act(async () => { await server.client.disconnect(); });
+  server.snapshots.set('A', { ...snapshot(), context: { ...base, manual_compaction: {
+    request_id: requestId, released: true, skipped: outcome === 'skipped', cancelled: outcome === 'cancelled', error: null,
+  } } });
+  await act(async () => { await server.connect(); await server.client.waitForAttachment('A', () => true); });
+  expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe(outcome);
+  expect(server.client.getSnapshot().uncertain.some(item => item.method === 'context/compact')).toBe(false);
+  compact(); await server.waitFor('context/compact', 2);
+});
 it('observes native operations and preserves the exact pre-commit diagnostic', async () => {
   render(<ContextSeat client={server.client} sessionId="A"/>);
   await observe({ ...base, compaction_in_progress: true });
@@ -75,6 +161,27 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
   expect(screen.getByRole('status').textContent).toContain('Summary provider rejected model fixture/exact');
   expect(count()).toBe(0);
+});
+
+it('retires the old manual receipt when a new foreground operation starts', async () => {
+  server.held.add('context/compact');
+  render(<ContextSeat client={server.client} sessionId="A"/>);
+  compact();
+  const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: pending.id, error: { code: -32000, message: 'manual failure' } }));
+  const request = server.client.getSnapshot().views.A.compactionRequest!;
+  expect(request.status).toBe('failed');
+  await observe({ ...base, compaction_in_progress: true, compaction_progress: { operation_id: 'other-operation', mode: 'overflow', accepted_fragments: 1, source_ranges: [], generation: null } });
+  expect(server.client.getSnapshot().views.A.compactionRequest).toBeUndefined();
+  expect(screen.getByRole('status').textContent).toContain('Context limit reached');
+  expect(screen.getByRole('status').textContent).not.toContain('manual failure');
+  await observe({ ...base, compaction_error: 'new overflow failure', compaction_operations: [operation('committed', false)] });
+  fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
+  expect(screen.getByRole('status').textContent).toContain('new overflow failure');
+  await observe({ ...base, compaction_count: 1, latest_compaction: { operation_id: 'other-operation', generation: '1', checkpoint_id: 'other-checkpoint', activation_id: '1', tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' } });
+  expect(server.client.getSnapshot().views.A.compactionRequest).toBeUndefined();
+  expect(screen.getByRole('status').textContent).toContain('Context compacted');
+  expect(screen.getByRole('status').textContent).not.toContain('manual failure');
 });
 it.each([undefined, { estimated: false, model_deferred:false, model_source:null, input_tokens: '25', context_window_tokens: '100', model: 'frozen/model', breakdown: { system_tokens: '5', tool_tokens: '10', message_tokens: '10' } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
@@ -178,9 +285,9 @@ it('a committed checkpoint leaves the live status seat, including after remount'
   compact(); await server.waitFor('context/compact', 1);
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
   await observe({ ...base, compaction_count: 1,
-    manual_compaction: { request_id: requestId, released: true, error: null },
+    manual_compaction: { request_id: requestId, released: true, skipped: false, cancelled: false, error: null },
     projection_head: { ...projectionHead(), checkpoint_id: 'checkpoint-outside-window', activation_id: '4' },
-    latest_compaction: { generation: '1', checkpoint_id: 'checkpoint-outside-window', activation_id: '4',
+    latest_compaction: { operation_id: 'manual-compaction-operation-1', generation: '1', checkpoint_id: 'checkpoint-outside-window', activation_id: '4',
       tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' },
   });
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');

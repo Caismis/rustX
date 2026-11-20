@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { CheckpointReadCut, CheckpointPage, CheckpointValueChunk, RuntimeClientDeliveryItem } from '../../protocol/app-server/v80';
+import type { CheckpointReadCut, CheckpointPage, CheckpointValueChunk, RuntimeClientDeliveryItem } from '../../protocol/app-server/v82';
 import { checkpointReadCutKey, observationReadCutKey } from '../../protocol/app-server/content-identity';
 import { domainOriginalValue } from '../../protocol/app-server/domain-observation';
 import { readTraceSelectedWindow } from '../../protocol/app-server/trace-field';

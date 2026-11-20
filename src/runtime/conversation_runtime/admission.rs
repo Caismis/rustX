@@ -343,9 +343,6 @@ impl RuntimeInner {
         summary_backend: Arc<dyn crate::context::summarizer::SummaryBackend>,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
         let configuration = resources.configuration();
-        let policy = configuration.map_or(self.context.policy, |generation| {
-            generation.config.context_policy()
-        });
         let status_engine = match configuration {
             Some(generation) => generation
                 .config
@@ -358,7 +355,6 @@ impl RuntimeInner {
                 .map(AgentStatusEngine::for_attempt),
         };
         let mut context = ContextRuntime::for_attempt_with_assembly(
-            policy,
             Arc::clone(&self.context.estimator),
             status_engine,
             assembly,
@@ -431,6 +427,7 @@ impl RuntimeInner {
         // client, polling or retry timer.
         self.executor.spawn(async move {
             let mut admit = false;
+            let mut check_idle_install = true;
             loop {
                 let lifecycle_changed = lifecycle.changed();
                 tokio::pin!(lifecycle_changed);
@@ -443,15 +440,23 @@ impl RuntimeInner {
                         break;
                     };
                     inner.reap_manual_tail(false).await;
+                    inner.reap_async_compaction(false).await;
                     {
                         let mut state = inner.lock_state();
+                        let revision = state.resources.revision();
                         inner.publish_runtime_catalogs_locked(&mut state);
                         inner.commit_staged_configuration_locked(&mut state);
+                        check_idle_install |= state.resources.revision() != revision;
                         if !state.configuration_commit_waiting
                             && std::mem::take(&mut state.configuration_admission_deferred)
                         {
                             admit = true;
                         }
+                    }
+                    // A staged configuration commits at this same boundary
+                    // before idle installation chooses its current model.
+                    if check_idle_install {
+                        inner.install_ready_async_when_idle().await;
                     }
                     if admit && !inner.admit_next_scheduled() {
                         inner.admit_next_attempt();
@@ -460,12 +465,15 @@ impl RuntimeInner {
                     commit_blocked =
                         state.catalog_commit_blocked || state.configuration_commit_waiting;
                 }
+                check_idle_install = true;
                 admit = tokio::select! {
                     biased;
                     () = wake.notify.notified() => true,
                     () = mailbox_wake.notified() => true,
                     () = wake.eligibility.notified() => false,
-                    () = &mut lifecycle_changed => false,
+                    // Installation itself enters and leaves a lifecycle admission.
+                    // Recheck configuration blockers without retrying the identical Ready candidate.
+                    () = &mut lifecycle_changed => { check_idle_install = false; false },
                     () = lifecycle.commit_available(), if commit_blocked => false,
                     result = catalog_changes.changed() => {
                         if result.is_err() { break; }

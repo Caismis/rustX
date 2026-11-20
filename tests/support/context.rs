@@ -414,6 +414,7 @@ pub(crate) fn checkpoint_fixture(
         items.push(item);
     }
     CheckpointCandidate {
+        prefix_coverage: None,
         checkpoint_id,
         expected_head: history.cut.checkpoint_id,
         read_cut: store.compaction_resource_cut().unwrap(),
@@ -436,6 +437,7 @@ pub(crate) fn checkpoint_commit_fixture(
     ));
     let signal = rustx::runtime::CancellationSignal::new();
     rustx::durable::projection::ProjectionCommitInput {
+        prefix_proof: None,
         grant: signal
             .authorize_compaction_commit(operation_id.clone())
             .unwrap(),

@@ -2,7 +2,7 @@ import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.t
 import { messageDescriptors } from './message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
 import { displayInteraction } from './interaction-display.ts';
-import type { ContentBinding } from '../../../protocol/app-server/v80.ts';
+import type { ContentBinding } from '../../../protocol/app-server/v82.ts';
 import { expandRuntimeEvent, foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
@@ -176,17 +176,37 @@ export function deferredContent(state: PresentationState) {
  * Pure: the input state is never mutated, so a caller may keep the previous
  * value (for a diff, a test assertion, or an undo of a render).
  */
+function terminalSummaryNotices(context: PresentationState['context']): string[] {
+  return (context.compaction_operations ?? [])
+    .filter(({status}) => ['failed', 'cancelled', 'superseded', 'no_effect'].includes(status.phase))
+    .map(({status}) => status.operation_id);
+}
+
 export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
   const { cursor } = protocolEvent;
   let { event } = protocolEvent;
-  if (event.type === 'checkpoint_advanced') return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
+  if (event.type === 'checkpoint_advanced') {
+    const next = replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
+    if (next.conversationId === state.conversationId) {
+      next.dismissedCompactionNotices = next.context.latest_compaction && next.context.latest_compaction.checkpoint_id !== state.context.latest_compaction?.checkpoint_id
+        ? terminalSummaryNotices(state.context) : state.dismissedCompactionNotices;
+    }
+    return next;
+  }
   const native = nativeSnapshots.get(state);
   if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
   event = expandRuntimeEvent(native, event);
   const projected = foldRuntimeEvent(native, event);
   let view: TranscriptView = transcriptView(state);
-  for (const fact of transitionFacts(event)) view = adaptTranscript(view, fact, projected);
+  let dismissed = state.dismissedCompactionNotices;
+  for (const fact of transitionFacts(event)) {
+    view = adaptTranscript(view, fact, projected);
+    if (fact.type === 'context_compacted') {
+      dismissed = terminalSummaryNotices(fact.context);
+    }
+  }
   const next: PresentationState = { ...view, ...nativeFields(projected), cursor };
+  if (dismissed?.length) next.dismissedCompactionNotices = dismissed;
   nativeSnapshots.set(next, projected);
   preserveHistoryBindings(state, next);
   return next;
@@ -340,7 +360,11 @@ function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, projec
     case 'interaction_pending':
     case 'interaction_settled':
     case 'interaction_removed':
+    case 'context_compaction_operation_updated':
     case 'context_compaction_started':
+    case 'context_compaction_progressed':
+    case 'context_compaction_cancelled':
+    case 'context_compaction_skipped':
     case 'context_compaction_failed':
     case 'context_compacted':
     case 'agent_status_composed':
@@ -502,8 +526,8 @@ function mergeNativeTranscript(state: TranscriptView, fresh: TranscriptView): Tr
   };
 }
 
-function boundedDeferred(rows: import('../../../protocol/app-server/v80.ts').CheckpointPageItem[]) {
- const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v80.ts').CheckpointPageItem[]=[];let bytes=0;
+function boundedDeferred(rows: import('../../../protocol/app-server/v82.ts').CheckpointPageItem[]) {
+ const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v82.ts').CheckpointPageItem[]=[];let bytes=0;
  for(const row of [...unique.values()].reverse()){const size=new TextEncoder().encode(JSON.stringify(row)).length;if(kept.length===512||bytes+size>4*1024*1024)break;bytes+=size;kept.push(row);}
  return kept.reverse();
 }

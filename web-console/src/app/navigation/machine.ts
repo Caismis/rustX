@@ -1,7 +1,7 @@
 import { actionError } from '../../bindings/action-error';
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
-import type { CanonicalContentLocator, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v80';
+import type { CanonicalContentLocator, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v82';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { RpcFailure } from '../../client/errors';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';

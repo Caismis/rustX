@@ -139,7 +139,14 @@ impl ProjectionStore for SqliteConversationStore {
     ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
         self.read_transaction(|transaction| {
             #[cfg(test)]
-            if Self::consume(&self.fail_projection_history_remaining) {
+            if Self::consume(&self.fail_projection_history_remaining)
+                || self
+                    .fail_projected_history_when
+                    .lock()
+                    .expect("projection read fault")
+                    .as_ref()
+                    .is_some_and(|probe| probe())
+            {
                 return Err(storage("fault injected: post-commit hot projection read"));
             }
             projection::selected_history(transaction, &self.conversation_id, &self.conn.manifest)
@@ -295,6 +302,14 @@ impl ProjectionStore for SqliteConversationStore {
     ) -> Result<Option<crate::durable::projection::ProjectionCommitReceipt>, ConversationStoreError>
     {
         projection::receipt(&*self.lock()?, operation, fingerprint)
+    }
+    fn compaction_restart_evidence(
+        &self,
+        operation: &crate::runtime::identity::CompactionOperationId,
+    ) -> Result<crate::durable::projection::CompactionRestartEvidence, ConversationStoreError> {
+        self.read_transaction(|transaction| {
+            projection::restart_evidence(transaction, &self.conversation_id, operation)
+        })
     }
     fn commit_projection(
         &self,

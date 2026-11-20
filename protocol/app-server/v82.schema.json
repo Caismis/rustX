@@ -4528,6 +4528,16 @@
           "const": "unsupported"
         },
         {
+          "description": "The provider explicitly rejected the exact native JSON Schema field.\nThis is distinct from other unsupported features and request errors.",
+          "type": "string",
+          "const": "native_format_unsupported"
+        },
+        {
+          "description": "A completed Native structured response was not one schema-valid JSON\nobject. It excludes refusals, truncation, tools and transport failures.",
+          "type": "string",
+          "const": "structured_output_contract_violation"
+        },
+        {
           "description": "The model generated tool intent that cannot become a trustworthy\ncanonical [`ToolCall`](crate::tools::types::ToolCall).\n\nThis is a *generation* defect, not a transport defect and not a Tool\nschema rejection: the proposal never crossed `ToolCall` acceptance, so\nnothing executed, nothing was settled, and nothing entered canonical\nhistory. The Agent Loop owns the bounded corrective regeneration this\nclass authorizes; see [`MalformedToolProposalSource`] for the\nprovider-independent provenance carried alongside it.",
           "type": "string",
           "const": "malformed_tool_proposal"
@@ -4937,7 +4947,6 @@
       ]
     },
     "TraceRecord": {
-      "description": "One bounded pageable ledger record.",
       "type": "object",
       "properties": {
         "fields": {
@@ -4997,6 +5006,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/TraceToolSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCompaction"
             },
             {
               "type": "null"
@@ -5329,6 +5348,7 @@
         "completed",
         "failed",
         "cancelled",
+        "skipped",
         "timed_out",
         "limited",
         "denied",
@@ -5829,6 +5849,142 @@
         "block_index"
       ]
     },
+    "TraceCompaction": {
+      "description": "Original admission and independently published lifecycle at this read cut.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CompactionMode"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompactionOperationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCompactionOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ]
+    },
+    "CompactionMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "blocking",
+            "manual",
+            "proactive"
+          ]
+        },
+        {
+          "description": "Recovery from an actual provider context-overflow rejection.",
+          "type": "string",
+          "const": "overflow"
+        }
+      ]
+    },
+    "CompactionOperationStatus": {
+      "description": "One runtime-admitted operation. Attribution never grants Attempt ownership.",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/CompactionOperationId"
+        },
+        "admission_generation": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "triggering_attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waiting_attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/CompactionOperationPhase"
+        },
+        "accepted_fragments": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "admission_generation",
+        "phase",
+        "accepted_fragments"
+      ]
+    },
+    "CompactionOperationId": {
+      "description": "One compaction operation, allocated before its lifecycle facts.",
+      "type": "string"
+    },
+    "CompactionOperationPhase": {
+      "description": "Generation readiness and projection commitment are distinct states.",
+      "type": "string",
+      "enum": [
+        "generating",
+        "retrying",
+        "ready",
+        "foreground_waiting",
+        "committed",
+        "failed",
+        "cancelled",
+        "superseded",
+        "no_effect"
+      ]
+    },
+    "TraceCompactionOutcome": {
+      "description": "One bounded pageable ledger record.",
+      "type": "string",
+      "enum": [
+        "committed",
+        "failed",
+        "cancelled",
+        "skipped",
+        "superseded",
+        "no_effect"
+      ]
+    },
     "TraceToolCall": {
       "description": "One canonical `ToolCall` the model proposed.\n\nA proposal proves that the generation assembled a call. It never proves\nthat execution started: a started Tool record is separate evidence.",
       "type": "object",
@@ -6172,11 +6328,6 @@
           "const": "instructions"
         },
         {
-          "description": "The context budgeting/projection policy.",
-          "type": "string",
-          "const": "context_policy"
-        },
-        {
           "description": "The model-facing Tool catalog.",
           "type": "string",
           "const": "tools"
@@ -6261,6 +6412,33 @@
         {
           "type": "object",
           "properties": {
+            "page": {
+              "$ref": "#/$defs/TraceInspectionCompactionCalls"
+            },
+            "checkpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeClientProjectionHeadView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "compaction"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "definition": {
               "$ref": "#/$defs/TraceToolDefinitionSelection"
             },
@@ -6314,6 +6492,309 @@
           ]
         }
       ]
+    },
+    "TraceInspectionCompactionCalls": {
+      "description": "An operation-owned page; continuation is an exclusive Journal coordinate.",
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "total": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceInspectionCompactionCall"
+          }
+        },
+        "next_offset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "total",
+        "items"
+      ]
+    },
+    "TraceInspectionCompactionCall": {
+      "description": "A Call's exact native causality; physical requests have their own page.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "started_sequence": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "settled_sequence": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preceding_call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryGenerationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strategy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredOutputStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requests_domain": {
+          "type": "string"
+        },
+        "request_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "started_sequence",
+        "requests_domain",
+        "request_count"
+      ]
+    },
+    "AuxiliaryCallId": {
+      "type": "string",
+      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "AuxiliaryCallOutcome": {
+      "description": "Terminal outcome of one auxiliary Call.",
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "AuxiliaryCallRef": {
+      "description": "Exact settled Call preceding another Call in a Compaction operation.\nThis names audit causality even when the Call failed or never dispatched.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "through_journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "call_id",
+        "through_journal"
+      ]
+    },
+    "SummaryGenerationRef": {
+      "description": "Exact auxiliary Summary Call that generated one retained checkpoint.\n\nThis is source execution provenance, not an input-identity inference. The\nsource Conversation and original inclusive Journal cut remain stable across\nrepeated Clone/Fork operations.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "through_journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "call_id",
+        "through_journal"
+      ]
+    },
+    "StructuredOutputStrategy": {
+      "description": "Preparation strategy, not another model capability or user-facing setting.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "native",
+            "prompt"
+          ]
+        },
+        {
+          "description": "Explicit Native-to-Prompt downgrade bound to one Compaction owner.\nAuxiliary admission verifies this identity against its business source.",
+          "type": "object",
+          "properties": {
+            "prompt_fallback": {
+              "type": "object",
+              "properties": {
+                "operation_id": {
+                  "$ref": "#/$defs/CompactionOperationId"
+                }
+              },
+              "required": [
+                "operation_id"
+              ]
+            }
+          },
+          "required": [
+            "prompt_fallback"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RuntimeClientProjectionHeadView": {
+      "description": "Projection ownership is independent of the local execution trajectory.",
+      "type": "object",
+      "properties": {
+        "checkpoint_id": {
+          "$ref": "#/$defs/CheckpointId"
+        },
+        "activation_id": {
+          "$ref": "#/$defs/ProjectionActivationId"
+        },
+        "transcript_anchor": {
+          "description": "Insert the historical marker after this native transcript position.\nCaptured at activation; independent of Ledger and Journal coordinates.",
+          "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+        },
+        "base_frontier": {
+          "$ref": "#/$defs/LedgerFrontier"
+        },
+        "activation_ledger": {
+          "$ref": "#/$defs/LedgerFrontier"
+        },
+        "origin": {
+          "$ref": "#/$defs/OriginActivation"
+        },
+        "destination_installation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineageInstallationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "derived_items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "summary_preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id",
+        "activation_id",
+        "transcript_anchor",
+        "base_frontier",
+        "activation_ledger",
+        "origin",
+        "original_items",
+        "derived_items"
+      ]
+    },
+    "ProjectionActivationId": {
+      "description": "Checkpoint activation order, independent of the Ledger and Journal domains.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "LedgerFrontier": {
+      "description": "Inclusive canonical commit position, independent of Journal and activation order.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "OriginActivation": {
+      "description": "Immutable source activation. Destination installation is a different coordinate.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "activation": {
+          "$ref": "#/$defs/ProjectionActivationId"
+        },
+        "completed_journal": {
+          "$ref": "#/$defs/JournalFrontier"
+        }
+      },
+      "required": [
+        "conversation_id",
+        "activation",
+        "completed_journal"
+      ]
+    },
+    "JournalFrontier": {
+      "description": "Inclusive source Journal position, never an activation or Ledger position.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
+    "LineageInstallationId": {
+      "description": "Immutable destination bootstrap installation, distinct from source activations.",
+      "type": "string"
     },
     "TraceToolDefinitionSelection": {
       "description": "Absence is proved by the original catalog; unavailable means its relationship cannot be read.",
@@ -8887,6 +9368,20 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "description": "No eligible historical material was available to compact.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "context_compaction_skipped"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -11899,10 +12394,6 @@
         }
       ]
     },
-    "AuxiliaryCallId": {
-      "type": "string",
-      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
     "ScheduleCatalogPage": {
       "description": "A finite catalog page. Failed sources remain explicit instead of becoming empty.",
       "type": "object",
@@ -12887,15 +13378,6 @@
         "result"
       ]
     },
-    "AuxiliaryCallOutcome": {
-      "description": "Terminal outcome of one auxiliary Call.",
-      "type": "string",
-      "enum": [
-        "completed",
-        "failed",
-        "cancelled"
-      ]
-    },
     "ResultAvailability": {
       "type": "string",
       "enum": [
@@ -13818,6 +14300,10 @@
       "description": "Public metadata for one committed compaction.\n\nEvery field is derived from an actual local checkpoint commit. The\nindependent projection disclosure carries summary content; canonical\nexecution rows never acquire a fabricated summary identity.",
       "type": "object",
       "properties": {
+        "operation_id": {
+          "description": "Stable native operation that installed this checkpoint.",
+          "$ref": "#/$defs/CompactionOperationId"
+        },
         "generation": {
           "description": "The local committed projection generation.",
           "type": "string",
@@ -13843,17 +14329,13 @@
       },
       "additionalProperties": false,
       "required": [
+        "operation_id",
         "generation",
         "checkpoint_id",
         "activation_id",
         "tokens_before",
         "estimated_tokens_after"
       ]
-    },
-    "ProjectionActivationId": {
-      "description": "Checkpoint activation order, independent of the Ledger and Journal domains.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "TokenMeasurement": {
       "description": "A token measurement of a model input, with explicit provenance.\n\nThis is a Layer 0 value contract. The Context Engine owns the accounting\nbehavior that decides when a measurement is valid, but the measurement\nitself is shared by runtime events, context projections, and the Runtime\nClient read model.",
@@ -13918,108 +14400,6 @@
       "required": [
         "records"
       ]
-    },
-    "RuntimeClientProjectionHeadView": {
-      "description": "Projection ownership is independent of the local execution trajectory.",
-      "type": "object",
-      "properties": {
-        "checkpoint_id": {
-          "$ref": "#/$defs/CheckpointId"
-        },
-        "activation_id": {
-          "$ref": "#/$defs/ProjectionActivationId"
-        },
-        "transcript_anchor": {
-          "description": "Insert the historical marker after this native transcript position.\nCaptured at activation; independent of Ledger and Journal coordinates.",
-          "$ref": "#/$defs/RuntimeClientTranscriptCursor"
-        },
-        "base_frontier": {
-          "$ref": "#/$defs/LedgerFrontier"
-        },
-        "activation_ledger": {
-          "$ref": "#/$defs/LedgerFrontier"
-        },
-        "origin": {
-          "$ref": "#/$defs/OriginActivation"
-        },
-        "destination_installation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LineageInstallationId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "original_items": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "derived_items": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "summary_preview": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TraceText"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "checkpoint_id",
-        "activation_id",
-        "transcript_anchor",
-        "base_frontier",
-        "activation_ledger",
-        "origin",
-        "original_items",
-        "derived_items"
-      ]
-    },
-    "LedgerFrontier": {
-      "description": "Inclusive canonical commit position, independent of Journal and activation order.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-    },
-    "OriginActivation": {
-      "description": "Immutable source activation. Destination installation is a different coordinate.",
-      "type": "object",
-      "properties": {
-        "conversation_id": {
-          "$ref": "#/$defs/ConversationId"
-        },
-        "activation": {
-          "$ref": "#/$defs/ProjectionActivationId"
-        },
-        "completed_journal": {
-          "$ref": "#/$defs/JournalFrontier"
-        }
-      },
-      "required": [
-        "conversation_id",
-        "activation",
-        "completed_journal"
-      ]
-    },
-    "JournalFrontier": {
-      "description": "Inclusive source Journal position, never an activation or Ledger position.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-    },
-    "LineageInstallationId": {
-      "description": "Immutable destination bootstrap installation, distinct from source activations.",
-      "type": "string"
     },
     "ProjectionDetail": {
       "type": "object",
@@ -14357,6 +14737,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/TraceToolOutcomeUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCompaction"
             },
             {
               "type": "null"
@@ -20417,6 +20807,24 @@
             }
           ]
         },
+        "compaction_operations": {
+          "description": "At most two most recently admitted asynchronous compaction operations.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeClientCompactionOperation"
+          }
+        },
+        "compaction_progress": {
+          "description": "Latest accepted fragment, scoped to the currently active operation.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientCompactionProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "compaction_in_progress": {
           "description": "Whether the runtime currently owns a context-compaction operation.\nThis is live operation state, not inferred from token usage.",
           "type": "boolean"
@@ -20465,6 +20873,14 @@
           "description": "False until coordinator state is restored and maintenance released.",
           "type": "boolean"
         },
+        "skipped": {
+          "description": "A confirmed native no-op, distinct from a committed checkpoint.",
+          "type": "boolean"
+        },
+        "cancelled": {
+          "description": "Native cancellation released this command without a checkpoint.",
+          "type": "boolean"
+        },
         "error": {
           "description": "Exact pre-commit failure diagnostic, if released unsuccessfully.",
           "type": [
@@ -20475,7 +20891,9 @@
       },
       "additionalProperties": false,
       "required": [
-        "released"
+        "released",
+        "skipped",
+        "cancelled"
       ]
     },
     "ManualCompactionRequestId": {
@@ -20484,6 +20902,108 @@
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+    },
+    "RuntimeClientCompactionOperation": {
+      "description": "A bounded operation observation and whether this process still owns the work.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CompactionOperationStatus"
+        },
+        "live": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "live"
+      ]
+    },
+    "RuntimeClientCompactionProgress": {
+      "description": "Native accepted work for the currently active Compaction operation.",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/CompactionOperationId"
+        },
+        "mode": {
+          "description": "The native trigger fixed at operation admission.",
+          "$ref": "#/$defs/CompactionMode"
+        },
+        "accepted_fragments": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "source_ranges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuxiliarySourceRange"
+          }
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryGenerationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "mode",
+        "accepted_fragments",
+        "source_ranges"
+      ]
+    },
+    "AuxiliarySourceRange": {
+      "description": "A half-open byte range in the deterministic rendered text of one selected\nprojection occurrence, rather than an offset in canonical JSON. Empty\nrendered occurrences use `[0, 0)` and still identify their coverage.",
+      "type": "object",
+      "properties": {
+        "projection_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "role": {
+          "$ref": "#/$defs/AuxiliarySourceRole"
+        },
+        "byte_start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "byte_end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "projection_index",
+        "role",
+        "byte_start",
+        "byte_end"
+      ]
+    },
+    "AuxiliarySourceRole": {
+      "description": "Model-visible role of one projected source occurrence.",
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant",
+        "tool"
+      ]
     },
     "CapabilityView": {
       "description": "The deterministic capability projection.\n\nProjected from the active [`CapabilitySnapshot`]\n([`crate::capabilities::CapabilitySnapshot`]) plus the\ncoordinator-owned availability state (Issue #81): the revision, the\nactive Tool catalog, the complete available Tool catalog, the deterministic\nmodel-visible Skill catalog, and the typed per-source availability. No\nexecutors, environment paths, package-manager state, or private dependency\ninternals appear.",
@@ -22962,6 +23482,24 @@
           ]
         },
         {
+          "description": "An asynchronous compaction operation changed its bounded status.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_operation_updated"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
           "description": "A context compaction operation began.",
           "type": "object",
           "properties": {
@@ -22983,6 +23521,90 @@
             "type": {
               "type": "string",
               "const": "context_compaction_started"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
+          "description": "A validated compaction fragment was accepted; no checkpoint is committed.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_progressed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
+          "description": "Native compaction cancellation, distinct from summary failure.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_cancelled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
+          "description": "Native compaction found no eligible history; no checkpoint was committed.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_skipped"
             }
           },
           "additionalProperties": false,
@@ -27758,7 +28380,6 @@
         "generation",
         "document",
         "root_agent",
-        "context",
         "model_timeout",
         "tool_deadline",
         "child_capacity",
@@ -27920,9 +28541,6 @@
         "root_agent": {
           "$ref": "#/$defs/AgentProfileDocument"
         },
-        "context": {
-          "$ref": "#/$defs/ContextPolicyDocument"
-        },
         "model_timeout": {
           "$ref": "#/$defs/ModelTimeoutPolicyDocument"
         },
@@ -27980,7 +28598,6 @@
         "generation",
         "document",
         "root_agent",
-        "context",
         "model_timeout",
         "tool_deadline",
         "child_capacity",
@@ -28251,16 +28868,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AgentProfileLayer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "context": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ContextLayer"
             },
             {
               "type": "null"
@@ -29146,73 +29753,6 @@
       },
       "additionalProperties": false
     },
-    "ContextLayer": {
-      "type": "object",
-      "properties": {
-        "reserve_tokens": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "keep_recent_tokens": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "summary_output_cap": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SummaryOutput"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "SummaryOutput": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "model_limit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "tokens": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "mode": {
-              "type": "string",
-              "const": "limit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "tokens"
-          ]
-        }
-      ]
-    },
     "TimeoutLayer": {
       "type": "object",
       "properties": {
@@ -29479,37 +30019,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "ContextPolicyDocument": {
-      "description": "The static current-runtime context policy document.\n\nThere is deliberately no context window here: the window belongs to the\nselected model and is derived per attempt from that attempt's immutable\nmodel snapshot.",
-      "type": "object",
-      "properties": {
-        "reserveTokens": {
-          "description": "Tokens permanently reserved out of whichever model window is in\nforce.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "keepRecentTokens": {
-          "description": "Tokens of recent conversation history kept uncompressed.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "summaryOutputCap": {
-          "description": "The summary/output safety cap applied to the summary invocation\nthrough the runtime-owned protected max-output field.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "reserveTokens",
-        "keepRecentTokens"
-      ]
     },
     "ModelTimeoutPolicyDocument": {
       "description": "The resolved native model request timeout policy.\n\nMilliseconds keep the configuration human-readable while the runtime\nreceives a typed [`ModelTimeoutPolicy`] containing only finite\n[`Duration`] values.",
@@ -36076,6 +36585,13 @@
                 },
                 "request_id": {
                   "$ref": "#/$defs/ManualCompactionRequestId"
+                },
+                "instructions": {
+                  "description": "Optional focus hints; the native owner bounds their UTF-8 bytes.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "additionalProperties": false,
@@ -42216,29 +42732,6 @@
             "unit": {
               "type": "string",
               "const": "project_guidance"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "unit"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "authored": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ContextLayer"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "unit": {
-              "type": "string",
-              "const": "context"
             }
           },
           "additionalProperties": false,

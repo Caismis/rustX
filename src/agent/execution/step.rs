@@ -37,6 +37,8 @@ pub(super) enum LogicalModelStepState {
 pub(super) struct LogicalStep {
     /// Every compaction entry for this logical step shares the original finite budget.
     pub(super) compaction_budget: Option<crate::context::compaction_budget::CompactionBudget>,
+    /// The candidate already found inadmissible at the current request boundary.
+    pub(super) deferred_compaction: Option<crate::runtime::identity::CompactionOperationId>,
     /// Workflow correction frozen for this logical generation, including recovery versions.
     pub(super) frozen_workflow_feedback: Option<String>,
     /// The semantic-generation recovery state of the current logical model
@@ -86,6 +88,7 @@ impl LogicalStep {
         Self {
             frozen_workflow_feedback,
             compaction_budget: None,
+            deferred_compaction: None,
             semantic_recovery: SemanticGenerationRecovery::default(),
             accepted_context: None,
             frozen_carryover: None,
@@ -263,7 +266,7 @@ impl<'a> AgentExecution<'a> {
                     terminal = Some(Self::interaction_failure_terminal());
                     break;
                 }
-                terminal = self.run_turn(pending_attempt.take()).await;
+                terminal = Box::pin(self.run_turn(pending_attempt.take())).await;
                 if terminal.is_none() && self.cancellation.interaction_failed() {
                     terminal = Some(Self::interaction_failure_terminal());
                 } // TEST-ONLY continuation boundary: the previous turn is
@@ -315,7 +318,7 @@ impl<'a> AgentExecution<'a> {
     /// terminalizes as an audit. Canonical acceptance and audit
     /// terminalization can therefore never both happen for one stream.
     async fn run_turn(&mut self, attempt: Option<RuntimeEventEnvelope>) -> Option<Terminal> {
-        let terminal = self.run_turn_body(attempt).await;
+        let terminal = Box::pin(self.run_turn_body(attempt)).await;
         if !self.publication_settlement_failed
             && let Err(error) = self.settle_publication_audit()
         {
@@ -783,6 +786,7 @@ impl<'a> AgentExecution<'a> {
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+        self.compaction_control.accepted_step();
         let input = self.logical_step.current_input.take();
         self.continuation_source = if self.pending_continuation.is_some() {
             let input = input.expect("accepted output has frozen actual request");

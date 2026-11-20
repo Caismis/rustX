@@ -37,6 +37,7 @@ import {
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
 import { role, style, plainText, plainWidth } from "../theme.ts";
+import { sanitizeField } from "../../sanitize.ts";
 
 /**
  * The working label, or `undefined` when the runtime is not working.
@@ -47,7 +48,51 @@ import { role, style, plainText, plainWidth } from "../theme.ts";
  * rustX did not publish.
  */
 export function workingStatus(state: PresentationState): string | undefined {
+  const primary = primaryWorkingStatus(state);
+  return [primary, backgroundCompactionStatus(state)].filter(Boolean).join(' · ') || undefined;
+}
+
+/** Session-owned work has native lifecycle facts independent of Attempt status. */
+export function backgroundCompactionStatus(state: PresentationState): string | undefined {
+  const foreground = state.context.compaction_in_progress ? state.context.compaction_progress?.operation_id : undefined;
+  const summaries = (state.context.compaction_operations ?? [])
+    .filter(operation => operation.live && operation.status.operation_id !== foreground)
+    .flatMap(({ status }) => {
+      if (status.phase === 'generating') return ['Summarizing previous context…'];
+      if (status.phase === 'retrying') return ['Retrying context summary…'];
+      if (status.phase === 'foreground_waiting') return ['Waiting for context summary…'];
+      return [];
+    });
+  return summaries.join(' · ') || undefined;
+}
+
+/** Readiness and terminal outcomes are static facts, not a working spinner. */
+export function compactionNotice(state: PresentationState): string | undefined {
+  const operation = state.context.compaction_operations?.findLast(({status, live}) =>
+    !state.dismissedCompactionNotices?.includes(status.operation_id)
+      && (!live || !['generating', 'retrying', 'foreground_waiting'].includes(status.phase)));
+  if (!operation) return undefined;
+  const { status, live } = operation;
+  if (!live && ['generating', 'retrying', 'foreground_waiting', 'ready'].includes(status.phase)) return 'Previous context summary is no longer active';
+  if (status.phase === 'ready') return 'Context summary ready';
+  if (status.phase === 'cancelled') return 'Context summary cancelled';
+  if (status.phase === 'superseded') return 'Context summary replaced';
+  if (status.phase === 'no_effect') return 'Context summary not applied';
+  if (status.phase === 'failed') {
+    const diagnostic = status.diagnostic && Array.from(sanitizeField(status.diagnostic)).slice(0, 160).join('');
+    return `Context summary failed${diagnostic ? `: ${diagnostic}` : ''}`;
+  }
+  return undefined;
+}
+
+function primaryWorkingStatus(state: PresentationState): string | undefined {
   if (state.context.compaction_in_progress) {
+    const mode = state.context.compaction_progress?.mode;
+    const cancellable = state.attempt && ['admitted', 'running'].includes(state.attempt.phase.type);
+    const hint = cancellable ? ' (Esc cancels this response)' : '';
+    if (mode === 'overflow') return `Context limit reached, compacting…${hint}`;
+    if (mode === 'blocking') return `Compacting context before continuing…${hint}`;
+    if (mode === 'manual') return 'Compacting context (manual)…';
     return "Compacting context…";
   }
   const waiting = state.pendingInteractions;

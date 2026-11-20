@@ -93,6 +93,7 @@ import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import { SourceRepairStatus } from "./components/source-repair-status.ts";
 import { FooterView } from "./components/status.ts";
 import type { ConversationContext } from "./components/status.ts";
+import type { RuntimeClientProjectionHeadView } from '../protocol/app-server.ts';
 import { renderResourceBanner } from "./components/resources.ts";
 import {
   type PresentationPreferences,
@@ -101,6 +102,9 @@ import {
   withExpandedBackgroundExecutions,
   withExpandedInteractions,
   withExpandedToolCalls,
+  compactionKey,
+  withExpandedCompactions,
+  withToggledCompaction,
   withReasoningVisible,
   withToggledBackgroundExecution,
   withToggledInteraction,
@@ -158,6 +162,9 @@ export class RustxTuiApp {
 
   readonly #tui: TUI;
   readonly #view: ConversationView;
+  #compactionOwner?: AppServerSession;
+  #compactionConversation?: string;
+  #compactionHeads = new Map<string, RuntimeClientProjectionHeadView>();
   readonly #transient = new TransientFeedbackSurface();
   /** Newly observed configuration repairs of the current App Server
    * authority; presentation only (Issue #464). */
@@ -1401,6 +1408,17 @@ export class RustxTuiApp {
           change.interaction,
         );
         break;
+      case "expand_compaction": {
+        const head = change.checkpointId
+          ? [...this.#compactionHeads.values()].find(head => head.checkpoint_id === change.checkpointId)
+          : this.#session?.state.context.projection_head;
+        if (head && (!change.checkpointId || head.checkpoint_id === change.checkpointId)) {
+          this.#preferences = withToggledCompaction(this.#preferences, compactionKey(head));
+        } else {
+          this.#showTransient('info', 'No matching committed summary is loaded.');
+        }
+        break;
+      }
       case "expand":
         this.#preferences = this.#expandTarget(change.target);
         break;
@@ -1438,13 +1456,13 @@ export class RustxTuiApp {
       const interactions = state.pendingInteractions.map(
         (interaction) => interaction.interaction,
       );
-      return withExpandedInteractions(
+      return withExpandedCompactions(withExpandedInteractions(
         withExpandedBackgroundExecutions(
           withExpandedToolCalls(this.#preferences, calls),
           executions,
         ),
         interactions,
-      );
+      ), this.#compactionHeads.keys());
     }
     // "latest" is the most recently correlated *tool call*, which is the one a
     // user pressing ctrl+o is looking at. Correlation order follows the
@@ -1562,6 +1580,13 @@ export class RustxTuiApp {
   #renderState(state: PresentationState): void {
     if (this.#connecting) { this.#renderConnecting(); return; }
     state = this.#humanInput.project(state);
+    if (this.#compactionOwner !== this.#session || this.#compactionConversation !== state.conversationId) {
+      this.#compactionOwner = this.#session; this.#compactionConversation = state.conversationId; this.#compactionHeads.clear();
+    }
+    for (const head of this.#session?.projectionHistory ?? []) this.#compactionHeads.set(compactionKey(head), head);
+    const activeHead = state.context.projection_head;
+    if (activeHead) { this.#compactionHeads.delete(compactionKey(activeHead)); this.#compactionHeads.set(compactionKey(activeHead), activeHead); }
+    while (this.#compactionHeads.size > 32) this.#compactionHeads.delete(this.#compactionHeads.keys().next().value!);
     if (!hasSubagentSelection(state.agents, this.#selectedAgentId)) {
       this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
@@ -1569,6 +1594,7 @@ export class RustxTuiApp {
     this.#view.render(state, {
       preferences: this.#preferences,
       threadStatus:this.#session?this.#host.threadStatus(this.#session.target.conversation_id):undefined,
+      compactions: [...this.#compactionHeads.values()],
       sessionInfo: this.#sessionInfo,
       workspace: this.#workspace,
       selectedAgentId: this.#subagentListFocused ? this.#selectedAgentId : undefined,

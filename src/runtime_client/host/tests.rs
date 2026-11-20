@@ -443,9 +443,15 @@ async fn host_fixture_with_native_tools(
     status_engine: AgentStatusEngine,
     include_native_tools: bool,
 ) -> (Arc<GatedAdapter>, HostFixture) {
-    let (adapter, fixture) =
-        host_fixture_before_activation(scripts, tools, status_engine, include_native_tools, None)
-            .await;
+    let (adapter, fixture) = host_fixture_before_activation(
+        scripts,
+        tools,
+        status_engine,
+        include_native_tools,
+        None,
+        None,
+    )
+    .await;
     fixture.runtime.activate();
     await_fixture_activation(&fixture.host).await;
     (adapter, fixture)
@@ -461,6 +467,7 @@ async fn host_fixture_before_activation(
     status_engine: AgentStatusEngine,
     include_native_tools: bool,
     monotonic_clock: Option<Arc<dyn crate::runtime::monotonic::MonotonicClock>>,
+    before_recovery: Option<fn(&SqliteConversationStore)>,
 ) -> (Arc<GatedAdapter>, HostFixture) {
     let adapter = Arc::new(GatedAdapter::new(scripts));
     let dir = tempfile::tempdir().expect("temp dir");
@@ -474,6 +481,10 @@ async fn host_fixture_before_activation(
         )
         .expect("store"),
     );
+    if let Some(seed) = before_recovery {
+        store.initialize(&[]).expect("initialize seeded store");
+        seed(&store);
+    }
     let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id.clone(),
         crate::tools::runtime::ConversationRuntimeConfig {
@@ -553,11 +564,6 @@ async fn host_fixture_before_activation(
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             status_clock: std::sync::Arc::new(crate::context::SystemClock),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(status_engine),
         },
@@ -651,11 +657,6 @@ async fn host_fixture_with_runtime_probe(
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 status_clock: std::sync::Arc::new(crate::context::SystemClock),
-                policy: crate::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator,
                 status_engine: Some(status_engine()),
             },
@@ -788,6 +789,28 @@ fn one_turn_stop() -> Vec<GatedStep> {
         GatedStep::Emit(ModelEvent::TextDelta {
             block_index: ContentBlockIndex::new(0),
             text: "done".to_owned(),
+        }),
+        GatedStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }),
+    ]
+}
+
+fn summary_turn_stop(goal: &str) -> Vec<GatedStep> {
+    let summary = serde_json::json!({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": {"done": [], "in_progress": [], "blocked": []},
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": []
+    });
+    vec![
+        GatedStep::Emit(ModelEvent::Started),
+        GatedStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: summary.to_string(),
         }),
         GatedStep::Emit(ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
@@ -2928,17 +2951,7 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
                     generation: None,
                 },
             })],
-            vec![
-                GatedStep::Emit(ModelEvent::Started),
-                GatedStep::Emit(ModelEvent::TextDelta {
-                    block_index: ContentBlockIndex::new(0),
-                    text: "historical summary".to_owned(),
-                }),
-                GatedStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::Stop,
-                    usage: None,
-                }),
-            ],
+            summary_turn_stop("historical summary"),
             one_turn_stop(),
         ],
         ToolRegistry::new(),
@@ -2955,7 +2968,7 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: crate::runtime_client::RequestId::new(1),
-        content: submit_content("first"),
+        content: submit_content(&"first historical request and its facts; ".repeat(32)),
     });
     receive_until(&subscription, |event| {
         event
@@ -2992,8 +3005,64 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
         snapshots[2].identity.attempt_id
     );
     assert_eq!(
-        snapshots[1].context_generation, snapshots[2].context_generation,
+        snapshots[1].context_generation.id, snapshots[2].context_generation.id,
         "overflow retry keeps the one admitted context generation"
+    );
+    let reminder_owner = crate::runtime::identity::ContextContributorIdentity::Native(
+        crate::runtime::identity::NativeContextContributor::PermissionReminder,
+    );
+    let mut expected_contributors = snapshots[1].context_generation.contributors.clone();
+    expected_contributors.push(crate::context::ContributorGeneration {
+        identity: reminder_owner.clone(),
+        attestation: None,
+    });
+    expected_contributors.sort_by(|left, right| left.identity.cmp(&right.identity));
+    assert_eq!(
+        snapshots[2].context_generation.contributors, expected_contributors,
+        "compaction adds only its native reminder to the frozen contributors"
+    );
+    assert_eq!(snapshots[1].system_sections, snapshots[2].system_sections);
+    assert_eq!(
+        snapshots[1].effective_system_prompt,
+        snapshots[2].effective_system_prompt
+    );
+    assert!(
+        snapshots[2]
+            .system_sections
+            .iter()
+            .all(|section| section.contributor != reminder_owner)
+    );
+    let reminders = snapshots[2]
+        .contributions
+        .iter()
+        .filter(|contribution| {
+            contribution.producer == reminder_owner
+                && snapshots[2]
+                    .request_context_ids
+                    .contains(&contribution.message_id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reminders.len(),
+        1,
+        "one new native reminder belongs to the retry start"
+    );
+    let reminder_id = &reminders[0].message_id;
+    assert_eq!(snapshots[2].request_context_ids, vec![reminder_id.clone()]);
+    assert!(
+        !snapshots[1]
+            .contributions
+            .iter()
+            .any(|entry| &entry.message_id == reminder_id)
+    );
+    assert_eq!(
+        &snapshots[2].contributions[..snapshots[1].contributions.len()],
+        &snapshots[1].contributions,
+        "ordinary receipts retain their exact identities and metadata"
+    );
+    assert_ne!(
+        snapshots[1].semantic_input_fingerprint,
+        snapshots[2].semantic_input_fingerprint
     );
     assert_ne!(
         snapshots[1].history_cut.activation, snapshots[2].history_cut.activation,
@@ -3019,6 +3088,58 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
             *request
         );
     }
+    let retry = fixture
+        .host
+        .reconstruct_request(&snapshots[2].identity)
+        .unwrap();
+    let messages = retry
+        .messages
+        .iter()
+        .filter_map(|message| message.as_canonical())
+        .filter(|message| message.id() == reminder_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages.len(),
+        1,
+        "Tail and staged input select the new reminder once"
+    );
+    let MessageBlock::User(reminder) = messages[0] else {
+        panic!("the native reminder must be a canonical User message");
+    };
+    assert_eq!(reminder.source, UserSource::Runtime);
+    assert_eq!(
+        reminder.kind,
+        crate::message::types::InboundKind::Context(
+            crate::message::types::ContextKind::NativeEnvironment,
+        )
+    );
+    assert_eq!(
+        reminder.content,
+        crate::context::assembly::permission_reminder_content(
+            &crate::runtime::permission::permission_reminder_text(snapshots[2].permission_mode),
+        )
+    );
+    assert_eq!(
+        fixture
+            .host
+            .reconstruct_request(&snapshots[2].identity)
+            .unwrap(),
+        retry
+    );
+    assert_eq!(
+        history.get(&snapshots[2].identity).unwrap(),
+        Some(snapshots[2].clone())
+    );
+    assert_eq!(
+        request_snapshots(&history).len(),
+        3,
+        "reads introduce no snapshot replay"
+    );
+    assert_eq!(
+        adapter.requests().len(),
+        4,
+        "reads invoke no provider request"
+    );
     assert!(
         provider_requests[3].messages.iter().any(|message| {
             matches!(
@@ -3529,6 +3650,7 @@ async fn gated_pending_fixture(
         status_engine(),
         false,
         Some(clock),
+        None,
     )
     .await;
     fixture.runtime.activate();
@@ -7542,11 +7664,6 @@ async fn host_fixture_probe_with_native_tools(
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             status_clock: std::sync::Arc::new(crate::context::SystemClock),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(status_engine()),
         },
@@ -7641,11 +7758,6 @@ async fn host_fixture_probe_with_runtime_gate(
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 status_clock: std::sync::Arc::new(crate::context::SystemClock),
-                policy: crate::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator,
                 status_engine: Some(status_engine()),
             },
@@ -7762,11 +7874,6 @@ async fn runtime_only_fixture(
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             status_clock: std::sync::Arc::new(crate::context::SystemClock),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(status_engine()),
         },
@@ -8179,11 +8286,6 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             status_clock: std::sync::Arc::new(crate::context::SystemClock),
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(status_engine()),
         },

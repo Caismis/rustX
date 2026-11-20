@@ -138,7 +138,8 @@ impl Commands {
     pub(crate) async fn admitted_for_test(&self, id: &str) {
         let mut revisions = self.revisions.subscribe();
         loop {
-            drop(revisions.borrow_and_update());
+            // State owns admission. A blocked watch writer cannot hide an
+            // already admitted command; changed() retains racing publications.
             if self.state.lock().expect("commands").active.contains_key(id) {
                 return;
             }

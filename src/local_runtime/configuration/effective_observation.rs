@@ -15,7 +15,6 @@ pub enum EffectiveFieldName {
     Generation,
     Document,
     RootAgent,
-    Context,
     ModelTimeout,
     ToolDeadline,
     ChildCapacity,
@@ -27,7 +26,7 @@ pub enum EffectiveFieldName {
     EffectiveModel,
     AdmittedAttempt,
 }
-const FIELDS: [EffectiveFieldName; 18] = [
+const FIELDS: [EffectiveFieldName; 17] = [
     EffectiveFieldName::ProcessBindings,
     EffectiveFieldName::Application,
     EffectiveFieldName::AdoptedBinding,
@@ -35,7 +34,6 @@ const FIELDS: [EffectiveFieldName; 18] = [
     EffectiveFieldName::Generation,
     EffectiveFieldName::Document,
     EffectiveFieldName::RootAgent,
-    EffectiveFieldName::Context,
     EffectiveFieldName::ModelTimeout,
     EffectiveFieldName::ToolDeadline,
     EffectiveFieldName::ChildCapacity,
@@ -99,7 +97,7 @@ fn field(
     limit: usize,
 ) -> Result<(Vec<u8>, u64), String> {
     macro_rules! fields {($($variant:ident:$member:ident),+)=>{match name {$(EffectiveFieldName::$variant=>encode(&source.$member,offset,limit)),+}};}
-    fields!(ProcessBindings:process_bindings,Application:application,AdoptedBinding:adopted_binding,SourceRevisions:source_revisions,Generation:generation,Document:document,RootAgent:root_agent,Context:context,ModelTimeout:model_timeout,ToolDeadline:tool_deadline,ChildCapacity:child_capacity,ApprovalMode:approval_mode,Provenance:provenance,Resources:resources,AvailableTools:available_tools,SessionModel:session_model,EffectiveModel:effective_model,AdmittedAttempt:admitted_attempt)
+    fields!(ProcessBindings:process_bindings,Application:application,AdoptedBinding:adopted_binding,SourceRevisions:source_revisions,Generation:generation,Document:document,RootAgent:root_agent,ModelTimeout:model_timeout,ToolDeadline:tool_deadline,ChildCapacity:child_capacity,ApprovalMode:approval_mode,Provenance:provenance,Resources:resources,AvailableTools:available_tools,SessionModel:session_model,EffectiveModel:effective_model,AdmittedAttempt:admitted_attempt)
 }
 pub(crate) fn bounded(
     source: &EffectiveConfiguration,

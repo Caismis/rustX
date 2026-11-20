@@ -2,6 +2,7 @@
 //! latest frozen input, context-overflow compact-and-retry, and the shared
 //! semantic corrective-generation budget.
 
+use super::compaction::{CompactionInput, CompactionNeed, CompactionOutcome};
 use super::request::PreparedModelTurn;
 use super::stream::ModelInvocation;
 use super::terminal::Terminal;
@@ -229,8 +230,9 @@ impl AgentExecution<'_> {
         request_ordinal: u32,
         next_request_ordinal: &mut u32,
     ) -> Result<ModelInvocation, Terminal> {
-        let staged = self.stage_model_turn(request_ordinal, &[])?;
-        let prepared = self.finalize_model_turn(&[], staged)?;
+        let context = self.pending_context()?;
+        let staged = self.stage_model_turn(request_ordinal, &context)?;
+        let prepared = self.finalize_model_turn(&context, staged)?;
         let started = self.start_actual_model_request(prepared, next_request_ordinal)?;
         self.consume_invocation(started).await
     }
@@ -333,7 +335,23 @@ impl AgentExecution<'_> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        let effective_system_prompt = self.effective_system_prompt()?;
+        let (tools, estimated_input, request) = self
+            .logical_step
+            .current_input
+            .as_ref()
+            .map(|input| {
+                (
+                    input.request.input().tools.clone(),
+                    input.estimated_input,
+                    input.request.input().clone(),
+                )
+            })
+            .ok_or_else(|| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    "overflow recovery has no frozen primary request",
+                ))
+            })?;
         let must_cover = self.continuation_owner.clone();
         // ContextWindowExceeded is a rejected provider request, not evidence
         // that a successful model invocation observed the fresh inbound
@@ -365,19 +383,38 @@ impl AgentExecution<'_> {
                     .and_then(|observed| EstimateCorrection::new(estimated, observed))
             })
             .unwrap_or(EstimateCorrection::UNQUANTIFIED);
-        match self
-            .perform_compaction(
-                must_cover.as_ref(),
-                fresh.as_ref(),
-                &effective_system_prompt,
-                Some(overflow_error),
-                &[],
-                Some(estimate_correction),
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(terminal) => return Err(terminal),
+        let compaction_input = CompactionInput {
+            request: &request,
+            tools: &tools,
+            estimated_input,
+        };
+        // The measured overflow establishes a new installation boundary.
+        self.logical_step.deferred_compaction = None;
+        let joined = self
+            .wait_for_background_compaction(&compaction_input, Some(estimate_correction))
+            .await?;
+        if !joined {
+            match self
+                .perform_bounded_compaction(
+                    must_cover.as_ref(),
+                    fresh.as_ref(),
+                    &compaction_input,
+                    Some(overflow_error),
+                    Some(estimate_correction),
+                    CompactionNeed::Mandatory,
+                )
+                .await
+            {
+                Ok(CompactionOutcome::Committed) => {}
+                Ok(CompactionOutcome::Deferred) => {
+                    return Err(Self::context_failure_terminal(&ContextError::new(
+                        ContextErrorKind::Internal,
+                        "mandatory overflow compaction was unexpectedly deferred",
+                    )));
+                }
+                Ok(CompactionOutcome::Retry) => unreachable!("bounded compaction consumes retries"),
+                Err(terminal) => return Err(terminal),
+            }
         }
         // The cancellation check here is a cheap fast path only: it avoids
         // emitting `ModelRetryScheduled` once cancellation is already
@@ -399,9 +436,9 @@ impl AgentExecution<'_> {
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        // The retry is another actual provider request: it stages no new
-        // request-scoped context (the original request's start transaction
-        // already committed it), freezes its own Request Snapshot, and
+        // The retry is another actual provider request: it stages only the
+        // newly eligible native reminder; ordinary context stays committed
+        // under its original identities. It freezes its own Request Snapshot and
         // passes through the one cancellation-vs-start arbitration exactly
         // like the first request of the turn.
         self.start_recovered_model_turn(retry_number, next_request_ordinal)

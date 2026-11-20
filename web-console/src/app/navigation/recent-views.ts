@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace recent-views.ts. */
-import type { AttachmentTarget, ThreadStatusEntry } from '../../../../protocol/app-server/v80';
+import type { AttachmentTarget, ThreadStatusEntry } from '../../../../protocol/app-server/v82';
 import type { ClientView, SessionView } from '../../client/contracts';
 
 /** Inactive recent views kept besides the selected Session. Matches the Harness default. */
