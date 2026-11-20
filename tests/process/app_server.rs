@@ -750,7 +750,6 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
             std::fs::read(f.root.path().join("b/marker")).unwrap(),
             b"decoy"
         );
-
         client.close().await;
         terminate(&child);
         let output = child.wait_with_output().await.unwrap();
@@ -883,7 +882,6 @@ async fn remote_execution_serves_session_reads_over_websocket() {
             panic!("Session B read must fail")
         };
         assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
-
         client.close().await;
         terminate(&server);
         let output = server.wait_with_output().await.unwrap();
@@ -908,6 +906,72 @@ async fn remote_execution_serves_session_reads_over_websocket() {
         assert!(status.success(), "gracefully closed Client must exit 0");
     })
     .await;
+}
+
+async fn assert_seeded_environment_tree(
+    client: &driver::Driver,
+    session: &SessionId,
+    workspace: &std::path::Path,
+) {
+    use rustx::app_server::protocol::*;
+    const CONTENT: &[u8] = b"one\r\ntwo\x00\xff\n";
+    let path = |relative: &str| workspace.join(relative).display().to_string();
+    std::fs::write(path("tree-source"), CONTENT).unwrap();
+    let copy = |destination: &str| Method::FsCopy {
+        session_id: session.clone(),
+        source_path: path("tree-source"),
+        destination_path: path(destination),
+        recursive: false,
+    };
+    result(
+        client,
+        Method::FsCreateDirectory {
+            session_id: session.clone(),
+            path: path("tree-copy/nested"),
+            recursive: true,
+        },
+    )
+    .await;
+    result(client, copy("tree-copy/nested/文本")).await;
+    assert_eq!(
+        std::fs::read(path("tree-copy/nested/文本")).unwrap(),
+        CONTENT
+    );
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session.clone(),
+            path: path("tree-copy/nested"),
+            offset: 0,
+            limit: 1,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("list copied tree")
+    };
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].file_name, "文本");
+    assert_eq!(page.entries[0].metadata.size, CONTENT.len() as u64);
+    assert_eq!(page.next_offset, None);
+    let Response::Failure(error) = rpc(client, 48, copy("../escape")).await else {
+        panic!("copy must refuse a non-normal Workspace path")
+    };
+    assert_eq!(error.error.data, Some(ErrorData::EnvironmentUnauthorized));
+    assert!(!workspace.with_file_name("escape").exists());
+    result(
+        client,
+        Method::FsRemove {
+            session_id: session.clone(),
+            path: path("tree-copy"),
+            recursive: true,
+            force: false,
+        },
+    )
+    .await;
+    assert!(!workspace.join("tree-copy").exists());
+    assert_eq!(std::fs::read(path("tree-source")).unwrap(), CONTENT);
 }
 
 #[tokio::test]
@@ -1002,8 +1066,8 @@ fn seed_workspace(workspace: &std::path::Path, decoy_dir: &std::path::Path) {
 /// The identical seeded operation sequence both transports must serve
 /// byte-for-byte identical: UTF-8 and escaped-name reads, symlink
 /// metadata, the directory page, the missing-file typed failure, a
-/// conditional write that commits then conflicts, and the unbound
-/// Session's refused read and write. The transcript records only
+/// conditional write that commits then conflicts, tree mutations, and the
+/// unbound Session's refused read and write. The transcript records only
 /// deterministic outcomes — revisions and identities are proven
 /// non-empty but never compared, since they are per-write identities.
 async fn seeded_operations(
@@ -1210,6 +1274,7 @@ async fn seeded_operations(
     }
     assert_eq!(std::fs::read(decoy_marker).unwrap(), b"decoy");
     transcript.push("unbound:ExecutionUnavailable".to_string());
+    assert_seeded_environment_tree(client, session_a, workspace_a).await;
 
     transcript
 }

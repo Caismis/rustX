@@ -129,6 +129,57 @@ fn git(repository: &std::path::Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
+fn stage_parent_with_client_path(
+    root: &std::path::Path,
+    home: &std::path::Path,
+    path: &str,
+    mount: Option<(&std::path::Path, &std::path::Path)>,
+) -> std::path::PathBuf {
+    let program = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"));
+    let binaries = program.parent().unwrap();
+    let staged = root.join("bin");
+    std::fs::create_dir(&staged).unwrap();
+    for name in [
+        "rustx",
+        "bash-supervisor",
+        "interactive-supervisor",
+        "workflow-renderer",
+    ] {
+        let source = binaries.join(name);
+        let target = staged.join(name);
+        if std::fs::hard_link(&source, &target).is_err() {
+            std::fs::copy(&source, &target).unwrap();
+        }
+    }
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+    let scratch = staged.join("tmp");
+    std::fs::create_dir(&scratch).unwrap();
+    let client = quote(binaries.join("rustx-execution-client").to_str().unwrap());
+    let home = quote(home.to_str().unwrap());
+    let scratch = quote(scratch.to_str().unwrap());
+    let command = mount.map_or_else(
+        || client.clone(),
+        |(physical, logical)| {
+            format!(
+                "bwrap --ro-bind / / --dev /dev --bind {} {} --bind {home} {home} --tmpfs {scratch} -- {client}",
+                quote(physical.to_str().unwrap()),
+                quote(logical.to_str().unwrap()),
+            )
+        },
+    );
+    let wrapper = staged.join("rustx-execution-client");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexport PATH={} HOME={home} TMPDIR={scratch}\nexec {command} \"$@\"\n",
+            quote(path),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    staged.join("rustx")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one real-process capability and workspace proof
 async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
@@ -138,6 +189,14 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
     let repository = root.path().join("repository");
     let workspace = repository.join("nested/session");
     std::fs::create_dir_all(&workspace).unwrap();
+    let private = (cfg!(target_os = "linux")
+        && std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some())
+    .then(|| {
+        let physical = root.path().join("client-workspace");
+        std::fs::create_dir(&physical).unwrap();
+        physical
+    });
+    let physical = private.as_deref().unwrap_or(&workspace);
     git(&repository, &["init", "-b", "fixture"]);
     git(
         &repository,
@@ -159,40 +218,51 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
         "builtin = [\"read\"]",
         "builtin = [\"read\", \"write\", \"edit\", \"bash\"]",
     );
-    // The final Tool result cannot arrive until a real supervised Python
-    // preparation is running. It remains blocked until child drain cancels it,
-    // so terminal success proves its anchor release preceded IPC shutdown.
+    // The Client starts a real preparation before Bash's FIFO reader
+    // completes. Session drain must reap the physical probe.
     let bin = root.path().join("probe-bin");
     std::fs::create_dir(&bin).unwrap();
     let uv = bin.join("uv");
     std::fs::write(
         &uv,
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'uv 0.10.2'; exit 0; fi\nprintf 'ready\\n' > .python-probe-ready\nexec /bin/sleep 300\n",
+        r#"#!/bin/sh
+if [ "$1" = --version ]; then echo 'uv 0.10.2'; exit 0; fi
+echo "$$" > .python-probe-pid
+printf 'ready\n' > .python-probe-ready
+exec /bin/cat .python-probe-stop
+"#,
     )
     .unwrap();
     std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(workspace.join(".python-probe-ready"))
-            .status()
-            .unwrap()
-            .success()
-    );
+    for gate in [".python-probe-ready", ".python-probe-stop"] {
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(physical.join(gate))
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
     let path = format!(
         "{}:{}",
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
     let models = models_json(&server.url("/v1"));
-    let mut process = launch_parent_with_environment(
+    write_parent_fixture(root.path(), &workspace, &models, &session);
+    let mut bindings = ParentBindings::under(root.path(), &workspace);
+    bindings.execution = true;
+    bindings.program = stage_parent_with_client_path(
         root.path(),
-        &workspace,
-        &models,
-        &session,
-        &[
-            ("RUSTX_SUBAGENT_TEST_KEY", "native-secret"),
-            ("PATH", &path),
-        ],
+        &bindings.home,
+        &path,
+        private
+            .as_deref()
+            .map(|physical| (physical, workspace.as_path())),
+    );
+    let mut process = Parent::spawn(
+        &bindings,
+        &[("RUSTX_SUBAGENT_TEST_KEY", "native-secret")],
         None,
     )
     .await;
@@ -236,9 +306,13 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
         assert_eq!(tools.iter().filter(|tool| tool.name == control).count(), 1);
     }
     assert_eq!(
-        std::fs::read_to_string(workspace.join("child.txt")).unwrap(),
+        std::fs::read_to_string(physical.join("child.txt")).unwrap(),
         "after\n"
     );
+    if private.is_some() {
+        assert!(!workspace.join("child.txt").exists());
+        assert!(!workspace.join(".python-probe-pid").exists());
+    }
     assert!(!repository.join("child.txt").exists());
     assert!(!root.path().join("workspaces").exists());
     assert!(!root.path().join("private/workspaces").exists());
@@ -268,6 +342,13 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
         ids,
         ["shared-write", "shared-edit", "shared-read", "shared-bash"]
     );
+    let probe_pid = std::fs::read_to_string(physical.join(".python-probe-pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(process_state(probe_pid).is_some_and(|state| state != 'Z'));
     let (status, stderr) = process.shutdown().await;
     assert!(status.success(), "clean shutdown: {stderr}");
+    wait_for_no_running_processes(&[probe_pid]).await;
 }

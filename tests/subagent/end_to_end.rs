@@ -143,6 +143,16 @@ async fn launch_parent_with_environment(
     environment: &[(&str, &str)],
     resume: Option<&rustx::local_runtime::SessionId>,
 ) -> Parent {
+    write_parent_fixture(root, workspace, models, session);
+    Parent::spawn(&ParentBindings::under(root, workspace), environment, resume).await
+}
+
+fn write_parent_fixture(
+    root: &std::path::Path,
+    workspace: &std::path::Path,
+    models: &str,
+    session: &str,
+) {
     std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
     std::fs::write(
         workspace.join(".agents/agents/explore.toml"),
@@ -156,7 +166,6 @@ async fn launch_parent_with_environment(
         format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
     )
     .expect("rustx.toml");
-    Parent::spawn(&ParentBindings::under(root, workspace), environment, resume).await
 }
 
 /// Launches a new parent Session over `<root>/workspace`.

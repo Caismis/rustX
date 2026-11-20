@@ -3,7 +3,7 @@
 #
 #   test-support/prove_execution_mount_view.sh
 #
-# It exports RUSTX_MOUNT_VIEW_PROOF=1, runs the two opt-in App Server
+# It exports RUSTX_MOUNT_VIEW_PROOF=1, runs the opt-in App Server
 # and Client proofs, and repeats the Agent tool-plane test with isolation:
 #
 #  - `filesystem_operations_use_the_private_mount_view` spawns the real
@@ -45,6 +45,8 @@
 #  - The background Bash continuation test runs native Write, Read, Bash and
 #    Grep in the Client view. A FIFO holds the operation while Read/Grep
 #    inspect the committed prefix. The final output uses the same locator.
+#  - Workspace Python resolves and runs the interpreter from a Client-only
+#    overlay, using an actual uv and the existing supervisor.
 #
 # The product proof runs only against the real prepared artifacts — the
 # process harness plus its metadata-verified sibling Execution Client — so
@@ -57,7 +59,9 @@ if ! command -v bwrap >/dev/null 2>&1; then
     exit 2
 fi
 python3 test-support/prepare_native_tests.py -- \
-    cargo test --all-features --locked --no-run --lib --test process
+    cargo test --all-features --locked --no-run --lib --test process --test subagent
+python3 test-support/prepare_native_tests.py -- \
+    cargo test -p rustx-execution-client --locked --no-run --test bootstrap
 export RUSTX_MOUNT_VIEW_PROOF=1
 cargo test -p rustx-execution-client --locked \
     --test bootstrap filesystem_operations_use_the_private_mount_view \
@@ -71,3 +75,5 @@ cargo test -p rustx --all-features --locked \
 cargo test -p rustx --all-features --locked --lib \
     tools::background::tests::background_live_output_is_readable_while_running_and_reused_at_settlement \
     -- --exact --nocapture
+cargo test -p rustx --all-features --locked --test subagent \
+    a_real_child_executes_native_tools_in_the_frozen_nested_workspace -- --nocapture
