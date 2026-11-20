@@ -226,9 +226,9 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
              before command: a concise explanation of why you are running it, shown in the UI. No shell state \
              survives between calls. A foreground command still running after 120 seconds, or after its \
              timeout if set, moves to a background job instead of being killed. The optional timeout is in \
-             seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution \
-             immediately returns its live output file's absolute path; use Read or Grep on it to \
-             inspect the output while the command runs.",
+             seconds, overrides that 120 second budget, and is capped at 600 seconds. Promotion returns \
+             the job ID, live output file, and any output captured so far. Use job_status to check the job, \
+             or Read or Grep on the absolute output path to inspect the output while it runs.",
         policy,
     )
 }

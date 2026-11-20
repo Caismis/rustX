@@ -608,7 +608,7 @@ pub enum BackgroundDispatchOutcome {
     Accepted {
         /// The allocated runtime execution identity.
         execution_id: ToolExecutionId,
-        /// The accepted result: bounded structured content identifying
+        /// The accepted result: bounded content identifying
         /// `execution_id`, `state`, and the tool.
         result: ToolExecutionResult,
     },
@@ -802,14 +802,49 @@ impl PrivateBashStage {
     pub(crate) async fn adopt(
         &mut self,
         cancellation: &CancellationSignal,
+        budget: std::time::Duration,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
-        let outcome = self
+        // Take the bounded preview while the private stage still owns the open file.
+        let output = self
+            .registry
+            .resources
+            .tool_output
+            .live_tail(&self.execution_id);
+        let mut outcome = self
             .registry
             .commit_ownership(
                 BackgroundOwnershipTransfer::Handoff(self.execution_id.clone()),
                 cancellation,
             )
             .await;
+        if let Ok(BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        }) = &mut outcome
+        {
+            let path = self
+                .registry
+                .resources
+                .tool_output
+                .background_output_path(execution_id);
+            let path = serde_json::Value::String(path.to_string_lossy().into_owned());
+            let mut text = format!(
+                "[still running after {}ms; moved to background job {execution_id}]\nOutput file: {path}\n\
+                 Use job_status to inspect the job, job_wait if you need to wait, or job_cancel to stop it. \
+                 Use read on the output file for more output.",
+                budget.as_millis(),
+            );
+            if let Ok((preview, truncated)) = output {
+                if truncated {
+                    text.push_str("\nEarlier output was omitted from this preview.");
+                }
+                if !preview.is_empty() {
+                    text.push_str("\n\nOutput so far:\n");
+                    text.push_str(&preview);
+                }
+            }
+            result.content = vec![ToolResultContent::Text(TextBlock { text })];
+        }
         if matches!(
             outcome,
             Ok(BackgroundDispatchOutcome::Accepted { .. }
@@ -2198,6 +2233,7 @@ impl ConversationBackgroundRegistry {
         let notification = terminal_inbound_message(
             execution_id,
             &state.records[index].tool_name,
+            state.records[index].tool_id.as_str() == "tool-bash",
             settled,
             &stored,
             self.resources.clock.now(),
@@ -2387,6 +2423,7 @@ impl ConversationBackgroundRegistry {
         let notification = terminal_inbound_message(
             execution_id,
             &state.records[index].tool_name,
+            state.records[index].tool_id.as_str() == "tool-bash",
             candidate.settled,
             &candidate.result,
             self.resources.clock.now(),
@@ -3081,6 +3118,7 @@ fn accepted_result(
 fn terminal_inbound_message(
     execution_id: &ToolExecutionId,
     tool_name: &str,
+    native_bash: bool,
     state: BackgroundLifecycle,
     result: &ToolExecutionResult,
     timestamp: chrono::DateTime<chrono::Utc>,
@@ -3090,7 +3128,22 @@ fn terminal_inbound_message(
         execution_id.as_str(),
         state.name()
     );
-    let projection = result.model_facing_projection();
+    let output = match &result.content[..] {
+        [ToolResultContent::Json { value }] if native_bash => value["combined"].as_str(),
+        _ => None,
+    };
+    let projection = if let Some(output) = output {
+        let mut output = output.to_owned();
+        if let Some(code) = result.exit_code.filter(|code| *code != 0) {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&format!("[exit code: {code}]"));
+        }
+        result.project_with_content(&[ToolResultContent::Text(TextBlock { text: output })])
+    } else {
+        result.model_facing_projection()
+    };
     if !projection.is_empty() {
         text.push_str("\n\nResult:\n");
         text.push_str(&projection.as_text());
@@ -3691,9 +3744,10 @@ mod tests {
             &RecordingProgress,
         )
         .await;
-        assert!(
-            matches!(result.content.first(), Some(ToolResultContent::Json { value }) if value["tool"] == "bash" && value["job_id"].is_string())
-        );
+        let text = result.model_facing_projection().as_text();
+        assert!(text.starts_with("[still running after 30ms; moved to background job exec_"));
+        assert!(text.contains("Output file: \"/"));
+        assert!(text.contains("job_status"));
         assert_eq!(fixture.registry.listing(true, 16).matched, 1);
         assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
         release.send_replace(true);
@@ -3830,7 +3884,7 @@ mod tests {
         // ownership transfer commits durably and publishes the Job.
         let attempt_signal = cancellation.signal();
         let outcome = stage
-            .adopt(&attempt_signal)
+            .adopt(&attempt_signal, std::time::Duration::ZERO)
             .await
             .expect("the adoption resolves");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
@@ -6753,6 +6807,7 @@ mod tests {
         let message = super::terminal_inbound_message(
             &ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000009"),
             "bash",
+            false,
             BackgroundLifecycle::Succeeded,
             &result,
             chrono::Utc::now(),

@@ -492,8 +492,16 @@ impl ToolExecutionResult {
     /// managed-output fields remain unchanged and authoritative.
     #[must_use]
     pub fn model_facing_projection(&self) -> ToolResultProjection {
+        self.project_with_content(&self.content)
+    }
+
+    /// Apply the same projection and bounds when a native producer supplies a textual view.
+    pub(crate) fn project_with_content(
+        &self,
+        content: &[ToolResultContent],
+    ) -> ToolResultProjection {
         Self::project_result(
-            &self.content,
+            content,
             &self.status,
             self.managed_output.as_deref(),
             &self.artifacts,

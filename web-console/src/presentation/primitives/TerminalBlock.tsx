@@ -203,7 +203,7 @@ export function TerminalBlock({
   const { hidden, capped, headLines, tailLines } = headTailCap(lines.length, maxLines, expanded)
   // A running command with nothing printed yet is banner-only; once it has
   // printed, the output streams in under the banner as it would in a terminal.
-  const body = !background && (!running || !empty)
+  const body = !empty || !background && !running
 
   return (
     <div

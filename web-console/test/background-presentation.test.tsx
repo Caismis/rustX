@@ -33,6 +33,23 @@ it('renders a successful background launch as a static command receipt, without 
   expect(ui.container.textContent).not.toContain('Job · job-one');
 });
 
+it('shows output at promotion without claiming that Bash exited', () => {
+  const launch = tool();
+  if (launch.state.type !== 'settled') throw new Error('Expected the foreground call to be settled');
+  launch.state.result = { status: { type: 'success' }, duration_ms: '120000', content: [{ type: 'text', text:
+    '[still running after 120000ms; moved to background job exec_one]\nOutput file: "/workspace/output.txt"\nUse job_status.\n\nOutput so far:\nfirst line\nsecond line\n' }] };
+  const ui = render(<Tool tool={launch}/>);
+  expect(ui.getByLabelText('Tool status').textContent).toBe('Moved to background');
+  fireEvent.click(ui.getByRole('button', { expanded: false }));
+  const terminal = ui.container.querySelector('[data-terminal][data-background][data-body]');
+  expect(terminal).toBeTruthy();
+  expect(terminal?.textContent).toContain('first line');
+  expect(terminal?.textContent).toContain('second line');
+  expect(terminal?.querySelector('[data-state]')).toBeNull();
+  expect(ui.getByText('/workspace/output.txt', { exact: true })).toBeTruthy();
+  expect(ui.queryByText('Use job_status.')).toBeNull();
+});
+
 it('agent messages disclose their recorded content without a separate View agent button', () => {
   const agent = incrementalAgent(), open = vi.fn(), server = new Server();
   const ui = render(<SubagentContext.Provider value={{ client: server.client, agents: [agent], metrics: {}, metricErrors: {}, opened: [], open, close: () => {} }}>

@@ -39,6 +39,22 @@ test('default foreground Bash promotes the original process after 120 seconds an
     expect(elapsedMs).toBeGreaterThanOrEqual(120_000);
     expect(elapsedMs).toBeLessThan(130_000);
     await expect(page.getByText('The shell is continuing in the background.', { exact: true })).toBeVisible();
+    const turn = page.locator('[data-turn-process][aria-expanded]').first();
+    if (await turn.getAttribute('aria-expanded') === 'false') await turn.click();
+    const call = page.locator('[data-tool-name="bash"][data-tool-call-id]').first();
+    const step = page.locator('[data-step-process]').filter({ has: call }).locator(':scope > button[aria-expanded="false"]');
+    if (await step.count()) await step.click();
+    await expect(call.getByLabel('Tool status', { exact: true })).toHaveText('Moved to background');
+    await call.getByRole('button', { expanded: false }).click();
+    await expect(call.locator('[data-terminal][data-background]').getByText(`before pid=${pid}`, { exact: true })).toBeVisible();
+    await expect(call.locator('[data-terminal] [data-state]')).toHaveCount(0);
+    await expect(call.locator('code')).toHaveText(/\.output$/);
+    await page.screenshot({ path: test.info().outputPath('bash-promotion.png') });
+    await call.getByRole('button', { name: 'Inspect', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'Trajectory', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await page.getByRole('tab', { name: 'Result', exact: true }).click();
+    await expect(page.getByText(`before pid=${pid}`, { exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await send('Continue while the shell runs');
     await expect(page.getByText('Chat continued while the shell ran.', { exact: true })).toBeVisible();
 
@@ -60,6 +76,10 @@ test('default foreground Bash promotes the original process after 120 seconds an
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true; throw error; }
     }).toBe(true);
     await expect(page.getByText('The shell has stopped.', { exact: true })).toBeVisible();
+    const notice = page.locator('[data-inbound-source="job"]');
+    await notice.getByRole('button', { expanded: false }).click();
+    await expect(notice).toContainText(`after pid=${pid}`);
+    await expect(notice).not.toContainText('"combined":');
     expect(await launches()).toBe(`${pid}\n`);
     await test.info().attach('promotion', { body: JSON.stringify({ pid, elapsedMs }), contentType: 'application/json' });
     passed = true;

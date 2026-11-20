@@ -9,6 +9,27 @@ export function jobState(value: unknown): RuntimeClientJob['state'] | undefined 
   return typeof value === 'string' && jobStates.includes(value as RuntimeClientJob['state']) ? value as RuntimeClientJob['state'] : undefined;
 }
 export interface BackgroundLaunch { jobId: string; tool: string; outputPath: string }
+export interface BashPromotion extends BackgroundLaunch { output?: string; truncated: boolean }
+
+/** Only native Bash call sites interpret the handoff header. Command output follows it verbatim. */
+export function bashPromotion(text: string): BashPromotion | undefined {
+  const match = /^\[still running after \d+ms; moved to background job (exec_[\w-]+)\]\nOutput file: ("[^\n]+")\n/.exec(text);
+  if (!match) return;
+  let outputPath: unknown;
+  try { outputPath = JSON.parse(match[2]!); } catch { return; }
+  if (typeof outputPath !== 'string' || !outputPath) return;
+  const rest = text.slice(match[0].length);
+  const delimiter = '\n\nOutput so far:\n';
+  const outputAt = rest.indexOf(delimiter);
+  return { jobId: match[1]!, tool: 'bash', outputPath,
+    truncated: (outputAt < 0 ? rest : rest.slice(0, outputAt)).endsWith('Earlier output was omitted from this preview.'),
+    output: outputAt < 0 ? undefined : rest.slice(outputAt + delimiter.length) };
+}
+
+export function bashOutput(value: unknown): string | undefined {
+  const data = object(value);
+  return typeof data?.combined === 'string' ? data.combined : undefined;
+}
 /** The native acceptance receipt proves dispatch, never process exit. */
 export function backgroundLaunch(value: unknown, name: string): BackgroundLaunch | undefined {
   const data = object(value);

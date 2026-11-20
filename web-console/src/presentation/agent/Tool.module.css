@@ -206,6 +206,15 @@
   font: var(--dsw-font-markdown-code-block-small);
 }
 
+.handoff {
+  display: grid;
+  gap: 3px;
+  margin: 6px 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 /* One card section (IN or OUT): the gutter-label grid, capped and scrolling
    independently so a long input never buries a short output (and vice versa). */
 .ioSection {

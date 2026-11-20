@@ -18,6 +18,7 @@ export interface ToolCardView {
  variant: 'generic' | 'bash' | 'image' | 'read' | 'write' | 'edit' | 'search'; input?: string; output?: string;
  artifacts?: ReactNode; path?: string; imageResult?: boolean; exitCode?: number | null; truncated?: boolean; diffs?: DiffHunk[];
  background?: boolean; jobId?: string;
+ promotion?: { outputPath: string; truncated: boolean };
  details?: ToolDetailsModel; icon?: ReactNode;
 }
 const icons = { image: IconBrowseOutline16, generic: IconSparkle16, bash: IconApiOutline14, read: IconBrowseOutline16, write: IconEditOutline16, edit: IconEditOutline16, search: IconSearchOutline16 };
@@ -31,6 +32,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
  const state = tool.state === 'failure' ? 'error' : tool.state === 'cancelled' || tool.state === 'uncertain' ? 'stopped' : tool.state === 'success' ? 'ok' : tool.state;
  const expandable = tool.variant !== 'image' || !!(tool.imageResult || tool.output || body || inspect);
  const summary = open ? tool.details?.expandedSummary ?? tool.summary : tool.summary;
+ const backgroundLabel = tool.promotion ? tx('common:activity.background-promoted') : tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting');
  return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
  <div className={css.root} data-state={state} data-variant={tool.variant}>
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
@@ -41,7 +43,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
    {onOpenPath ? <button type="button" className={`${css.summary} ${css.pathLink}`} title={tool.path}
      onClick={event => { event.stopPropagation(); onOpenPath(); }} onKeyDown={event => event.stopPropagation()}>{summary}</button>
      : <span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}><TextShimmer>{summary}</TextShimmer></span>}
- </>}{tool.details?.summarySuffix && <span className={css.summarySuffix}>{tool.details.summarySuffix}</span>}{tool.background && <span className={css.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
+ </>}{tool.details?.summarySuffix && <span className={css.summarySuffix}>{tool.details.summarySuffix}</span>}{tool.background && <span className={css.summary}><TextShimmer>{backgroundLabel}</TextShimmer></span>}</>}>
  <div className={css.bodyWrap}>
  {body ?? (tool.details ? <ToolDetails model={tool.details} onOpenAgent={onOpenAgent}/>
  : tool.variant === 'bash' ? <TerminalBlock command={tool.input ?? ''} output={tool.output} exitCode={tool.exitCode} background={tool.background}
@@ -59,10 +61,15 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
    {tool.input && tool.output && !tool.background && <span className={css.ioDivider} aria-hidden/>}
    {tool.output && !tool.background && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.out')}</span><span className={css.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
  </div>)}
+ {tool.promotion && <div className={css.handoff}>
+   <span>{tx('common:activity.job-title', { id: tool.jobId ?? '' })}</span>
+   <code title={tool.promotion.outputPath}>{tool.promotion.outputPath}</code>
+   {tool.promotion.truncated && <span>{tx('common:activity.job-output-truncated')}</span>}
+ </div>}
  {!tool.imageResult && tool.artifacts}
  {inspect && <ToolInspectionButton inspect={inspect}/>}
  </div></DisclosureRow>
- <span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span>
+ <span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? backgroundLabel : tx(`common:state.${tool.state}`)}</span>
 </div>{children && <div className={tree.subCalls}>{children}</div>}</div>;
 }
 

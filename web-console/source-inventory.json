@@ -1006,7 +1006,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "54886386deca1eef5a6be0a0d8ffbc84e62e1e35866746fa286cf72472a1760b"
+      "local_sha256": "96a58b971772ccefb68f506a771dd5ae40f8021484baeb26d6cc73389d704a28"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1639,7 +1639,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "a61fff8ddc993bf8ac73af368cfc18d24eac0c8ab81ca21fc0fabdcfc101a4bf",
+      "local_sha256": "0833eac6a2d0adaf810e5f04d89d5d3f0dd5237777086d9363865ce695f1e67d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
@@ -1683,7 +1683,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "aaf8b4df7daacca9670ceb0cde9a5de8f89dd30dc8ed39549e3ebfafa0b9b133",
+      "local_sha256": "c9eb7f48e58807bf741ba09adeae7b7092b57dde7d9e53c2d674957bdfbb5066",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -3775,7 +3775,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "04c46111526151aa9576fc4cf4ee6b346dd7c20b621dab7873648a49396cef83",
+      "local_sha256": "34f6e2fd0cc571ad111410d6d65e59bbce5d985ff593e8a9c7ca1f2962205ab2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/TerminalBlock.tsx",
@@ -4033,7 +4033,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "c31fc317aeace82d7412379a85a8613b760e04b053395536b6856a7ec0fab551"
+      "local_sha256": "8729ada919605038577cf3c498d049d836afeaa56c0d565c06fd20c4abcc9ac3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

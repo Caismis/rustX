@@ -9,7 +9,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import { backgroundLaunch } from '../../bindings/jobs';
+import { backgroundLaunch, bashOutput, bashPromotion } from '../../bindings/jobs';
 import { READ_IMAGE_RECEIPT, READ_IMAGE_TOOL, readImageName } from '../../bindings/tools';
 import { traceStateLabel } from '../../bindings/status-labels';
 import { ToolDetails } from '../../presentation/agent/ToolDetails';
@@ -399,6 +399,16 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const blocks = imageRead ? result.blocks.filter(block => block.type !== 'text' || block.text.truncated || block.text.text !== READ_IMAGE_RECEIPT) : result.blocks;
   const block = result.blocks.length === 1 ? result.blocks[0] : undefined;
   const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
+  const bash = record.tool?.tool_id === 'tool-bash';
+  const promotion = bash && !error && block?.type === 'text' ? bashPromotion(block.text.text) : undefined;
+  if (promotion) return <div>
+    <p>{tx('common:activity.background-promoted')}</p>
+    <p>{tx('common:activity.job-title', { id: promotion.jobId })}</p>
+    <pre className={css.payload}>{promotion.outputPath}</pre>
+    {promotion.truncated && <p>{tx('common:activity.job-output-truncated')}</p>}
+    {promotion.output && <pre className={css.resultBlockText}>{promotion.output}</pre>}
+    <Attachments artifacts={artifacts} preview={preview}/>
+  </div>;
   const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
   if (launch) return <div><p>{tx('common:activity.background-started')}</p><p>{tx('common:activity.job-title', { id: launch.jobId })}</p><pre className={css.payload}>{launch.outputPath}</pre><Attachments artifacts={artifacts} preview={preview}/></div>;
   // The overview shares Chat's recorded details. Result keeps the original
@@ -415,7 +425,9 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} imageName={imageName} /></>;
   return <div className={[css.resultBlocks, preview ? css.resultBlocksPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>
     {error && result.detail?.text && <pre className={css.resultBlockText}>{result.detail.text}</pre>}
-    {blocks.map((block, index) => block.type === 'json'
+    {blocks.map((block, index) => block.type === 'json' && bash && bashOutput(block.value.value) !== undefined
+      ? <pre key={index} className={css.resultBlockText}>{bashOutput(block.value.value) || tx('trajectory:record.no-output')}</pre>
+      : block.type === 'json'
       ? <Json key={index} value={block.value.value} label={tx('trajectory:record.result-json')} preview={preview} error={error} />
       : block.type === 'image' || block.type === 'file' ? null
         : rawBlockContent(block) !== '' ? <pre key={index} className={css.resultBlockText}>{rawBlockContent(block)}</pre> : null)}

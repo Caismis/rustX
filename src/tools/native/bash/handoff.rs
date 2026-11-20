@@ -41,7 +41,7 @@ pub(crate) async fn drive_private_bash(
                 stage.cancel(cancellation.reason());
             }
             () = &mut sleep, if !stopping => {
-                match stage.adopt(cancellation.signal()).await {
+                match stage.adopt(cancellation.signal(), handoff.budget).await {
                     Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => {
                         handoff.record_transfer();
                         flush_progress(&mut stage);

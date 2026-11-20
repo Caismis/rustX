@@ -782,11 +782,14 @@ def web_bash_promotion() -> Scenario:
     )
     return Scenario("web_bash_promotion",
         Step(expected("Run the foreground promotion probe"), Stream(ToolCall("promotion-bash", "bash", json.dumps({
+            "description": "Record the running Bash process",
             "command": command,
             "execution_mode": "foreground",
             "elevation_reason": "Record the shell PID in the test workspace",
         })), Finish("tool_calls"))),
-        Step(expected("job_id"), Stream(Text("The shell is continuing in the background."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(
+            "still running after 120000ms; moved to background job", "Output so far:", "before pid=",
+        )), Stream(Text("The shell is continuing in the background."), Finish())),
         Step(expected("Continue while the shell runs"), Stream(Text("Chat continued while the shell ran."), Finish())),
         Step(expected("settled: cancelled"), Stream(Text("The shell has stopped."), Finish())))
 
