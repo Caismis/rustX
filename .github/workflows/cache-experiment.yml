@@ -52,15 +52,15 @@ jobs:
           else
             echo "COLD — first run on this ref pair"
           fi
+      - name: write marker
+        if: steps.scope.outputs.cache-hit != 'true'
+        run: echo "$(date -u +%FT%TZ) run=${{ github.run_id }} ref=${{ github.ref }}" > scope-marker.txt
       - name: save scope marker
         if: steps.scope.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: scope-marker.txt
           key: exp-scope-${{ github.base_ref }}-${{ github.head_ref }}
-      - name: write marker
-        if: steps.scope.outputs.cache-hit != 'true'
-        run: echo "$(date -u +%FT%TZ) run=${{ github.run_id }} ref=${{ github.ref }}" > scope-marker.txt
 
   # Variant D: production-equivalent deps-only rust-cache, but saving on the
   # experiment ref so this PR self-warms (the missing producer problem).
