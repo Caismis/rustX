@@ -1,0 +1,189 @@
+.pending,
+.overlay {
+  --wire: var(--dsw-alias-label-secondary);
+  --wire-edge: color-mix(in srgb, var(--wire) 63%, transparent);
+  --wire-field: color-mix(in srgb, var(--wire) 23%, transparent);
+  --wire-paper: var(--dsw-alias-bg-layer-1);
+  --wire-grid: radial-gradient(circle at 1px 1px, var(--wire-field) .8px, transparent 1.2px) 0 0 / 15px 15px;
+}
+
+.pending {
+  margin-block: 1rem;
+  padding: .75rem clamp(.75rem, 2.2vw, 1.25rem) 1rem;
+  border: 1px solid var(--dsw-alias-border-l4);
+  border-radius: 16px;
+  background: var(--wire-grid), var(--wire-paper);
+}
+
+.status {
+  margin-bottom: .65rem;
+  color: var(--wire);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
+.preview {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.stack,
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.row {
+  flex-flow: row wrap;
+}
+
+.row > * {
+  flex: 1 1 145px;
+}
+
+.frame,
+.emptyFrame {
+  min-inline-size: 0;
+  position: relative;
+  border: 2px dotted var(--wire-edge);
+  border-radius: 10px;
+  background: repeating-linear-gradient(90deg, var(--wire-edge) 0 1.5px, transparent 1.5px 5px)
+    12px 31px / min(29%, 133px) 2px no-repeat;
+}
+
+.emptyFrame {
+  min-block-size: 108px;
+  background: repeating-linear-gradient(90deg, var(--wire-edge) 0 1.5px, transparent 1.5px 5px)
+    12px 23px / min(25%, 110px) 2px no-repeat;
+}
+
+.caption {
+  display: block;
+  padding: 4px 10px 0;
+  color: var(--wire);
+  font: 10px/1.5 ui-monospace, monospace;
+}
+
+.previewScan,
+.scan {
+  position: absolute;
+  inset-inline: 0;
+  pointer-events: none;
+}
+
+.previewScan {
+  inset-block: 0;
+  background: radial-gradient(circle at 1px 1px, var(--wire) 1px, transparent 1.5px) 0 0 / 15px 15px;
+  mask-image: linear-gradient(180deg, transparent 31%, black 50%, transparent 69%);
+  opacity: .42;
+  animation: preview-pass 2.8s linear infinite;
+}
+
+.reveal {
+  position: relative;
+}
+
+.result {
+  display: flow-root;
+}
+
+.reveal[data-a2ui-generation="reveal"] .result {
+  animation: reveal 1.45s cubic-bezier(.25, .7, .3, 1) both;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  pointer-events: none;
+  border-radius: 16px;
+  background: var(--wire-grid), var(--wire-paper);
+  animation: overlay 1.45s cubic-bezier(.25, .7, .3, 1) both;
+}
+
+.overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 1px 1px, var(--wire) 1px, transparent 1.6px) 0 0 / 15px 15px;
+  mask-image: linear-gradient(115deg, transparent 39%, black 50%, transparent 61%);
+  animation: field .8s ease-out both;
+}
+
+.wire {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.guides,
+.edges {
+  fill: none;
+  stroke: var(--wire-edge);
+  stroke-linecap: round;
+}
+
+.guides {
+  stroke-dasharray: 1 8;
+  opacity: .55;
+}
+
+.edges {
+  stroke-width: 1.7px;
+  stroke-dasharray: .1 4.5;
+  animation: draw .68s cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.corners {
+  stroke: var(--wire);
+  fill: var(--wire-paper);
+}
+
+.scan {
+  top: 0;
+  height: 0;
+  border-top: 1px dotted var(--wire);
+  animation: scan 1.45s cubic-bezier(.25, .7, .3, 1) both;
+}
+
+@keyframes preview-pass {
+  from { transform: translateY(-70%); }
+  to { transform: translateY(70%); }
+}
+
+@keyframes draw {
+  from { opacity: 0; stroke-dashoffset: 25; }
+  to { opacity: 1; stroke-dashoffset: 0; }
+}
+
+@keyframes field {
+  from { transform: translateX(-60%); opacity: .64; }
+  to { transform: translateX(60%); opacity: 0; }
+}
+
+@keyframes reveal {
+  0%, 42% { clip-path: inset(0 0 100%); opacity: .65; }
+  100% { clip-path: inset(0); opacity: 1; }
+}
+
+@keyframes overlay {
+  0%, 42% { clip-path: inset(0); }
+  100% { clip-path: inset(100% 0 0); }
+}
+
+@keyframes scan {
+  0%, 41% { top: 0; opacity: 0; }
+  42% { top: 0; opacity: 1; }
+  96% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .previewScan { animation: none; display: none; }
+  .overlay { display: none; }
+  .reveal[data-a2ui-generation="reveal"] .result { animation: none; }
+}

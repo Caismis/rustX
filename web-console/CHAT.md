@@ -693,7 +693,7 @@ validated by the native receipt collection owner before turn admission.
 
 ## A2UI Express
 
-Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines or in an `a2ui` code fence. Each block owns its data model. Reopening a rendered message initializes its values from the source. The chat embeds each completed view between the surrounding paragraphs and shows a status while a block is still streaming. For Playground surfaces the Web UI uses the official Express compiler and the upstream shadcn/ui renderer. The 121-entry browser catalog, renderer sources, and gallery tests are pinned together. [Playground port](src/presentation/markdown/vendor/playground/README.md)
+Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines or in an `a2ui` code fence. Each block owns its data model. Reopening a rendered message initializes its values from the source. The chat draws a dotted blueprint as components arrive, then scans in the finished surface between the surrounding paragraphs. The blueprint admits no actions. History opens without a replay, and reduced-motion mode shows the blueprint without animation. For Playground surfaces the Web UI uses the official Express compiler and the upstream shadcn/ui renderer. The 121-entry browser catalog, renderer sources, and gallery tests are pinned together. [Playground port](src/presentation/markdown/vendor/playground/README.md)
 
 | Area | Supported in chat |
 | --- | --- |

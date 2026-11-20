@@ -1,12 +1,11 @@
 import { useContext, useMemo, useRef } from 'react';
-import { ExpressParser } from '@a2ui/agent';
-import { Catalog } from '@a2ui/web_core/catalog';
 import { createGenerativeUIDispatcher, GenerativeUISurfaceManager, GenerativeUISurfaceContentSchema } from '@copilotkit/core/generative-ui';
 import { GenerativeUIRuntimeContext, SurfaceView, type GenerativeUIRuntime } from '@copilotkit/react-core/v2/generative-ui/native';
 import { ExpressCard, ExpressEventContext } from './ExpressCard';
 import type { ExpressSurface } from './a2ui-express';
 import { MAX_SOURCE_LENGTH } from './express-values';
 import { MarkdownText } from './MarkdownText';
+import { playgroundParser } from './playground-parser';
 import catalog from './vendor/playground/catalog.json';
 import { playgroundUI } from './vendor/playground/ui';
 import { shadcnTheme } from './vendor/playground/design-systems/theme';
@@ -14,7 +13,6 @@ import css from './ExpressCard.module.css';
 
 const inlineTarget = 'chat';
 const openLink = '__rustx_open_https_link';
-const parser = new ExpressParser(Catalog.fromJson(catalog, '1.0', catalog.catalogId), 'inline', '1.0');
 
 function https(value: unknown): string | undefined {
   if (typeof value !== 'string' || !/^https:\/\//i.test(value.trim())) return undefined;
@@ -40,7 +38,7 @@ export function createSurface(source: string) {
   if (source.length > MAX_SOURCE_LENGTH) return undefined;
   try {
     const body = source.trim().replace(/^<a2ui>\s*/, '').replace(/\s*<\/a2ui>$/, '');
-    const operations = parser.compile(body).filter(operation => !('callRendererFunction' in operation));
+    const operations = playgroundParser.compile(body).filter(operation => !('callRendererFunction' in operation));
     const created = operations.find(operation => 'createSurface' in operation);
     if (!created?.createSurface) return undefined;
     const { surfaceId } = created.createSurface;

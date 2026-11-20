@@ -1,12 +1,11 @@
-import { Fragment, lazy, Suspense, useMemo, useRef } from 'react';
-import { useTranslation } from '../../locale/react';
+import { Fragment, lazy, useMemo, useRef } from 'react';
 import { MarkdownText } from './MarkdownText';
 import { parseExpress, type ExpressNode, type ExpressSurface } from './a2ui-express';
 import { ExpressCard } from './ExpressCard';
-import css from './ExpressCard.module.css';
+import { ExpressGeneration } from './ExpressGeneration';
 
 const PlaygroundExpress = lazy(() => import('./PlaygroundExpress'));
-type Part = { start: number; text: string; tree?: ExpressSurface; source?: string; pending?: boolean };
+type Part = { start: number; text: string; tree?: ExpressSurface; source?: string; draft?: string };
 
 function needsPlayground(node: ExpressNode): boolean {
   return node.kind === 'Unsupported' || ['AreaChart', 'CandlestickChart', 'StockTicker'].includes(node.kind)
@@ -60,7 +59,8 @@ function expressParts(source: string, streaming: boolean, cache: Map<string, Exp
   const pending = tag ?? (openFence ? fence?.start : undefined);
   if (streaming && pending !== undefined) {
     if (consumed < pending) parts.push({ start: consumed, text: source.slice(consumed, pending) });
-    parts.push({ start: pending, text: '', pending: true });
+    const body = tag === undefined ? source.slice(fence?.body ?? pending) : source.slice(tag + '<a2ui>'.length);
+    parts.push({ start: pending, text: '', draft: body.replace(/^\s*<a2ui>\s*/, '') });
     return parts;
   }
   if (consumed < source.length || !parts.length) parts.push({ start: consumed, text: source.slice(consumed) });
@@ -68,16 +68,15 @@ function expressParts(source: string, streaming: boolean, cache: Map<string, Exp
 }
 
 export function AssistantMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const tx = useTranslation();
   const cache = useRef(new Map<string, ExpressSurface | null>());
   const parts = useMemo(() => expressParts(text, streaming, cache.current), [text, streaming]);
-  const pending = <div className={css.pending} role="status">{tx('interactions:express.preparing')}</div>;
   return <>{parts.map((part, index) => <Fragment key={part.start}>
-    {part.pending ? pending
-      : part.source ? <Suspense fallback={pending}>
-        <PlaygroundExpress key={part.source} source={part.source} fallback={part.text} tree={part.tree} streaming={streaming}/>
-      </Suspense>
-      : part.tree ? <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>
+    {part.draft !== undefined || part.source || part.tree
+      ? <ExpressGeneration live={streaming} draft={part.draft}>
+        {part.source
+          ? <PlaygroundExpress key={part.source} source={part.source} fallback={part.text} tree={part.tree} streaming={streaming}/>
+          : part.tree && <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>}
+      </ExpressGeneration>
       : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
   </Fragment>)}</>;
 }

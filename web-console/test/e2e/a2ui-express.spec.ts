@@ -4,6 +4,79 @@ import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { routeWorkspaceHost } from './workspace-host';
 
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`draws the live Express layout with ${reducedMotion} motion`, async ({ page }, info) => {
+    const fixture = await startDogfood('web_a2ui_generation');
+    let passed = false;
+    try {
+      const errors: string[] = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.emulateMedia({ reducedMotion });
+      if (reducedMotion === 'reduce') {
+        await page.setViewportSize({ width: 390, height: 900 });
+        await page.addInitScript(() => localStorage.setItem('rustx-appearance-v1', 'dark'));
+      }
+      await routeWorkspaceHost(page, fixture);
+      await page.goto('/');
+      await expect(page).toHaveTitle('rustX');
+      await connectRemote(page, fixture.endpoint, fixture.token);
+      await openEmptySession(page, fixture, 'Workspace A');
+      await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Draw the market panel');
+      await page.getByRole('button', { name: 'Send', exact: true }).click();
+
+      const chat = page.getByLabel('Canonical conversation', { exact: true });
+      const draft = chat.locator('[data-a2ui-generation="draft"]');
+      await expect(draft.getByRole('status')).toHaveText('Preparing inline view…');
+      await expect(chat.getByText('The prices are ready.', { exact: true })).toBeVisible();
+      await fixture.release('express-open');
+      await expect(draft.locator('[data-a2ui-blueprint="StockTicker"]')).toBeVisible();
+      await expect(draft.locator('[data-a2ui-blueprint=""]')).toHaveCount(1);
+      await expect(chat).not.toContainText('root = Column');
+      if (reducedMotion === 'reduce') {
+        expect(await draft.evaluate(node => node.getAnimations({ subtree: true }).length)).toBe(0);
+      }
+      await draft.screenshot({ path: info.outputPath('express-generating.png') });
+
+      await fixture.release('express-structure');
+      const reveal = chat.locator('[data-a2ui-generation="reveal"]');
+      if (reducedMotion === 'no-preference') {
+        await expect(reveal).toBeVisible();
+        // Capture the real layout drawing before its synchronized scan begins.
+        await reveal.evaluate(node => {
+          for (const animation of node.getAnimations({ subtree: true })) {
+            animation.pause();
+            animation.currentTime = 470;
+          }
+        });
+        await expect(reveal.locator('svg[focusable="false"] rect').first()).toBeVisible();
+        await reveal.screenshot({ path: info.outputPath('express-wireframe.png') });
+        await reveal.evaluate(node => {
+          for (const animation of node.getAnimations({ subtree: true })) animation.play();
+        });
+      }
+      await expect(draft).toHaveCount(0);
+      await expect(reveal).toHaveCount(0);
+      const result = chat.locator('[data-a2ui-express]');
+      await expect(result.getByText('NVIDIA Corporation', { exact: true })).toBeVisible();
+      await expect(result.getByRole('img', { name: 'Daily candles' })).toBeVisible();
+      await expect(chat.getByText('The series is complete.', { exact: true })).toBeVisible();
+      await result.screenshot({ path: info.outputPath('express-settled.png') });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await fixture.release('express-complete');
+      await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+      await page.reload();
+      await connectRemote(page, fixture.endpoint, fixture.token);
+      await expect(result.getByText('NVIDIA Corporation', { exact: true })).toBeVisible();
+      await expect(chat.locator('[data-a2ui-generation]')).toHaveCount(0);
+      await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+      expect(errors).toEqual([]);
+      passed = true;
+    } finally {
+      await stopDogfoodPage(page, fixture, passed);
+    }
+  });
+}
+
 test('opens only valid HTTPS destinations from an Express card in assistant history', async ({ page, context }, info) => {
   const fixture = await startDogfood('web_a2ui_express');
   let passed = false;

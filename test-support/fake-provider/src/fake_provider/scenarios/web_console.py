@@ -1003,6 +1003,29 @@ note = Alert("Data source", "Real daily bars from Yahoo Finance (NVDA), unadjust
 SCENARIOS["web_a2ui_market"] = web_a2ui_market
 
 
+def web_a2ui_generation() -> Scenario:
+    return Scenario("web_a2ui_generation", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Draw the market panel",)),
+        Stream(
+            Text("The prices are ready.\n\n<a2ui>\n"),
+            Gate("express-open"),
+            Text('surface("market")\nroot = Column([summary, candles])\n'
+                 'summary = StockTicker("NVDA", "NVIDIA Corporation", 145.98, -4.98, -3.30, _, [229.28, 220.96, 178.67, 145.98])\n'),
+            Gate("express-structure"),
+            Text('$/candles = [{date: "11-17", open: 156.90, high: 158.19, low: 150.33, close: 155.46},'
+                 ' {date: "11-18", open: 159.19, high: 159.70, low: 150.40, close: 150.96},'
+                 ' {date: "11-19", open: 152.92, high: 158.13, low: 145.71, close: 145.98}]\n'
+                 'candles = CandlestickChart("Daily candles", "Recent closes", _, "currency", _, $/candles)\n'
+                 '</a2ui>\n\nThe series is complete.'),
+            Gate("express-complete"),
+            Finish(),
+        ),
+    ))
+
+
+SCENARIOS["web_a2ui_generation"] = web_a2ui_generation
+
+
 def web_a2ui_dashboard() -> Scenario:
     reply = """Regional revenue was higher in February.
 
