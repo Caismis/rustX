@@ -5,27 +5,33 @@
 //! Session creation schedules preparation and does not wait for it.
 //! An existing environment is reused or diagnosed; it is never deleted or rebuilt.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+#[cfg(feature = "test-support")]
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
 
-use super::execution_environment::ExecutionHost;
+use host::ExecutionHost;
 use interpreter::FixedInterpreter;
 
 mod guard;
+mod host;
 mod interpreter;
 mod owner;
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 
-pub(crate) use guard::GUARD_MESSAGE_KEY;
+pub use guard::GUARD_MESSAGE_KEY;
 
 /// The Workspace Python choice frozen into one command environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PythonSelection {
+pub struct PythonSelection {
     pub path_prefix: Vec<PathBuf>,
     pub virtual_env: Option<PathBuf>,
     pub diagnostic: String,
@@ -140,7 +146,7 @@ pub(crate) struct ProgramRequest {
     pub cwd_identity: (u64, u64),
     pub env: Vec<(String, String)>,
     pub timeout: Duration,
-    pub cancellation: crate::runtime::cancellation::CancellationSignal,
+    pub cancellation: rustx_process_supervisor::signal::ProcessSignal,
 }
 
 #[derive(Clone, Debug)]
@@ -173,13 +179,16 @@ struct Owner {
     records: Mutex<HashMap<PathBuf, Record>>,
     flights: Mutex<HashMap<PathBuf, Arc<Flight>>>,
     permits: tokio::sync::Semaphore,
-    shutdown: crate::runtime::cancellation::CancellationSignal,
-    probe: Arc<dyn ProgramProbe>,
+    shutdown: rustx_process_supervisor::signal::ProcessSignal,
+    #[cfg(test)]
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    admitted: Mutex<HashSet<PathBuf>>,
+    #[cfg(test)]
+    admitted: Mutex<std::collections::HashSet<PathBuf>>,
+    #[cfg(test)]
+    schedules: bool,
+    probe: Arc<dyn ProgramProbe>,
     host_override: Option<Arc<ExecutionHost>>,
     state_override: Option<PathBuf>,
-    schedules: bool,
     #[cfg(test)]
     before_lock: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     #[cfg(test)]
@@ -196,26 +205,84 @@ struct Owner {
     after_interpreter: Mutex<Option<TestGate>>,
 }
 
-/// The current Workspace Python selection. This never waits for uv.
-pub(crate) fn observe(root: &Path) -> PythonSelection {
-    owner::global().observe(root)
+/// A physical Workspace Python owner for one admitted Client binding.
+pub struct WorkspacePython {
+    owner: Owner,
+    root: PathBuf,
+    permit: Arc<tokio::sync::Semaphore>,
+    scheduled: AtomicBool,
 }
 
-/// Schedules preparation without waiting. Session creation and registration use this.
-pub(crate) fn schedule(root: &Path) {
-    owner::global().schedule_on(root);
+impl WorkspacePython {
+    /// Creates an owner with the binding's physical revocation signal.
+    #[must_use]
+    pub fn new(root: PathBuf, shutdown: rustx_process_supervisor::signal::ProcessSignal) -> Self {
+        Self {
+            owner: Owner::production(shutdown),
+            permit: Arc::new(tokio::sync::Semaphore::new(1)),
+            scheduled: AtomicBool::new(false),
+            root,
+        }
+    }
+
+    /// Acquires the one live preparation slot.
+    pub fn prepare_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let permit = self.permit.clone().try_acquire_owned().ok()?;
+        if self.owner.current_record(&self.root).is_some() {
+            return None;
+        }
+        self.scheduled.store(true, Ordering::Release);
+        Some(permit)
+    }
+
+    /// Whether this binding has authorized physical preparation.
+    #[must_use]
+    pub fn scheduled(&self) -> bool {
+        self.scheduled.load(Ordering::Acquire)
+    }
+
+    /// Current readiness at the Client, including input replacement.
+    #[must_use]
+    pub fn status(&self) -> rustx_execution_protocol::WorkspacePythonStatus {
+        use rustx_execution_protocol::WorkspacePythonStatus;
+        if !self.scheduled() {
+            return WorkspacePythonStatus::Unscheduled;
+        }
+        match self.permit.clone().try_acquire_owned() {
+            Ok(_permit) => {
+                if matches!(
+                    self.owner.current_record(&self.root),
+                    Some(Record::Ready { .. })
+                ) {
+                    WorkspacePythonStatus::Ready
+                } else {
+                    WorkspacePythonStatus::Unavailable
+                }
+            }
+            Err(_) => WorkspacePythonStatus::Preparing,
+        }
+    }
+
+    /// Drives a Client preparation through physical settlement.
+    pub async fn prepare(&self) {
+        self.owner.prepare(self.root.clone()).await;
+    }
+
+    /// Applies the verified Workspace interpreter or its guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an executable guard cannot be installed or
+    /// the resulting environment is invalid.
+    pub fn apply(&self, entries: &mut Vec<(String, String)>) -> Result<(), &'static str> {
+        host::apply(entries, &self.owner.observe(&self.root))
+    }
 }
 
-/// Prepares one Workspace and waits. Registration and native Bash do not call
-/// this. A caller that has already chosen to wait, including a test that needs
-/// the selection before the first command, can.
-pub async fn prepare_now(root: &Path) {
-    let Ok(canonical) = std::fs::canonicalize(root) else {
-        return;
-    };
-    owner::global().prepare(canonical).await;
-}
-
-pub(crate) async fn shutdown() {
-    owner::global().stop().await;
+/// Builds the unprepared environment for an in-process supervisor fixture.
+/// Product native Bash receives its selection from the Client binding.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn fixture_selection(root: &Path) -> PythonSelection {
+    Owner::production(rustx_process_supervisor::signal::ProcessSignal::new()).observe(root)
 }

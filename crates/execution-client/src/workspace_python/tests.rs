@@ -2,6 +2,7 @@ use super::guard::{
     GUARD_PYTHON, GUARD_PYTHON3, bounded_diagnostic, ensure_guard, guard_beside_executable,
     install_guard, provisioned_guard_for, selection_from_guard,
 };
+use super::host::{self as execution_environment, ExecutionHost, host_from_entries};
 use super::interpreter::{
     FixedInterpreter, ParsedRequest, absolute_pin, creation_request, exact_pin_conflicts,
     parse_request, path_request, pin_matches, read_pin, uv_can_create,
@@ -11,7 +12,6 @@ use super::{
     Owner, ProgramOutput, ProgramProbe, ProgramRequest, PythonSelection, Record, TestGate,
     pass_gate,
 };
-use crate::tools::execution_environment::{self, ExecutionHost, host_from_entries};
 use futures_util::future::BoxFuture;
 use pep440_rs::Version;
 use std::os::unix::fs::PermissionsExt;
@@ -447,8 +447,7 @@ async fn u11_unready_selection_is_a_guard_and_does_not_wait() {
 
 #[tokio::test]
 async fn u16_second_process_holds_the_workspace_lock() {
-    const NAME: &str =
-        "tools::workspace_python::tests::u16_second_process_holds_the_workspace_lock";
+    const NAME: &str = "workspace_python::tests::u16_second_process_holds_the_workspace_lock";
     if std::env::var_os("RUSTX_WORKSPACE_PYTHON_LOCK_HOLDER").is_some() {
         use std::io::Write;
         let path = std::env::var("RUSTX_WORKSPACE_PYTHON_LOCK_PATH").expect("lock path");
@@ -1186,12 +1185,7 @@ fn failed_guard_install_does_not_restore_host_python() {
         ("PATH", &host_bin.path().display().to_string()),
         ("HOME", "/users/ada"),
     ]);
-    let entries = crate::tools::execution_environment::compose(
-        &host,
-        &crate::tools::environment::ToolEnvironment::new(),
-        &selection,
-    )
-    .expect("composed");
+    let entries = execution_environment::compose(&host, &[], &selection).expect("composed");
     let path = entries
         .iter()
         .find(|(key, _)| key == "PATH")
@@ -1230,7 +1224,7 @@ fn incomplete_state_guard_does_not_restore_host_python() {
         let selection = selection_from_guard(specific, diagnostic);
         let entries = execution_environment::compose(
             &host_from_entries(vec![("PATH", "/usr/bin:/bin")]),
-            &crate::tools::environment::ToolEnvironment::new(),
+            &[],
             &selection,
         )
         .expect("composed");
@@ -1347,7 +1341,8 @@ async fn implementation_request_accepts_and_rejects_without_uv() {
 
 #[tokio::test]
 async fn shutdown_stops_waiting_for_a_lock_another_process_still_holds() {
-    const NAME: &str = "tools::workspace_python::tests::shutdown_stops_waiting_for_a_lock_another_process_still_holds";
+    const NAME: &str =
+        "workspace_python::tests::shutdown_stops_waiting_for_a_lock_another_process_still_holds";
     if std::env::var_os("RUSTX_WORKSPACE_PYTHON_LOCK_HOLDER").is_some() {
         use std::io::Write;
         let path = std::env::var("RUSTX_WORKSPACE_PYTHON_LOCK_PATH").expect("lock path");
@@ -1455,7 +1450,8 @@ async fn repeated_admission_keeps_one_task() {
     assert_eq!(owner.records.lock().expect("records").len(), 1);
 }
 
-pub(crate) async fn ancestor_python_version_does_not_bind_workspace_discovery() {
+#[tokio::test]
+async fn ancestor_python_version_does_not_bind_workspace_discovery() {
     const CASE: &str = "RUSTX_TEST_DISCOVERY_ANCESTOR_ROOT";
     if let Some(base) = std::env::var_os(CASE) {
         let base = PathBuf::from(base);
@@ -1507,9 +1503,17 @@ pub(crate) async fn ancestor_python_version_does_not_bind_workspace_discovery() 
     std::fs::write(base.path().join(".python-version"), "9.99").unwrap();
     std::fs::create_dir(base.path().join("tmp")).unwrap();
     let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "boundary_suites::workspace_python::ancestor_python_version_does_not_bind_workspace_discovery", "--nocapture"])
-        .env(CASE, base.path()).env("TMPDIR", base.path().join("tmp"))
-        .kill_on_drop(true).output().await.unwrap();
+        .args([
+            "--exact",
+            "workspace_python::tests::ancestor_python_version_does_not_bind_workspace_discovery",
+            "--nocapture",
+        ])
+        .env(CASE, base.path())
+        .env("TMPDIR", base.path().join("tmp"))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
     assert!(
         output.status.success(),
         "child production pipeline: {}{}",
@@ -1638,12 +1642,8 @@ fn failed_guard_directories_reject_python_and_run_other_commands() {
         guard_unavailable: false,
     };
     let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
-    let entries = crate::tools::execution_environment::compose(
-        &host,
-        &crate::tools::environment::ToolEnvironment::new(),
-        &selection,
-    )
-    .expect("non-python execution stays available");
+    let entries = execution_environment::compose(&host, &[], &selection)
+        .expect("non-python execution stays available");
     let python = run_bash(&entries, "python3 -c 'print(99)'");
     assert_eq!(python.status.code(), Some(127));
     assert!(String::from_utf8_lossy(&python.stderr).contains("disk full"));
@@ -1670,33 +1670,22 @@ fn record_guard_witness(expected_token: &str) {
     std::fs::write(&witness_path, expected_token).expect("write guard witness");
 }
 
-fn verify_unprovisioned_guard_subprocess(
-    host: &crate::tools::execution_environment::ExecutionHost,
-) {
+fn verify_unprovisioned_guard_subprocess(host: &execution_environment::ExecutionHost) {
     assert!(super::guard::provisioned_guard().is_none());
     let selection = super::guard::finish_guard(None, "disk full");
     assert!(selection.guard_unavailable);
     assert!(
-        crate::tools::execution_environment::compose(
-            host,
-            &crate::tools::environment::ToolEnvironment::new(),
-            &selection,
-        )
-        .is_err(),
+        execution_environment::compose(host, &[], &selection,).is_err(),
         "unprovisioned binary without writable guard storage must fail closed"
     );
     record_guard_witness("unprovisioned-ok");
 }
 
-fn verify_provisioned_guard_subprocess(host: &crate::tools::execution_environment::ExecutionHost) {
+fn verify_provisioned_guard_subprocess(host: &execution_environment::ExecutionHost) {
     let selection = super::guard::finish_guard(None, "disk full");
     assert!(!selection.guard_unavailable);
-    let entries = crate::tools::execution_environment::compose(
-        host,
-        &crate::tools::environment::ToolEnvironment::new(),
-        &selection,
-    )
-    .expect("composition stays available with provisioned sidecar");
+    let entries = execution_environment::compose(host, &[], &selection)
+        .expect("composition stays available with provisioned sidecar");
     let deployed =
         super::guard::provisioned_guard().expect("guard beside the relocated test executable");
     let executable = std::env::current_exe().expect("test executable");
@@ -1926,12 +1915,8 @@ fn relocated_install_rejects_python_without_the_build_tree() {
     let selection = super::guard::directory_guard(Some(resolved), "disk full");
     assert!(!selection.guard_unavailable);
     let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
-    let entries = crate::tools::execution_environment::compose(
-        &host,
-        &crate::tools::environment::ToolEnvironment::new(),
-        &selection,
-    )
-    .expect("composition stays available");
+    let entries = execution_environment::compose(&host, &[], &selection)
+        .expect("composition stays available");
     let path = entries
         .iter()
         .find(|(key, _)| key == "PATH")
@@ -1962,7 +1947,8 @@ fn relocated_install_rejects_python_without_the_build_tree() {
     assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
 }
 
-pub(crate) async fn relative_interpreter_pin_is_bound_to_the_workspace() {
+#[tokio::test]
+async fn relative_interpreter_pin_is_bound_to_the_workspace() {
     for launcher in [false, true] {
         let root = workspace();
         let interpreter = PathBuf::from("/usr/bin/python3");
@@ -2018,7 +2004,8 @@ pub(crate) async fn relative_interpreter_pin_is_bound_to_the_workspace() {
     }
 }
 
-pub(crate) async fn directory_pins_create_and_reuse_without_uv() {
+#[tokio::test]
+async fn directory_pins_create_and_reuse_without_uv() {
     for spelling in ["absolute", "relative", "bare"] {
         let root = workspace();
         let source = root.path().join("source-env");
@@ -2117,7 +2104,8 @@ pub(crate) async fn directory_pins_create_and_reuse_without_uv() {
     }
 }
 
-pub(crate) async fn invalid_directory_pins_fail_without_changing_the_target() {
+#[tokio::test]
+async fn invalid_directory_pins_fail_without_changing_the_target() {
     for kind in ["empty", "nonexecutable", "not-python", "dangling", "cyclic"] {
         for reuse in [false, true] {
             let root = workspace();
@@ -2372,18 +2360,14 @@ fn cached_guard_deletion_and_mode_changes_select_a_verified_replacement() {
     assert_ne!(second, third);
     let host = host_from_entries(vec![("PATH", "/usr/bin:/bin")]);
     let selection = super::guard::directory_guard(Some(third), "disk full");
-    let entries = crate::tools::execution_environment::compose(
-        &host,
-        &crate::tools::environment::ToolEnvironment::new(),
-        &selection,
-    )
-    .unwrap();
+    let entries = execution_environment::compose(&host, &[], &selection).unwrap();
     assert_guard_rejected(&run_bash(&entries, "python3"));
     assert_guard_rejected(&run_bash(&entries, "/usr/bin/env python3"));
     assert!(run_bash(&entries, "ls /bin/sh >/dev/null").status.success());
 }
 
-pub(crate) async fn replaced_root_while_create_waits_for_permit_is_not_written() {
+#[tokio::test]
+async fn replaced_root_while_create_waits_for_permit_is_not_written() {
     let parent = workspace();
     let root = parent.path().join("workspace");
     std::fs::create_dir(&root).unwrap();
@@ -2414,7 +2398,8 @@ pub(crate) async fn replaced_root_while_create_waits_for_permit_is_not_written()
     assert!(owner.records.lock().unwrap().get(&root).is_none());
 }
 
-pub(crate) async fn shutdown_between_check_and_signal_cannot_start_a_program() {
+#[tokio::test]
+async fn shutdown_between_check_and_signal_cannot_start_a_program() {
     let root = workspace();
     write_venv(&root.path().join(".venv"));
     for name in ["python", "python3"] {
@@ -2450,12 +2435,7 @@ fn all_guard_sources_missing_cannot_compose_an_unguarded_host_path() {
     assert!(super::guard::cached_guard(&mut cached, &[file]).is_none());
     let selection = super::guard::directory_guard(None, "no guard resource");
     let host = host_from_entries(vec![("PATH", "/usr/bin:/bin")]);
-    let error = crate::tools::execution_environment::compose(
-        &host,
-        &crate::tools::environment::ToolEnvironment::new(),
-        &selection,
-    )
-    .unwrap_err();
+    let error = execution_environment::compose(&host, &[], &selection).unwrap_err();
     assert!(error.contains("guard"));
 }
 
@@ -2493,7 +2473,8 @@ fn argv0_sensitive_python(root: &Path) -> (PathBuf, PathBuf) {
     (launcher, alias)
 }
 
-pub(crate) async fn file_pin_invocation_resolves_alias_without_losing_its_witness() {
+#[tokio::test]
+async fn file_pin_invocation_resolves_alias_without_losing_its_witness() {
     let root = workspace();
     let (launcher, alias) = argv0_sensitive_python(root.path());
     std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
@@ -2544,7 +2525,8 @@ pub(crate) async fn file_pin_invocation_resolves_alias_without_losing_its_witnes
     }
 }
 
-pub(crate) async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
+#[tokio::test]
+async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
     for reuse in [false, true] {
         for unusable in [false, true] {
             let root = workspace();
@@ -2634,7 +2616,8 @@ pub(crate) async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
     }
 }
 
-pub(crate) async fn real_uv_missing_interpreter_obeys_download_policy() {
+#[tokio::test]
+async fn real_uv_missing_interpreter_obeys_download_policy() {
     for policy in ["automatic", "manual", "never"] {
         let root = workspace();
         std::fs::write(root.path().join(".python-version"), "3.12").unwrap();
@@ -2692,7 +2675,8 @@ pub(crate) async fn real_uv_missing_interpreter_obeys_download_policy() {
     }
 }
 
-pub(crate) async fn real_uv_does_not_seed_or_select_an_external_project() {
+#[tokio::test]
+async fn real_uv_does_not_seed_or_select_an_external_project() {
     let root = workspace();
     let foreign = workspace();
     std::fs::write(foreign.path().join(".python-version"), "9.99").unwrap();
@@ -2730,7 +2714,8 @@ pub(crate) async fn real_uv_does_not_seed_or_select_an_external_project() {
     owner.stop().await;
 }
 
-pub(crate) async fn real_dual_venv_launcher_variables_cannot_change_prefix() {
+#[tokio::test]
+async fn real_dual_venv_launcher_variables_cannot_change_prefix() {
     let root = workspace();
     let foreign = workspace();
     for target in [root.path().join(".venv"), foreign.path().join("venv")] {
@@ -2760,18 +2745,13 @@ pub(crate) async fn real_dual_venv_launcher_variables_cannot_change_prefix() {
                 !configured,
                 owner.records.lock().unwrap()
             );
-            let base = crate::tools::environment::ToolEnvironment::from_configured(if configured {
+            let base = if configured {
                 vec![(key.to_owned(), foreign_python.display().to_string())]
             } else {
                 vec![]
-            })
-            .unwrap();
-            let entries = crate::tools::execution_environment::compose(
-                &host,
-                &base,
-                &owner.observe(root.path()),
-            )
-            .unwrap();
+            };
+            let entries =
+                execution_environment::compose(&host, &base, &owner.observe(root.path())).unwrap();
             let script = "import sys; print(sys.prefix)";
             for absolute in [false, true] {
                 let mut command = if absolute {
@@ -2855,7 +2835,8 @@ async fn invalid_requires_with_a_pin_is_rejected_before_any_probe_or_target() {
     }
 }
 
-pub(crate) async fn targets_added_while_creation_waits_for_capacity_are_never_initialized() {
+#[tokio::test]
+async fn targets_added_while_creation_waits_for_capacity_are_never_initialized() {
     for kind in ["symlink", "directory", "file"] {
         let root = workspace();
         let external = workspace();
@@ -2977,7 +2958,8 @@ fn installed_python_interpreters() -> Vec<(Version, PathBuf)> {
     interpreters
 }
 
-pub(crate) async fn launcher_selection_change_between_probes_cannot_publish_ready() {
+#[tokio::test]
+async fn launcher_selection_change_between_probes_cannot_publish_ready() {
     let interpreters = installed_python_interpreters();
     let first = python_base_executable(&interpreters.first().expect("two Python minors").1);
     let second = python_base_executable(&interpreters.last().unwrap().1);
@@ -3037,7 +3019,8 @@ pub(crate) async fn launcher_selection_change_between_probes_cannot_publish_read
     owner.stop().await;
 }
 
-pub(crate) async fn real_multi_interpreter_selection_satisfies_both_root_inputs() {
+#[tokio::test]
+async fn real_multi_interpreter_selection_satisfies_both_root_inputs() {
     let interpreters = installed_python_interpreters();
     let (low_version, low) = interpreters
         .first()
@@ -3072,9 +3055,7 @@ pub(crate) async fn real_multi_interpreter_selection_satisfies_both_root_inputs(
         .args(["venv", "--no-project", "--python", "3"])
         .arg(&control)
         .env_clear()
-        .envs(crate::tools::execution_environment::bootstrap_environment(
-            &host,
-        ))
+        .envs(execution_environment::bootstrap_environment(&host))
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");

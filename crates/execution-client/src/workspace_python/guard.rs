@@ -75,8 +75,8 @@ pub(super) fn directory_guard(directory: Option<PathBuf>, diagnostic: &str) -> P
     }
 }
 
-pub(super) const GUARD_PYTHON: &[u8] = include_bytes!("../../../assets/python-guard/python");
-pub(super) const GUARD_PYTHON3: &[u8] = include_bytes!("../../../assets/python-guard/python3");
+pub(super) const GUARD_PYTHON: &[u8] = include_bytes!("../../assets/python-guard/python");
+pub(super) const GUARD_PYTHON3: &[u8] = include_bytes!("../../assets/python-guard/python3");
 
 /// `python-guard` installed beside the running executable. The source checkout
 /// is not consulted: a relocated binary keeps this directory next to itself,
@@ -115,7 +115,8 @@ pub(super) fn validated_guard_directory(directory: &Path) -> Option<PathBuf> {
     Some(directory.to_path_buf())
 }
 
-pub(crate) const GUARD_MESSAGE_KEY: &str = "RUSTX_PYTHON_GUARD_MESSAGE";
+/// The physical guard receives its one diagnostic through this environment entry.
+pub const GUARD_MESSAGE_KEY: &str = "RUSTX_PYTHON_GUARD_MESSAGE";
 
 pub(super) fn fallback_guard() -> Option<PathBuf> {
     static GUARD: Mutex<Option<PathBuf>> = Mutex::new(None);

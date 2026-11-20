@@ -1010,6 +1010,55 @@ fn a_foreign_protocol_version_never_connects() {
     assert_never_connected(&rig);
 }
 
+#[cfg(target_os = "linux")]
+fn spawn_mount_client(rig: &Rig, physical: &Path, scratch: &Path) -> Child {
+    let bwrap = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|dir| dir.join("bwrap"))
+        .find(|path| {
+            path.is_file()
+                && fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+        })
+        .expect("the mount-view proof requires an executable `bwrap` on PATH");
+
+    // `bwrap --ro-bind / / --bind <physical> <workspace> -- <client>`:
+    // inside the namespace the same absolute workspace path resolves to a
+    // different physical directory than the server sees.
+    let mut command = Command::new(bwrap);
+    command
+        .arg("--ro-bind")
+        .arg("/")
+        .arg("/")
+        .arg("--dev")
+        .arg("/dev")
+        .arg("--setenv")
+        .arg("PATH")
+        .arg(std::env::var_os("PATH").expect("Git fixture PATH"))
+        .arg("--bind")
+        .arg(physical)
+        .arg(&rig.workspace_path)
+        .arg("--tmpfs")
+        .arg(scratch)
+        .arg("--setenv")
+        .arg("TMPDIR")
+        .arg(scratch)
+        .arg("--setenv")
+        .arg("HOME")
+        .arg(scratch)
+        .arg("--")
+        .arg(env!("CARGO_BIN_EXE_rustx-execution-client"))
+        .arg("--binding-file")
+        .arg(&rig.bundle)
+        .arg("--workspace")
+        .arg(&rig.workspace_path)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    command.spawn().unwrap()
+}
+
 /// T02 proof fragment: data is read and tree mutations cross through a
 /// physically distinct mount view. Opt-in manual evidence only — run
 /// `test-support/prove_execution_mount_view.sh`, which requires Linux and
@@ -1030,16 +1079,6 @@ fn filesystem_operations_use_the_private_mount_view() {
     );
     // bwrap is a hard requirement of the proof: its absence fails here
     // rather than silently proving nothing.
-    let bwrap = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .map(|dir| dir.join("bwrap"))
-        .find(|path| {
-            path.is_file()
-                && fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
-        })
-        .expect("the mount-view proof requires an executable `bwrap` on PATH");
-
     let rig = rig_with(BTreeSet::from([
         Capability::Connection,
         Capability::ReadRange,
@@ -1067,38 +1106,7 @@ fn filesystem_operations_use_the_private_mount_view() {
     fs::write(physical.1.join(".git/info/exclude"), "ignored\n").unwrap();
     fs::write(physical.1.join("ignored"), b"pre-capture\n").unwrap();
 
-    // `bwrap --ro-bind / / --bind <physical> <workspace> -- <client>`:
-    // inside the namespace the same absolute workspace path resolves to a
-    // different physical directory than the server sees.
-    let mut command = Command::new(bwrap);
-    command
-        .arg("--ro-bind")
-        .arg("/")
-        .arg("/")
-        .arg("--dev")
-        .arg("/dev")
-        .arg("--setenv")
-        .arg("PATH")
-        .arg(std::env::var_os("PATH").expect("Git fixture PATH"))
-        .arg("--bind")
-        .arg(&physical.1)
-        .arg(&rig.workspace_path)
-        .arg("--tmpfs")
-        .arg(&scratch.1)
-        .arg("--setenv")
-        .arg("TMPDIR")
-        .arg(&scratch.1)
-        .arg("--")
-        .arg(env!("CARGO_BIN_EXE_rustx-execution-client"))
-        .arg("--binding-file")
-        .arg(&rig.bundle)
-        .arg("--workspace")
-        .arg(&rig.workspace_path)
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().unwrap();
+    let mut child = spawn_mount_client(&rig, &physical.1, &scratch.1);
 
     let mut connection = admit_pair(&rig, &mut child);
 
@@ -1297,6 +1305,138 @@ fn filesystem_operations_use_the_private_mount_view() {
         io::ErrorKind::NotFound
     );
 
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+#[allow(clippy::too_many_lines)] // One authenticated mount session owns all observed effects.
+fn workspace_python_prepares_and_runs_in_the_private_mount_view() {
+    use rustx_execution_protocol::WorkspacePythonStatus;
+    use rustx_execution_protocol::process::{
+        OperationId, OperationState, ProcessOperationKey, ProcessProgram, ProcessReply,
+        ProcessRequest, ProcessSpec, ProcessStdin,
+    };
+
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::AgentBash,
+        Capability::WorkspacePython,
+    ]));
+    let physical = private_dir();
+    let scratch = private_dir();
+    assert!(
+        Command::new("uv")
+            .args([
+                "venv",
+                "--no-config",
+                "--no-project",
+                "--offline",
+                "--quiet"
+            ])
+            .arg("--python")
+            .arg("python3")
+            .arg(physical.1.join(".venv"))
+            .status()
+            .unwrap()
+            .success(),
+        "stage an existing environment for the Client to verify"
+    );
+    fs::create_dir(physical.1.join("probe")).unwrap();
+    let mut child = spawn_mount_client(&rig, &physical.1, &scratch.1);
+    let mut connection = admit_pair(&rig, &mut child);
+    assert_eq!(
+        connection.workspace_python_status().unwrap(),
+        WorkspacePythonStatus::Unscheduled
+    );
+    connection.ping().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    connection
+        .prepare_workspace_python(deadline, || Ok(()))
+        .unwrap();
+    loop {
+        match connection.workspace_python_status().unwrap() {
+            WorkspacePythonStatus::Ready => break,
+            WorkspacePythonStatus::Preparing => std::thread::yield_now(),
+            other => panic!("unexpected Python readiness: {other:?}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the Client Python preparation did not settle"
+        );
+    }
+
+    let admission = connection.admission();
+    let key = ProcessOperationKey {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        operation: OperationId::new(),
+    };
+    let spec = ProcessSpec {
+        cwd: "probe".into(),
+        program: ProcessProgram::Shell {
+            command: r#"python3 -I -B -c 'from pathlib import Path; import sys; Path("selected").write_text(sys.prefix)'"#.to_owned(),
+            conversation: "mount-python".to_owned(),
+            live_output: false,
+        },
+        env: std::collections::BTreeMap::default(),
+        timeout_ms: 10_000,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let register = connection
+        .process_until(
+            &ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: spec.fingerprint(),
+                spec,
+            },
+            deadline,
+        )
+        .unwrap();
+    assert_eq!(register, ProcessReply::Registered { key: key.clone() });
+    assert!(
+        matches!(connection.process_until(&ProcessRequest::Start { key: key.clone() }, deadline).unwrap(),
+        ProcessReply::State { key: found, .. } if found == key)
+    );
+    let snapshot = loop {
+        match connection
+            .process_until(&ProcessRequest::Query { key: key.clone() }, deadline)
+            .unwrap()
+        {
+            ProcessReply::State {
+                key: found,
+                state: OperationState::Settled(snapshot),
+            } if found == key => break snapshot,
+            ProcessReply::State { key: found, .. } if found == key => std::thread::yield_now(),
+            other => panic!("unexpected Python process state: {other:?}"),
+        }
+    };
+    assert_eq!(snapshot.exit_code, Some(0));
+    assert_eq!(
+        fs::read_to_string(physical.1.join("probe/selected")).unwrap(),
+        rig.workspace_path.join(".venv").display().to_string()
+    );
+    assert!(!rig.workspace_path.join("probe/selected").exists());
+    assert_eq!(
+        connection
+            .process_until(
+                &ProcessRequest::ReleaseOutput {
+                    key: key.clone(),
+                    final_sequence: snapshot.final_sequence,
+                },
+                deadline
+            )
+            .unwrap(),
+        ProcessReply::OutputReleased { key }
+    );
     drop(connection);
     expect_success(&mut child);
 }

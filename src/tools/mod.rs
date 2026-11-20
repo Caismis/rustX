@@ -17,6 +17,7 @@ pub mod artifacts;
 pub mod background;
 pub mod deadline;
 pub mod environment;
+#[cfg(test)]
 pub mod execution_environment;
 pub mod executor;
 pub mod host;
@@ -34,7 +35,8 @@ pub mod session_files;
 pub mod todo;
 pub mod types;
 pub mod workspace;
-pub mod workspace_python;
+#[cfg(test)]
+pub(crate) use rustx_execution_client::workspace_python;
 
 pub use native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 

@@ -1469,6 +1469,26 @@ impl SessionExecutionScope {
         .await
     }
 
+    pub(crate) async fn prepare_workspace_python(
+        &self,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<()> {
+        self.dispatch_data(
+            cancellation,
+            DataCapacity::WaitForSlot,
+            move |endpoint, data, _writer, deadline, cancellation| {
+                endpoint.with_connection(Some(data), true, |connection| {
+                    connection.prepare_workspace_python(deadline, || {
+                        cancellation
+                            .with_active(|| ())
+                            .ok_or_else(cancelled_before_dispatch)
+                    })
+                })
+            },
+        )
+        .await
+    }
+
     pub(crate) async fn workspace_changes(
         &self,
         request: rustx_execution_protocol::changes::ChangeRequest,

@@ -4737,6 +4737,7 @@ dependencies = [
  "rustix",
  "rustx-confined-fs",
  "rustx-document-reader",
+ "rustx-execution-client",
  "rustx-execution-protocol",
  "rustx-execution-server",
  "rustx-execution-transport",
@@ -4796,6 +4797,7 @@ name = "rustx-execution-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "futures-util",
  "getrandom 0.3.4",
  "globset",
  "grep-regex",
@@ -4803,6 +4805,7 @@ dependencies = [
  "libc",
  "nix",
  "notify",
+ "pep440_rs",
  "rustix",
  "rustx-confined-fs",
  "rustx-document-reader",
@@ -4817,6 +4820,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml_edit 0.22.27",
  "tracing",
 ]
 

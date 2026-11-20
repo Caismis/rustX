@@ -217,17 +217,6 @@ pub async fn run_subagent_child() -> i32 {
     } else {
         None
     };
-    let runtime_root = spec.runtime_root().ok();
-    if let Err(detail) =
-        crate::tools::execution_environment::install_child_snapshot(runtime_root.as_deref())
-    {
-        let _ = write_child_frame(
-            &mut control,
-            &ChildFrame::StartupError(DiagnosticFrame { message: detail }),
-        )
-        .await;
-        return 2;
-    }
     // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
     // supervised process unit — reaches the parent only through it.
@@ -288,10 +277,6 @@ pub async fn run_subagent_child() -> i32 {
             3
         }
     };
-    // Process-owned Python probes can outlive the conversation's semantic
-    // result. Their physical settlement must release nested anchors while
-    // the parent control writer is still alive, before its final queue drain.
-    crate::tools::workspace_python::shutdown().await;
     dispatcher.shutdown().await;
     code
 }

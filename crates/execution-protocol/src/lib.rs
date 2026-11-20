@@ -444,6 +444,8 @@ pub enum Capability {
     FileWatches,
     /// Client-owned Workspace baselines, file observations, and comparisons.
     WorkspaceChanges,
+    /// The bound Client prepares Workspace Python for native Agent Bash.
+    WorkspacePython,
     /// The implemented conditional write: one staged `PrepareWrite` plus a
     /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
     /// private commit kernel under the binding workspace.
@@ -717,6 +719,20 @@ pub struct Admission {
     pub generation: Generation,
     /// The exact workspace the binding is fixed to.
     pub workspace: PathBuf,
+}
+
+/// Readiness of the Client's Workspace Python owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspacePythonStatus {
+    /// This binding has scheduled no preparation.
+    Unscheduled,
+    /// A supervised probe or preparation is still running.
+    Preparing,
+    /// The current Workspace inputs have a verified interpreter.
+    Ready,
+    /// No current verified interpreter exists.
+    Unavailable,
 }
 
 /// The reason a [`Hello`] was rejected.
@@ -1083,6 +1099,10 @@ pub enum ClientRequest {
     MutateTree(TreeMutation),
     /// Attempt-scoped Workspace baseline, capture, and comparison.
     WorkspaceChanges(changes::ChangeRequest),
+    /// Schedule Client-owned Python readiness for this admitted Workspace.
+    PrepareWorkspacePython,
+    /// Read the verified preparation state of this admitted Workspace.
+    WorkspacePythonStatus,
     /// Register a native observer or receive its bounded coalesced hints.
     Watch(crate::watch::WatchRequest),
     /// First phase of one conditional write: retain the exact named target
@@ -1346,6 +1366,10 @@ pub enum ClientReply {
     TreeMutated,
     /// Reply from the Client-owned Workspace observation service.
     WorkspaceChanges(changes::ChangeReply),
+    /// Physical preparation was scheduled, or was already in flight.
+    WorkspacePythonScheduled,
+    /// Current physical readiness, independent of authentication.
+    WorkspacePythonStatus(WorkspacePythonStatus),
     /// A change crossed and the tree operation could not settle successfully.
     TreeOutcomeUnknown,
     /// Registration receipt or coalesced hints from one native observer.

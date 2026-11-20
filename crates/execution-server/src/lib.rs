@@ -2492,6 +2492,49 @@ impl LocalConnection {
         }
     }
 
+    /// Schedules Workspace Python preparation on the admitted Client.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capability, dispatch, or typed physical refusal.
+    pub fn prepare_workspace_python(
+        &mut self,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        if !self.capabilities.contains(&Capability::WorkspacePython) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        match self.exchange_admitted(
+            &ClientRequest::PrepareWorkspacePython,
+            Some(deadline),
+            admit,
+            || (),
+        )? {
+            ClientReply::WorkspacePythonScheduled => Ok(()),
+            ClientReply::Error { kind } => Err(read_error(kind)),
+            _ => Err(self.retire(io::ErrorKind::InvalidData.into())),
+        }
+    }
+
+    /// Reads current readiness independently of the Session admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported capability or failed exchange.
+    pub fn workspace_python_status(
+        &mut self,
+    ) -> io::Result<rustx_execution_protocol::WorkspacePythonStatus> {
+        if !self.capabilities.contains(&Capability::WorkspacePython) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        match self.exchange(&ClientRequest::WorkspacePythonStatus)? {
+            ClientReply::WorkspacePythonStatus(status) => Ok(status),
+            ClientReply::Error { kind } => Err(read_error(kind)),
+            _ => Err(self.retire(io::ErrorKind::InvalidData.into())),
+        }
+    }
+
     /// Dispatch one bounded Workspace observation command on this binding.
     ///
     /// # Errors

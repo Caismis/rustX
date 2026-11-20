@@ -669,6 +669,15 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
+            if let Some(scope) = execution_scope.clone() {
+                let preparation = crate::runtime::ExecutionCancellation::detached(
+                    cancellation.child(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                );
+                std::mem::drop(tokio::spawn(async move {
+                    let _ = scope.prepare_workspace_python(&preparation).await;
+                }));
+            }
             tool_runtime_config.execution_scope = execution_scope;
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)

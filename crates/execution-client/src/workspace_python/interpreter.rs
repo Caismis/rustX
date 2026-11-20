@@ -8,9 +8,9 @@ use std::sync::Mutex;
 use pep440_rs::{Version, VersionSpecifier, VersionSpecifiers};
 
 use super::guard::{create_private_directory, monotonic_nanos};
+use super::host::ExecutionHost;
 use super::owner::{PROBE_TIMEOUT, stamp};
 use super::{Generation, Owner, PathStamp};
-use crate::tools::execution_environment::ExecutionHost;
 
 const UV_MINIMUM: &str = "0.10.0";
 
@@ -313,11 +313,29 @@ pub(super) fn read_pin(root: &Path) -> Result<Option<String>, &'static str> {
 }
 
 pub(super) fn read_optional_file(path: &Path) -> Result<Option<String>, ()> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    const MAX_PYTHON_SOURCE_BYTES: u64 = 1024 * 1024;
+
     if std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
         return Ok(None);
     }
     // Shared bounded reads open with O_NONBLOCK and validate the opened FD.
-    let bytes = crate::bounded_file::read_bounded(path).map_err(|_| ())?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| ())?;
+    if !file.metadata().map_err(|_| ())?.is_file() {
+        return Err(());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_PYTHON_SOURCE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > MAX_PYTHON_SOURCE_BYTES {
+        return Err(());
+    }
     String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 

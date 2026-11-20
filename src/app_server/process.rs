@@ -542,13 +542,8 @@ async fn run(options: Request) -> Result<(), String> {
                 None => (&mut scheduler).await,
             }
         };
-        let (failures, reaper_result, scheduler_result, _, ()) = tokio::join!(
-            host.drain(),
-            reaper,
-            scheduler_completion,
-            source_watch,
-            crate::tools::workspace_python::shutdown()
-        );
+        let (failures, reaper_result, scheduler_result, _) =
+            tokio::join!(host.drain(), reaper, scheduler_completion, source_watch);
         shutdown.cancel();
         if !transport_finished {
             match (&mut serving).await {

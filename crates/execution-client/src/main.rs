@@ -199,6 +199,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::TreeMutations,
             Capability::FileWatches,
             Capability::WorkspaceChanges,
+            Capability::WorkspacePython,
             Capability::ConditionalWrite,
             Capability::ConditionalEdit,
             Capability::ReadLines,
@@ -657,6 +658,19 @@ fn serve(
         };
         let reply = match request {
             ClientRequest::Ping => ClientReply::Pong,
+            ClientRequest::WorkspacePythonStatus => {
+                ClientReply::WorkspacePythonStatus(operations.workspace_python_status())
+            }
+            ClientRequest::PrepareWorkspacePython => {
+                if operations.schedule_workspace_python() {
+                    ClientReply::WorkspacePythonScheduled
+                } else {
+                    ClientReply::Error {
+                        kind: ReadError::Unavailable,
+                    }
+                }
+            }
+
             ClientRequest::Process(process_request) => {
                 ClientReply::Process(operations.dispatch(process_request))
             }

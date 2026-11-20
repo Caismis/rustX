@@ -220,6 +220,7 @@ pub(crate) struct Operations {
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
     workers: Arc<WorkerCount>,
     captures: Arc<Captures>,
+    python: Arc<rustx_execution_client::workspace_python::WorkspacePython>,
     /// Test-only START holds, each owned by exactly one operation id.
     #[cfg(test)]
     start_holds:
@@ -242,6 +243,13 @@ impl Operations {
     /// Creates the registry for one admitted binding; the workspace root
     /// descriptor is the Client's own — never the Server's view.
     pub(crate) fn new(admission: Admission) -> io::Result<Self> {
+        let revoke = ProcessSignal::new();
+        let python = Arc::new(
+            rustx_execution_client::workspace_python::WorkspacePython::new(
+                admission.workspace.clone(),
+                revoke.child(),
+            ),
+        );
         Ok(Self {
             inner: Arc::new(Mutex::new(Inner {
                 records: BTreeMap::new(),
@@ -249,7 +257,8 @@ impl Operations {
             root: PackageDirectory::open(&admission.workspace)?,
             workspace: admission.workspace.clone(),
             admission,
-            revoke: ProcessSignal::new(),
+            revoke,
+            python,
             runtime: Mutex::new(Some(
                 tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(1)
@@ -307,6 +316,29 @@ impl Operations {
             future.await;
         });
         true
+    }
+
+    pub(crate) fn workspace_python_status(
+        &self,
+    ) -> rustx_execution_protocol::WorkspacePythonStatus {
+        if self.root.verify().is_err() {
+            return rustx_execution_protocol::WorkspacePythonStatus::Unavailable;
+        }
+        self.python.status()
+    }
+
+    pub(crate) fn schedule_workspace_python(&self) -> bool {
+        if self.root.verify().is_err() || self.revoke.is_cancelled() {
+            return false;
+        }
+        let Some(permit) = self.python.prepare_permit() else {
+            return true;
+        };
+        let python = self.python.clone();
+        self.start_auxiliary(async move {
+            let _permit = permit;
+            python.prepare().await;
+        })
     }
 
     /// The control-lane cancellation for one keyed operation.
@@ -660,6 +692,9 @@ impl Operations {
         let cwd_fd = operation.cwd.descriptor().try_clone();
         let cwd_path = self.workspace.join(&spec.cwd);
         drop(inner);
+        if matches!(&spec.program, ProcessProgram::Shell { .. }) && self.python.scheduled() {
+            self.schedule_workspace_python();
+        }
         // The runtime handle comes first: a stopped runtime fails before
         // the worker count ever reflects in-flight creation, so the
         // count below always includes the worker it precedes.
@@ -688,11 +723,12 @@ impl Operations {
             *live += 1;
         }
         let worker_key = key.clone();
+        let python = Arc::clone(&self.python);
         runtime.spawn(async move {
             let _count = WorkerGuard(workers);
             run_operation(
                 inner_arc, cwd_fd, cwd_path, workspace, worker_key, spec, signal, revoke, input_rx,
-                control, capture, captures,
+                control, capture, captures, python,
             )
             .await;
         });
@@ -1192,6 +1228,7 @@ async fn run_operation(
     control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
     mut capture: Option<Capture>,
     captures: Arc<Captures>,
+    python: Arc<rustx_execution_client::workspace_python::WorkspacePython>,
 ) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -1230,10 +1267,18 @@ async fn run_operation(
         ProcessProgram::Argv(argv) => (argv.join(" "), Some(argv.clone())),
         ProcessProgram::Shell { command, .. } => (command.clone(), None),
     };
+    let mut environment = command_environment(&workspace, &spec);
+    if matches!(&spec.program, ProcessProgram::Shell { .. })
+        && let Err(error) = python.apply(&mut environment)
+    {
+        tracing::warn!(%error, "Workspace Python guard unavailable");
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        return;
+    }
     let command_spec = SupervisedCommandSpec {
         command,
         cwd: cwd_path,
-        command_environment: command_environment(&workspace, &spec),
+        command_environment: environment,
         timeout: (spec.timeout_ms != 0).then(|| Duration::from_millis(spec.timeout_ms)),
         cancellation: signal.clone(),
     };

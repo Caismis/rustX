@@ -62,6 +62,9 @@ export RUSTX_MOUNT_VIEW_PROOF=1
 cargo test -p rustx-execution-client --locked \
     --test bootstrap filesystem_operations_use_the_private_mount_view \
     -- --exact --ignored --nocapture
+cargo test -p rustx-execution-client --locked \
+    --test bootstrap workspace_python_prepares_and_runs_in_the_private_mount_view \
+    -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked \
     --test process app_server::explicit_composition_reads_from_client_mount_namespace \
     -- --exact --ignored --nocapture

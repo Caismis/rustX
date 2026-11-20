@@ -4,14 +4,20 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT"
-description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness, bounded revision-checked range reads, logical-text pages, whitelisted document pages, ticketed conditional writes, bounded workspace search, and managed process operations of its workspace — no MCP or Python I/O."
+description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness, bounded revision-checked range reads, logical-text pages, whitelisted document pages, ticketed conditional writes, bounded workspace search, and managed process operations of its workspace, and the bound Workspace Python environment."
 publish = false
 
 [[bin]]
 name = "rustx-execution-client"
 path = "src/main.rs"
 
+[features]
+test-support = []
+
 [dependencies]
+futures-util = "0.3"
+pep440_rs = "0.7.3"
+toml_edit = "0.22"
 similar = "3.2.0"
 tracing = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }

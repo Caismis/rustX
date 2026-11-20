@@ -175,6 +175,7 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+rustx-execution-client = { path = "crates/execution-client", features = ["test-support"] }
 rustx-process-supervisor = { path = "crates/process-supervisor", features = ["test-support"] }
 
 # The physical structured-document decoder — production code reaches it

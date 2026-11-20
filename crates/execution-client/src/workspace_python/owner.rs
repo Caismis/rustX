@@ -1,11 +1,13 @@
 //! Workspace Python owner state, gates, locks, and environment preparation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(test)]
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
@@ -14,6 +16,7 @@ use sha2::{Digest, Sha256};
 use super::guard::{
     bounded_diagnostic, ensure_guard, fallback_guard, guarded, validated_guard_directory,
 };
+use super::host::{self, ExecutionHost};
 use super::interpreter::{
     FixedInterpreter, InterpreterError, Requires, creation_request, exact_pin_conflicts, find_uv,
     isolated_discovery_args, parse_request, path_request, read_pin, read_requires, uv_can_create,
@@ -24,31 +27,28 @@ use super::{
     FileStamp, Flight, Generation, Owner, PathStamp, ProgramOutput, ProgramProbe, ProgramRequest,
     PythonSelection, Record,
 };
-use crate::tools::execution_environment::{self, ExecutionHost};
 
 const CREATE_TIMEOUT: Duration = Duration::from_mins(10);
 pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 const EXTERNAL_PERMITS: usize = 2;
 
-pub(super) fn global() -> &'static Arc<Owner> {
-    static OWNER: OnceLock<Arc<Owner>> = OnceLock::new();
-    OWNER.get_or_init(|| Arc::new(Owner::production()))
-}
-
 impl Owner {
-    fn production() -> Self {
+    pub(super) fn production(shutdown: rustx_process_supervisor::signal::ProcessSignal) -> Self {
         Self {
             records: Mutex::new(HashMap::new()),
             flights: Mutex::new(HashMap::new()),
             permits: tokio::sync::Semaphore::new(EXTERNAL_PERMITS),
-            shutdown: crate::runtime::cancellation::CancellationSignal::new(),
-            probe: production_probe(),
+            shutdown,
+            #[cfg(test)]
             tasks: Mutex::new(Vec::new()),
-            admitted: Mutex::new(HashSet::new()),
+            #[cfg(test)]
+            admitted: Mutex::new(std::collections::HashSet::new()),
+            #[cfg(test)]
+            schedules: true,
+            probe: production_probe(),
             host_override: None,
             state_override: None,
-            schedules: true,
             #[cfg(test)]
             before_lock: Mutex::new(None),
             #[cfg(test)]
@@ -79,14 +79,53 @@ impl Owner {
             state_override: state,
             schedules: false,
             before_lock: Mutex::new(before_lock),
-            ..Self::production()
+            ..Self::production(rustx_process_supervisor::signal::ProcessSignal::new())
         }
     }
 
     fn host(&self) -> Arc<ExecutionHost> {
-        self.host_override
-            .clone()
-            .unwrap_or_else(execution_environment::current)
+        self.host_override.clone().unwrap_or_else(host::current)
+    }
+
+    pub(super) fn current_record(&self, root: &Path) -> Option<Record> {
+        let root = root.canonicalize().ok()?;
+        let generation = generation_of(&root);
+        self.records
+            .lock()
+            .expect("workspace python records")
+            .get(&root)
+            .filter(|record| Self::current(record, &generation))
+            .cloned()
+    }
+
+    fn current(record: &Record, generation: &Generation) -> bool {
+        match record {
+            Record::Ready {
+                generation: stored,
+                fixed,
+                guard,
+                ..
+            } => {
+                stored == generation
+                    && fixed.as_deref().is_none_or(FixedInterpreter::is_current)
+                    && validated_guard_directory(guard).is_some()
+            }
+            Record::Unavailable {
+                generation: stored,
+                retry_after,
+                ..
+            } => stored == generation && Instant::now() < *retry_after,
+            Record::Conflict {
+                generation: stored,
+                directory_candidate,
+                ..
+            } => {
+                stored == generation
+                    && directory_candidate
+                        .as_ref()
+                        .is_none_or(|path| !path.is_dir())
+            }
+        }
     }
 
     pub(super) fn observe(&self, root: &Path) -> PythonSelection {
@@ -100,17 +139,16 @@ impl Owner {
             .expect("workspace python records")
             .get(&canonical)
             .cloned();
-        match &record {
+        match record
+            .as_ref()
+            .filter(|record| Self::current(record, &generation))
+        {
             Some(Record::Ready {
-                generation: stored,
                 bin,
                 virtual_env,
                 guard,
-                fixed,
-            }) if stored == &generation
-                && fixed.as_deref().is_none_or(FixedInterpreter::is_current)
-                && validated_guard_directory(guard).is_some() =>
-            {
+                ..
+            }) => {
                 return PythonSelection {
                     path_prefix: vec![bin.clone(), guard.clone()],
                     virtual_env: Some(virtual_env.clone()),
@@ -118,32 +156,14 @@ impl Owner {
                     guard_unavailable: false,
                 };
             }
-            Some(Record::Unavailable {
-                generation: stored,
-                diagnostic,
-                retry_after,
-            }) if stored == &generation && Instant::now() < *retry_after => {
+            Some(Record::Unavailable { diagnostic, .. } | Record::Conflict { diagnostic, .. }) => {
                 return guarded(diagnostic);
             }
-            Some(Record::Conflict {
-                generation: stored,
-                diagnostic,
-                directory_candidate,
-            }) if stored == &generation
-                && directory_candidate
-                    .as_ref()
-                    .is_none_or(|path| !path.is_dir()) =>
-            {
-                return guarded(diagnostic);
-            }
-            _ => {}
+            None => {}
         }
         #[cfg(test)]
         if let Some(miss) = self.cache_miss.lock().expect("cache miss").take() {
             let _ = miss.send(());
-        }
-        if self.schedules && std::ptr::eq(self, Arc::as_ptr(global())) {
-            global().schedule_on(&canonical);
         }
         let diagnostic = record
             .map(|record| record.diagnostic())
@@ -152,6 +172,7 @@ impl Owner {
         guarded(&diagnostic)
     }
 
+    #[cfg(test)]
     pub(super) fn schedule_on(self: &Arc<Self>, root: &Path) {
         const MAX_LIVE_TASKS: usize = 64;
         if !self.schedules {
@@ -606,7 +627,7 @@ impl Owner {
             argv,
             cwd: root.to_path_buf(),
             cwd_identity: (expected.root_dev, expected.root_ino),
-            env: execution_environment::bootstrap_environment(host),
+            env: host::bootstrap_environment(host),
             timeout,
             cancellation: self.shutdown.child(),
         }
@@ -712,11 +733,13 @@ impl Drop for FinishFlight<'_> {
     }
 }
 
+#[cfg(test)]
 struct AdmitLeave {
     owner: Arc<Owner>,
     root: PathBuf,
 }
 
+#[cfg(test)]
 impl Drop for AdmitLeave {
     fn drop(&mut self) {
         self.owner
@@ -764,7 +787,7 @@ impl ProgramProbe for SupervisedProbe {
                 cwd: request.cwd,
                 command_environment: request.env,
                 timeout: Some(request.timeout),
-                cancellation: request.cancellation.physical(),
+                cancellation: request.cancellation,
             };
             let result =
                 rustx_process_supervisor::process_runner::run_supervised_program(spec, invocation)
@@ -781,6 +804,7 @@ impl ProgramProbe for SupervisedProbe {
     }
 }
 
+#[cfg(test)]
 impl Owner {
     pub(super) async fn stop(&self) {
         self.shutdown.cancel();
@@ -818,11 +842,7 @@ pub(super) fn state_dir() -> Option<PathBuf> {
 
 #[cfg(not(test))]
 pub(super) fn state_dir() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    if !home.is_absolute() {
-        return None;
-    }
-    Some(home.join("rustx").join("runtime").join("workspace-python"))
+    host::home().map(|home| home.join("rustx").join("runtime").join("workspace-python"))
 }
 
 pub(super) fn generation_of(root: &Path) -> Generation {
@@ -895,7 +915,7 @@ async fn acquire_lock(
     root: &Path,
     before_lock: Option<tokio::sync::oneshot::Sender<()>>,
     state_override: Option<PathBuf>,
-    shutdown: crate::runtime::cancellation::CancellationSignal,
+    shutdown: rustx_process_supervisor::signal::ProcessSignal,
 ) -> Result<nix::fcntl::Flock<std::fs::File>, String> {
     let state = state_override
         .or_else(state_dir)
