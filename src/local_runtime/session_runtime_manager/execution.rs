@@ -854,7 +854,7 @@ impl LocalExecutionEndpoint {
     /// live preparation on drop: the fail-closed answer when a cleanup
     /// abort cannot be delivered — capacity is never advertised as free
     /// while a ticket may still be stranded on the Client.
-    fn retire_connection(&self) {
+    pub fn retire_connection(&self) {
         let mut guard = self
             .connection
             .lock()

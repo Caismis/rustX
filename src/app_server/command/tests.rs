@@ -2,7 +2,7 @@ use super::*;
 
 fn parameters() -> ExecParams {
     ExecParams {
-        session_id: crate::local_runtime::session::SessionId::new("session-1"),
+        session_id: crate::local_runtime::session::SessionId::generate(),
         command: vec!["/bin/echo".into(), "hi".into()],
         cwd: "/workspace".into(),
         env: BTreeMap::new(),

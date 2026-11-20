@@ -40,6 +40,8 @@ use rustx_execution_protocol::{
 use rustx_execution_transport::{ChannelShutdown, RecordChannel};
 use sha2::{Digest, Sha256};
 
+mod process_reply;
+
 /// The deadline for a Client to present its Hello on an accepted local
 /// connection — one shared budget owned by
 /// [`rustx_execution_protocol::transport`].
@@ -2049,7 +2051,8 @@ impl LocalConnection {
                 "peer admitted no process capability",
             ));
         }
-        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        process_reply::validate_request(request)
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         let ClientReply::Process(reply) = self.exchange_admitted(
             &ClientRequest::Process(request.clone()),
             Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
@@ -2057,17 +2060,13 @@ impl LocalConnection {
             || (),
         )?
         else {
-            return Err(self.retire(violation("unexpected reply to process request")));
+            return Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected reply to process request",
+            )));
         };
-        if reply.key() != request.key() {
-            return Err(self.retire(violation("process reply echoes a foreign key")));
-        }
-        if let rustx_execution_protocol::process::ProcessReply::Output { delta_base64, .. } = &reply
-            && delta_base64.len()
-                > rustx_execution_protocol::process::MAX_PROCESS_DATA_BYTES.div_ceil(3) * 4
-        {
-            return Err(self.retire(violation("process output exceeds the bounded page")));
-        }
+        process_reply::validate(request, &reply)
+            .map_err(|message| self.retire(io::Error::new(io::ErrorKind::InvalidData, message)))?;
         Ok(reply)
     }
 
@@ -4883,6 +4882,78 @@ mod tests {
         // nothing further is ever requested on it.
         assert_eq!(binding.status().phase, BindingPhase::Detached);
         assert!(connection.ping().is_err());
+    }
+
+    fn process_key() -> rustx_execution_protocol::process::ProcessOperationKey {
+        use rustx_execution_protocol::process::{OperationId, ServerIncarnation};
+        rustx_execution_protocol::process::ProcessOperationKey {
+            incarnation: ServerIncarnation::generate(),
+            session: rustx_execution_protocol::SessionId::new("session-1"),
+            instance: rustx_execution_protocol::ClientInstanceId::new("client-1"),
+            generation: rustx_execution_protocol::Generation::try_from(1u64).unwrap(),
+            operation: OperationId::new(),
+        }
+    }
+
+    #[test]
+    fn a_contradictory_process_reply_retires_the_pair() {
+        use rustx_execution_protocol::DecimalU64;
+        use rustx_execution_protocol::process::{ProcessReply, ProcessRequest};
+
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::Process,
+        ]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let key = process_key();
+        let request = ProcessRequest::Start { key: key.clone() };
+
+        let answer = thread::spawn(move || {
+            let received: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(received, ClientRequest::Process(_)));
+            write_record(
+                &mut peer,
+                &ClientReply::Process(ProcessReply::InputAccepted {
+                    key,
+                    sequence: DecimalU64::new(1),
+                }),
+            )
+            .unwrap();
+        });
+        let error = connection.process(&request).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_prewire_invalid_output_bound_leaves_the_pair_healthy() {
+        use rustx_execution_protocol::DecimalU64;
+        use rustx_execution_protocol::process::ProcessRequest;
+
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::Process,
+        ]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let request = ProcessRequest::OutputPage {
+            key: process_key(),
+            cursor: DecimalU64::new(0),
+            max_bytes: 0,
+        };
+        let error = connection.process(&request).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
     }
 
     #[test]

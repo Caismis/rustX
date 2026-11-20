@@ -10,6 +10,9 @@
 //! only the `process_id` → operation map; cancellation rides the
 //! dedicated control lane and never targets another Session's or UI
 //! connection's operation.
+mod output;
+
+use self::output::OutputAccounting;
 use super::protocol::{ErrorData, NotificationMethod, RequestId, RpcError};
 use super::rpc_error::domain;
 use base64::Engine as _;
@@ -559,10 +562,32 @@ async fn exchange(
             std::io::ErrorKind::NotConnected
             | std::io::ErrorKind::BrokenPipe
             | std::io::ErrorKind::PermissionDenied => domain(ErrorData::ExecutionUnavailable),
+            // A reply that contradicts the contract retired its pair: what
+            // the Client did with the request is no longer knowable.
+            std::io::ErrorKind::InvalidData => domain(ErrorData::OutcomeUnknown),
             _ => super::connection::environment_error(io),
         }),
         Err(_) => Exchange::Failed(domain(ErrorData::OutcomeUnknown)),
     }
+}
+
+/// The public stream of one output lane (`0` stdout, `1` stderr).
+fn lane_stream(lane: usize) -> OutputStream {
+    if lane == 0 {
+        OutputStream::Stdout
+    } else {
+        OutputStream::Stderr
+    }
+}
+
+/// A reply that contradicts the Client's contract after START: the pair that
+/// produced it is retired — never repaired — and the outcome is unknown.
+async fn contradicted(
+    endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+) -> RpcError {
+    let endpoint = endpoint.clone();
+    let _ = tokio::task::spawn_blocking(move || endpoint.retire_connection()).await;
+    domain(ErrorData::OutcomeUnknown)
 }
 
 /// The physical outcome pace of the operation task: far inside every
@@ -596,6 +621,7 @@ async fn run(
     root_retired: crate::runtime::CancellationSignal,
 ) -> Result<ExecResult, RpcError> {
     let endpoint = entry.endpoint.clone();
+    let mut accounting = OutputAccounting::new(spec.pty.is_some(), spec.output_cap);
     let register = ProcessRequest::Register {
         key: key.clone(),
         fingerprint: spec.fingerprint(),
@@ -622,9 +648,16 @@ async fn run(
                 state: OperationState::Settled(snapshot),
                 ..
             }) => {
-                // An exact replay attaching an already-settled record —
-                // release is Client-side already consumed; the snapshot
-                // is authoritative.
+                // An exact replay attaching an already-released record: its
+                // bytes were consumed by the earlier attempt and are not
+                // available here. Only an output-free outcome can be
+                // reported exactly; anything else is honestly unknown.
+                if snapshot.final_sequence.get() != 0
+                    || snapshot.stdout_total.get() != 0
+                    || snapshot.stderr_total.get() != 0
+                {
+                    return Err(domain(ErrorData::OutcomeUnknown));
+                }
                 return Ok(result_from(snapshot, streaming, Vec::new(), Vec::new()));
             }
             Exchange::Reply(ProcessReply::Refused { reason, .. }) => {
@@ -702,12 +735,11 @@ async fn run(
         tokio::time::sleep(OPERATION_POLL).await;
     }
 
-    let mut cursor: u64 = 0;
     let mut settled: Option<SettledSnapshot> = None;
     let mut cancelled = false;
     let mut drained = false;
+    let mut finished = false;
     let mut delta_sequence = 0_u64;
-    let mut cap_announced = [false; 2];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut outbox: VecDeque<(OutputStream, String, bool)> = VecDeque::new();
@@ -739,6 +771,29 @@ async fn run(
                 }
             }
         }
+        // The settled snapshot is checked once the journal is fully
+        // delivered. A truncation still unannounced by then — exact cap
+        // with truncation visible only in the totals — is announced now,
+        // after the retained output.
+        if !finished
+            && drained
+            && let Some(snapshot) = settled
+        {
+            if accounting.finish(&snapshot).is_err() {
+                return Err(contradicted(&endpoint).await);
+            }
+            if streaming {
+                for (lane, truncated) in [snapshot.stdout_truncated, snapshot.stderr_truncated]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if truncated && accounting.announce(lane) {
+                        outbox.push_back((lane_stream(lane), String::new(), true));
+                    }
+                }
+            }
+            finished = true;
+        }
         // While the operation is live at most one delta is outstanding
         // — the consumer's receipt is the delivery fence. Once settled
         // the outbox drains regardless so a consumer that never reads
@@ -768,14 +823,15 @@ async fn run(
         }
         // Drain the ordered journal one bounded page at a time until the
         // cursor sits at the journal's current end. A live operation
-        // holds paging while a delivery receipt is still outstanding —
-        // the same backpressure the physical reads had.
+        // holds paging while a delivery receipt is still outstanding,
+        // and only once the previous page's chunks are all queued — so
+        // the outbox never holds more than one page plus its markers.
         if !drained && outbox.is_empty() && (last_receipt.is_none() || settled.is_some()) {
             match exchange(
                 &endpoint,
                 ProcessRequest::OutputPage {
                     key: key.clone(),
-                    cursor: DecimalU64::new(cursor),
+                    cursor: DecimalU64::new(accounting.cursor()),
                     max_bytes: u32::try_from(
                         rustx_execution_protocol::process::MAX_PROCESS_DATA_BYTES,
                     )
@@ -787,25 +843,31 @@ async fn run(
                 Exchange::Reply(ProcessReply::Output {
                     sequence,
                     stream,
+                    offset,
                     delta_base64,
                     capped,
                     last,
                     ..
                 }) => {
-                    cursor = sequence.get();
+                    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&delta_base64)
+                    else {
+                        return Err(contradicted(&endpoint).await);
+                    };
+                    let delivery = output::Delivery {
+                        sequence: sequence.get(),
+                        stream,
+                        offset: offset.get(),
+                        bytes: &bytes,
+                        capped,
+                        last,
+                    };
+                    // Stream, offset, and cap are verified before any byte
+                    // is buffered or announced.
+                    let Ok(lane) = accounting.admit(&delivery) else {
+                        return Err(contradicted(&endpoint).await);
+                    };
                     drained |= last;
-                    if delta_base64.len()
-                        > rustx_execution_protocol::process::MAX_PROCESS_DATA_BYTES.div_ceil(3) * 4
-                    {
-                        return Err(domain(ErrorData::OperationFailed));
-                    }
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(&delta_base64)
-                        .map_err(|_| domain(ErrorData::OperationFailed))?;
                     if streaming {
-                        let stream_index = usize::from(stream == ProcessStream::Stderr);
-                        let cap_reached = capped && !cap_announced[stream_index];
-                        cap_announced[stream_index] |= capped;
                         let stream = match stream {
                             ProcessStream::Stdout | ProcessStream::Pty => OutputStream::Stdout,
                             ProcessStream::Stderr => OutputStream::Stderr,
@@ -820,44 +882,50 @@ async fn run(
                                 false,
                             ));
                         }
-                        // Truncation is announced as its own delta at the
-                        // retained prefix's end — the same wire shape the
-                        // old physical runner produced.
-                        if cap_reached {
-                            outbox.push_back((stream, String::new(), true));
+                        // The lane's retained prefix ends with this page once
+                        // it reaches the cap: announce the truncation live.
+                        if accounting.prefix_complete(lane) && accounting.announce(lane) {
+                            outbox.push_back((lane_stream(lane), String::new(), true));
                         }
+                    } else if lane == 0 {
+                        stdout.extend_from_slice(&bytes);
                     } else {
-                        match stream {
-                            ProcessStream::Stdout | ProcessStream::Pty => {
-                                stdout.extend_from_slice(&bytes);
-                            }
-                            ProcessStream::Stderr => stderr.extend_from_slice(&bytes),
-                        }
+                        stderr.extend_from_slice(&bytes);
                     }
                     continue;
                 }
-                Exchange::Reply(ProcessReply::OutputPending { .. }) | Exchange::Busy => {}
-                Exchange::Reply(ProcessReply::OutputEnd { .. }) => drained = true,
-                Exchange::Reply(
-                    ProcessReply::Conflict { .. } | ProcessReply::Unknown { .. } | _,
-                ) => {
-                    return Err(domain(ErrorData::OperationFailed));
+                Exchange::Reply(ProcessReply::OutputPending { .. }) => {
+                    if accounting.pending_allowed().is_err() {
+                        return Err(contradicted(&endpoint).await);
+                    }
                 }
+                Exchange::Busy => {}
+                Exchange::Reply(ProcessReply::OutputEnd { final_sequence, .. }) => {
+                    if accounting.end(final_sequence.get()).is_err() {
+                        return Err(contradicted(&endpoint).await);
+                    }
+                    drained = true;
+                }
+                Exchange::Reply(_) => return Err(contradicted(&endpoint).await),
                 Exchange::Failed(error) => return Err(error),
             }
         }
         if settled.is_none() {
             match exchange(&endpoint, ProcessRequest::Query { key: key.clone() }).await {
-                Exchange::Reply(ProcessReply::State {
-                    state: OperationState::Settled(snapshot),
-                    ..
-                }) => settled = Some(snapshot),
-                Exchange::Reply(ProcessReply::State { .. }) | Exchange::Busy => {}
-                Exchange::Reply(_) => return Err(domain(ErrorData::OperationFailed)),
+                Exchange::Reply(ProcessReply::State { state, .. }) => {
+                    if accounting.observe(&state).is_err() {
+                        return Err(contradicted(&endpoint).await);
+                    }
+                    if let OperationState::Settled(snapshot) = state {
+                        settled = Some(snapshot);
+                    }
+                }
+                Exchange::Busy => {}
+                Exchange::Reply(_) => return Err(contradicted(&endpoint).await),
                 Exchange::Failed(error) => return Err(error),
             }
         }
-        if settled.is_some() && drained && outbox.is_empty() {
+        if finished && drained && outbox.is_empty() {
             break;
         }
         tokio::time::sleep(OPERATION_POLL).await;
