@@ -450,7 +450,9 @@ fn client_control_worker(
                         // containment actually settled — bounded so the
                         // Server's own revoke budget still fences.
                         operations.revoke();
-                        let _ = operations.settle(REVOKE_SETTLE_BUDGET);
+                        if operations.settle(REVOKE_SETTLE_BUDGET) != 0 {
+                            return;
+                        }
                         ControlReply::Revoked
                     }
                     ControlRequest::CancelProcess { ref key } => ControlReply::ProcessCancelled {

@@ -92,6 +92,18 @@ test-fixture bug. Bubblewrap's parent-death signal fired when the setup
 thread exited. The fixture now retains that thread through Client cleanup.
 Only the run with the repaired fixture is counted as Agent mount evidence.
 
+The first full Linux workspace test run at `100098eac` passed 6,279
+root tests, failed 19, and ignored 28; Cargo stopped at the failed root
+harness. Three background-output and sixteen crash/recovery conformance
+rows were still composing with no admitted Execution Client or checking a
+Server spill pathname. In the follow-up, those rows run through a real
+Client. The recovery rows reuse the exact catalog Session for lineage
+cuts, and the live output test queries bounded Client lines while the
+command is waiting on a FIFO. The focused combined suite passes 73
+tests with no failures or ignores. A release workspace binary build also
+passed on `100098eac`. The follow-up still requires the complete workspace
+test and remote verification lanes.
+
 The remaining #576 production work has these owners.
 
 - `src/app_server/filesystem.rs` still starts the native watch in the

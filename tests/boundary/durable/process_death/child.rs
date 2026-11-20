@@ -35,11 +35,12 @@ use crate::model::types::ModelProtocol;
 use crate::runtime::ApprovalDecision;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::{
-    AgentId, ConversationId, MessageId, SubagentId, ToolCallId, ToolId,
+    AgentId, ConversationId, MessageId, SessionId, SubagentId, ToolCallId, ToolId,
 };
 use crate::runtime::interaction::InteractionResponse;
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::process_death;
+use crate::session_execution_support::ExecutionFixture;
 use crate::tools::types::ToolCallStart;
 use rustx::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalRuntimeDependencies,
@@ -485,6 +486,15 @@ struct Child {
     headless: HeadlessConversationRuntime,
     model: Arc<FakeModel>,
     log: Arc<Log>,
+    _execution: ExecutionFixture,
+}
+
+struct RuntimeLineage {
+    conversation: ConversationId,
+    artifacts_root: PathBuf,
+    access: Arc<crate::runtime::local_storage::ConversationAccess>,
+    controller: SessionController,
+    session: SessionId,
 }
 
 impl Child {
@@ -522,11 +532,7 @@ impl Child {
         scripts: Vec<Vec<FakeStep>>,
         approve: bool,
         client: bool,
-        lineage: Option<(
-            ConversationId,
-            PathBuf,
-            Arc<crate::runtime::local_storage::ConversationAccess>,
-        )>,
+        lineage: Option<RuntimeLineage>,
         before_activation: Option<BeforeActivation>,
     ) -> Result<Self, String> {
         let paths = lab_paths(root);
@@ -576,42 +582,51 @@ impl Child {
                 std::path::PathBuf::from("/"),
             ))
         };
-        let core = if let Some((conversation_id, artifacts_root, access)) = lineage {
-            // A Session lineage composes over the allocation its durable
-            // owner granted, exactly as the App Server runtime manager does.
-            LocalConversationCore::compose_with_access(
-                &launch,
-                &dependencies,
-                registry,
-                runtime_config.clone(),
-                state,
-                conversation_id,
-                artifacts_root,
-                access,
-                crate::local_runtime::composition::McpInitialSubmission::default(),
-                &crate::runtime::cancellation::CancellationSignal::new(),
-                &[],
-                None,
+        let (conversation_id, artifacts_root, access, execution) = if let Some(lineage) = lineage {
+            let execution = ExecutionFixture::for_session(
+                &paths.workspace,
+                lineage.controller,
+                lineage.session,
+            );
+            (
+                lineage.conversation,
+                lineage.artifacts_root,
+                lineage.access,
+                execution,
             )
-            .await
         } else {
             let controller = Arc::new(
                 crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
-                    .unwrap(),
+                    .map_err(|error| error.to_string())?,
             );
             let artifacts_root = controller.root().join("sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001");
-            LocalConversationCore::compose_from_config(
-                &launch,
-                &dependencies,
-                registry,
-                runtime_config.clone(),
-                state,
+            let access = crate::runtime::local_storage::ConversationAccess::start(
+                controller,
+                &artifacts_root,
+            )
+            .map_err(|error| error.to_string())?;
+            (
                 ConversationId::new(CONVERSATION),
                 artifacts_root,
-                controller,
+                Arc::new(access),
+                ExecutionFixture::new(&paths.workspace),
             )
-            .await
-        }
+        };
+        let core = LocalConversationCore::compose_with_access(
+            &launch,
+            &dependencies,
+            registry,
+            runtime_config,
+            state,
+            conversation_id,
+            artifacts_root,
+            access,
+            crate::local_runtime::composition::McpInitialSubmission::default(),
+            &crate::runtime::cancellation::CancellationSignal::new(),
+            &[],
+            Some(execution.scope.clone()),
+        )
+        .await
         .map_err(|error| format!("{error:?}"))?;
 
         let log = Log::new();
@@ -628,6 +643,7 @@ impl Child {
             headless,
             model,
             log,
+            _execution: execution,
         })
     }
 
@@ -720,7 +736,7 @@ async fn compose_session_child(
     let template = SessionPersistentState {
         model: Some(runtime_config.initial_model().clone().clone()),
         ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
-            std::path::PathBuf::from("/"),
+            paths.workspace.clone(),
         ))
     };
     // The lab's first Session is pre-existing product state, published
@@ -804,11 +820,13 @@ async fn compose_session_child(
         scripts,
         false,
         true,
-        Some((
-            node.conversation_id.clone(),
+        Some(RuntimeLineage {
+            conversation: node.conversation_id.clone(),
             artifacts_root,
-            access.allocation.clone(),
-        )),
+            access: access.allocation.clone(),
+            controller: controller.clone(),
+            session: session_id.clone(),
+        }),
         before_activation,
     )
     .await

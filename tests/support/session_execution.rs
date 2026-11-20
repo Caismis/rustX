@@ -18,6 +18,7 @@
 //! outer runtime flavor matters.
 
 use std::io;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -32,6 +33,7 @@ use rustx::local_runtime::session_controller::SessionController;
 use rustx::local_runtime::session_runtime_manager::{
     RuntimeResidencyPolicy, SessionExecutionScope, SessionRuntimeManager,
 };
+use rustx::runtime::identity::SessionId;
 use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 
 /// The staged `rustx-execution-client` sibling this test binary was
@@ -125,7 +127,7 @@ impl ExecutionFixture {
         let setup = std::thread::Builder::new().name("execution-fixture".to_owned());
         let Some(physical) = physical.map(Path::to_path_buf) else {
             return setup
-                .spawn(move || Self::setup(&workspace, None))
+                .spawn(move || Self::setup(&workspace, None, None))
                 .expect("execution fixture setup thread")
                 .join()
                 .expect("execution fixture setup panicked");
@@ -134,7 +136,10 @@ impl ExecutionFixture {
         let (lifetime, release) = std::sync::mpsc::channel::<()>();
         let thread = setup
             .spawn(move || {
-                if ready.send(Self::setup(&workspace, Some(&physical))).is_ok() {
+                if ready
+                    .send(Self::setup(&workspace, Some(&physical), None))
+                    .is_ok()
+                {
                     let _ = release.recv();
                 }
             })
@@ -149,9 +154,29 @@ impl ExecutionFixture {
         }
     }
 
+    /// Binds the real Client to an existing catalog Session.
+    #[allow(dead_code)] // used by the in-crate process-death fixtures
+    pub(crate) fn for_session(
+        workspace: &Path,
+        controller: SessionController,
+        session: SessionId,
+    ) -> Self {
+        let workspace = workspace.canonicalize().expect("fixture workspace root");
+        std::thread::Builder::new()
+            .name("execution-fixture".to_owned())
+            .spawn(move || Self::setup(&workspace, None, Some((controller, session))))
+            .expect("execution fixture setup thread")
+            .join()
+            .expect("execution fixture setup panicked")
+    }
+
     /// The async setup, run on a dedicated current-thread runtime so the
     /// synchronous constructor stays usable inside any async test.
-    fn setup(workspace: &Path, physical: Option<&Path>) -> Self {
+    fn setup(
+        workspace: &Path,
+        physical: Option<&Path>,
+        session: Option<(SessionController, SessionId)>,
+    ) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -162,20 +187,27 @@ impl ExecutionFixture {
             let home = temporary.path().join("home");
             std::fs::create_dir_all(&runtime_root).expect("runtime root");
             std::fs::create_dir_all(home.join("rustx")).expect("home root");
-            let controller = SessionController::open(&runtime_root).expect("session controller");
+            let (controller, session) = match session {
+                Some(existing) => existing,
+                None => {
+                    let controller =
+                        SessionController::open(&runtime_root).expect("session controller");
+                    let session = controller
+                        .create_session(SessionPersistentState::from_input(
+                            &SessionConfigInput::new(workspace.to_path_buf()),
+                        ))
+                        .await
+                        .expect("catalog session")
+                        .session;
+                    (controller, session.id)
+                }
+            };
             let user_config = UserConfigManager::new(UserConfigSources {
                 home_directory: home.clone(),
                 config_path: home.join("rustx").join("rustx.toml"),
-                runtime_root: runtime_root.clone(),
+                runtime_root,
             })
             .expect("user configuration");
-            let session = controller
-                .create_session(SessionPersistentState::from_input(
-                    &SessionConfigInput::new(workspace.to_path_buf()),
-                ))
-                .await
-                .expect("catalog session")
-                .session;
             let manager = SessionRuntimeManager::new(
                 controller,
                 user_config,
@@ -188,7 +220,7 @@ impl ExecutionFixture {
             )
             .expect("session runtime manager");
             let endpoint = manager
-                .reserve_local_execution(&session.id)
+                .reserve_local_execution(&session)
                 .await
                 .expect("reserved local execution");
             let mut command = if let Some(physical) = physical {
@@ -215,6 +247,7 @@ impl ExecutionFixture {
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
+                    .process_group(0)
                     .spawn()
                     .expect("staged execution client spawns"),
             );
@@ -265,7 +298,7 @@ impl ExecutionFixture {
                 }
             }
 
-            let scope = manager.execution_scope(&session.id);
+            let scope = manager.execution_scope(&session);
             Self {
                 scope,
                 _child: child,

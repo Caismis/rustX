@@ -2332,13 +2332,11 @@ fn assert_cut_lineage(scenario: &str) {
         })
         .expect("the source Accepted result owns its literal output locator");
     assert!(copied.contains(&output_path));
+    let output_path = std::path::Path::new(&output_path);
+    assert!(crate::tools::native::bash_operation_at(output_path).is_some());
     assert!(
-        std::path::Path::new(&output_path)
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with("e-")
+        !output_path.exists(),
+        "the locator never names a Server file"
     );
 
     // …and every one of those identities is inert. The destination Journal is
