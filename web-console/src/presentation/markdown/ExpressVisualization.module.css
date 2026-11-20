@@ -15,24 +15,33 @@
 
 .tableScroll table {
   border-collapse: collapse;
-  width: 100%;
+  inline-size: 100%;
+  font-size: .8125rem;
 }
 
 .caption {
-  padding: .75rem 1rem;
+  padding: .75rem var(--a2-inset);
   border-bottom: 1px solid var(--a2-border);
+  background: var(--a2-card);
+  font-size: .875rem;
   font-weight: 600;
   text-align: start;
 }
 
 .tableScroll th, .tableScroll td {
-  padding: .5rem 1rem;
+  padding: .6rem var(--a2-inset);
   border-bottom: 1px solid var(--a2-border);
-  font: inherit;
   text-align: start;
 }
 
-.tableScroll th { color: var(--a2-muted-foreground); font-weight: 500; white-space: nowrap; }
+.tableScroll th {
+  min-inline-size: 5.5rem;
+  background: color-mix(in oklch, var(--a2-muted) 55%, var(--a2-card));
+  color: var(--a2-muted-foreground);
+  font-size: .75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
 .tableScroll td { overflow-wrap: anywhere; }
 .tableScroll tbody tr:hover { background: color-mix(in oklch, var(--a2-muted) 50%, transparent); }
 .tableScroll tbody tr:last-child td { border-bottom: 0; }
@@ -57,7 +66,7 @@
   container-type: inline-size;
   min-width: 0;
   margin: 0;
-  padding: 1rem;
+  padding: var(--a2-inset);
   border: 1px solid var(--a2-border);
   border-radius: var(--a2-radius);
   background: var(--a2-card);
@@ -66,7 +75,7 @@
 
 .title {
   display: block;
-  margin: 0 0 0.4rem;
+  margin: 0 0 .625rem;
   font-weight: 600;
 }
 
@@ -79,6 +88,7 @@
 .grid {
   stroke: var(--a2-border);
   stroke-width: 1;
+  stroke-dasharray: 3 4;
 }
 
 .zero,
@@ -114,7 +124,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem 1rem;
-  margin: 0.45rem 0 0;
+  margin: .625rem 0 0;
   padding: 0;
   color: var(--a2-muted-foreground);
   font-size: 0.8rem;

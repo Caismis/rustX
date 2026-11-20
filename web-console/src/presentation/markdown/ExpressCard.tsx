@@ -22,8 +22,8 @@ export function ExpressCard({ surface }: { surface: ExpressSurface }) {
     switch (node.kind) {
       case 'Text': {
         const heading = /^h[1-6]$/.test(node.variant ?? '');
-        const Tag = heading ? node.variant as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' : 'span';
-        return <Tag key={index} className={heading ? css.heading : node.variant === 'caption' ? css.caption : css.text}>
+        const Tag = heading ? node.variant as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' : node.variant === 'description' ? 'p' : 'span';
+        return <Tag key={index} className={css.text} data-variant={node.variant}>
           {node.bindings?.text ? String(props.text ?? '') : node.text}
         </Tag>;
       }

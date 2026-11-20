@@ -1,7 +1,9 @@
 .surface {
   --a2-background: oklch(1 0 0);
   --a2-foreground: oklch(0.145 0 0);
+  --a2-canvas: oklch(0.985 0 0);
   --a2-card: oklch(1 0 0);
+  --a2-control: var(--a2-card);
   --a2-primary: oklch(0.205 0 0);
   --a2-primary-foreground: oklch(0.985 0 0);
   --a2-muted: oklch(0.97 0 0);
@@ -11,15 +13,23 @@
   --a2-input: oklch(0.922 0 0);
   --a2-ring: oklch(0.708 0 0);
   --a2-radius: 12px;
+  --a2-radius-control: 8px;
+  --a2-inset: clamp(.875rem, 2.2vw, 1.25rem);
+  --a2-gap: 1rem;
   --a2-chart-1: oklch(0.646 0.222 41.116);
   --a2-chart-2: oklch(0.6 0.118 184.704);
   --a2-chart-3: oklch(0.398 0.07 227.392);
   --a2-chart-4: oklch(0.828 0.189 84.429);
   --a2-chart-5: oklch(0.769 0.188 70.08);
   --a2-chart-6: oklch(0.556 0 0);
-  --a2-shadow: 0 1px 3px 0 oklch(0 0 0 / 10%), 0 1px 2px -1px oklch(0 0 0 / 10%);
-  min-width: 0;
-  margin-block: .75rem;
+  --a2-shadow: 0 1px 2px oklch(0 0 0 / 7%);
+  min-inline-size: 0;
+  margin-block: 1rem;
+  padding: var(--a2-inset);
+  border: 1px solid var(--a2-border);
+  border-radius: calc(var(--a2-radius) + 4px);
+  background: radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--a2-muted-foreground) 17%, transparent) .65px, transparent 1px)
+    0 0 / 1.125rem 1.125rem, var(--a2-canvas);
   overflow-wrap: anywhere;
   color: var(--a2-foreground);
   color-scheme: light;
@@ -29,7 +39,9 @@
 :global(body[data-ds-dark-theme]) .surface {
   --a2-background: oklch(0.145 0 0);
   --a2-foreground: oklch(0.985 0 0);
+  --a2-canvas: oklch(0.17 0 0);
   --a2-card: oklch(0.205 0 0);
+  --a2-control: oklch(0.24 0 0);
   --a2-primary: oklch(0.922 0 0);
   --a2-primary-foreground: oklch(0.205 0 0);
   --a2-muted: oklch(0.269 0 0);
@@ -47,23 +59,58 @@
   color-scheme: dark;
 }
 .Card {
+  --a2-gap: .625rem;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  gap: 1rem;
-  padding: 1.25rem;
+  min-inline-size: 0;
+  gap: var(--a2-gap);
+  padding: var(--a2-inset);
   border: 1px solid var(--a2-border);
   border-radius: var(--a2-radius);
   background: var(--a2-card);
   box-shadow: var(--a2-shadow);
 }
-.Column { display: flex; flex-direction: column; min-width: 0; gap: .75rem; }
-.Row { display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem 1rem; }
-.Row > :last-child:not(:first-child) { margin-inline-start: auto; }
-.list { margin: .25rem 0 0; padding: 0; list-style: none; }
-.list > li { padding-block: .55rem; }
+.surface > .Card {
+  --a2-gap: 1rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.Column { display: flex; flex-direction: column; min-inline-size: 0; gap: var(--a2-gap); }
+.Row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .875rem; min-inline-size: 0; }
+.Row:has(> .Card):not(:has(> :not(.Card))) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: .75rem;
+  align-items: stretch;
+}
+.Row > .text:first-child:not(:last-child) { flex: 1 1 10rem; min-inline-size: 0; }
+.list {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--a2-border);
+  border-radius: var(--a2-radius);
+  background: var(--a2-card);
+  list-style: none;
+}
+.list > li { padding: .55rem .875rem; }
 .list > li + li, .divider { border: 0; border-top: 1px solid var(--a2-border); }
 .divider { width: 100%; margin: 0; }
-.heading { margin: 0; font-weight: 600; line-height: 1.35; }
-.caption { color: var(--a2-muted-foreground); font-size: .75rem; }
-.text, .caption { white-space: pre-wrap; }
+
+.text { margin: 0; white-space: pre-wrap; }
+.text:is(h1, h2, h3, h4, h5, h6),
+.text[data-variant='value'] { font-weight: 600; line-height: 1.25; letter-spacing: -.025em; }
+.text:is(h1, h2, h3) { text-wrap: balance; }
+.text:is(h1) { font-size: 1.75rem; }
+.text:is(h2), .text[data-variant='value'] { font-size: 1.5rem; }
+.text:is(h3) { font-size: 1.125rem; }
+.text:is(h4, h5, h6) { font-size: .875rem; }
+.text:is([data-variant='description'], [data-variant='label'], [data-variant='caption']) { color: var(--a2-muted-foreground); }
+.text[data-variant='label'] { font-weight: 500; }
+.text:is([data-variant='caption'], [data-variant='value']) { font-variant-numeric: tabular-nums; }
+.text[data-variant='caption'] { font-size: .75rem; }
+.Column > .text:is([data-variant='label'], [data-variant='caption']) + .text:is(h1, h2, h3),
+.Column > .text:is(h1, h2, h3) + .text[data-variant='description'] {
+  margin-block-start: calc(.375rem - var(--a2-gap));
+}
