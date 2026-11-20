@@ -174,7 +174,7 @@ window.sessionFixture = {
   async state(mode) {
     const next = structuredClone(server.snapshots.get('A')!);
     if (mode === 'idle' || mode === 'queued') next.attempt = null;
-    if (mode === 'queued') next.inbound = { pending: [{ sequence: '1', revision: '0', message: { id: 'queued-A', source: 'human', content: [{ type: 'text', text: 'Review the implementation' }] } }] };
+    if (mode === 'queued') next.inbound = { pending: [{ sequence: '1', revision: '0', message: { id: 'queued-A', source: 'human', kind: 'queued_message', content: [{ type: 'text', text: 'Review the implementation' }] } }] };
     await server.update('A', next);
     if (mode === 'stopping' || mode === 'uncertain') {
       server.held.add('turn/interrupt');

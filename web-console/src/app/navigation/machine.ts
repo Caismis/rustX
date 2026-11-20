@@ -1,7 +1,7 @@
 import { actionError } from '../../bindings/action-error';
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
-import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v80';
+import type { CanonicalContentLocator, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v80';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { RpcFailure } from '../../client/errors';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
@@ -9,7 +9,7 @@ import type { CommandRequest } from '../commands/CommandPanel';
 import type { SettingsNavigationActor, SettingsNavigationEvent } from '../settings/machines/navigation';
 import { firstSubmissions } from '../new-conversation/first-submit';
 import type { DraftPreparations } from '../new-conversation/preparation';
-import { responseRetry, responseRetryReady, type ResponseRetry } from '../agent/response-retry';
+import { responseRetry, responseRetryReady, userMessageRetry, type ResponseRetry } from '../agent/response-retry';
 import { forkLatestSession } from '../commands/fork-session';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
@@ -38,8 +38,9 @@ type Destination =
   | { kind: 'session'; sessionId: string; sidebar: boolean; command?: CommandRequest; nodeId?: string; conversationId?: string }
   | { kind: 'restore-session'; sessionId: string; sidebar: boolean; command?: CommandRequest }
   | { kind: 'transition'; sessionId: string; action: HistoryAction; response?: CompletedResponseView; selection?: HistoricalSelection }
+  | { kind: 'retry-message'; sessionId: string; locator: CanonicalContentLocator; replacementText?: string }
   | { kind: 'fork-session'; sessionId: string; sidebar?: boolean }
-  | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string };
+  | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string; messageId?: string };
 interface Pending { recovery?: true; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
 interface Prepared { warning?: string; pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
 interface Input { drafts?: DraftPreparations; client: AppServerClient; settings: SettingsNavigationActor; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; workflows: WorkflowSurfaceActor; route?: ShellRoute }
@@ -231,6 +232,12 @@ async function prepare(input: { client: AppServerClient; host: ProductHostWorksp
       }
       if (requestedConversation && current() && client.getSnapshot().views[sessionId]?.target?.conversation_id !== requestedConversation) throw new RetiredPreparation();
     } catch (error) {
+      const view = client.getSnapshot().views[sessionId];
+      if (current() && view?.passiveHistory && error instanceof RpcFailure
+        && (error.error.data?.kind === 'residency_capacity' || error.error.data?.kind === 'attachment_capacity')
+        && (destination.kind === 'restore-session' || !destination.conversationId || destination.conversationId === view.nodeConversationId)) {
+        return { pending, route: { kind: 'session-draft', sessionId } };
+      }
       if (destination.kind !== 'restore-session' || !(error instanceof RpcFailure) || error.error.data?.kind !== 'unknown_session' || !current()) throw error;
       // Only Native can establish that a saved identity no longer exists.
       // Release this obsolete hint, which owns no runtime claim, and never
@@ -246,6 +253,12 @@ async function prepare(input: { client: AppServerClient; host: ProductHostWorksp
     const scope = new CommandSession(client, sessionId, current);
     if (destination.kind === 'node') {
       if (!await scope.openNode(destination.nodeId, destination.conversationId)) throw new Error('Node navigation retired.');
+    } else if (destination.kind === 'retry-message') {
+      const selection = await scope.userSelection(destination.locator);
+      const result = await scope.transition('retry', selection, destination.replacementText);
+      if (!result) throw new RetiredPreparation();
+      content = result.content;
+      replay = result.replay;
     } else {
       const selection = destination.selection ?? await scope.responseSelection(destination.response!);
       const result = await scope.transition(destination.action, selection);
@@ -282,7 +295,7 @@ export const shellNavigationMachine = setup({
     };
     const subscription = input.parent.subscribe(follow); follow();
     return () => subscription.unsubscribe();
-  }), authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> } } }>(({ input, sendBack }) => {
+  }), authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input, sendBack }) => {
     const observe = () => {
       const native = input.client.getSnapshot(), owner = input.parent.getSnapshot().context;
       if (native.generation !== owner.generation || native.authorityRevision !== owner.authority) sendBack({ type: 'AUTHORITY', generation: native.generation, authority: native.authorityRevision });
@@ -293,7 +306,18 @@ export const shellNavigationMachine = setup({
         sendBack({ type: 'SESSION.RESUME', intent: owner.draftSession.intent, generation: native.generation, authority: native.authorityRevision });
       else if (owner.retry && responseRetryReady(owner.retry, native.views[owner.retry.view.id])) sendBack({ type: 'RETRY.OBSERVED', retry: owner.retry });
     };
-    const release = input.client.subscribe(observe); observe(); return release;
+    const release = input.client.subscribe(observe);
+    let route = input.parent.getSnapshot().context.route;
+    const navigation = input.parent.subscribe(() => {
+      const next = input.parent.getSnapshot().context.route;
+      if (next === route) return;
+      route = next;
+      // Reconnect can reach the native attach while Settings owns the view.
+      // Returning Home must sample that proof even without a new native event.
+      if (route.kind === 'session-draft') observe();
+    });
+    observe();
+    return () => { release(); navigation.unsubscribe(); };
   }), prepare: fromPromise<Prepared, { client: AppServerClient; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }>(({ input, signal }) => prepare(input, signal)) },
   guards: {
     workflowLeave: ({ context, event }) => context.route.kind === 'workflows' && context.approvedLeave?.event !== event,
@@ -301,6 +325,7 @@ export const shellNavigationMachine = setup({
       if (event.type !== 'OPEN') return false;
       const pending = context.pending?.destination, next = event.destination;
       if (pending?.kind === 'fork-session' && next.kind === 'fork-session') return pending.sessionId === next.sessionId;
+      if (pending?.kind === 'retry-message' && next.kind === 'retry-message') return pending.sessionId === next.sessionId;
       return pending?.kind === 'transition' && next.kind === 'transition'
         && pending.sessionId === next.sessionId && pending.action === next.action
         && (pending.response && next.response ? attemptOwnerKey(pending.response.origin) === attemptOwnerKey(next.response.origin) : pending.selection === next.selection);
@@ -391,8 +416,10 @@ export const shellNavigationMachine = setup({
         }
       }
       const pending: Pending = { destination, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision };
-      const retry = destination.kind === 'transition' && destination.action === 'retry' && destination.response
-        ? responseRetry(context.client.getSnapshot().views[destination.sessionId], destination.response) : undefined;
+      const retry = destination.kind === 'retry-message'
+        ? userMessageRetry(context.client.getSnapshot().views[destination.sessionId], destination.locator, destination.replacementText)
+        : destination.kind === 'transition' && destination.action === 'retry' && destination.response
+          ? responseRetry(context.client.getSnapshot().views[destination.sessionId], destination.response) : undefined;
       // Local selection never borrows another Session's editor or authority.
       // Its own executable promotion retains this same binding.
       return { ...((destination.kind === 'restore-session' || destination.kind === 'session') ? pendingSessionDraft(context, pending, destination.sessionId) : {}), pending, retry, dismissedSidebar: undefined, command: undefined, error: undefined };

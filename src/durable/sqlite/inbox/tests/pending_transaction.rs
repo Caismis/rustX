@@ -227,6 +227,15 @@ pub(super) fn claim_mutation_race(mutation: Operation, claim_first: bool, retain
             Operation::Claim => unreachable!(),
         }
     }
+    for item in &mut expected_receipt {
+        assert!(item.transcript_cursor.is_none());
+        item.transcript_cursor = Some(
+            first
+                .message_transcript_cursor(&item.message_id)
+                .unwrap()
+                .unwrap(),
+        );
+    }
     // Full equality covers occurrence identity, order, content, revision, cursor
     // and correlation; the old selected payload cannot leak into the receipt.
     assert_eq!(receipt, expected_receipt);
@@ -274,8 +283,13 @@ pub(super) fn assert_claim_read_models(
     );
     let transcript = first.load_transcript_page(None, 64).unwrap();
     assert_eq!(transcript.entries.len(), receipt.len());
-    for (entry, item) in transcript.entries.iter().zip(receipt) {
-        assert_eq!(Some(entry.cursor), item.transcript_cursor);
+    for (index, (entry, item)) in transcript.entries.iter().zip(receipt).enumerate() {
+        assert_eq!(item.transcript_cursor, Some(entry.cursor));
+        assert_eq!(entry.cursor.get(), index as u64 + 1);
+        assert_eq!(
+            first.message_transcript_cursor(&item.message_id).unwrap(),
+            Some(entry.cursor)
+        );
         assert_eq!(
             entry.item,
             TranscriptItem::Message {

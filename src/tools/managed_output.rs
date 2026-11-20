@@ -16,7 +16,7 @@ pub(crate) mod storage;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -314,6 +314,40 @@ impl ManagedToolOutput {
             allocated.file.take();
         }
     }
+    /// Read a bounded live tail through the same open file as the executor.
+    /// Positional reads do not move the writer cursor or resolve a client path.
+    pub(crate) fn live_tail(&self, id: &ToolExecutionId) -> std::io::Result<(String, bool)> {
+        const LIMIT: u64 = 16 * 1024;
+        let file = self
+            .state
+            .lock()
+            .expect("managed output lock")
+            .background
+            .get(id)
+            .and_then(|output| output.file.as_ref())
+            .ok_or_else(|| std::io::Error::other("live output is no longer available"))?
+            .try_clone()?;
+        let end = file.metadata()?.len();
+        let start = end.saturating_sub(LIMIT);
+        let mut bytes = vec![0; usize::try_from(end - start).expect("bounded live tail")];
+        file.read_exact_at(&mut bytes, start)?;
+        // The tail can start inside a UTF-8 character. The final incomplete
+        // character, if a write is in flight, appears on the next read.
+        let first = bytes
+            .iter()
+            .position(|byte| byte & 0xc0 != 0x80)
+            .unwrap_or(bytes.len());
+        let tail = &bytes[first..];
+        let complete = match std::str::from_utf8(tail) {
+            Ok(text) => text.to_owned(),
+            Err(error) if error.error_len().is_none() => {
+                String::from_utf8_lossy(&tail[..error.valid_up_to()]).into_owned()
+            }
+            Err(_) => String::from_utf8_lossy(tail).into_owned(),
+        };
+        Ok((complete, start > 0))
+    }
+
     /// Open exactly the allocated background file without creating or repairing it.
     /// # Errors
     /// Missing, redirected or replaced output is unavailable, never empty output.

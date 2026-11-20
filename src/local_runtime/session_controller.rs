@@ -212,6 +212,7 @@ pub struct SessionController {
 }
 
 mod lineage;
+mod message_versions;
 mod reads;
 mod settings;
 #[cfg(test)]

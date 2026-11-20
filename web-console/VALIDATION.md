@@ -1,3 +1,19 @@
+# Transient feedback audit
+
+| Interaction | Visual contract | Regression coverage |
+| --- | --- | --- |
+| Change workspace permissions | Keep the last observed mode in its control. While the write and normal reread are pending, disable admission without adding text or buttons. Keep full-access confirmation, conflicts, failed rereads and recovery actions visible. | `test/e2e/convergence.spec.ts` holds the write and observation separately. |
+| Start a conversation | Publishing the new session before its attachment or first thread status is ready is not evidence of a disconnect. Do not insert a recovery banner between the title and transcript. Real observation failures still offer recovery. | `test/e2e/convergence.spec.ts` watches the header from Send through the first answer, not just the final DOM. `test/session-product.test.tsx` also exercises failed reads. |
+| Edit a queued message | Use the existing disabled controls and busy region; do not add an updating paragraph. Keep uncertain outcomes and stale drafts actionable. | `test/composer-context.test.tsx` holds the mutation before readback. |
+| Refresh or search scheduled tasks | Keep visible results in place. An empty list can explain an outstanding load or search; errors are not loading states. | `test/e2e/scheduler.spec.ts` covers the task surface on desktop and mobile. |
+
+Not every short-lived element is a defect. The audit distinguished user-opened menus and confirmations, attachment progress, pending message content, connection recovery, and error toasts from redundant passive notices. The following candidates were inspected in source but not cleared by the startup browser check:
+
+- The workspace folder picker, resource browser and workflow library use loading text in place of content that has not arrived. Exercise cold navigation separately from refreshing an already populated list.
+- Geometry previews distinguish the initial load from refinement of an existing preview. Tool details and workflow run details fetch content on expansion; time those reads before removing feedback for a slow operation.
+- Recovery notices, explicit saves and copy confirmation have different meanings from passive refresh. Test that the action stays understandable and that feedback does not move its trigger.
+- During an active-session workspace reread, permission/model chips can fall back to placeholder labels. The new-conversation test is not evidence that these active-session states are visually stable.
+
 # Current incremental projection gates (#420)
 
 Current architecture and acceptance mapping: [CHAT.md](CHAT.md) and

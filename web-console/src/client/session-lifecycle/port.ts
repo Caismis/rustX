@@ -6,7 +6,7 @@ export interface Admission {
   sent?(): void;
 }
 export type Attached = Extract<MethodResult, { type: 'attached' }>;
-export type FailureKind = 'unsent' | 'uncertain' | 'refused' | 'stale-route' | 'local';
+export type FailureKind = 'unsent' | 'uncertain' | 'refused' | 'stale-route' | 'capacity' | 'local';
 export interface Observation {
   readonly generation: number;
   readonly target: AttachmentTarget;
@@ -28,6 +28,8 @@ export interface LifecycleFacts {
   readonly deletionCommitted?: LifecycleFacts['deletionRecovery'];
   readonly recoveringDeletion?: boolean;
   readonly error?: string;
+  /** Selected Session whose activation was refused for capacity. Durable history only. */
+  readonly passiveHistory?: boolean;
 }
 /** Finite I/O only. No lifecycle decisions or writable SessionView dependency. */
 export interface SessionLifecyclePort {

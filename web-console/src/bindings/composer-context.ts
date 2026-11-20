@@ -29,7 +29,7 @@ export function goalDock(snapshot?: RuntimeClientSnapshot): GoalDockState | unde
 
 export type InboundRow = NonNullable<RuntimeClientSnapshot['inbound']['pending']>[number];
 /** Accepted, not yet adopted native inbound in runtime sequence order. */
-export const queueRows = (snapshot?: RuntimeClientSnapshot): readonly InboundRow[] => snapshot?.inbound.pending ?? [];
+export const queueRows = (snapshot?: RuntimeClientSnapshot): readonly InboundRow[] => snapshot?.inbound.pending?.filter(row => row.message.source !== 'human' || row.message.kind === 'queued_message') ?? [];
 
 /** Presentation-only one-line summary of submitted content. Native inbound rows
  * carry canonical `UserContentBlock`s; an accepted submission carries the

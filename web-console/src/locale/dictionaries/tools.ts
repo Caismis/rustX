@@ -14,7 +14,8 @@ export const en = {
   "detail.todo-deleted": "Deleted",
   "detail.todo-empty": "No tasks",
   "detail.bounded": "Showing {returned} of {matched}",
-  "todo.title": "Update tasks",
+  "todo.title": "Update to-do list",
+  "todo.completed": "{done}/{total} completed",
 
   "tool-card.inspect": "Inspect",
   "tool-card.read-image": "Read image",
@@ -72,7 +73,8 @@ export const zh = {
   "detail.todo-deleted": "已删除",
   "detail.todo-empty": "暂无任务",
   "detail.bounded": "显示 {matched} 项中的 {returned} 项",
-  "todo.title": "更新任务",
+  "todo.title": "更新任务清单",
+  "todo.completed": "{done}/{total} 已完成",
 
   "tool-card.inspect": "查看",
   "tool-card.read-image": "读取图片",

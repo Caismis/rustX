@@ -674,18 +674,23 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     );
     let before = store.observation_read_cut().unwrap();
     assert_eq!(before.ledger_through, 0);
-    assert_eq!(before.transcript_total, 1);
-    let pending = store.transcript_header_page(&before, None, 32).unwrap();
-    assert!(pending.headers[0].deferred);
+    assert_eq!(before.transcript_total, 0);
+    let transcript = store.transcript_header_page(&before, None, 32).unwrap();
     assert_eq!(
-        pending.headers[0].content,
-        [] as [crate::observation::cut::ContentBinding; 0]
+        transcript.headers,
+        [] as [crate::durable::observation::TranscriptHeader; 0]
     );
     assert_eq!(before.read.pending_total, 1);
     let heads = store.pending_header_page(&before.read, None, 32).unwrap();
     assert_eq!(heads.headers.len(), 1);
     assert_eq!(heads.headers[0].sequence, accepted.sequence.get());
     assert_eq!(heads.headers[0].revision, 0);
+    assert!(heads.headers[0].message.transcript_cursor.is_none());
+    assert!(heads.headers[0].message.deferred);
+    assert_eq!(
+        heads.headers[0].message.content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     let mut bytes = Vec::new();
     let mut offset = 0;
     loop {
@@ -725,11 +730,13 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
             .is_err()
     );
     let edited = store.observation_read_cut().unwrap();
-    let pending = store.transcript_header_page(&edited, None, 32).unwrap();
-    let crate::observation::transcript::RuntimeClientTranscriptItem::Message {
-        message: MessageBlock::User(user),
-    } = &pending.headers[0].display.as_ref().unwrap().item
-    else {
+    assert_eq!(edited.transcript_total, 0);
+    let pending = store.pending_header_page(&edited.read, None, 32).unwrap();
+    assert_eq!(pending.headers.len(), 1);
+    assert_eq!(pending.headers[0].sequence, accepted.sequence.get());
+    assert_eq!(pending.headers[0].revision, 1);
+    assert!(pending.headers[0].message.transcript_cursor.is_none());
+    let Some(MessageBlock::User(user)) = &pending.headers[0].message.display else {
         panic!("pending User body")
     };
     assert!(matches!(&user.content[0],UserContentBlock::Text(text) if text.text=="revised"));
@@ -752,6 +759,7 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     };
     assert_eq!(remove_cut, store.observation_read_cut().unwrap().read);
     let removed = store.observation_read_cut().unwrap();
+    assert_eq!(removed.read.pending_total, 0);
     assert_eq!(removed.transcript_total, 0);
     assert_eq!(
         store
@@ -2165,6 +2173,12 @@ fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit
             .is_err(),
         "display hole is unavailable, never an empty boundary page"
     );
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_pending_header BEFORE UPDATE OF observation_header ON pending_inbound
+             BEGIN SELECT RAISE(ABORT,'derived pending header unavailable'); END;",
+        )
+        .unwrap();
     let accepted = store
         .accept_inbound(InboundDraft {
             message_id: Some(MessageId::new("original-pending")),

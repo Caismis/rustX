@@ -937,3 +937,68 @@ it('lost input receipts repair by exact native correlation without retransmittin
   const lookup=s.requests.find(row=>row.request.method==='inbound/submissionLookup')!.request;
   expect(lookup.params).toMatchObject({inputId:request.params.inputId,target:{conversation_id:request.params.target.conversation_id}});
 });
+
+it('sendContent selects inbound/queue before dispatch when no active Turn is present', async () => {
+  const s = server(); await s.attached('A');
+  await s.update('A', { ...snapshot(), attempt: { attempt_id: 'settled-attempt', turn: 1, phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } } });
+  const acknowledged = vi.fn();
+  const result = await s.client.sendContent('A', [{ type: 'text', text: 'after settle' }], 'steer', acknowledged);
+  expect(result.type).toBe('inbound_accepted');
+  expect(acknowledged).toHaveBeenCalledExactlyOnceWith(result);
+  expect(s.requests.filter(row => row.request.method === 'turn/steer')).toEqual([]);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
+});
+
+it('sendContent catches exact steer_unavailable refusal and falls back to inbound/queue with same inputId, target, and dispatchCurrent', async () => {
+  const s = server(); await s.attached('A');
+  await s.update('A', { ...snapshot(), attempt: { attempt_id: 'attempt-A', turn: 1, phase: { type: 'running' } } });
+  const expectedTarget = s.client.target('A');
+  s.handlers.set('turn/steer', () => { throw new RpcFailure({ code: -32000, message: 'not steerable', data: { kind: 'steer_unavailable' } }); });
+  let allowed = true;
+  const dispatchCurrent = vi.fn(() => allowed);
+  const acknowledged = vi.fn();
+  const result = await s.client.sendContent('A', [{ type: 'text', text: 'steer fallback' }], 'steer', acknowledged, dispatchCurrent);
+  expect(result.type).toBe('inbound_accepted');
+  expect(acknowledged).toHaveBeenCalledExactlyOnceWith(result);
+  const steer = s.requests.find(row => row.request.method === 'turn/steer')!.request;
+  const queued = s.requests.find(row => row.request.method === 'inbound/queue')!.request;
+  if (steer.method !== 'turn/steer' || queued.method !== 'inbound/queue') throw new Error('Expected steer and queue');
+  expect(queued.params.inputId).toBe(steer.params.inputId);
+  expect(queued.params.target).toEqual(expectedTarget);
+  expect(dispatchCurrent.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+  // If dispatchCurrent turns false before queue dispatch, fallback does not send.
+  allowed = true;
+  s.handlers.set('turn/steer', () => {
+    allowed = false;
+    throw new RpcFailure({ code: -32000, message: 'not steerable', data: { kind: 'steer_unavailable' } });
+  });
+  await expect(s.client.sendContent('A', [{ type: 'text', text: 'gated fallback' }], 'steer', undefined, dispatchCurrent)).rejects.toBeInstanceOf(RequestNotDispatched);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
+});
+
+it('sendContent never retries uncertain outcomes or non-steer_unavailable refusals', async () => {
+  const s = server(); await s.attached('A');
+  await s.update('A', { ...snapshot(), attempt: { attempt_id: 'attempt-A', turn: 1, phase: { type: 'running' } } });
+
+  // 1. outcome_unknown RPC failure is never retried.
+  s.handlers.set('turn/steer', () => { throw new RpcFailure({ code: -32000, message: 'uncertain', data: { kind: 'outcome_unknown' } }); });
+  await expect(s.client.sendContent('A', [{ type: 'text', text: 'uncertain rpc' }], 'steer')).rejects.toBeInstanceOf(RpcFailure);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
+  expect(s.client.getSnapshot().uncertain).toHaveLength(1);
+
+  // 2. Other typed refusals (e.g. invalid_state) are never retried.
+  s.handlers.set('turn/steer', () => { throw new RpcFailure({ code: -32000, message: 'invalid state', data: { kind: 'invalid_state' } }); });
+  await expect(s.client.sendContent('A', [{ type: 'text', text: 'invalid state' }], 'steer')).rejects.toBeInstanceOf(RpcFailure);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
+
+  // 3. Socket close before reply (OutcomeUncertain) is never retried.
+  s.handlers.delete('turn/steer');
+  s.held.add('turn/steer');
+  const pending = s.client.sendContent('A', [{ type: 'text', text: 'lost socket' }], 'steer');
+  const rejected = expect(pending).rejects.toBeInstanceOf(OutcomeUncertain);
+  await s.waitFor('turn/steer', 2);
+  s.socket.close();
+  await rejected;
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
+});

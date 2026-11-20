@@ -154,7 +154,7 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
                         "schema={schema}, call={envelope}"
                     );
                     assert_eq!(
-                        resolve_invocation_metadata(policy, &envelope).unwrap().2,
+                        resolve_invocation_metadata(&original, &envelope).unwrap().2,
                         *business
                     );
                 }
@@ -165,6 +165,14 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
 
 #[test]
 fn decoder_rejects_flat_calls_unknown_metadata_and_missing_business() {
+    let selectable = definition(
+        ToolExecutionPolicy::ModelSelectable,
+        json!({"type":"object"}),
+    );
+    let foreground = definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        json!({"type":"object"}),
+    );
     for call in [
         json!({}),
         json!({"command":"status"}),
@@ -174,20 +182,17 @@ fn decoder_rejects_flat_calls_unknown_metadata_and_missing_business() {
         json!({"arguments":{},"execution_mode":"foreground"}),
     ] {
         assert!(
-            resolve_invocation_metadata(ToolExecutionPolicy::ForegroundOnly, &call).is_err(),
+            resolve_invocation_metadata(&foreground, &call).is_err(),
             "{call}"
         );
     }
     assert!(matches!(
-        resolve_invocation_metadata(
-            ToolExecutionPolicy::ModelSelectable,
-            &json!({"arguments":{}})
-        ),
+        resolve_invocation_metadata(&selectable, &json!({"arguments":{}})),
         Err(SchemaError::MissingExecutionMode)
     ));
     assert!(matches!(
         resolve_invocation_metadata(
-            ToolExecutionPolicy::ModelSelectable,
+            &selectable,
             &json!({"arguments":{},"execution_mode":"later"})
         ),
         Err(SchemaError::InvalidExecutionMode(_))
@@ -196,10 +201,14 @@ fn decoder_rejects_flat_calls_unknown_metadata_and_missing_business() {
 
 #[test]
 fn decoder_enforces_elevation_utf8_budget_and_preserves_business_names() {
+    let foreground = definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        json!({"type":"object"}),
+    );
     for reason in [json!(null), json!("  "), json!("\n")] {
         assert_eq!(
             resolve_invocation_metadata(
-                ToolExecutionPolicy::ForegroundOnly,
+                &foreground,
                 &json!({"arguments":{},"elevation_reason":reason})
             )
             .unwrap()
@@ -207,7 +216,7 @@ fn decoder_enforces_elevation_utf8_budget_and_preserves_business_names() {
             None
         );
     }
-    assert_eq!(resolve_invocation_metadata(ToolExecutionPolicy::ForegroundOnly,&json!({"arguments":{"elevation_reason":7,"execution_mode":false},"elevation_reason":"  permit  "})).unwrap(),(ToolInvocationMode::Foreground,Some("permit".into()),json!({"elevation_reason":7,"execution_mode":false})));
+    assert_eq!(resolve_invocation_metadata(&foreground,&json!({"arguments":{"elevation_reason":7,"execution_mode":false},"elevation_reason":"  permit  "})).unwrap(),(ToolInvocationMode::Foreground,Some("permit".into()),json!({"elevation_reason":7,"execution_mode":false})));
     for reason in [
         json!("界".repeat(171)),
         json!("x".repeat(513)),
@@ -217,7 +226,7 @@ fn decoder_enforces_elevation_utf8_budget_and_preserves_business_names() {
     ] {
         assert!(matches!(
             resolve_invocation_metadata(
-                ToolExecutionPolicy::ForegroundOnly,
+                &foreground,
                 &json!({"arguments":{},"elevation_reason":reason})
             ),
             Err(SchemaError::InvalidElevationReason(_))
@@ -225,7 +234,7 @@ fn decoder_enforces_elevation_utf8_budget_and_preserves_business_names() {
     }
     assert!(
         resolve_invocation_metadata(
-            ToolExecutionPolicy::ForegroundOnly,
+            &foreground,
             &json!({"arguments":{},"elevation_reason":"界".repeat(170)})
         )
         .is_ok()
@@ -267,7 +276,9 @@ fn only_selectable_policy_has_outer_execution_selector() {
             );
         }
         assert_eq!(
-            resolve_invocation_metadata(policy, &envelope).unwrap().0,
+            resolve_invocation_metadata(&definition(policy, json!({"type":"object"})), &envelope)
+                .unwrap()
+                .0,
             mode
         );
     }
@@ -312,4 +323,65 @@ fn dependency_defaults_cannot_reintroduce_schema_host_access() {
     // This intentionally bypasses our explicit builder. The dependency feature
     // boundary also protects owner paths that construct their own validator.
     assert!(Validator::new(&schema).is_err());
+}
+
+#[test]
+fn elevation_metadata_follows_tool_identity_and_the_permission_matrix() {
+    let reason = json!({"arguments": {}, "elevation_reason": "request approval"});
+    let mut tool = definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        json!({"type": "object"}),
+    );
+    for (name, expected) in [
+        ("read", false),
+        ("read_image", false),
+        ("glob", false),
+        ("grep", false),
+        ("todo", false),
+        ("get_goal", false),
+        ("update_goal", false),
+        ("ask_user", false),
+        ("present", false),
+        ("job_status", false),
+        ("write", true),
+        ("edit", true),
+        ("bash", true),
+        ("create_goal", true),
+    ] {
+        tool.name = name.into();
+        let model = compile_model_definition(&tool).unwrap();
+        assert_eq!(
+            model.input_schema["properties"]
+                .get(ELEVATION_REASON_FIELD)
+                .is_some(),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            resolve_invocation_metadata(&tool, &reason).is_ok(),
+            expected,
+            "{name}"
+        );
+        assert!(resolve_invocation_metadata(&tool, &json!({"arguments":{}})).is_ok());
+    }
+    tool.name = "get_goal".into();
+    tool.id = crate::runtime::identity::ToolId::new("tool-workflow-get_goal");
+    assert!(
+        compile_model_definition(&tool).unwrap().input_schema["properties"]
+            .get(ELEVATION_REASON_FIELD)
+            .is_some()
+    );
+    assert!(resolve_invocation_metadata(&tool, &reason).is_ok());
+    tool.id = crate::runtime::identity::ToolId::new("tool-host-read");
+    tool.name = "read".into();
+    tool.origin = ToolOrigin::Host {
+        namespace: None,
+        name: "read".into(),
+    };
+    assert!(
+        compile_model_definition(&tool).unwrap().input_schema["properties"]
+            .get(ELEVATION_REASON_FIELD)
+            .is_some()
+    );
+    assert!(resolve_invocation_metadata(&tool, &reason).is_ok());
 }

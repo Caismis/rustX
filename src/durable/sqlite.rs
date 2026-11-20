@@ -921,6 +921,10 @@ impl SqliteConversationStore {
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         read(&transaction)
     }
+    #[cfg(test)]
+    pub(crate) fn arm_head_read_probe(&self, probe: impl FnOnce() + Send + 'static) {
+        *self.head_read_probe.lock().unwrap() = Some(Box::new(probe));
+    }
     /// The bounded observation read-cut lifecycle: validate the authentic
     /// native `cut` and run `read` in the same read snapshot, so no query can
     /// observe state the cut does not own.

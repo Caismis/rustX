@@ -4,6 +4,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import type { ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v80';
+import { RpcFailure } from '../src/client/errors';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
 import { Server, snapshot } from './fixture';
@@ -33,8 +34,18 @@ it('C13 success is silent: an applied application renders no banner', async () =
   expect(screen.queryByLabelText('Session configuration')).toBeNull();
 });
 
+it('C13 routine preparing is quiet: no preparing or unavailable line', async () => {
+  const s = cfg3Client();
+  s.source.application = { ...cfg3Application(), units: { capabilities: { status: 'preparing' }, execution_policy: { status: 'preparing' } } };
+  render(rendered(s));
+  await waitFor(() => expect(cfg3Reads(s)).toHaveLength(1));
+  await act(async () => {});
+  expect(screen.queryByLabelText('Session configuration')).toBeNull();
+  expect(screen.queryByText(/Preparing configuration/)).toBeNull();
+  expect(unavailableLine()).toBeNull();
+});
+
 it.each([
-  ['preparing', { status: 'preparing' as const }, /Preparing configuration changes/],
   ['failed', { status: 'failed' as const, diagnostic: 'resource failed' }, /keep their previous configuration/],
   ['uncertain', { status: 'uncertain' as const, diagnostic: 'journal unavailable' }, /could not be recorded/],
   ['restart', { status: 'process_restart' as const }, /after the App Server restarts/],
@@ -43,6 +54,7 @@ it.each([
   render(rendered(s));
   await screen.findByText(text);
   if ('diagnostic' in unit) expect(screen.getByText(new RegExp(unit.diagnostic))).toBeTruthy();
+  expect(screen.queryByText(/Preparing configuration/)).toBeNull();
 });
 
 it('C14 a failure offers native Retry, which rescans each owner once and never replays a save', async () => {
@@ -63,8 +75,29 @@ it('C13 a failed reconnect read retains the pending observation and never assert
   act(() => s.publish({ connection: 'stale', generation: 2 }));
   act(() => s.publish({ connection: 'connected' }));
   await screen.findByText(/Configuration status unavailable/);
+  expect(screen.getByRole('alert').textContent).toMatch(/unavailable/);
   expect(screen.getByText(waiting)).toBeTruthy();
   expect(screen.queryByText(/up to date/i)).toBeNull();
+});
+
+it('C13 a reconnect read still in flight is quiet; the last observation stays and no unavailable line is invented', async () => {
+  let hold = false;
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const s = cfg3Client(async op => { if (hold && op.method === 'session/configuration') await held; });
+  s.source.application = cfg3Application();
+  try {
+    render(rendered(s));
+    await screen.findByText(waiting);
+    hold = true;
+    act(() => s.publish({ connection: 'stale', generation: 2 }));
+    act(() => s.publish({ connection: 'connected' }));
+    await waitFor(() => expect(cfg3Reads(s)).toHaveLength(2));
+    expect(unavailableLine()).toBeNull();
+    expect(screen.queryByText(/Preparing configuration/)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText(waiting)).toBeTruthy();
+  } finally { release(); }
 });
 
 it('C13 an authoritative answer of no application is known: the banner claims nothing', async () => {
@@ -107,6 +140,52 @@ it('C18 hundreds of streamed deltas never read Session configuration and never f
     expect(screen.getByText(waiting)).toBeTruthy();
   }
   expect(reads(s)).toHaveLength(1);
+});
+
+it('a permission-mode update does not emit preparing or unavailable UI', async () => {
+  const applied = { ...cfg3Application(), scope: 'A', units: { execution_policy: { status: 'applied' as const }, instructions: { status: 'applied' as const } } };
+  const s = await session(applied);
+  expect(screen.queryByLabelText('Session configuration')).toBeNull();
+  const preparing = {
+    ...applied, version: '3', desired: { input_revision: 'permission-3', attempt: '3' },
+    units: {
+      execution_policy: { status: 'preparing' as const }, capabilities: { status: 'preparing' as const },
+      instructions: { status: 'preparing' as const }, provider: { status: 'preparing' as const },
+      shared_capacity: { status: 'preparing' as const }, process_bindings: { status: 'preparing' as const },
+    },
+  };
+  await act(async () => {
+    s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: applicationReceipt(preparing) } });
+  });
+  expect(screen.queryByLabelText('Session configuration')).toBeNull();
+  expect(screen.queryByText(/Preparing configuration/)).toBeNull();
+  expect(unavailableLine()).toBeNull();
+  expect(reads(s)).toHaveLength(1);
+
+  s.handlers.set('session/configurationValueRead', () => { throw new RpcFailure({ code: -32000, message: 'configuration value unavailable' }); });
+  await act(async () => {
+    s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: {
+      scope: 'A', sources: preparing.sources, version: '4', inline: null,
+      reference: { version: '4', revision: 'permission-mode', byte_length: 32 },
+    } } });
+  });
+  await waitFor(() => expect(s.client.getSnapshot().configurationObservation?.A?.phase).toBe('unavailable'));
+  expect(screen.queryByLabelText('Session configuration')).toBeNull();
+  expect(screen.queryByText(/Preparing configuration/)).toBeNull();
+  expect(unavailableLine()).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(reads(s)).toHaveLength(1);
+
+  await act(async () => {
+    s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: applicationReceipt({
+      ...preparing, version: '5', units: { execution_policy: { status: 'failed', diagnostic: 'permission mode rejected' } },
+    }) } });
+  });
+  await screen.findByText(/keep their previous configuration/);
+  expect(screen.getByText(/permission mode rejected/)).toBeTruthy();
+  expect(screen.getByText(/Execution policy/)).toBeTruthy();
+  expect(screen.queryByText(/Preparing configuration/)).toBeNull();
+  expect(unavailableLine()).toBeNull();
 });
 
 it('C19 a native publication that applies the change is folded as the observation and removes the banner, never reread', async () => {

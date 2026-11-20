@@ -66,6 +66,7 @@ impl Family<'_> {
             | Method::Transcript { target, .. }
             | Method::ConversationTurns { target, .. }
             | Method::Goal { target, .. }
+            | Method::JobOutput { target, .. }
             | Method::JobStatus { target, .. }
             | Method::JobList { target, .. }
             | Method::JobWait { target, .. }
@@ -100,6 +101,7 @@ impl Family<'_> {
             | Method::InboundSubmissionLookup { target, .. }
             | Method::InboundEdit { target, .. }
             | Method::InboundRemove { target, .. }
+            | Method::InboundSteer { target, .. }
             | Method::TurnCancel { target, .. } => Family::Runtime(target),
             Method::WorkflowScheduledRecovery { .. }
             | Method::WorkflowScheduledCancel { .. }
@@ -155,6 +157,8 @@ impl Family<'_> {
             | Method::SessionDelete { .. }
             | Method::SessionRecoverDeletion { .. } => Family::Catalog,
             Method::SessionHistory { .. }
+            | Method::SessionMessageBoundary { .. }
+            | Method::SessionMessageVersions { .. }
             | Method::SessionNodeOriginHistory { .. }
             | Method::SessionTraceHistory { .. }
             | Method::SessionTraceHistoryDetail { .. }

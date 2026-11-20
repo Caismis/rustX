@@ -153,8 +153,6 @@ it('reload retries the unresolved startup selection after a transient failure an
   const pending = await server.waitFor('session/read', 1);
   expect(pending.params).toMatchObject({session_id:'B'});
   await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
-  const other = await server.waitFor('session/read', 2);
-  await act(async () => server.reply(other));
   await click(ui, 'View options');
   await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Close view'})));
   await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Session A'})));
@@ -169,8 +167,7 @@ it.each(['Workflows', 'Scheduled Tasks', 'Skills', 'New Conversation', 'Open Ses
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
   await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
-  const other = await server.waitFor('session/read', 2);
-  server.held.delete('session/read'); await act(async () => server.reply(other));
+  server.held.delete('session/read');
   await click(ui, name);
   expect(hints().route).toEqual(name === 'Open Session A' ? {kind:'session',sessionId:'A'} : name === 'Workflows' ? {kind:'workflows'} : name === 'Scheduled Tasks' ? {kind:'schedules'} : name === 'Skills' ? {kind:'skills'} : {kind:'new-conversation',workspaceId:'workspace-a'});
   if (name === 'Workflows' || name === 'Scheduled Tasks' || name === 'Skills') {
@@ -184,8 +181,7 @@ it.each(['Settings', 'Workflows', 'Scheduled Tasks', 'Skills'])('a failed Fork k
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
   await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
-  const other = await server.waitFor('session/read', 2);
-  server.held.delete('session/read'); await act(async () => server.reply(other));
+  server.held.delete('session/read');
   expect(hints().route).toEqual({kind:'session',sessionId:'B'});
   await click(ui, 'Session actions for Session A');
   await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Fork session'})));
@@ -303,8 +299,7 @@ it('a failed startup hint survives Settings while its same Home return awaits au
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: pending.id, error: { code: -32000, message: 'B temporarily unavailable', data: { kind: 'operation_failed' } } }));
-  const other = await server.waitFor('session/read', 2);
-  server.held.delete('session/read'); await act(async () => server.reply(other));
+  server.held.delete('session/read');
   await click(ui, 'Settings');
   expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' });
   let release!: () => void, entered!: () => void;

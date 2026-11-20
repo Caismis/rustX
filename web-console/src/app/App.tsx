@@ -9,10 +9,10 @@ import { Workbench, type WorkbenchHandle } from './components/Workbench';
 import { WorkbenchPreviewRetention } from './workbench-previews';
 import { PreviewContentCache } from '../client/preview-content';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
-import { message } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
 import { ConversationHeader } from './agent/ConversationHeader';
+import { SessionPanelProvider } from './agent/session-panel-state';
 import { BtwPanel } from './agent/BtwPanel';
 import { DocumentTitle } from './DocumentTitle';
 import { useClientSelector, selectShell, sameValue } from '../client/selectors';
@@ -37,6 +37,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, isHomeRoute, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import { navigationPreferencesKey, readNavigationPreferences, restoreRoute, resumableViews, saveRoute } from './navigation/preferences';
+import { RecentInactiveViews, recentViewSnapshot } from './navigation/recent-views';
+import { SessionPins } from '../workspaces/session-pins';
 import type { AppServerClient } from '../client/app-server';
 import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v80';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
@@ -113,6 +115,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, host: workspaceHost, workspaces: workspaceAuthority, workflows, route: savedRoute?.kind === 'session' && !client.isAttachmentControlCurrent(savedRoute.sessionId, client.getSnapshot().views[savedRoute.sessionId]?.attachmentObservation) ? undefined : savedRoute } });
   return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements} workflows={workflows}/>;
 }
+/** The Session a gesture or startup open is acquiring. Recent-view release must not detach it. */
+function navigationSession(shell: ShellNavigationActor): string | undefined {
+  const pending = shell.getSnapshot().context.pending?.destination;
+  if (pending && 'sessionId' in pending) return pending.sessionId;
+  const home = shell.getSnapshot().context.home;
+  return home.kind === 'session' || home.kind === 'session-draft' ? home.sessionId : undefined;
+}
 /** Route rendering and gestures; it owns no native admission or actor lifetime. */
 export function AppSurface({ client, workspaceHost, workspaceAuthority, connection, navigation: shell, composerDraft, repairAcknowledgements, workflows }: { composerDraft: ComposerDraft; client: AppServerClient; workspaceHost: ProductHostWorkspaces; workspaceAuthority: WorkspaceAuthority; connection: ConnectionController; navigation: ShellNavigationActor; repairAcknowledgements: RepairAcknowledgements; workflows: WorkflowSurfaceActor }) {
   const fileWorkbench = useRef<WorkbenchHandle>(null);
@@ -188,18 +197,43 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const [error, setError] = useToastNotice();
   const [deletingSession, setDeletingSession] = useState<string>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
+  const pinScope = JSON.stringify([state.endpoint, state.authorityId]);
+  const pins = useMemo(() => {
+    let storage: Storage | undefined;
+    try { storage = globalThis.localStorage; } catch { /* Browser storage is optional. */ }
+    return new SessionPins(pinScope, storage);
+  }, [pinScope]);
+  const recent = useMemo(() => new RecentInactiveViews(
+    () => recentViewSnapshot(client.getSnapshot(), new Set(pins.getSnapshot()), navigationSession(shell)),
+    (id, claim) => client.releaseHeldView(id, claim),
+  ), [client, pins, shell]);
   // The client owns authority retirement. This render adjustment retires only
   // browser presentation before any children can reinterpret an old Session ID.
   if (presentationAuthority !== state.authorityRevision) {
     setPresentationAuthority(state.authorityRevision);
     setOpenViews([]);
     setDeletingSession(undefined); setError(''); setConsumed(undefined);
+    recent.reset();
   }
 
   useEffect(() => { if (center.kind === 'session' || center.kind === 'session-draft') { client.restoreViews([center.sessionId]); setOpenViews(open => open.includes(center.sessionId) ? open : [...open, center.sessionId]); } }, [client, center]);
+  useEffect(() => {
+    recent.setListener(evicted => setOpenViews(open => {
+      const keep = navigationSession(shell);
+      const next = open.filter(id => id === keep || !evicted.includes(id));
+      return next.length === open.length ? open : next;
+    }));
+    const stopClient = client.subscribe(() => recent.sync());
+    const stopPins = pins.subscribe(() => recent.sync());
+    recent.sync();
+    return () => { recent.setListener(undefined); stopClient(); stopPins(); };
+  }, [client, pins, recent, shell]);
+  useEffect(() => { recent.show(selected); }, [recent, selected]);
 
   const selectedView = selected ? state.views[selected] : center.kind === 'new-conversation' && routeState.context.draftSession ? state.views[routeState.context.draftSession.sessionId] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
+  const activeSessionId = view?.id ?? (!selectedView?.deleting ? selected : undefined);
+  const activeSummary = activeSessionId ? (state.sessions.find(session => session.id === activeSessionId) ?? view?.summary) : undefined;
   const sideQuestionAvailable = !!view && (!!client.getSnapshot().capabilities?.delivery_access || !!client.auxiliary.snapshot(view.id));
   const openSideQuestion = () => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openSideQuestion(); };
   const workbenchTarget: WorkbenchTarget | undefined = view?.summary
@@ -244,9 +278,13 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     const view = commandable();
     if (view) shell.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: view.id, action, response } });
   };
+  const publishedVersion = routeState.context.publication?.intent?.destination;
+  const messageVersionFocus = publishedVersion?.kind === 'node' && publishedVersion.sessionId === activeSessionId
+    ? publishedVersion : undefined;
   const destination = routeState.context.pending?.destination;
   const sessionTransition = routeState.context.retry ? { sessionId: routeState.context.retry.view.id, action: 'retry' as const }
     : destination?.kind === 'fork-session' ? { sessionId: destination.sessionId, action: 'fork' as const }
+    : destination?.kind === 'retry-message' ? { sessionId: destination.sessionId, action: 'retry' as const }
     : destination?.kind === 'transition' && (destination.action === 'fork' || destination.action === 'retry') ? { sessionId: destination.sessionId, action: destination.action } : undefined;
   const forkingResponse = destination?.kind === 'transition' && destination.action === 'fork' ? destination.response : undefined;
   const runGlobal = (action: () => Promise<unknown>, current: () => boolean = () => true) => {
@@ -262,17 +300,14 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     const route = restoreRoute(preferences, native);
     if (!route || owner.intentRevision !== 0 || owner.pending) return;
     const views = resumableViews(preferences.openViews, native);
-    client.restoreViews(views);
     setOpenViews(views);
+    recent.restore(views);
     if (route.kind === 'session') shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: route.sessionId, sidebar: false } });
     else if (!sameValue(owner.route, route)) {
       if (route.kind === 'workflows') shell.send({ type: 'WORKFLOWS' });
       else if (route.kind === 'schedules') shell.send({ type: 'SCHEDULES' });
       else if (route.kind === 'new-conversation') shell.send({ type: 'DRAFT', workspaceId: route.workspaceId });
       else shell.send({ type: 'RESOURCES', module: route.kind });
-    }
-    if (client.getSnapshot().connection === 'connected') for (const id of views.filter(id => route.kind !== 'session' || id !== route.sessionId)) {
-      if (!client.getSnapshot().views[id]?.target && (!firstSubmissions(client).session(id) || ['admitted', 'discarded'].includes(firstSubmissions(client).session(id)!.phase))) void client.attach(id).catch(() => {});
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen, preferencesApplied]);
   const resumeRoute = JSON.stringify(saveRoute(routeState.context, JSON.parse(resumeViews)));
@@ -301,10 +336,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'DRAFT' });
   };
   const open = (id: string, command?: CommandRequest, sidebar?: SidebarGeometry, node?: { nodeId: string; conversationId: string }) => {
-    if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
     shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: !!sidebar?.overlay, command, ...node } });
+    if (navigationSession(shell) === id) recent.show(id);
   };
   const closeView = (id: string) => {
+    recent.forget(id);
     const remaining = openViews.filter(item => item !== id);
     setOpenViews(remaining);
     if (selected === id) focusSession(remaining[0]);
@@ -312,6 +348,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   };
   const closeAllViews = () => {
     const closing = [...openViews];
+    recent.reset();
     setOpenViews([]); shell.send({ type: 'DRAFT' });
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
@@ -345,7 +382,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.OWNER', directory: owner.directory } });
   };
   const openTaskSession = (task: TaskRef) => open(task.session_id, undefined, undefined, { nodeId: task.node_id, conversationId: task.id.conversation_id });
-  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
+  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={activeSessionId} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
     primary={geometry => <PrimaryNavigationRail label={tx('sidebar:navigation.label')} activeId={home ? 'home' : primaryRoute.kind}
       items={[
         { id: 'home', label: tx('sidebar:navigation.home'), icon: <IconHomeOutline16 size={18}/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
@@ -358,7 +395,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       settings={{ id: 'settings', label: tx('settings:settings.settings'), icon: <IconSettingsOutline16 size={18}/>, select: () => shell.send({ type: 'SETTINGS' }) }}
       feedback={<ConnectionFeedback client={client} connection={connection} wide={false} settings={openConnectionSettings}/>}/>}
     sidebar={geometry => <HomeSidebar width={geometry.width} toggleSidebar={geometry.toggleSidebar} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
-      browser={<WorkspaceNavigation transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} host={workspaceHost} client={client} state={state} endpoint={endpoint}
+      browser={<WorkspaceNavigation pins={pins} transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} host={workspaceHost} client={client} state={state} endpoint={endpoint}
         metadataChanged={removed => { if (removed && center.kind === 'new-conversation' && center.workspaceId === removed) shell.send({ type: 'DRAFT' }); }}
         workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
         draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id, true); geometry.dismissSidebar(); }}
@@ -393,15 +430,15 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         if (next) open(next); else focusSession();
       }
     }}/>}
-    <DocumentTitle client={client} sessionId={home || settingsOpen ? view?.id : undefined}/>
+    <DocumentTitle client={client} sessionId={home || settingsOpen ? activeSessionId : undefined}/>
     <OverlayScope className="primary-page" active={settingsOpen}>
       <Settings visible={settingsOpen} associations={associations} navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </OverlayScope>
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} host={workspaceHost} authority={workspaceAuthority} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
     {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
-    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
-      <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
+    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${agentCss.root}`} data-phase={activeSessionId ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={activeSessionId ? 'session-title' : undefined} aria-label={activeSessionId ? undefined : tx('agent:conversation-header.product-title')}>
+      <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} sessionId={activeSessionId} summary={activeSummary} view={view} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
         previewToggle={previews.mode === 'collapsed' && <>{sideQuestionAvailable && <Button size="sm" className={agentCss.iconButton} data-side-question-toggle aria-label={tx('agent:btw.title')} title={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></Button>}<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button></>} invokeCommand={invokeCommand}
         openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
@@ -410,6 +447,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         if (action === 'connection-settings') openConnectionSettings();
         else if (action === 'connect') void connection.reconnect();
         else if (action === 'refresh') runGlobal(() => client.refresh(view.id));
+        else if (client.getSnapshot().views[view.id]?.passiveHistory) focusSession(view.id);
         else {
           const current = committedRouteCurrent(shell);
           const route = shell.getSnapshot().context.route;
@@ -418,11 +456,21 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         }
       }} />}
 
-      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
+      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={activeSessionId && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={activeSessionId && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ConversationQuestionPanels client={client} sessionId={view?.id}>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
+      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={activeSessionId} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}
+        messageVersionFocus={messageVersionFocus}
+        onRetryMessage={(locator, replacementText) => {
+          const view = commandable();
+          if (view && lineageSwitchSafe(view)) shell.send({ type: 'OPEN', destination: { kind: 'retry-message', sessionId: view.id, locator, replacementText } });
+        }}
+        onSwitchMessageVersion={version => {
+          const view = commandable();
+          if (view && lineageSwitchSafe(view)) shell.send({ type: 'OPEN', destination: { kind: 'node', sessionId: view.id,
+            nodeId: version.node_id, conversationId: version.conversation_id, messageId: version.message_id ?? undefined } });
+        }}/>
       <ConversationSeat visible={home} intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) { shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); rememberWorkspace(id); } }}
@@ -445,6 +493,6 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         close={() => shell.send({ type: 'COMMAND.CLOSE', command })}
         navigate={choice => { if (!commandCurrent() || command.route.kind !== 'session') return; shell.send({ type: 'OPEN', destination: choice.kind === 'node' ? { ...choice, sessionId: command.route.sessionId } : { kind: 'transition', sessionId: command.route.sessionId, action: choice.action, selection: choice.selection } }); }} />}
 
-    </section></FileLinks.Provider></div>
+    </section></SessionPanelProvider></FileLinks.Provider></div>
   </AppFrame></ChangesReviewContext></PreviewContext></SubagentScope></TaskNavigationProvider>;
 }

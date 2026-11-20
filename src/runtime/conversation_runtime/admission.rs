@@ -1319,6 +1319,42 @@ impl ConversationRuntime {
         )
     }
 
+    /// Promote one exact row or the observed queue into the running attempt.
+    /// The durable transaction preserves the original submission identities.
+    pub(crate) fn steer_queued(
+        &self,
+        expected: &AttemptId,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, InboundAdmissionError> {
+        let state = self.inner.lock_state();
+        let steering = self
+            .inner
+            .mailbox
+            .steering
+            .lock()
+            .expect("steering admission");
+        let current = state.current_attempt.as_ref();
+        if current.is_none_or(|current| current.attempt_id != *expected) {
+            return Err(InboundAdmissionError::StaleAttempt);
+        }
+        if state.scheduled.is_some()
+            || state.manual_compaction.is_some()
+            || current.is_some_and(|current| {
+                current.cancellation.is_cancelled()
+                    || !steering.open
+                    || steering.active.as_ref() != Some(&current.attempt_id)
+            })
+        {
+            return Err(InboundAdmissionError::NotSteerable);
+        }
+        // Hold both locks across the writer so a model boundary cannot select
+        // a disagreeing batch and a replacement attempt cannot adopt the rows.
+        self.inner
+            .mailbox
+            .steer_pending(scope)
+            .map_err(InboundAdmissionError::Mailbox)
+    }
+
     fn require_new_input(&self, correlation: &str) -> Result<(), InboundAdmissionError> {
         if self
             .inner
@@ -1393,12 +1429,7 @@ pub(super) enum IdleProbe {
 }
 
 fn input_correlation(id: &str) -> Result<String, InboundAdmissionError> {
-    if id.is_empty()
-        || id.len() > 64
-        || !id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-    {
+    if !crate::durable::inbox::valid_public_input_id(id) {
         return Err(InboundAdmissionError::InvalidInputId);
     }
     Ok(format!("app-server:{id}"))

@@ -124,6 +124,27 @@ fn background_allocation_binds_full_identity_and_preserves_live_locator() {
 }
 
 #[test]
+fn live_tail_is_bounded_and_follows_the_original_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let id = store.execution_identity().unwrap();
+    let path = store.allocate_background_output(&id).unwrap();
+    let mut sink = store.open_background_output_sink(&id).unwrap();
+    sink.append("early output").unwrap();
+    assert_eq!(
+        store.live_tail(&id).unwrap(),
+        ("early output".into(), false)
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, "different file").unwrap();
+    let suffix = "x".repeat(16 * 1024 - 1);
+    sink.append(&format!("好{suffix}")).unwrap();
+    assert_eq!(store.live_tail(&id).unwrap(), (suffix, true));
+    store.settle_background_output(&id);
+    assert!(store.live_tail(&id).is_err());
+}
+
+#[test]
 fn rollback_and_write_failures_are_explicit() {
     let dir = tempfile::tempdir().unwrap();
     let store = store(dir.path());

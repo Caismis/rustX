@@ -30,6 +30,10 @@ import { sessionCatalog, sessionModelBlock, WorkspaceControls, WorkspacePermissi
 import { firstSubmissions } from './first-submit';
 import { draftPreparations } from './preparation';
 
+function passivePermissionUpdate(reason: Message) {
+  return reason.key === 'workspace:approval.reading' || reason.key === 'workspace:approval.applying' || reason.key === 'workspace:approval.saved';
+}
+
 export function ConversationComposer({ visible = true, client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed, intakeCommitted = true }: { visible?: boolean; intakeCommitted?: boolean; draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
@@ -99,7 +103,7 @@ export function ConversationComposer({ visible = true, client, host, authority, 
     onDraftSend={active && !connecting && !hasDraftFiles ? undefined : async (text, files, attachmentIds, submission) => {
       if (activeView) return submissions.submit(binding, { workspaceId: '', text, files, attachmentIds, submission }, firstSubmitPort(client, host, current, preparePublication, true), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids), activeView.id);
       const blocked = block();
-      if (blocked) { if (blocked.key !== 'workspace:approval.reading') setError(blocked); return false; }
+      if (blocked) { if (!passivePermissionUpdate(blocked)) setError(blocked); return false; }
       if (!selected) { setError(message('common:copy.choose-a-host-authorized-registered-workspace-before-submitting')); return false; }
       return submissions.submit(binding, { preparation: draftPreparations(client)?.seal(binding, selected.id, catalog!.authorityId), workspaceId: selected.id, text, files, attachmentIds, submission, model: requestedModel }, firstSubmitPort(client, host, current, preparePublication), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
     }} {...active} busy={pending || !!active?.busy} disabled={active ? !pending && !connecting && active.disabled : !live || owner !== binding} binding={binding}/>;
@@ -133,7 +137,7 @@ export function ConversationComposer({ visible = true, client, host, authority, 
       const quietControl = (control: ReactNode) => <div className={preparing ? startupCss.pendingControl : undefined} aria-hidden={preparing || undefined} inert={preparing || undefined}>{control}</div>;
       return <><AgentControls client={client} view={activeView} coldSource={source} blocked={pending} draft={active ? undefined : { source, intent: selection, choose: chooseModel, disabled: !drafting }}>{(toolbar, picker) => composer(block, requestedModel,
         (active ? initialWorkspace : selected) && quietControl(<WorkspacePermission source={source} approval={approval} disabled={active ? pending || !live : !drafting}/>), quietControl(toolbar), picker, !active && !!selected && approval.reading && approval.block()?.key === 'workspace:approval.reading')}
-      </AgentControls>{!active && selected && guidance && guidance.key !== 'workspace:approval.reading' && <small role="status">{displayText(tx, guidance)}</small>}</>;
+      </AgentControls>{!active && selected && guidance && !passivePermissionUpdate(guidance) && <small role="status">{displayText(tx, guidance)}</small>}</>;
     }}</WorkspaceControls>}/>
     {!active && catalog?.picker.kind === 'unavailable' && !selected && <small role="status">{catalog.picker.reason}</small>}
     {!active && !add && error && <p role="alert">{error}</p>}

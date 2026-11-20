@@ -1,10 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. MarkdownBody and ImageBody adapted; see PROVENANCE.md. */
 import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
+import { MarkdownBody } from './MarkdownBody';
 import { useLocale, useTranslation } from '../../../locale/react';
-import { splitFrontmatter } from './frontmatter';
-import { FrontmatterFields } from './frontmatter-fields';
 import { ImagePreview } from '../documents/ImagePreview';
 import { excelFormat } from './excel/format';
 import { en, zh } from '../../../locale/dictionaries/workbench-excel';
@@ -13,7 +11,6 @@ import { DocumentResources } from '../../../presentation/markdown/DocumentResour
 import { relativeDocumentPath, WorkspaceImage } from './resources';
 import type { FileTabView, WorkbenchCall } from '../WorkbenchFiles';
 import type { Viewer } from './definitions';
-import css from './MarkdownBody.module.css';
 import { FILE_PREVIEW_LIMITS } from '../../../../shared/file-preview.ts';
 import { validateRaster } from '../../../client/raster';
 import { DocumentDependencies } from './dependencies';
@@ -28,7 +25,6 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   const [state,setState] = useState(view.document ?? {});
   const change = (patch: typeof state) => { view.document = {...view.document,...patch}; setState(view.document); };
 
-  const split = useMemo(() => splitFrontmatter(text), [text]);
   const loading = <LoadingIndicator label={tx('artifacts:workbench.loading')}/>;
   const geometryStarted = useRef(false);
   if (mode === 'geometry' && visible) geometryStarted.current = true;
@@ -38,10 +34,7 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
     const sameCopy = () => view.current() && view.preview?.owner === owner && owner.getSnapshot().revision === snapshot.revision && (snapshot.source ? owner.getSnapshot().source === snapshot.source : owner.getSnapshot().version === snapshot.version && owner.getSnapshot().data === snapshot.data);
     return <GeometryDocument visible={visible} bytes={snapshot.source ? undefined : snapshot.data} source={snapshot.source} name={path} copyId={`${snapshot.revision}:${snapshot.source ? 'stream' : snapshot.version}`} signal={signal} current={() => !signal.aborted && sameCopy()} takeSource={() => snapshot.data && sameCopy() ? owner.takeGeometryBytes(snapshot.data) : undefined} releaseSource={() => { if (snapshot.data && sameCopy()) owner.releaseGeometryBytes(snapshot.data); }} viewState={state} onViewStateChange={patch => { if (!signal.aborted && sameCopy()) change(patch); }} onGeometryRetire={geometry => { if (sameCopy()) view.document = { ...view.document, geometry }; }}/>
   }
-  if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
-    {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}
-    <MarkdownText text={split?.body ?? text} streaming={false}/>
-  </div></DocumentResources.Provider>;
+  if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><MarkdownBody text={text}/></DocumentResources.Provider>;
   if (mode === 'html') return <HtmlBody data={bytes} path={path} call={call} signal={signal} dependencies={dependencies}/>;
   if (mode === 'image') return <ImageBody bytes={bytes} path={path} view={view} signal={signal}/>;
   if (mode === 'pdf' || mode === 'office') return <Suspense fallback={loading}><Pdf bytes={bytes} maxBytes={mode === 'office' ? FILE_PREVIEW_LIMITS.convertedPdfBytes : undefined} signal={signal} retry={retry} viewState={state} onViewStateChange={change}/></Suspense>;
