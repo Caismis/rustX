@@ -499,6 +499,37 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// Capture the bound Workspace document under the same data budget as
+    /// other authorized reads. A missing leaf is meaningful only after the
+    /// live Client has proved the Workspace directory.
+    pub(crate) fn workspace_configuration(&self) -> io::Result<WorkspaceConfiguration> {
+        // Configuration capture may sit inside a source publication. Give
+        // the root probe and every chunk one small absolute wire budget.
+        const CAPTURE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+        let deadline = Instant::now() + CAPTURE_BUDGET;
+        self.with_connection(None, false, |connection| {
+            let root = connection.entry_metadata_until(Path::new(""), deadline)?;
+            if root.kind != EntryKind::Directory {
+                return Err(io::Error::other("Client Workspace root is not a directory"));
+            }
+            let document = connection.read_bounded_file(
+                Path::new("rustx.toml"),
+                crate::bounded_file::MAX_RESOURCE_BYTES,
+                deadline,
+                || Ok(()),
+            );
+            let document = match document {
+                Ok(document) => Some(document),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            Ok(WorkspaceConfiguration {
+                directory_identity: root.stamp.identity,
+                document,
+            })
+        })
+    }
+
     /// The metadata of one entry through the admitted Client — `path`
     /// may name the workspace root itself (the exact reserved absolute
     /// path or a bare `.`), never an embedded `.`/`..`.
@@ -790,16 +821,18 @@ impl LocalExecutionEndpoint {
     ) -> io::Result<Vec<u8>> {
         self.with_connection(Some(data), true, |connection| {
             let relative = workspace_relative(&connection.admission().workspace, path)?;
-            connection.read_image(
-                &relative,
-                crate::tools::artifacts::ARTIFACT_TRANSFER_MAX as u64,
-                deadline,
-                || {
-                    cancellation
-                        .with_active(|| ())
-                        .ok_or_else(cancelled_before_dispatch)
-                },
-            )
+            connection
+                .read_bounded_file(
+                    &relative,
+                    crate::tools::artifacts::ARTIFACT_TRANSFER_MAX as u64,
+                    deadline,
+                    || {
+                        cancellation
+                            .with_active(|| ())
+                            .ok_or_else(cancelled_before_dispatch)
+                    },
+                )
+                .map(|(bytes, _)| bytes)
         })
     }
 
@@ -1306,6 +1339,12 @@ enum ExecutionRoute {
 enum DataCapacity {
     Immediate,
     WaitForSlot,
+}
+
+#[derive(PartialEq, Eq)]
+pub(crate) struct WorkspaceConfiguration {
+    directory_identity: String,
+    pub(crate) document: Option<(Vec<u8>, FileStamp)>,
 }
 
 impl SessionExecutionScope {
@@ -2313,13 +2352,23 @@ impl SessionExecutionRegistry {
         &self,
         session: &SessionId,
     ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        self.configuration_endpoint(session)?
+            .ok_or_else(|| error("Session has no execution endpoint"))
+    }
+
+    /// Preserve the distinction between an unclaimed Session and one
+    /// whose claimed Workspace cannot currently answer a physical read.
+    pub(super) fn configuration_endpoint(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<Arc<LocalExecutionEndpoint>>, RuntimeManagerError> {
         let slots = self.0.lock().expect("execution registry mutex");
         let Some(slot) = slots.get(session) else {
-            return Err(error("Session has no execution endpoint"));
+            return Ok(None);
         };
         let phase = slot.phase.lock().expect("execution slot phase");
         match &*phase {
-            Phase::Published(endpoint) => Ok(endpoint.clone()),
+            Phase::Published(endpoint) => Ok(Some(endpoint.clone())),
             Phase::Preparing => Err(error("execution binding preparation in progress")),
             Phase::Closed(_) => Err(error("execution binding is closed; recovery is required")),
         }

@@ -2092,8 +2092,7 @@ impl LocalConnection {
     }
 
     /// One bounded whole-file fetch assembled from `ReadRange` chunks on
-    /// this connection — the physical backing of the Agent's image
-    /// transfer. `admit` is the caller's acceptance gate run after each
+    /// this connection. `admit` is the caller's acceptance gate run after each
     /// request is encoded and the binding's live check passes, before
     /// that request's first byte; every chunk shares the one absolute
     /// `deadline`.
@@ -2115,13 +2114,13 @@ impl LocalConnection {
     /// Returns the same kinds as [`read_range`](Self::read_range), plus
     /// [`io::ErrorKind::FileTooLarge`] for a source larger than `bound`
     /// and the `admit` error verbatim.
-    pub fn read_image(
+    pub fn read_bounded_file(
         &mut self,
         relative_path: &Path,
         bound: u64,
         deadline: Instant,
         admit: impl Fn() -> io::Result<()>,
-    ) -> io::Result<Vec<u8>> {
+    ) -> io::Result<(Vec<u8>, FileStamp)> {
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
         let limit = usize::try_from(bound).unwrap_or(usize::MAX);
         let chunk_bound = u32::try_from(MAX_RAW_CHUNK_BYTES).unwrap_or(u32::MAX);
@@ -2132,7 +2131,7 @@ impl LocalConnection {
         if size > bound {
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
-                "image source exceeds the transfer bound",
+                "source exceeds the transfer bound",
             ));
         }
         let mut bytes = first.bytes;
@@ -2148,18 +2147,18 @@ impl LocalConnection {
                 || (),
             )?;
             if chunk.metadata != stamp {
-                return Err(self.retire(violation("image source stamp changed between chunks")));
+                return Err(self.retire(violation("source stamp changed between chunks")));
             }
             if bytes.len() + chunk.bytes.len() > limit {
-                return Err(self.retire(violation("image chunks exceed the stamped bound")));
+                return Err(self.retire(violation("chunks exceed the stamped bound")));
             }
             bytes.extend_from_slice(&chunk.bytes);
             next = chunk.next_offset;
         }
         if bytes.len() as u64 != size {
-            return Err(self.retire(violation("image chunks contradict the stamped size")));
+            return Err(self.retire(violation("chunks contradict the stamped size")));
         }
-        Ok(bytes)
+        Ok((bytes, stamp))
     }
 
     /// One managed-process exchange: the typed request is sent and its
@@ -2618,15 +2617,34 @@ impl LocalConnection {
     /// I/O error kind, or [`io::ErrorKind::InvalidData`] for a malformed
     /// reply.
     pub fn entry_metadata(&mut self, relative_path: &Path) -> io::Result<EntryStamp> {
+        self.entry_metadata_until(relative_path, Instant::now() + PAGE_REQUEST_TIMEOUT)
+    }
+
+    /// Query metadata under the caller's absolute deadline, which may also
+    /// cover related bounded reads from this connection.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::entry_metadata`], and retires the
+    /// connection if a sent request exceeds the deadline.
+    pub fn entry_metadata_until(
+        &mut self,
+        relative_path: &Path,
+        deadline: Instant,
+    ) -> io::Result<EntryStamp> {
         if !self.capabilities.contains(&Capability::DirectoryMetadata) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "peer admitted no directory metadata capability",
             ));
         }
-        let reply = self.exchange(&ClientRequest::GetMetadata {
-            relative_path: relative_path.to_path_buf(),
-        })?;
+        let reply = self.exchange_admitted(
+            &ClientRequest::GetMetadata {
+                relative_path: relative_path.to_path_buf(),
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }

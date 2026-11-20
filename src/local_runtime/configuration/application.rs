@@ -347,13 +347,42 @@ impl ApplicationState {
         persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let key = super::capture::canonical_directory(&input.cwd)?;
-        let mut capture = match self.creation_capture(configuration, &key, credentials)? {
+        let capture = match self.creation_capture(configuration, &key, credentials)? {
             std::borrow::Cow::Borrowed(capture) => capture.clone(),
             std::borrow::Cow::Owned(capture) => {
                 self.available.insert(key.clone(), capture.clone());
                 capture
             }
         };
+        Self::admit_initial(capture, input, credentials, persisted)
+    }
+
+    /// A Client-bound document has Session authority; two Clients can serve
+    /// different authored bytes at the same logical path. This capture never
+    /// borrows or populates the directory's Session-creation cache.
+    pub(crate) fn initial_bound_session(
+        configuration: &super::UserConfigManager,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    ) -> Result<super::AdmittedSessionConfig, String> {
+        let capture = configuration
+            .capture_bound_application(
+                &super::SessionConfigInput::new(input.cwd.clone()),
+                credentials,
+                endpoint,
+            )?
+            .context?;
+        Self::validate_default(&capture, credentials)?;
+        Self::admit_initial(capture, input, credentials, true)
+    }
+
+    fn admit_initial(
+        mut capture: super::ProspectiveSessionConfig,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        persisted: bool,
+    ) -> Result<super::AdmittedSessionConfig, String> {
         capture.input.model = Some(
             input
                 .model
@@ -542,6 +571,7 @@ impl ApplicationState {
         Self::validate_default(capture, credentials)?;
         capture.validate_resource_authority()?;
         if self.current(scope, identity)
+            && self.scope_sources.contains_key(scope)
             && self
                 .desired_sources
                 .get(&capture.input.cwd)
@@ -630,10 +660,31 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
         self.record_source(source, &input);
-        self.reasons
-            .insert(scope.clone(), ConfigurationChangeReason::Source);
         self.scope_sources
             .insert(scope.clone(), source.to_path_buf());
+        self.capture_session_source(scope, source, input)
+    }
+
+    /// A bound Session never publishes its Client's view into the
+    /// path-keyed authoring cache or reloads from that cache.
+    pub(crate) fn capture_bound_source(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        self.scope_sources.remove(&scope);
+        self.capture_session_source(scope, source, input)
+    }
+
+    fn capture_session_source(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        self.reasons
+            .insert(scope.clone(), ConfigurationChangeReason::Source);
         self.own_scope(&scope, source);
         if let Ok(capture) = &input
             && let Some(current) = self.scopes.get(&scope)

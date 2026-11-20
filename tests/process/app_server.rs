@@ -1046,7 +1046,8 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
         let f = Fixture::new().await;
         let workspace = f.root.path().join("a");
         grant_environment_roots(&f, std::slice::from_ref(&workspace));
-        std::fs::write(workspace.join("rustx.toml"), b"[broken").unwrap();
+        let project = workspace.join("rustx.toml");
+        std::fs::write(&project, b"[agent]\n").unwrap();
         std::fs::write(workspace.join("marker"), b"authorized").unwrap();
         let (_bin, rustx) = isolated_server_bin();
         let private = f.root.path().join("bootstrap-private");
@@ -1081,6 +1082,27 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
         };
         assert_eq!(before.error.data, Some(ErrorData::ExecutionUnavailable));
 
+        let thread_id = app_server_conformance::thread_id(&client, id.clone()).await;
+        let Response::Failure(before_attach) = rpc(
+            &client,
+            42,
+            Method::SessionAttach {
+                thread_id: thread_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("configuration before authenticated Client");
+        };
+        assert!(
+            before_attach
+                .error
+                .message
+                .contains("no client is admitted"),
+            "{before_attach:?}"
+        );
+        assert_eq!(diagnostics(&client).await.loaded, 0);
+        std::fs::write(project, b"[broken").unwrap();
         let _execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
         await_admission(&client, &id, &workspace.join("marker")).await;
         assert!(matches!(
@@ -1088,7 +1110,6 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
             MethodResult::DirectoryPage { page }
                 if page.entries.iter().any(|entry| entry.file_name == "marker")
         ));
-        let thread_id = app_server_conformance::thread_id(&client, id.clone()).await;
         assert!(matches!(
             rpc(&client, 44, Method::SessionAttach { thread_id }).await,
             Response::Failure(_)
@@ -1445,6 +1466,34 @@ async fn websocket_and_unix_transports_serve_identical_seeded_operations() {
     .await;
 }
 
+#[cfg(target_os = "linux")]
+async fn effective_tool_deadline(
+    client: &driver::Driver,
+    target: rustx::app_server::protocol::AttachmentTarget,
+) -> u64 {
+    use rustx::app_server::protocol::*;
+    use rustx::local_runtime::configuration::effective_observation::EffectiveFieldName;
+    let MethodResult::EffectiveConfiguration { projection } =
+        result(client, Method::ConfigurationGet { target }).await
+    else {
+        panic!("the bound Session has an effective configuration");
+    };
+    if let Some(configuration) = projection.inline {
+        return configuration.tool_deadline.hard_deadline_ms;
+    }
+    let policy = projection
+        .fields
+        .into_iter()
+        .find(|field| field.name == EffectiveFieldName::ToolDeadline)
+        .and_then(|field| field.value)
+        .expect("the bounded Tool Deadline field");
+    policy["hardDeadlineMs"]
+        .as_str()
+        .unwrap_or_else(|| panic!("exact deadline in {policy}"))
+        .parse()
+        .expect("decimal deadline")
+}
+
 /// Product-entrance proof of the Client's private mount view: the real
 /// two-process composition serves Session A's workspace from the
 /// Client's `bwrap` bind mount, never the Server's view of the same
@@ -1456,8 +1505,10 @@ async fn websocket_and_unix_transports_serve_identical_seeded_operations() {
 #[ignore = "requires Linux mount namespace; run test-support/prove_execution_mount_view.sh"]
 async fn explicit_composition_reads_from_client_mount_namespace() {
     bounded(async {
+        use app_server_conformance::AppServerConformanceDriver as _;
         use base64::Engine as _;
         use rustx::app_server::protocol::*;
+        use rustx::local_runtime::configuration::application::{ApplyUnit, UnitApplication};
         use std::os::unix::fs::PermissionsExt;
         assert!(
             std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some(),
@@ -1479,6 +1530,8 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         // path inside the Client's mount namespace.
         let decoy = workspace.join("server-only");
         std::fs::write(&decoy, b"server-side only").unwrap();
+        let server_document = workspace.join("rustx.toml");
+        std::fs::write(&server_document, b"[server-side-invalid").unwrap();
         let (bin_dir, rustx) = isolated_server_bin();
         let bin = bin_dir.path();
         // The staged sibling is the only trusted source for the real
@@ -1531,6 +1584,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         );
 
         let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .env("TEST_KEY", "fixture")
             .spawn()
             .expect("spawn staged server");
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
@@ -1705,6 +1759,53 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             Some(ErrorData::ExecutionUnavailable)
         );
         assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        std::fs::write(
+            physical.join("rustx.toml"),
+            b"[tool_deadline_policy]\nhard_deadline_ms = 34567\n",
+        ).unwrap();
+        let target = attach(&client, f.sessions[0].clone(), 25).await;
+        assert_eq!(effective_tool_deadline(&client, target.clone()).await, 34_567);
+        std::fs::write(
+            physical.join("rustx.toml"),
+            b"[tool_deadline_policy]\nhard_deadline_ms = 45678\n",
+        ).unwrap();
+        assert!(matches!(
+            result(
+                &client,
+                Method::ConfigurationReconcile {
+                    target: rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+                        directory: workspace.clone(),
+                    },
+                },
+            )
+            .await,
+            MethodResult::ConfigurationReceipt { .. }
+        ));
+        assert!(matches!(
+            result(
+                &client,
+                Method::SessionConfiguration { session_id: f.sessions[0].clone() },
+            )
+            .await,
+            MethodResult::SessionConfiguration { projection: Some(projection) }
+                if projection.inline.as_ref().is_some_and(|application| application.desired.input_revision.is_some())
+        ));
+        loop {
+            let notification = client.next_notification().await;
+            if let NotificationMethod::ConfigurationChanged { application } = notification.notification
+                && application.scope == target.session_id.to_string()
+            {
+                let application = application.inline.expect("bounded Session application");
+                match &application.units[&ApplyUnit::ExecutionPolicy] {
+                    UnitApplication::Preparing | UnitApplication::Ready => {}
+                    UnitApplication::Applied => break,
+                    outcome => panic!("the Client's deadline policy did not settle: {outcome:?}"),
+                }
+            }
+        }
+        assert_eq!(effective_tool_deadline(&client, target).await, 45_678);
+        assert_eq!(std::fs::read(server_document).unwrap(), b"[server-side-invalid");
 
         // After the exchanges the Server's view is untouched: still no
         // marker, the decoy intact.
@@ -2240,16 +2341,16 @@ async fn attach(
     id: i64,
 ) -> rustx::app_server::protocol::AttachmentTarget {
     use rustx::app_server::protocol::*;
-    let Response::Success(response) = rpc(
+    let response = rpc(
         client,
         id,
         Method::SessionAttach {
             thread_id: app_server_conformance::thread_id(client, session).await,
         },
     )
-    .await
-    else {
-        panic!("attach")
+    .await;
+    let Response::Success(response) = response else {
+        panic!("attach failed: {response:?}")
     };
     let MethodResult::Attached { target, .. } = response.result else {
         panic!("attached")

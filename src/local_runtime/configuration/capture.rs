@@ -10,6 +10,23 @@ use super::{
     RuntimeLayer, SessionConfigInput, SessionLocations, Sha256, SourceCapture, SourceReread,
     SourceScope, UserConfigManager, UserConfigSources, application, read_bounded, repair,
 };
+use crate::local_runtime::session_runtime_manager::{
+    LocalExecutionEndpoint, WorkspaceConfiguration,
+};
+
+enum WorkspaceDocument<'a> {
+    Authored(AdmittedSource),
+    Bound {
+        endpoint: &'a LocalExecutionEndpoint,
+        path: PathBuf,
+        captured: WorkspaceConfiguration,
+    },
+}
+
+struct ConfigurationDocuments<'a> {
+    user: AdmittedSource,
+    workspace: WorkspaceDocument<'a>,
+}
 
 /// Canonical authoring identity determines the base of relative user bindings.
 pub(in crate::local_runtime) fn canonical_settings_source(path: &Path) -> Result<PathBuf, String> {
@@ -147,7 +164,16 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_at_boundary(request, credentials, || {})
+        self.capture_application_with_workspace(request, credentials, None, || {})
+    }
+
+    pub(crate) fn capture_bound_application(
+        &self,
+        request: &SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        workspace: &LocalExecutionEndpoint,
+    ) -> Result<application::CapturedApplication, String> {
+        self.capture_application_with_workspace(request, Some(credentials), Some(workspace), || {})
     }
 
     /// A Session scope's capture: its source generation, resolved and
@@ -159,10 +185,13 @@ impl UserConfigManager {
         &self,
         input: &SessionConfigInput,
         credentials: &crate::credentials::CredentialSnapshot,
+        workspace: Option<&LocalExecutionEndpoint>,
     ) -> Result<application::CapturedApplication, String> {
-        let mut captured = self.capture_application(
+        let mut captured = self.capture_application_with_workspace(
             &SessionConfigInput::new(input.cwd.clone()),
             Some(credentials),
+            workspace,
+            || {},
         )?;
         if let Ok(context) = &mut captured.context {
             context.input.model.clone_from(&input.model);
@@ -170,14 +199,25 @@ impl UserConfigManager {
         Ok(captured)
     }
 
+    #[cfg(test)]
     pub(in crate::local_runtime) fn capture_application_at_boundary(
         &self,
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
+        self.capture_application_with_workspace(request, credentials, None, after_layers)
+    }
+
+    fn capture_application_with_workspace(
+        &self,
+        request: &SessionConfigInput,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
+        workspace: Option<&LocalExecutionEndpoint>,
+        after_layers: impl FnOnce(),
+    ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
-            .capture_layers(request)
+            .capture_layers(request, workspace)
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -237,7 +277,7 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        let (layers, documents) = self.capture_layers(request)?;
+        let (layers, documents) = self.capture_layers(request, None)?;
         let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
         let prospective = self.resolve_resources(request, resolved)?;
@@ -291,27 +331,50 @@ impl UserConfigManager {
     // is structural; semantic validation belongs to the consuming domain. Both
     // documents are read through their admitted directories, which stay
     // admitted for the capture's revision fence ([`Self::verify_documents`]).
-    fn capture_layers(
+    fn capture_layers<'a>(
         &self,
         request: &SessionConfigInput,
-    ) -> Result<(LayerCapture, [AdmittedSource; 2]), LaunchFailure> {
+        endpoint: Option<&'a LocalExecutionEndpoint>,
+    ) -> Result<(LayerCapture, ConfigurationDocuments<'a>), LaunchFailure> {
         let host = &self.sources;
         let (locations, identity) = self.resolve_locations(request)?;
         let user_path = host.config_path.clone();
         let project_path = locations.workspace.join("rustx.toml");
-        let documents = [admit_source(&user_path)?, admit_source(&project_path)?];
-        let read = |source: &AdmittedSource, workspace| {
-            let bytes = source
-                .read()
-                .map_err(|error| unavailable(source.path(), client_detail(error)))?;
-            let layer = layer_of(source.path(), bytes.as_deref(), workspace)?;
-            Ok::<_, LaunchFailure>((layer, super::super::settings::revision(bytes.as_deref())))
+        let user_document = admit_source(&user_path)?;
+        let workspace_document = match endpoint {
+            None => WorkspaceDocument::Authored(admit_source(&project_path)?),
+            Some(endpoint) => {
+                if endpoint.workspace() != locations.workspace {
+                    return Err(unavailable(
+                        &project_path,
+                        "Session configuration path differs from its execution binding".into(),
+                    ));
+                }
+                let captured = read_bound_workspace(endpoint, &project_path)?;
+                WorkspaceDocument::Bound {
+                    endpoint,
+                    path: project_path.clone(),
+                    captured,
+                }
+            }
         };
-        let (user, user_revision) = read(&documents[0], false)?;
 
-        // Both ordinary documents may be absent. Typed resolution determines
-        // whether their composed configuration is complete.
-        let (project, workspace_revision) = read(&documents[1], true)?;
+        let user_bytes = read_document(&user_document)?;
+        let user = layer_of(&user_path, user_bytes.as_deref(), false)?;
+        let user_revision = super::super::settings::revision(user_bytes.as_deref());
+        let authored;
+        let project_bytes = match &workspace_document {
+            WorkspaceDocument::Authored(source) => {
+                authored = read_document(source)?;
+                authored.as_deref()
+            }
+            WorkspaceDocument::Bound { captured, .. } => captured
+                .document
+                .as_ref()
+                .map(|(bytes, _)| bytes.as_slice()),
+        };
+        let project = layer_of(&project_path, project_bytes, true)?;
+        let workspace_revision = super::super::settings::revision(project_bytes);
         let revisions = BTreeMap::from([
             (user_path.clone(), user_revision),
             (project_path.clone(), workspace_revision),
@@ -359,7 +422,10 @@ impl UserConfigManager {
                 provenance,
                 scoped_workflows,
             },
-            documents,
+            ConfigurationDocuments {
+                user: user_document,
+                workspace: workspace_document,
+            },
         ))
     }
 
@@ -378,18 +444,33 @@ impl UserConfigManager {
     )]
     fn verify_documents(
         &self,
-        documents: &[AdmittedSource; 2],
+        documents: &ConfigurationDocuments<'_>,
         revisions: &BTreeMap<PathBuf, String>,
     ) -> Result<(), LaunchFailure> {
         #[cfg(test)]
         self.test_hooks.reach("before_capture_verification");
-        for source in documents {
+        let verify = |source: &AdmittedSource| {
             let actual = super::super::settings::revision(reread(source)?.as_deref());
             if revisions.get(source.path()) != Some(&actual) {
                 return Err("configuration changed during capture; rescan to retry".into());
             }
+            Ok::<(), LaunchFailure>(())
+        };
+        verify(&documents.user)?;
+        match &documents.workspace {
+            WorkspaceDocument::Authored(source) => verify(source),
+            WorkspaceDocument::Bound {
+                endpoint,
+                path,
+                captured,
+            } => {
+                if &read_bound_workspace(endpoint, path)? == captured {
+                    Ok(())
+                } else {
+                    Err("Workspace configuration changed during capture; rescan to retry".into())
+                }
+            }
         }
-        Ok(())
     }
 
     fn resolve_captured_layers(
@@ -1043,6 +1124,21 @@ fn admit_source(path: &Path) -> Result<AdmittedSource, LaunchFailure> {
             format!("its directory cannot be reached without following a symlink: {error}"),
         )
     })
+}
+
+fn read_document(source: &AdmittedSource) -> Result<Option<Vec<u8>>, LaunchFailure> {
+    source
+        .read()
+        .map_err(|error| unavailable(source.path(), client_detail(error)))
+}
+
+fn read_bound_workspace(
+    endpoint: &LocalExecutionEndpoint,
+    path: &Path,
+) -> Result<WorkspaceConfiguration, LaunchFailure> {
+    endpoint
+        .workspace_configuration()
+        .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
 }
 
 /// A checked read of an admitted `rustx.toml` ([`AdmittedSource::reread`]).

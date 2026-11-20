@@ -523,12 +523,15 @@ impl SessionRuntimeManager {
             let paths = if let Some(paths) = retained {
                 paths
             } else {
-                // Only a fresh resolution reads sources; repair them first.
-                owner.repair_session_sources(&access.settings.input());
-                let paths = applications
-                    .lock()
-                    .initial_binding(&configuration, &access.settings.input(), &credentials, true)
-                    .map_err(error)?;
+                let input = access.settings.input();
+                let paths = if let Some(endpoint) = owner.execution.configuration_endpoint(&access.session.id)? {
+                    super::super::configuration::application::ApplicationState::initial_bound_session(
+                        &configuration, &input, &credentials, &endpoint,
+                    )
+                } else {
+                    owner.repair_session_sources(&input);
+                    applications.lock().initial_binding(&configuration, &input, &credentials, true)
+                }.map_err(error)?;
                 bindings
                     .lock()
                     .expect("Session configuration bindings")

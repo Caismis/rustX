@@ -38,7 +38,10 @@
 #    result file exists only in the physical directory. The Server's own view
 #    of the same absolute workspace path stays NotFound for the marker and the
 #    result, the Server-only decoy stays unreachable, and an unbound Session's
-#    command is refused as ExecutionUnavailable. The launcher is a fixture
+#    command is refused as ExecutionUnavailable. Cold attach uses a deadline
+#    from the Client's rustx.toml while the Server's copy is invalid. An
+#    explicit reconcile captures the Client's next authored revision.
+#    The launcher is a fixture
 #    artifact only; production resolves the sibling executable directly and
 #    has no override. This proves the App Server command/exec argv path.
 #

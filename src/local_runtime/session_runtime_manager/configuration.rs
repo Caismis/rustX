@@ -621,12 +621,27 @@ impl SessionRuntimeManager {
             .map(|(session, binding)| (session.clone(), binding.input.clone()))
             .collect();
         for (session, input) in inputs {
-            application.capture(
-                session.to_string(),
-                &input.cwd,
-                self.configuration
-                    .capture_session_application(&input, &self.credentials),
-            );
+            match self.execution.configuration_endpoint(&session) {
+                Ok(None) => application.capture(
+                    session.to_string(),
+                    &input.cwd,
+                    self.configuration
+                        .capture_session_application(&input, &self.credentials, None),
+                ),
+                endpoint => {
+                    let captured =
+                        endpoint
+                            .map_err(|error| error.to_string())
+                            .and_then(|endpoint| {
+                                self.configuration.capture_session_application(
+                                    &input,
+                                    &self.credentials,
+                                    endpoint.as_deref(),
+                                )
+                            });
+                    application.capture_bound_source(session.to_string(), &input.cwd, captured)
+                }
+            };
         }
     }
 
