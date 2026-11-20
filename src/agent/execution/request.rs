@@ -122,6 +122,18 @@ impl FrozenCarryover {
         }
     }
 
+    pub(super) fn fallbacks(&self) -> Vec<crate::context::engine::CompactionCarryover> {
+        let mut next = self.clone();
+        let mut fallbacks = Vec::new();
+        while next.degrade() {
+            fallbacks.push(crate::context::engine::CompactionCarryover {
+                level: next.level,
+                value: next.admitted(),
+            });
+        }
+        fallbacks
+    }
+
     pub(super) fn degrade(&mut self) -> bool {
         let next = match self.level {
             CarryoverDetailLevel::Full => CarryoverDetailLevel::Reduced,
@@ -209,6 +221,7 @@ impl AgentExecution<'_> {
                 "a primary model turn is prepared exactly once per turn",
             )));
         }
+        self.logical_step.deferred_compaction = None;
         self.freeze_pending_carryover()?;
         // The pending fresh inbound turn's canonical consistency is an
         // Agent Loop contract, checked before and independently of the
@@ -343,13 +356,32 @@ impl AgentExecution<'_> {
         let mut staged_context = self.stage_context(accepted)?;
         self.logical_step.context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
         self.freeze_model_media(&staged_context).await?;
+        let budgets = self.compaction_budgets();
+        let hard_input_limit = self
+            .context_runtime
+            .engine
+            .admissible_input_limit(budgets.primary_output_budget)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
         // Select once before staging; a later completion waits for the next
         // safe boundary and cannot rewrite this primary request.
-        let ready = self
-            .asynchronous
-            .as_ref()
-            .and_then(|owner| owner.take_ready());
-        let mut staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+        let coordinator = self.asynchronous.clone();
+        let ready = coordinator.as_ref().and_then(|owner| owner.take_ready());
+        let mut staged = self
+            .stage_model_turn(request_ordinal, &staged_context)
+            .or_else(|terminal| {
+                if let (
+                    Some(owner),
+                    Some(crate::context::asynchronous::CompactionDelivery::Ready(work)),
+                ) = (&coordinator, &ready)
+                {
+                    self.settle_background(
+                        owner.as_ref(),
+                        &work.admission,
+                        crate::context::asynchronous::CompactionDisposition::Defer(None),
+                    )?;
+                }
+                Err(terminal)
+            })?;
         if let Some(delivery) = ready {
             let installed = self.consume_background_compaction(
                 delivery,
@@ -359,19 +391,14 @@ impl AgentExecution<'_> {
                     estimated_input: staged.estimated_input,
                 },
                 None,
-                false,
+                staged.estimated_input > hard_input_limit
+                    || staged.projection.estimated_input.input_tokens > hard_input_limit,
             )?;
             if installed {
                 staged_context = self.pending_context()?;
                 staged = self.stage_model_turn(request_ordinal, &staged_context)?;
             }
         }
-        let budgets = self.compaction_budgets();
-        let hard_input_limit = self
-            .context_runtime
-            .engine
-            .admissible_input_limit(budgets.primary_output_budget)
-            .map_err(|error| Self::context_failure_terminal(&error))?;
         // A carryover is auxiliary continuity data. Degrade it first if that
         // alone lets the complete request pass the hard admission limit.
         while staged.estimated_input > hard_input_limit

@@ -180,26 +180,8 @@ fn read_compaction(
     context: &mut RuntimeClientContextView,
 ) -> Result<(), ConversationStoreError> {
     context.occupancy = store.observation_occupancy(cut.read.journal)?;
-    // Read bounded progress directly at the same frozen Journal cut; dense
-    // accepted chunk observations do not create separate Trace rows.
-    let kinds = [
-        "compaction_started",
-        "compaction_chunk_accepted",
-        "compaction_skipped",
-        "compaction_cancelled",
-        "compaction_failed",
-        "compaction_completed",
-    ]
-    .map(str::to_owned);
-    if let Some(latest) = store
-        .latest_observation_events(cut.read.journal, &kinds, None, 1)?
-        .pop()
-    {
-        let witness = latest.witness.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "compaction observation witness unavailable".into(),
-            )
-        })?;
+    let committed = read_latest_compaction(store, cut)?;
+    if let Some(witness) = store.latest_foreground_compaction(cut.read.journal)? {
         if witness.source_unavailable {
             return Err(ConversationStoreError::InvalidReference(
                 "compaction observation witness unavailable".into(),
@@ -214,7 +196,11 @@ fn read_compaction(
                 // a process restart; live hosts receive owner publications.
                 context.compaction_in_progress = false;
             }
-            "compaction_failed" => {
+            "compaction_failed"
+                if committed
+                    .as_ref()
+                    .is_none_or(|(sequence, _)| *sequence < witness.sequence) =>
+            {
                 context.compaction_error = witness
                     .value
                     .get("error")
@@ -235,19 +221,7 @@ fn read_compaction(
             },
         )
         .collect();
-    if context
-        .compaction_progress
-        .as_ref()
-        .is_some_and(|progress| {
-            context
-                .compaction_operations
-                .iter()
-                .any(|entry| entry.status.operation_id == progress.operation_id)
-        })
-    {
-        context.compaction_progress = None;
-    }
-    if let Some(compaction) = read_latest_compaction(store, cut)? {
+    if let Some((_, compaction)) = committed {
         context.latest_compaction = Some(compaction);
         context.compaction_count = 1;
     }
@@ -309,7 +283,7 @@ fn read_compaction_progress(
 pub(super) fn read_latest_compaction(
     store: &dyn ConversationStore,
     cut: &ObservationReadCut,
-) -> Result<Option<RuntimeClientCompactionView>, ConversationStoreError> {
+) -> Result<Option<(u64, RuntimeClientCompactionView)>, ConversationStoreError> {
     Ok(latest(
         store,
         cut,
@@ -319,7 +293,7 @@ pub(super) fn read_latest_compaction(
     )?
     .pop()
     .and_then(|fact| match fact.bootstrap {
-        Some(B::CompactionCompleted { reading }) => Some(reading.compaction),
+        Some(B::CompactionCompleted { reading }) => Some((fact.sequence, reading.compaction)),
         _ => None,
     }))
 }

@@ -37,6 +37,8 @@ pub(super) enum LogicalModelStepState {
 pub(super) struct LogicalStep {
     /// Every compaction entry for this logical step shares the original finite budget.
     pub(super) compaction_budget: Option<crate::context::compaction_budget::CompactionBudget>,
+    /// The candidate already found inadmissible at the current request boundary.
+    pub(super) deferred_compaction: Option<crate::runtime::identity::CompactionOperationId>,
     /// Workflow correction frozen for this logical generation, including recovery versions.
     pub(super) frozen_workflow_feedback: Option<String>,
     /// The semantic-generation recovery state of the current logical model
@@ -86,6 +88,7 @@ impl LogicalStep {
         Self {
             frozen_workflow_feedback,
             compaction_budget: None,
+            deferred_compaction: None,
             semantic_recovery: SemanticGenerationRecovery::default(),
             accepted_context: None,
             frozen_carryover: None,

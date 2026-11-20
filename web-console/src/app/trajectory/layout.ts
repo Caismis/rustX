@@ -94,6 +94,10 @@ export function systemPresentation(tx: Translate, record: TraceRecord): { label:
   return { label, facet };
 }
 
+export function isReadyCompaction(record: TraceRecord): boolean {
+  return record.state === 'pending' && record.compaction?.outcome == null && record.compaction?.status?.phase === 'ready';
+}
+
 export function recordLabel(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'compaction') {
     switch (record.compaction?.outcome) {
@@ -102,7 +106,7 @@ export function recordLabel(tx: Translate, record: TraceRecord): string {
       case 'superseded': return tx('trajectory:compaction.superseded');
       case 'no_effect': return tx('trajectory:compaction.no-effect');
     }
-    if (record.compaction?.status?.phase === 'ready') return tx('trajectory:compaction.ready');
+    if (isReadyCompaction(record)) return tx('trajectory:compaction.ready');
     return record.state === 'running' ? tx('trajectory:copy.compacting') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, record.state) });
   }
   return tx(`trajectory:kind.${record.kind}`);

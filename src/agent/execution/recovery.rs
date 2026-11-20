@@ -388,6 +388,8 @@ impl AgentExecution<'_> {
             tools: &tools,
             estimated_input,
         };
+        // The measured overflow establishes a new installation boundary.
+        self.logical_step.deferred_compaction = None;
         let joined = self
             .wait_for_background_compaction(&compaction_input, Some(estimate_correction))
             .await?;

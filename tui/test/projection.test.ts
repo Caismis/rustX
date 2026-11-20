@@ -1,3 +1,4 @@
+import { compactionNotice } from '../src/ui/components/status.ts';
 import { checkpointSnapshot, foldRuntimeEvent } from '../../protocol/app-server/projection.ts';
 import { checkpoint } from './support/fixtures.ts';
 import { nativeInteraction } from './support/fixtures.ts';
@@ -463,6 +464,8 @@ describe("presentation projection", () => {
         context: {
           compaction_in_progress: false,
           compaction_count: 2,
+          compaction_operations: [{ live: false, status: { operation_id: 'previous-failure', admission_generation: '1', phase: 'failed',
+            accepted_fragments: 0, diagnostic: 'previous failure', triggering_attempt_id: null, waiting_attempt_id: null } }],
           latest_compaction: {
             operation_id: "compaction-operation-2",
             generation: "2",
@@ -475,6 +478,9 @@ describe("presentation projection", () => {
       },
     ]);
 
+    assert.equal(compactionNotice(state), undefined);
+    const reopened = replaceFromSnapshot(snapshot({ context: state.context }), state.cursor);
+    assert.match(compactionNotice(reopened)!, /previous failure/);
     assert.equal(state.context.compaction_count, 2);
     assert.equal(state.context.latest_compaction?.generation, "2");
     assert.equal(

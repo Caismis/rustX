@@ -34,6 +34,24 @@ impl CompactionPolicy {
         )
     }
 
+    pub(crate) fn for_invocations(
+        primary: &crate::model::invocation::ModelInvocationView,
+        summary: &crate::model::invocation::ModelInvocationView,
+    ) -> Result<Self, ContextError> {
+        let reasoning = crate::model::invocation::reasoning_output_minimum(
+            summary.protocol,
+            &summary.request_params,
+        )
+        .map_err(|error| ContextError::new(ContextErrorKind::InvalidConfiguration, error))?;
+        Self::resolve_with_reasoning(
+            primary.context_window,
+            primary.max_output_tokens,
+            summary.context_window,
+            summary.max_output_tokens,
+            reasoning,
+        )
+    }
+
     pub(crate) fn for_models(
         model: &crate::model::session::AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {

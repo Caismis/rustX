@@ -954,6 +954,7 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
         )?
     };
     observation_state::index_compaction_operation(transaction, &persisted.event)?;
+    observation_state::index_foreground_compaction(transaction, &persisted.event)?;
     if let RuntimeEvent::CompactionOperationUpdated { status } = &persisted.event.event
         && status.phase.is_terminal()
         && status.phase != crate::context::operation::CompactionOperationPhase::Committed
@@ -1353,6 +1354,15 @@ fn validate_compaction_status(
     transaction: &Transaction<'_>,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    if let RuntimeEvent::CompactionFailed { operation_id, .. }
+    | RuntimeEvent::CompactionCancelled { operation_id }
+    | RuntimeEvent::CompactionSkipped { operation_id } = &envelope.event
+        && observation_state::is_proactive_operation(transaction, operation_id)?
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "proactive compaction requires an operation status for terminal settlement".into(),
+        ));
+    }
     let RuntimeEvent::CompactionOperationUpdated { status } = &envelope.event else {
         return Ok(());
     };
@@ -1605,6 +1615,12 @@ fn validate_compaction_progress(
             &mut remaining_records,
             &mut remaining_bytes,
         )?;
+        if !matches!(&call.input, crate::model::auxiliary::AuxiliaryInputEvidence::Compaction { source_ranges, .. } if source_ranges.is_empty())
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "intermediate Summary reduction contains unaccepted source ranges".into(),
+            ));
+        }
     }
     Err(ConversationStoreError::ResourceBoundExceeded(
         "compaction progress Summary chain exceeds its bound".into(),

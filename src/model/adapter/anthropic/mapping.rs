@@ -153,40 +153,82 @@ pub(crate) fn normalize_http_error(
     .normalized()
 }
 
+/// Which fields in the actual `output_config` are owned by the native schema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeFormat {
+    Absent,
+    FormatOnly,
+    WithSiblings,
+}
+
+impl NativeFormat {
+    pub(super) fn from_request(request: &crate::model::ModelRequest) -> Self {
+        if !request
+            .response_schema
+            .as_ref()
+            .is_some_and(crate::model::structured::PreparedResponseSchema::is_native)
+        {
+            return Self::Absent;
+        }
+        if request
+            .request_params()
+            .get("output_config")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|params| !params.is_empty())
+        {
+            Self::WithSiblings
+        } else {
+            Self::FormatOnly
+        }
+    }
+}
+
 /// Classify only explicit structured rejection of the actual native format.
-pub(crate) fn is_native_format_rejection(
+pub(super) fn is_native_format_rejection(
+    native: NativeFormat,
     provider_type: Option<&str>,
     code: Option<&str>,
     param: Option<&str>,
     message: &str,
 ) -> bool {
-    provider_type == Some("invalid_request_error")
-        && ((matches!(code, Some("unsupported_parameter" | "unsupported_value"))
-            && matches!(
-                param,
-                Some("output_config.format" | "output_config.format.type")
-            ))
-            || (matches!(
-                code,
-                None | Some("unsupported_parameter" | "unsupported_value")
-            ) && matches!(
-                param,
-                None | Some("output_config.format" | "output_config.format.type")
-            ) && (crate::model::adapter::structured::explicit_format_rejection_message(
-                message,
-                "output_config.format",
-            ) || message.trim()
-                == "output_config.format: Extra inputs are not permitted")))
+    if native == NativeFormat::Absent || provider_type != Some("invalid_request_error") {
+        return false;
+    }
+    let field = "output_config.format";
+    let owns_parent = native == NativeFormat::FormatOnly;
+    if code == Some("unsupported_parameter")
+        && (param == Some(field) || (owns_parent && param == Some("output_config")))
+    {
+        return true;
+    }
+    if code == Some("unsupported_value") && param == Some("output_config.format.type") {
+        return true;
+    }
+    let matches_field = |name: &str| {
+        crate::model::adapter::structured::explicit_format_rejection_message(message, name)
+            || message.trim().trim_end_matches('.')
+                == format!("{name}: Extra inputs are not permitted")
+    };
+    matches!(
+        code,
+        None | Some("invalid_request_error" | "unsupported_parameter" | "unsupported_value")
+    ) && ((matches!(
+        param,
+        None | Some("output_config.format" | "output_config.format.type")
+    ) && matches_field(field))
+        || (owns_parent
+            && matches!(param, None | Some("output_config"))
+            && matches_field("output_config")))
 }
 
-pub(crate) fn normalize_http_error_for_format(
+pub(super) fn normalize_http_error_for_format(
     status: StatusCode,
     headers: &HeaderMap,
     body: &[u8],
-    native_format: bool,
+    native_format: NativeFormat,
 ) -> ModelError {
     let mut error = normalize_http_error(status, headers, body);
-    if native_format
+    if native_format != NativeFormat::Absent
         && status == StatusCode::BAD_REQUEST
         && error.kind == ModelErrorKind::InvalidRequest
     {
@@ -196,6 +238,7 @@ pub(crate) fn normalize_http_error_for_format(
             .map(|root| root.get("error").filter(|v| v.is_object()).unwrap_or(root));
         if detail.is_some_and(|detail| {
             is_native_format_rejection(
+                native_format,
                 detail.get("type").and_then(serde_json::Value::as_str),
                 detail.get("code").and_then(serde_json::Value::as_str),
                 detail.get("param").and_then(serde_json::Value::as_str),
@@ -1234,13 +1277,21 @@ mod tests {
                         status,
                         &headers,
                         body.as_bytes(),
-                        native,
+                        if native {
+                            super::NativeFormat::FormatOnly
+                        } else {
+                            super::NativeFormat::Absent
+                        },
                     )
                     .kind
                 };
                 assert_eq!(
                     classify(reqwest::StatusCode::BAD_REQUEST, true),
-                    ModelErrorKind::NativeFormatUnsupported
+                    if (code == "unsupported_parameter") == (param == "output_config.format") {
+                        ModelErrorKind::NativeFormatUnsupported
+                    } else {
+                        ModelErrorKind::InvalidRequest
+                    }
                 );
                 assert_eq!(
                     classify(reqwest::StatusCode::BAD_REQUEST, false),
@@ -1256,6 +1307,26 @@ mod tests {
                 );
             }
         }
+        for (scope, field, expected) in [
+            (super::NativeFormat::FormatOnly, "output_config", true),
+            (super::NativeFormat::WithSiblings, "output_config", false),
+            (
+                super::NativeFormat::WithSiblings,
+                "output_config.format",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                super::is_native_format_rejection(
+                    scope,
+                    Some("invalid_request_error"),
+                    Some("invalid_request_error"),
+                    None,
+                    &format!("{field}: Extra inputs are not permitted.")
+                ),
+                expected
+            );
+        }
         for body in [
             r#"{"error":{"type":"invalid_request_error","code":"unsupported_parameter","param":"thinking","message":"output_config.format"}}"#,
             r#"{"error":{"type":"invalid_request_error","message":"unsupported output_config.format"}}"#,
@@ -1265,7 +1336,7 @@ mod tests {
                 reqwest::StatusCode::BAD_REQUEST,
                 &headers,
                 body.as_bytes(),
-                true,
+                super::NativeFormat::FormatOnly,
             );
             assert_ne!(error.kind, ModelErrorKind::NativeFormatUnsupported);
         }

@@ -217,7 +217,10 @@ export class SessionControls {
         this.port.setSession(id, { compactionRequest: undefined });
       } else {
         const evidence = snapshot.context?.manual_compaction;
-        if (evidence?.request_id === request.requestId && evidence.released) {
+        if (snapshot.context?.compaction_in_progress && (!evidence || evidence.released || evidence.request_id !== request.requestId)
+          && !['submitting', 'uncertain'].includes(request.status)) {
+          this.port.setSession(id, { compactionRequest: undefined });
+        } else if (evidence?.request_id === request.requestId && evidence.released) {
           // Native release ends gesture ownership independently of the RPC reply.
           if (this.compactionRequests.get(id)?.requestId === request.requestId) this.compactionRequests.delete(id);
           if (!['succeeded', 'skipped', 'cancelled'].includes(request.status)) this.port.setSession(id, { compactionRequest: { ...request, status: evidence.error ? 'failed' : evidence.cancelled ? 'cancelled' : evidence.skipped ? 'skipped' : 'succeeded', diagnostic: evidence.error ?? undefined } });

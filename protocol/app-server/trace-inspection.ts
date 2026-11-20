@@ -1,10 +1,16 @@
-import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v82.ts';
+import type {CheckpointPage,TraceInspectionCompactionCall,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v82.ts';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const userSource=(value:unknown)=>value==='human'||value==='fleet'||value==='external_system'||value==='runtime'||object(value)&&(object(value.agent)&&typeof value.agent.agent_id==='string'||object(value.extension)&&typeof value.extension.contributor==='string');
 const coordinate=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const count=(value:unknown):value is string=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
 const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'compaction',background:'lifecycle',subagent:'lifecycle',workflow:'workflow',interaction:'lifecycle',configuration:'lifecycle'} satisfies Record<TraceKind,string>;
+
+export function traceCompactionCall(call:unknown, domain:string, previous:bigint): TraceInspectionCompactionCall {
+ if(!object(call)||typeof call.call_id!=='string'||!count(call.started_sequence)||BigInt(call.started_sequence)<=previous
+  ||call.requests_domain!==`${domain}.${call.call_id}.requests`||!count(call.request_count))throw Error('Original Compaction Call identity changed.');
+ return call as unknown as TraceInspectionCompactionCall;
+}
 
 /** Decode only the complete native finite head, never a partial original TraceDetail. */
 export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceInspectionHead|undefined {
@@ -39,10 +45,8 @@ export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceIn
   const items=collection.items;
   if(BigInt(items.length)>BigInt(collection.total)||((collection.next_offset!=null)!==(BigInt(items.length)<BigInt(collection.total))))throw Error('Original Compaction Call collection did not advance.');
   let previous=0n;
-  for(const call of items){
-   if(!object(call)||typeof call.call_id!=='string'||!count(call.started_sequence)||BigInt(call.started_sequence)<=previous
-    ||call.requests_domain!==`${collection.domain}.${call.call_id}.requests`||!count(call.request_count))throw Error('Original Compaction Call identity changed.');
-   previous=BigInt(call.started_sequence);
+  for(const item of items){
+   previous=BigInt(traceCompactionCall(item, collection.domain, previous).started_sequence);
   }
   if(collection.next_offset!=null&&BigInt(collection.next_offset)!==previous)throw Error('Original Compaction Call cursor changed.');
  }else if(content.type==='messages'){

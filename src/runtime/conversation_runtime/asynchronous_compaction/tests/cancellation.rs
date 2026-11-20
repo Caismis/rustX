@@ -75,7 +75,7 @@ async fn selected_work() -> SelectedWork {
     }
 }
 
-fn install_gate(
+pub(super) fn install_gate(
     slot: &Mutex<Option<ArbitrationTestGate>>,
 ) -> (
     tokio::sync::oneshot::Receiver<()>,

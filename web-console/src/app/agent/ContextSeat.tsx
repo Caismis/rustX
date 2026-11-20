@@ -36,12 +36,11 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
   const foreground = !!context?.compaction_in_progress && !operations.some(operation => operation.status.operation_id === progress?.operation_id);
   const joinedRequest = foreground && facts.request && ['submitting', 'uncertain'].includes(facts.request.status)
     && context?.manual_compaction?.request_id === facts.request.requestId && !context.manual_compaction.released;
-  // Typed independent outcomes have their own seats. The unscoped latest
-  // diagnostic cannot identify a second operation; foreground failures also
-  // retain their native Attempt outcome in the conversation.
+  const duplicateFailure = visible.some(({ status }) => status.phase === 'failed' && status.diagnostic === context?.compaction_error);
   const manualContext = context && { ...context, compaction_in_progress: false,
-    compaction_error: context.manual_compaction?.error ?? (operations.length ? undefined : context.compaction_error) };
-  const presentation = joinedRequest ? undefined : compactionPresentation(manualContext, facts.request);
+    compaction_error: duplicateFailure ? undefined : context.compaction_error };
+  const pendingRequest = facts.request?.status === 'submitting' || facts.request?.status === 'uncertain';
+  const presentation = foreground && (joinedRequest || !pendingRequest) ? undefined : compactionPresentation(manualContext, facts.request);
   const head = context?.projection_head;
   const manual = presentation?.state === 'succeeded' && head ? undefined : presentation;
   if (!visible.length && !foreground && !manual) return null;

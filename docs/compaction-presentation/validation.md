@@ -39,8 +39,8 @@ filesystem and repository comparators. Build production client companions with
 `test-support/prepare_native_tests.py`, matching Cargo flags and emitted artifact
 identities for the exact checkout, target, profile and feature set.
 
-App Server v81 and Runtime Client v88 carry the read-only committed-checkpoint
-inspection addition. SQLite remains 90 and Child IPC remains v40. Rust owns
+The integrated checkpoint inspection contract uses App Server v82, Runtime
+Client v89, SQLite schema 116 and Child IPC v40. Rust owns
 schemas; regenerate the protocol pair and fixtures, typecheck all consumers,
 and verify generation drift against the Git index.
 

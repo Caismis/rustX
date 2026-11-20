@@ -154,19 +154,8 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
     let (primary, auxiliary) =
         crate::model::session::analyze_session_model_config(&parsed, config.initial_model())
             .map_err(|_| "invalid model selection")?;
-    let reasoning = crate::model::invocation::reasoning_output_minimum(
-        auxiliary.protocol,
-        &auxiliary.request_params,
-    )
-    .map_err(|_| "invalid summary reasoning budget")?;
-    crate::context::policy::CompactionPolicy::resolve_with_reasoning(
-        primary.context_window,
-        primary.max_output_tokens,
-        auxiliary.context_window,
-        auxiliary.max_output_tokens,
-        reasoning,
-    )
-    .map_err(|_| "declared model limits cannot fit native context budgets")?;
+    crate::context::policy::CompactionPolicy::for_invocations(&primary, &auxiliary)
+        .map_err(|_| "declared model limits cannot fit native context budgets")?;
     Ok([settings_bytes])
 }
 

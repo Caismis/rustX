@@ -445,7 +445,7 @@ fn local_snapshot(
                 format!("auxiliary Summary request query: {error}"),
             )
         })?;
-    let record_limit = remaining_records.min(remaining_bytes / AUXILIARY_AUDIT_RECORD_ENCODED_MAX);
+    let record_limit = remaining_records.min(remaining_bytes);
     if record_limit == 0 {
         return Err(ConversationStoreError::ResourceBoundExceeded(
             "auxiliary Summary closure has no remaining record budget".into(),
@@ -842,19 +842,17 @@ fn local_snapshot(
     } else {
         AuxiliaryAuditCompleteness::OpenAtCut
     };
-    let encoded_bytes = records
-        .len()
-        .checked_mul(AUXILIARY_AUDIT_RECORD_ENCODED_MAX)
-        .ok_or_else(|| storage("auxiliary Summary byte count overflow"))?;
+    let value = AuxiliaryAuditSnapshot {
+        origin: AuxiliaryAuditOrigin::Local,
+        source_conversation_id: conversation_id.clone(),
+        call_id: reference.call_id.clone(),
+        through_journal: cut.journal,
+        completeness,
+        records,
+    };
+    let encoded_bytes = bounded_encoded_len(&value, remaining_bytes)?;
     Ok(AuditedSnapshot {
-        value: AuxiliaryAuditSnapshot {
-            origin: AuxiliaryAuditOrigin::Local,
-            source_conversation_id: conversation_id.clone(),
-            call_id: reference.call_id.clone(),
-            through_journal: cut.journal,
-            completeness,
-            records,
-        },
+        value,
         encoded_bytes,
     })
 }

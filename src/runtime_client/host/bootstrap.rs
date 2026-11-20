@@ -116,7 +116,7 @@ pub(super) fn bootstrap_live_projection(
         let initialized = durable_bootstrap::read_latest_compaction(store, &cut)
             .and_then(|compaction| {
                 let operations = store.latest_compaction_operations(cut.read.journal)?;
-                Ok((compaction, operations))
+                Ok((compaction.map(|(_, view)| view), operations))
             })
             .map_err(RuntimeClientError::observation_store_error)
             .and_then(|(compaction, operations)| {

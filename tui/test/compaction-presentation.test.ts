@@ -30,6 +30,8 @@ it('uses one updating work label and a static Ready/terminal notice across Attem
   state.context.compaction_operations = [operation('ready')];
   assert.equal(workingStatus(state), undefined);
   assert.equal(compactionNotice(state), 'Context summary ready');
+  state.context.compaction_operations.push(operation('generating'));
+  assert.equal(compactionNotice(state), 'Context summary ready');
   state.context.compaction_operations = [operation('no_effect', false)];
   assert.equal(workingStatus(state), undefined);
   assert.equal(compactionNotice(state), 'Context summary not applied');

@@ -68,7 +68,9 @@ export function backgroundCompactionStatus(state: PresentationState): string | u
 
 /** Readiness and terminal outcomes are static facts, not a working spinner. */
 export function compactionNotice(state: PresentationState): string | undefined {
-  const operation = state.context.compaction_operations?.at(-1);
+  const operation = state.context.compaction_operations?.findLast(({status, live}) =>
+    !state.dismissedCompactionNotices?.includes(status.operation_id)
+      && (!live || !['generating', 'retrying', 'foreground_waiting'].includes(status.phase)));
   if (!operation) return undefined;
   const { status, live } = operation;
   if (!live && ['generating', 'retrying', 'foreground_waiting', 'ready'].includes(status.phase)) return 'Previous context summary is no longer active';

@@ -35,7 +35,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Artifact } from '../components/Artifact';
 import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
-import { isBetweenTurnsItem, recordLabel, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
+import { isBetweenTurnsItem, isReadyCompaction, recordLabel, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
 import css from './Trajectory.module.css';
 import { useWorkflowNodeContent } from './useWorkflowNodeContent';
@@ -750,7 +750,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     if (record.kind === 'compaction') {
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-          <div><dt>{tx('trajectory:details.status')}</dt>{record.compaction?.outcome != null || record.compaction?.status?.phase === 'ready'
+          <div><dt>{tx('trajectory:details.status')}</dt>{record.compaction?.outcome != null || isReadyCompaction(record)
             ? <dd className={state === 'error' ? css.error : undefined}>{recordLabel(tx, record)}</dd>
             : <StatusValue state={state} nativeState={record.state} />}</div>
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>

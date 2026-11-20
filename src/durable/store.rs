@@ -111,6 +111,19 @@ pub enum ConversationStoreError {
     Storage(String),
 }
 
+impl From<crate::context::checkpoint::CheckpointError> for ConversationStoreError {
+    fn from(error: crate::context::checkpoint::CheckpointError) -> Self {
+        match error {
+            crate::context::checkpoint::CheckpointError::Capacity(message) => {
+                Self::ResourceBoundExceeded(message.into())
+            }
+            crate::context::checkpoint::CheckpointError::Invalid(message) => {
+                Self::InvalidReference(message)
+            }
+        }
+    }
+}
+
 impl core::fmt::Display for ConversationStoreError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

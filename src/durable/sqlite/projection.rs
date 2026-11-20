@@ -145,7 +145,7 @@ fn candidate(
     #[cfg(test)]
     CANDIDATE_DECODES.with(|n| n.set(n.get() + 1));
     let value: CheckpointCandidate = decode(&json, "checkpoint content")?;
-    value.validate_budget().map_err(invalid)?;
+    value.validate_budget()?;
     if value.checkpoint_id != *id || value.fingerprint() != fingerprint {
         return Err(invalid("corrupted checkpoint content"));
     }
@@ -959,9 +959,7 @@ pub(super) fn validate_dependencies(
             body_required,
             ResourceLimits::default(),
         )
-        .map_err(|e| e.to_string())
-    })
-    .map_err(invalid)?;
+    })?;
     if let Some(metadata) = &value.summary_metadata {
         validate_summary_metadata(connection, scope, value, metadata)?;
     }
@@ -1090,7 +1088,7 @@ pub(super) fn commit(
     if input.grant.operation_id() != &input.operation_id {
         return Err(invalid("foreign compaction commit grant"));
     }
-    input.candidate.validate_budget().map_err(invalid)?;
+    input.candidate.validate_budget()?;
     let fingerprint = input.candidate.fingerprint();
     if let Some(receipt) = receipt(transaction, &input.operation_id, &fingerprint)? {
         return Ok(receipt);
@@ -1524,9 +1522,7 @@ fn compile_history_with_bodies(
                 body_required,
                 ResourceLimits::default(),
             )
-            .map_err(|e| e.to_string())
-        })
-        .map_err(invalid)?;
+        })?;
         let mut origins = std::collections::HashMap::new();
         for tool in &compiled.tools {
             let item = &checkpoint.candidate.items[tool.call.message.item_index as usize];

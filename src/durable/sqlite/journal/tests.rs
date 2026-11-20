@@ -90,6 +90,24 @@ fn proactive_admission_commits_start_and_status_together_or_neither() {
 
     let (first, second) = store.append_compaction_admission(started, status).unwrap();
     assert_eq!(second.sequence, first.sequence + 1);
+    for event in [
+        RuntimeEvent::CompactionCancelled {
+            operation_id: CompactionOperationId::new("atomic-proactive-admission"),
+        },
+        RuntimeEvent::CompactionSkipped {
+            operation_id: CompactionOperationId::new("atomic-proactive-admission"),
+        },
+        RuntimeEvent::CompactionFailed {
+            operation_id: CompactionOperationId::new("atomic-proactive-admission"),
+            error: "foreground-only".into(),
+        },
+    ] {
+        assert!(matches!(
+            store.append_event(envelope(&conversation, "invalid-terminal", None, event)),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+    }
+
     let events = store.read_events(None, 8).unwrap().events;
     assert_eq!(events, vec![first, second]);
     assert_eq!(

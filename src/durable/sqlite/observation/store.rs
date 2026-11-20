@@ -1064,6 +1064,26 @@ impl ObservationStore for SqliteConversationStore {
         let connection = self.lock()?;
         observation::latest_events(&connection, through, kinds, attempt, limit)
     }
+    fn latest_foreground_compaction(
+        &self,
+        through: u64,
+    ) -> Result<Option<crate::durable::observation::ObservationEventWitness>, ConversationStoreError>
+    {
+        use crate::durable::sqlite::statements::FixedStatements as _;
+        use rusqlite::OptionalExtension;
+        let connection = self.lock()?;
+        let sequence: Option<u64> = connection.query_row_cached("SELECT journal_sequence FROM state_observation_sources INDEXED BY state_observation_journal_idx WHERE domain='foreground_compaction' AND journal_sequence<=?1 ORDER BY journal_sequence DESC LIMIT 1",
+            [crate::durable::sqlite::seq_to_i64(through)?], |row| row.get(0)).optional().map_err(|error| ConversationStoreError::Storage(error.to_string()))?;
+        sequence
+            .map(|sequence| {
+                observation_event::witness(&connection, sequence, through)?.ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "missing foreground compaction witness".into(),
+                    )
+                })
+            })
+            .transpose()
+    }
     fn compaction_start_mode_before(
         &self,
         operation_id: &crate::runtime::identity::CompactionOperationId,

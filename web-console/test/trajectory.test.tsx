@@ -372,13 +372,23 @@ it.each(['en', 'zh'] as const)('non-committed compaction outcomes do not claim a
 
 it.each(['ready', 'superseded', 'no_effect'] as const)('compaction Inspector preserves the native %s state shown in the ledger', phase => {
   const ready = phase === 'ready';
-  const record = traceRecord(21, { kind: 'compaction', request: null, has_detail: false, state: ready ? 'running' : 'completed',
+  const record = traceRecord(21, { kind: 'compaction', request: null, has_detail: false, state: ready ? 'pending' : 'completed',
     compaction: { mode: 'proactive', status: { operation_id: 'op', admission_generation: '1', triggering_attempt_id: null,
       waiting_attempt_id: null, phase, accepted_fragments: 1, diagnostic: null }, outcome: ready ? null : phase } });
   show(cacheOf([record]));
   fireEvent.click(row('RecordRow', record.id));
   const status = within(screen.getByRole('tabpanel')).getByText('Status').nextElementSibling;
   expect(status?.textContent).toBe(recordLabel(translator('en'), record));
+});
+
+it.each(['interrupted', 'failed', 'cancelled'] as const)('does not label a %s Summary as ready', state => {
+  const record = traceRecord(21, { kind: 'compaction', request: null, state,
+    compaction: { mode: 'proactive', outcome: state === 'interrupted' ? null : state, status: {
+      operation_id: 'op', admission_generation: '1', triggering_attempt_id: null, waiting_attempt_id: null,
+      phase: 'ready', accepted_fragments: 1, diagnostic: null,
+    } } });
+  const tx = translator('en');
+  expect(recordLabel(tx, record)).not.toBe(tx('trajectory:compaction.ready'));
 });
 
 it('T1-09 search reveals both collapsed kinds without any detail/history reads', () => {

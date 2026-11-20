@@ -271,7 +271,14 @@ fn terminal_fields(
         Event::ToolExecutionCompleted { result, .. } => {
             value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::observation::bounded::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
         }
-        Event::ToolExecutionFailed { error, .. } | Event::CompactionFailed { error, .. } => {
+        Event::CompactionFailed {
+            error,
+            operation_id,
+        } => {
+            value["operation_id"] = serde_json::json!(operation_id);
+            value["error"] = serde_json::json!(prefix(error));
+        }
+        Event::ToolExecutionFailed { error, .. } => {
             value["error"] = serde_json::json!(prefix(error));
         }
         Event::WorkflowFailed {

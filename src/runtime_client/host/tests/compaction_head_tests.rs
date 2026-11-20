@@ -664,6 +664,7 @@ async fn manual_compaction_lost_stdio_response_reconciles_without_replaying_oper
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One frozen journal cut covers foreground and background owners.
 fn cold_status_reads_two_admissions_at_cut_and_never_claims_live_work() {
     use crate::context::operation::{
         CompactionMode, CompactionOperationPhase as Phase, CompactionOperationStatus,
@@ -696,6 +697,16 @@ fn cold_status_reads_two_admissions_at_cut_and_never_claims_live_work() {
             accepted_fragments,
             diagnostic: None,
         };
+    append(RuntimeEvent::CompactionStarted {
+        operation_id: CompactionOperationId::new("foreground"),
+        mode: CompactionMode::Manual,
+    })
+    .unwrap();
+    append(RuntimeEvent::CompactionFailed {
+        operation_id: CompactionOperationId::new("foreground"),
+        error: "foreground failure".into(),
+    })
+    .unwrap();
     for (id, generation) in [("a", 1), ("b", 2)] {
         store
             .append_compaction_admission(
@@ -722,6 +733,10 @@ fn cold_status_reads_two_admissions_at_cut_and_never_claims_live_work() {
     assert_eq!(historical[1].accepted_fragments, 0);
     let current = store.observation_read_cut().unwrap();
     let read = super::super::durable_bootstrap::read(&store, &current).unwrap();
+    assert_eq!(
+        read.context.compaction_error.as_deref(),
+        Some("foreground failure")
+    );
     assert_eq!(read.context.compaction_operations.len(), 2);
     assert_eq!(
         read.context.compaction_operations[1]

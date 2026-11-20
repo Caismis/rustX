@@ -36,7 +36,7 @@ use crate::tools::types::ToolCallStart;
 
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
-    invalid_request, is_native_format_rejection, is_refusal, map_finish_reason,
+    NativeFormat, invalid_request, is_native_format_rejection, is_refusal, map_finish_reason,
     normalize_http_error_for_format, normalize_usage, stream_retry_disposition,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
@@ -124,12 +124,8 @@ impl ModelAdapter for AnthropicMessagesAdapter {
             http_client: self.http_client.clone(),
             response_byte_limit: input.response_byte_limit,
             wire_request: body,
-            normalizer: AnthropicStreamNormalizer::new(tools).with_native_format(
-                input
-                    .response_schema
-                    .as_ref()
-                    .is_some_and(crate::model::structured::PreparedResponseSchema::is_native),
-            ),
+            normalizer: AnthropicStreamNormalizer::new(tools)
+                .with_native_format(NativeFormat::from_request(&input)),
             cancellation,
         };
         Box::pin(futures_util::stream::unfold(state, anthropic_phase_next))
@@ -263,7 +259,7 @@ async fn open_stream(
     http_client: &reqwest::Client,
     wire_request: bytes::Bytes,
     response_byte_limit: Option<usize>,
-    native_format: bool,
+    native_format: NativeFormat,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
     let send = http_client
@@ -508,7 +504,7 @@ enum AnthropicBlockState {
 #[derive(Debug)]
 struct AnthropicStreamNormalizer {
     tools: std::sync::Arc<ValidatedTools>,
-    native_format: bool,
+    native_format: NativeFormat,
     blocks: BlockAllocator<AnthropicBlockKey>,
     block_states: BTreeMap<u32, AnthropicBlockState>,
     message_start_usage: Option<WireUsage>,
@@ -523,7 +519,7 @@ struct AnthropicStreamNormalizer {
 impl AnthropicStreamNormalizer {
     fn new(tools: std::sync::Arc<ValidatedTools>) -> Self {
         Self {
-            native_format: false,
+            native_format: NativeFormat::Absent,
             tools,
             blocks: BlockAllocator::new(),
             block_states: BTreeMap::new(),
@@ -537,7 +533,7 @@ impl AnthropicStreamNormalizer {
         }
     }
 
-    fn with_native_format(mut self, native_format: bool) -> Self {
+    fn with_native_format(mut self, native_format: NativeFormat) -> Self {
         self.native_format = native_format;
         self
     }
@@ -643,21 +639,19 @@ impl AnthropicStreamNormalizer {
                     .or_else(|| error.error_type.clone());
                 let mut kind =
                     stream_error_kind(provider_code.as_deref(), error.message.as_deref());
-                if self.native_format
-                    && matches!(
-                        kind,
-                        ModelErrorKind::InvalidRequest | ModelErrorKind::ProviderError
-                    )
-                    && is_native_format_rejection(
-                        error.error_type.as_deref(),
-                        error
-                            .code
-                            .as_deref()
-                            .or(error.precise_error_type.as_deref()),
-                        error.param.as_deref(),
-                        error.message.as_deref().unwrap_or_default(),
-                    )
-                {
+                if matches!(
+                    kind,
+                    ModelErrorKind::InvalidRequest | ModelErrorKind::ProviderError
+                ) && is_native_format_rejection(
+                    self.native_format,
+                    error.error_type.as_deref(),
+                    error
+                        .code
+                        .as_deref()
+                        .or(error.precise_error_type.as_deref()),
+                    error.param.as_deref(),
+                    error.message.as_deref().unwrap_or_default(),
+                ) {
                     kind = ModelErrorKind::NativeFormatUnsupported;
                 }
                 let retry_disposition = if kind == ModelErrorKind::NativeFormatUnsupported {
@@ -1269,7 +1263,11 @@ mod native_format_error_tests {
                 .unwrap()
                 .into(),
             )
-            .with_native_format(enabled)
+            .with_native_format(if enabled {
+                super::NativeFormat::FormatOnly
+            } else {
+                super::NativeFormat::Absent
+            })
         };
         let classify = |body: &str, enabled| native(enabled).push_events(body).unwrap_err().kind;
         let valid = r#"{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_value","param":"output_config.format.type","message":"rejected"}}"#;

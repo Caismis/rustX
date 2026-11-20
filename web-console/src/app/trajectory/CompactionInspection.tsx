@@ -25,6 +25,7 @@ export function CompactionInspection({ initial, checkpoint, cut, reader, accepte
   const selectedId = selection?.owner === owner ? selection.call.call_id : collection.items[0]?.call_id;
   const call = collection.items.find(item => item.call_id === selectedId)
     ?? (located?.identity === identity && located.call?.call_id === selectedId ? located.call : undefined);
+  const lookupError = located?.identity === identity ? located.error : undefined;
   const latest = useRef({ identity, reader, selectedId }); latest.current = { identity, reader, selectedId };
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -87,7 +88,7 @@ export function CompactionInspection({ initial, checkpoint, cut, reader, accepte
     </label> : <p>{tx('trajectory:compaction.no-requests')}</p>}
     {collection.next != null && <Button disabled={collection.busy} onClick={() => { void loadMore(); }}>{tx(collection.busy ? 'trajectory:compaction.loading' : 'trajectory:compaction.more-calls')}</Button>}
     {collection.error && <p role="alert">{collection.error}</p>}
-    {!call && selectedId && <p role={located?.error ? 'alert' : 'status'}>{located?.identity === identity && located.error || tx('trajectory:compaction.loading')} <Button onClick={() => setRetry(value => value + 1)}>{tx('trajectory:compaction.retry')}</Button></p>}
+    {!call && selectedId && <p role={lookupError ? 'alert' : 'status'}>{lookupError ?? tx('trajectory:compaction.loading')} {lookupError && <Button onClick={() => { setLocated(undefined); setRetry(value => value + 1); }}>{tx('trajectory:compaction.retry')}</Button>}</p>}
     {call && <PhysicalRequests call={call} cut={cut} reader={reader} owner={owner}/>}
   </section>;
 }
@@ -130,7 +131,7 @@ function PhysicalRequests({ call, cut, reader, owner }: { call: TraceInspectionC
       <div><dt>{tx('trajectory:compaction.previous-summary')}</dt><dd>{call.previous_summary?.call_id ?? '—'}</dd></div>
     </dl>
     {(!shown || shown.identity !== identity) && <p role="status">{tx(shown?.items ? 'trajectory:compaction.refreshing' : 'trajectory:compaction.loading')}</p>}
-    {shown?.error && <p role="alert">{shown.error} <Button onClick={() => setRetry(value => value + 1)}>{tx('trajectory:compaction.retry')}</Button></p>}
+    {shown?.error && <p role="alert">{shown.error} <Button onClick={() => { setLocated(undefined); setRetry(value => value + 1); }}>{tx('trajectory:compaction.retry')}</Button></p>}
     {shown?.items?.map(request => <div className={css.request} key={request.id} data-compaction-request={request.id}>
       <h4>{tx('trajectory:compaction.physical-request')} {request.ordinal + 1}</h4>
       <dl className={css.facts}>

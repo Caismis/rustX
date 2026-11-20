@@ -372,10 +372,7 @@ impl LineageSeed {
     ) -> Result<Self, ConversationStoreError> {
         let mut previous = crate::context::checkpoint::ProjectionActivationId(0);
         for checkpoint in &projections {
-            checkpoint
-                .candidate
-                .validate_budget()
-                .map_err(ConversationStoreError::InvalidReference)?;
+            checkpoint.candidate.validate_budget()?;
             if checkpoint.fingerprint != checkpoint.candidate.fingerprint()
                 || checkpoint.activation.activation <= previous
                 || checkpoint.activation.destination_installation.is_none()

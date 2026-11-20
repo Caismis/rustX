@@ -63,8 +63,8 @@ The read-only Trace integration adds the exact committed checkpoint header to
 its existing inspection head. It searches the selected operation's completion
 through the frozen journal cut, verifies the operation/checkpoint/activation
 relation, and reads the finite immutable activation header. Ready and future
-completion cannot provide this relation. App Server v81 and Runtime Client v88
-describe this addition; SQLite remains 90 and Child IPC remains v40.
+completion cannot provide this relation. The integrated contract uses App Server v82, Runtime Client v89,
+SQLite schema 116 and Child IPC v40.
 
 ## Immutable references
 

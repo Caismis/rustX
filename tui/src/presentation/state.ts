@@ -196,6 +196,8 @@ export interface PresentationState {
    */
   statuses: AgentStatusView[];
   context: RuntimeClientContextView;
+  /** Terminal Summary notices already superseded by a locally observed checkpoint. */
+  dismissedCompactionNotices?: readonly string[];
   capabilities: CapabilityView;
   /** The active runtime resource generation: context files, agent profile. */
   resources: RuntimeClientResourcesView;

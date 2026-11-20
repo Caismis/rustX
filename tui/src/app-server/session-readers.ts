@@ -1,6 +1,6 @@
 import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity.ts';
 import { ContentCache } from '../../../protocol/app-server/content-cache.ts';
-import {traceInspectionHead,traceInspectionMessage,validateCanonicalInspectionPage} from '../../../protocol/app-server/trace-inspection.ts';
+import {traceCompactionCall,traceInspectionHead,traceInspectionMessage,validateCanonicalInspectionPage} from '../../../protocol/app-server/trace-inspection.ts';
 import {traceFields,traceFieldKey} from '../../../protocol/app-server/trace-identity.ts';
 import {readTraceSelectedWindow,readTraceFieldWindow} from '../../../protocol/app-server/trace-field.ts';
 import { messageDescriptor } from '../../../protocol/app-server/message-descriptor.ts';
@@ -71,7 +71,7 @@ export class SessionReaders {
     return page && page.epoch === this.#port.epoch() && sameTarget(page.target, this.#port.target()) && !this.#port.released() ? page.records : [];
   }
   // One explicit bounded inspection viewport, independent of projection/Applied.
-  #traceInspection?: {epoch:number;id:string;owned:()=>boolean;head?:import('../../../protocol/app-server/v82.ts').TraceInspectionHead;page?:import('../../../protocol/app-server/v82.ts').CheckpointPage;messages?:import('../../../protocol/app-server/v82.ts').TraceInspectionMessage[];collection?:import('../../../protocol/app-server/v82.ts').CheckpointPage};
+  #traceInspection?: {epoch:number;id:string;owned:()=>boolean;head?:import('../../../protocol/app-server/v82.ts').TraceInspectionHead;page?:import('../../../protocol/app-server/v82.ts').CheckpointPage;messages?:import('../../../protocol/app-server/v82.ts').TraceInspectionMessage[];compactionCalls?:import('../../../protocol/app-server/v82.ts').TraceInspectionCompactionCall[];collection?:import('../../../protocol/app-server/v82.ts').CheckpointPage};
   #projectionInspection?: {epoch:number;owned:()=>boolean;detail?:import('../../../protocol/app-server/v82.ts').ProjectionDetail};
   #currentTraceInspection() {
     const selected=this.#traceInspection;
@@ -150,6 +150,11 @@ export class SessionReaders {
     if(selected?.head&&selected.page){
       const cut=selected.page.read_cut,head=selected.head;
       for(const frontier of head.record.collections)rows.set(frontier.domain,{frontier,cut,inspection:selected});
+      if(head.content.type==='compaction'){
+        const page=head.content.page;
+        rows.set(page.domain,{cut,inspection:selected,frontier:{domain:page.domain,total:page.total,loaded:String(page.items.length),next_offset:page.next_offset??null}});
+        for(const call of selected.compactionCalls??page.items)rows.set(call.requests_domain,{cut,inspection:selected,frontier:{domain:call.requests_domain,total:call.request_count,loaded:'0',next_offset:call.request_count==='0'?null:'0'}});
+      }
       if(head.content.type==='messages'){
         const page=head.content.page;
         rows.set(page.domain,{cut,inspection:selected,frontier:{domain:page.domain,total:page.total,loaded:String(page.items.length),next_offset:page.next_offset==null?null:String(page.next_offset)}});
@@ -427,6 +432,18 @@ export class SessionReaders {
     const selected=this.#currentTraceInspection(),content=selected?.head?.content;
     if(inspection&&selected&&source&&/^messages\..+\.(?:blocks|tools)$/.test(domain)){
       validateCanonicalInspectionPage(page,offset,source.frontier.total,previous?.domain===domain&&previous.next_offset===String(offset)||source.frontier.next_offset===String(offset));selected.collection=page;
+    }
+    if(inspection&&selected&&content?.type==='compaction'&&domain===content.page.domain){
+      let after=BigInt(offset);
+      if(page.total!==content.page.total)throw Error('Compaction Call frontier changed.');
+      const calls=page.items.map(item=>{
+        const call=traceCompactionCall(item.value,domain,after);
+        if(item.body_complete!==true||item.offset!==call.started_sequence||item.identity!==call.call_id)throw Error('Compaction Call identity changed.');
+        after=BigInt(call.started_sequence);
+        return call;
+      });
+      if(page.next_offset!=null&&(!calls.length||page.next_offset!==String(after)))throw Error('Compaction Call page failed to advance.');
+      selected.compactionCalls=calls;
     }
     if(inspection&&selected?.page&&content?.type==='messages'&&domain===content.page.domain){
       const next=BigInt(offset)+BigInt(page.items.length),total=BigInt(content.page.total);

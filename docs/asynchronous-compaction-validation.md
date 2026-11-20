@@ -86,7 +86,7 @@ Use one active source workspace per Cargo target directory so type metadata
 cannot be confused with another branch's contract.
 
 Required gates include strict Clippy, formatting, all applicable Linux/macOS
-native suites, test-lane coverage, generated App Server v81 protocol/editor
+native suites, test-lane coverage, the then-current App Server v81 protocol/editor
 schemas, all TypeScript projects, provider tests, complete clients, i18n,
 source provenance/notices, production bundles and real-browser acceptance.
 Unfinished or unexecuted gates are not passing results.

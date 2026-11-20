@@ -252,7 +252,7 @@ impl UserConfigManager {
     ) -> Result<SourceCapture, LaunchFailure> {
         let capture = self.resolve_captured_layers(layers, false, None)?;
         let config = &capture.config;
-        crate::model::session::analyze_session_model_config(
+        let (primary, auxiliary) = crate::model::session::analyze_session_model_config(
             &capture.models,
             request
                 .model
@@ -260,6 +260,8 @@ impl UserConfigManager {
                 .unwrap_or_else(|| config.initial_model()),
         )
         .map_err(|e| e.to_string())?;
+        crate::context::policy::CompactionPolicy::for_invocations(&primary, &auxiliary)
+            .map_err(|error| error.message)?;
         Ok(capture)
     }
 
@@ -501,20 +503,10 @@ impl UserConfigManager {
                             .is_ok_and(|(provider, _)| provider.credential().is_ok())
                     }) && crate::model::session::analyze_session_model_config(&models, selection)
                         .is_ok_and(|(primary, auxiliary)| {
-                            crate::model::invocation::reasoning_output_minimum(
-                                auxiliary.protocol,
-                                &auxiliary.request_params,
+                            crate::context::policy::CompactionPolicy::for_invocations(
+                                &primary, &auxiliary,
                             )
-                            .is_ok_and(|reasoning| {
-                                crate::context::policy::CompactionPolicy::resolve_with_reasoning(
-                                    primary.context_window,
-                                    primary.max_output_tokens,
-                                    auxiliary.context_window,
-                                    auxiliary.max_output_tokens,
-                                    reasoning,
-                                )
-                                .is_ok()
-                            })
+                            .is_ok()
                         })
                 });
             config.agent.model = replacement

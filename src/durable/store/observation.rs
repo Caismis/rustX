@@ -532,6 +532,11 @@ pub trait ObservationStore: Send + Sync + 'static {
         attempt: Option<&AttemptId>,
         limit: usize,
     ) -> Result<Vec<crate::durable::observation::ObservationEventHeader>, ConversationStoreError>;
+    /// Latest foreground compaction lifecycle witness at the frozen Journal cut.
+    fn latest_foreground_compaction(
+        &self,
+        through: u64,
+    ) -> Result<Option<crate::durable::observation::ObservationEventWitness>, ConversationStoreError>;
     /// Exact bounded start mode for one operation before this Journal position.
     fn compaction_start_mode_before(
         &self,

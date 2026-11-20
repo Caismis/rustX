@@ -37,6 +37,8 @@ struct Work {
     #[cfg(test)]
     defer_settlement_gate: Mutex<Option<ArbitrationTestGate>>,
     #[cfg(test)]
+    generation_settlement_gate: Mutex<Option<ArbitrationTestGate>>,
+    #[cfg(test)]
     cancellation_request_gate: Mutex<Option<ArbitrationTestGate>>,
     changed: tokio::sync::Notify,
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -369,6 +371,7 @@ impl RuntimeInner {
                     state.phase = Phase::Terminal;
                     state.status.phase = CompactionOperationPhase::Cancelled;
                     state.status.diagnostic = None;
+                    state.status.waiting_attempt_id = None;
                     state.pending_terminal_publication = true;
                 }
             }
@@ -474,6 +477,11 @@ impl RuntimeInner {
                 state.phase = Phase::Failed(error.clone());
                 state.status.phase = CompactionOperationPhase::Failed;
                 state.status.diagnostic = Some(error.message);
+                state.status.waiting_attempt_id = None;
+                drop(state);
+                if let Err(error) = self.publish_async_status(&work) {
+                    self.fail_async_durability(&error);
+                }
             }
             work.joined.store(true, Ordering::Release);
             work.lifecycle
@@ -509,7 +517,8 @@ impl RuntimeInner {
         }
         let terminal = {
             let state = work.state.lock().expect("asynchronous compaction state");
-            matches!(state.phase, Phase::Terminal)
+            (matches!(state.phase, Phase::Terminal)
+                || (!self.lifecycle.is_running() && matches!(state.phase, Phase::Failed(_))))
                 && !state.pending_terminal_publication
                 && state.published.as_ref() == Some(&state.status)
         };
@@ -534,7 +543,7 @@ impl RuntimeInner {
     #[allow(clippy::too_many_lines)] // The checked-out conversation and every installation settlement share one boundary.
     pub(super) async fn install_ready_async_when_idle(self: &Arc<Self>) {
         let coordinator = RuntimeCompactionCoordinator(Arc::downgrade(self));
-        let (ready, mut conversation, mut context, mut request, staged_request_context) = {
+        let (ready, mut conversation, mut context, mut request, staged_request_context, _admission) = {
             let mut state = self.lock_state();
             if !self.lifecycle.is_running()
                 || self.durability_gate.is_failed()
@@ -568,6 +577,22 @@ impl RuntimeInner {
             let Ok(sections) = resources.context_assembly().system_sections(&native) else {
                 return;
             };
+            let Some(delivery) = coordinator.take_ready() else {
+                return;
+            };
+            let ready = match delivery {
+                CompactionDelivery::Ready(ready) => ready,
+                CompactionDelivery::Failed(_) => return,
+            };
+            let Ok(admission) = self.lifecycle.try_enter_running() else {
+                drop(state);
+                let _ = coordinator.settle(&ready.admission, CompactionDisposition::Cancelled);
+                return;
+            };
+            state.manual_compaction = Some(CurrentManualCompaction {
+                operation_id: ready.admission.operation_id.clone(),
+                cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
+            });
             let request = crate::model::ModelRequest {
                 prompt_fallback_authorization:
                     crate::model::types::PromptFallbackAuthorization::default(),
@@ -576,72 +601,59 @@ impl RuntimeInner {
                 images: BTreeMap::default(),
                 invocation: model.primary().invocation_config(),
                 messages: crate::model::SelectedModelInput::default(),
-                tools: resources.capability().tool_registry().model_definitions(),
+                tools: resources
+                    .capability()
+                    .tool_registry()
+                    .for_model(model.primary().capabilities())
+                    .model_definitions(),
                 effective_system_prompt: render_effective_system_prompt(&sections),
                 continuation: None,
                 continuation_source: None,
             };
-            let Some(delivery) = coordinator.take_ready() else {
-                return;
-            };
-            let ready = match delivery {
-                CompactionDelivery::Ready(ready) => ready,
-                CompactionDelivery::Failed(_) => return,
-            };
-            // Idle activation rearms the next start's canonical User reminder.
-            // This operation-scoped identity prices that staged context only;
-            // the actual start remains its sole allocation and commit owner.
-            let staged_request_context = [crate::message::types::MessageBlock::User(
-                crate::message::types::UserMessageBlock {
-                    id: crate::runtime::identity::MessageId::new(format!(
-                        "rustx-context-idle-{}-permission-reminder",
-                        ready.admission.operation_id,
-                    )),
-                    content: crate::context::assembly::permission_reminder_content(
-                        &crate::runtime::permission::permission_reminder_text(
-                            state.effective_approval_mode,
-                        ),
-                    ),
-                    source: crate::message::types::UserSource::Runtime,
-                    kind: crate::message::types::InboundKind::Context(
-                        crate::message::types::ContextKind::NativeEnvironment,
-                    ),
-                    timestamp: None,
-                },
+            let staged_request_context = [super::compaction::prospective_permission_reminder(
+                &ready.admission.operation_id,
+                state.effective_approval_mode,
             )];
-            if !matches!(state.conversation.hydrate(self.store.as_ref()), Ok(Some(_))) {
-                // A failed hydration leaves the durable head authoritative.
-                // Return this selected result to Ready after releasing the
-                // coordinator lock; settlement can publish and wake admission.
-                drop(state);
-                if let Err(error) =
-                    coordinator.settle(&ready.admission, CompactionDisposition::Defer(None))
-                {
-                    self.fail_async_durability(&error);
+            match state.conversation.hydrate(self.store.as_ref()) {
+                Ok(Some(_)) => {}
+                outcome => {
+                    let error = outcome.err();
+                    drop(state);
+                    let disposition = if let Some(error) = error {
+                        let diagnostic =
+                            format!("idle compaction could not load the conversation: {error}");
+                        self.fail_async_native(
+                            DurableOperation::CanonicalCommit,
+                            diagnostic.clone(),
+                        );
+                        CompactionDisposition::Failed(diagnostic)
+                    } else {
+                        CompactionDisposition::Defer(None)
+                    };
+                    let _ = coordinator.settle(&ready.admission, disposition);
+                    self.lock_state().manual_compaction = None;
+                    self.settlement.notify_waiters();
+                    return;
                 }
-                return;
             }
             let conversation = state
                 .conversation
                 .lend()
                 .expect("idle coordinator owns the conversation state");
-            state.manual_compaction = Some(CurrentManualCompaction {
-                operation_id: ready.admission.operation_id.clone(),
-                cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-            });
             (
                 ready,
                 conversation,
                 context.with_runtime_resources(&resources),
                 request,
                 staged_request_context,
+                admission,
             )
         };
         let result = async {
             let (history, _) = self
                 .store
                 .auxiliary_history()
-                .map_err(|error| CompactionExecutionError::Durable(error.to_string()))?;
+                .map_err(crate::context::compaction::resource_failure)?;
             context
                 .engine
                 .prepare_media(
@@ -689,7 +701,6 @@ impl RuntimeInner {
             if activated {
                 state.last_permission_reminder_mode = None;
             }
-            state.manual_compaction = None;
         }
         let disposition = match result {
             Ok(ActivationOutcome::Committed(completed)) => {
@@ -719,6 +730,11 @@ impl RuntimeInner {
                 );
                 CompactionDisposition::Committed
             }
+            Err(CompactionExecutionError::Context(error))
+                if error.kind != ContextErrorKind::AuxiliaryDurabilityFailed =>
+            {
+                CompactionDisposition::Failed(error.message)
+            }
             Err(error) => {
                 let diagnostic = format!("idle compaction installation failed: {error:?}");
                 self.fail_async_native(DurableOperation::CanonicalCommit, diagnostic.clone());
@@ -728,6 +744,7 @@ impl RuntimeInner {
         if let Err(error) = coordinator.settle(&ready.admission, disposition) {
             tracing::error!(diagnostic = %error.message, "idle compaction status settlement failed");
         }
+        self.lock_state().manual_compaction = None;
         self.settlement.notify_waiters();
     }
 }
@@ -882,6 +899,8 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             #[cfg(test)]
             defer_settlement_gate: Mutex::new(None),
             #[cfg(test)]
+            generation_settlement_gate: Mutex::new(None),
+            #[cfg(test)]
             cancellation_request_gate: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             join: Mutex::new(None),
@@ -942,9 +961,13 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
         let owner = inner.clone();
         let task_work = work.clone();
         let (release, registered) = tokio::sync::oneshot::channel();
+        let exit = WorkerExit {
+            work: work.clone(),
+            wake: inner.wake.clone(),
+        };
         let join = inner.executor.spawn(async move {
             if registered.await.is_err() { return; }
-            let _exit = WorkerExit { work: task_work.clone(), wake: owner.wake.clone() };
+            let _exit = exit;
             let progress_owner = owner.clone();
             let progress_work = task_work.clone();
             let progress = move |event: crate::events::types::RuntimeEventEnvelope| -> Result<(), CompactionExecutionError> {
@@ -1025,11 +1048,14 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             };
             operation.close().await;
             if owner.async_work(&admission).is_none() { return; }
+            #[cfg(test)]
+            wait_for_arbitration_test_gate(&task_work.generation_settlement_gate);
             let mut durability_failure = None;
             {
                 let mut state = task_work.state.lock().expect("asynchronous compaction state");
                 match result {
-                    Ok(generated) if !state.superseded && !admission.cancellation.is_cancelled() => {
+                    Ok(generated) if !state.superseded && !state.cancel_requested && !admission.cancellation.is_cancelled() => {
+                        state.status.waiting_attempt_id = None;
                         state.phase = Phase::Ready(Arc::new(generated));
                         state.status.phase = CompactionOperationPhase::Ready;
                     }
@@ -1049,7 +1075,7 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
                         state.status.waiting_attempt_id = None;
                         state.status.phase = if state.superseded {
                             CompactionOperationPhase::Superseded
-                        } else if context.kind == ContextErrorKind::Cancelled {
+                        } else if state.cancel_requested || admission.cancellation.is_cancelled() || context.kind == ContextErrorKind::Cancelled {
                             CompactionOperationPhase::Cancelled
                         } else if context.kind == ContextErrorKind::NoEligibleHistory {
                             CompactionOperationPhase::NoEffect
@@ -1111,18 +1137,18 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             }
             state.phase = Phase::Terminal;
         }
+        let publication = inner.publish_async_status(&work);
+        if let Err(error) = &publication {
+            inner.fail_async_durability(error);
+        }
         work.joined.store(true, Ordering::Release);
         work.lifecycle
             .lock()
             .expect("asynchronous lifecycle")
             .take();
         work.changed.notify_waiters();
-        if let Err(error) = inner.publish_async_status(&work) {
-            inner.fail_async_durability(&error);
-            return Err(error);
-        }
         inner.wake.notify.notify_one();
-        Ok(())
+        publication
     }
 
     fn take_ready(&self) -> Option<CompactionDelivery> {
@@ -1330,6 +1356,7 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             // Cancellation can publish its owner flag before its token. Read
             // both under the same lock that returns Installing work to Ready.
             let deferred = matches!(&outcome, CompactionDisposition::Defer(_))
+                && !state.superseded
                 && !state.cancel_requested
                 && !work.admission.cancellation.is_cancelled();
             state.status.waiting_attempt_id = None;
@@ -1428,13 +1455,14 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             {
                 return;
             }
-            if matches!(state.phase, Phase::Generating) {
+            if matches!(state.phase, Phase::Generating | Phase::Installing(_)) {
                 state.superseded = true;
                 (true, false)
             } else if matches!(state.phase, Phase::Ready(_)) {
                 state.superseded = true;
                 state.phase = Phase::Terminal;
                 state.status.phase = CompactionOperationPhase::Superseded;
+                state.status.waiting_attempt_id = None;
                 state.status.diagnostic = None;
                 (true, true)
             } else {

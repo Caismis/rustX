@@ -180,6 +180,7 @@ impl CompactionBudget {
     pub fn shrink_summary_input_limit(
         &self,
         configured: u64,
+        additional_output: u64,
         minimum: u64,
         maximum: u64,
         cancellation: &CancellationSignal,
@@ -189,14 +190,17 @@ impl CompactionBudget {
         if counts.shrinks >= COMPACTION_SHRINK_LIMIT {
             return Err(exhausted("compaction exhausted its three input shrinks"));
         }
-        let limit = counts.summary_input_limit.unwrap_or(configured);
+        let limit = counts
+            .summary_input_limit
+            .unwrap_or(configured)
+            .saturating_sub(additional_output);
         if limit <= minimum || maximum < minimum {
             return Err(exhausted(
                 "no smaller Summary request fits the remaining input limit",
             ));
         }
         counts.shrinks += 1;
-        let reduced = (limit / 2).max(minimum).min(maximum);
+        let reduced = additional_output + (limit / 2).max(minimum).min(maximum);
         counts.summary_input_limit = Some(reduced);
         Ok(reduced)
     }
@@ -357,19 +361,29 @@ mod tests {
     }
 
     #[test]
+    fn shrinking_after_output_growth_halves_the_remaining_input() {
+        let (budget, _, cancellation) = budget();
+        let learned = budget
+            .shrink_summary_input_limit(118_050, 60_450, 1, 54_999, &cancellation)
+            .unwrap();
+        assert_eq!(learned - 60_450, 28_800);
+        assert_eq!(budget.summary_input_limit(118_050), learned);
+    }
+
+    #[test]
     fn rejected_request_bound_can_shrink_far_below_half_the_old_limit() {
         let (budget, _, cancellation) = budget();
         assert_eq!(budget.summary_input_limit(2_800), 2_800);
         assert_eq!(
             budget
-                .shrink_summary_input_limit(2_800, 1, 199, &cancellation)
+                .shrink_summary_input_limit(2_800, 0, 1, 199, &cancellation)
                 .unwrap(),
             199
         );
         assert_eq!(budget.summary_input_limit(2_800), 199);
         assert!(
             budget
-                .shrink_summary_input_limit(199, 1, 0, &cancellation)
+                .shrink_summary_input_limit(199, 0, 1, 0, &cancellation)
                 .is_err()
         );
         assert_eq!(counts(&budget).2, 1);
@@ -424,7 +438,7 @@ mod tests {
         }
         assert_eq!(counts(&budget), (1, 0, 0));
         budget
-            .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+            .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
             .unwrap();
         clock.advance(20_000);
         let later = budget.next_operation(CompactionOperationId::new("next-checkpoint"));
@@ -512,7 +526,7 @@ mod tests {
             assert_eq!(
                 budget
                     .clone()
-                    .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+                    .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
                     .unwrap(),
                 expected
             );
@@ -524,7 +538,7 @@ mod tests {
         }
         assert_eq!(
             budget
-                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+                .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
                 .unwrap_err()
                 .kind,
             ContextErrorKind::CompactionBudgetExceeded
@@ -552,7 +566,7 @@ mod tests {
             assert!(child.same_operation(&budget));
             assert_eq!(child.deadline_millis(), 337_000);
             child
-                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+                .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
                 .unwrap();
 
             // A structurally valid Request for an unstarted Call is rejected
@@ -643,7 +657,7 @@ mod tests {
         );
         assert_eq!(
             budget
-                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+                .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
                 .unwrap_err()
                 .kind,
             ContextErrorKind::CompactionBudgetExceeded
@@ -678,6 +692,7 @@ mod tests {
                                 ),
                                 child.shrink_summary_input_limit(
                                     64_000,
+                                    0,
                                     4096,
                                     u64::MAX,
                                     &cancellation,
@@ -779,7 +794,7 @@ mod tests {
         assert!(futures_util::poll!(reentry_wait.as_mut()).is_pending());
         child.check(&cancellation).unwrap();
         child
-            .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+            .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
             .unwrap();
         drop(
             child
@@ -804,7 +819,7 @@ mod tests {
                 .reserve_start(RequestId::new("expired"), &cancellation)
                 .unwrap_err(),
             child
-                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
+                .shrink_summary_input_limit(64_000, 0, 4096, u64::MAX, &cancellation)
                 .unwrap_err(),
         ] {
             assert_eq!(error.kind, ContextErrorKind::AuxiliaryDeadlineExceeded);

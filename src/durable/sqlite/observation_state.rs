@@ -243,6 +243,14 @@ pub(super) fn event(
                 &serde_json::json!({"compaction_progress": value}),
             )?;
         }
+        RuntimeEvent::CompactionStarted { .. } => {
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({}),
+            )?;
+        }
         RuntimeEvent::CompactionOperationUpdated { status } => {
             super::observation_request::index_state(
                 connection,
@@ -419,16 +427,27 @@ pub(super) fn latest_compaction_operations(
     connection: &Connection,
     through: u64,
 ) -> Result<Vec<crate::context::operation::CompactionOperationStatus>, ConversationStoreError> {
-    let mut statement = connection.prepare("SELECT source_id FROM state_observation_sources INDEXED BY state_observation_journal_idx WHERE domain='compaction_admission' AND journal_sequence<=?1 ORDER BY journal_sequence DESC LIMIT 2").map_err(|e| storage(e.to_string()))?;
+    let through = super::seq_to_i64(through)?;
+    let mut statement = connection.prepare_cached("SELECT source_id FROM state_observation_sources INDEXED BY state_observation_journal_idx WHERE domain='compaction_admission' AND journal_sequence<=?1 ORDER BY journal_sequence DESC LIMIT 2").map_err(|e| storage(e.to_string()))?;
     let keys = statement
         .query_map([through], |row| row.get::<_, String>(0))
         .map_err(|e| storage(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| storage(e.to_string()))?;
     let mut statuses = Vec::new();
+    let mut read_status = connection.prepare_cached("SELECT CASE WHEN octet_length(e.event_json)<=16384 THEN e.event_json END FROM state_observation_sources s INDEXED BY state_observation_journal_idx JOIN events e ON e.sequence=s.journal_sequence WHERE s.domain=?1 AND s.journal_sequence<=?2 ORDER BY s.journal_sequence DESC LIMIT 1").map_err(|error| storage(error.to_string()))?;
     for key in keys {
         let domain = format!("compaction_operation/{key}");
-        let text: String = connection.query_row("SELECT CASE WHEN length(e.event_json)<=16384 THEN e.event_json END FROM state_observation_sources s INDEXED BY state_observation_journal_idx JOIN events e ON e.sequence=s.journal_sequence WHERE s.domain=?1 AND s.journal_sequence<=?2 ORDER BY s.journal_sequence DESC LIMIT 1", params![domain,through], |row| row.get(0)).map_err(|e| storage(e.to_string()))?;
+        let text = read_status
+            .query_row(params![domain, through], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .map_err(|error| storage(error.to_string()))?
+            .ok_or_else(|| {
+                ConversationStoreError::ResourceBoundExceeded(
+                    "compaction status exceeds its byte budget".into(),
+                )
+            })?;
         let envelope: crate::events::types::RuntimeEventEnvelope =
             serde_json::from_str(&text).map_err(|e| storage(e.to_string()))?;
         let crate::events::types::RuntimeEvent::CompactionOperationUpdated { status } =
@@ -441,6 +460,42 @@ pub(super) fn latest_compaction_operations(
     }
     statuses.reverse();
     Ok(statuses)
+}
+
+/// Index only foreground lifecycle facts. Proactive progress can be arbitrarily dense
+/// between a foreground failure and the next cold attach.
+pub(super) fn index_foreground_compaction(
+    connection: &Connection,
+    event: &crate::events::types::RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    use crate::events::types::RuntimeEvent;
+    match &event.event {
+        RuntimeEvent::CompactionStarted {
+            mode: crate::context::operation::CompactionMode::Proactive,
+            ..
+        } => return Ok(()),
+        RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionFailed { .. }
+        | RuntimeEvent::CompactionCancelled { .. }
+        | RuntimeEvent::CompactionSkipped { .. } => {}
+        RuntimeEvent::CompactionChunkAccepted { operation_id, .. }
+        | RuntimeEvent::CompactionCompleted { operation_id, .. } => {
+            if is_proactive_operation(connection, operation_id)? {
+                return Ok(());
+            }
+        }
+        _ => return Ok(()),
+    }
+    connection.execute_cached("INSERT INTO state_observation_sources(domain,source_id,journal_sequence) VALUES('foreground_compaction',?1,?2)",
+        params![format!("context/{}", event.sequence),event.sequence]).map_err(|e| storage(e.to_string()))?;
+    Ok(())
+}
+
+pub(super) fn is_proactive_operation(
+    connection: &Connection,
+    operation_id: &crate::runtime::identity::CompactionOperationId,
+) -> Result<bool, ConversationStoreError> {
+    connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM state_observation_sources WHERE domain='compaction_identity' AND source_id=?1)", [operation_id.as_str()], |row| row.get(0)).map_err(|error| storage(error.to_string()))
 }
 
 /// Index authoritative operation admission and each exact status update.

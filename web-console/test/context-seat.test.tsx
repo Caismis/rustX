@@ -149,7 +149,7 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   expect(count()).toBe(0);
 });
 
-it('retains the exact manual receipt while newer native state owns the live seat', async () => {
+it('retires the old manual receipt when a new foreground operation starts', async () => {
   server.held.add('context/compact');
   render(<ContextSeat client={server.client} sessionId="A"/>);
   compact();
@@ -158,10 +158,14 @@ it('retains the exact manual receipt while newer native state owns the live seat
   const request = server.client.getSnapshot().views.A.compactionRequest!;
   expect(request.status).toBe('failed');
   await observe({ ...base, compaction_in_progress: true, compaction_progress: { operation_id: 'other-operation', mode: 'overflow', accepted_fragments: 1, source_ranges: [], generation: null } });
-  expect(server.client.getSnapshot().views.A.compactionRequest).toEqual(request);
+  expect(server.client.getSnapshot().views.A.compactionRequest).toBeUndefined();
   expect(screen.getByRole('status').textContent).toContain('Context limit reached');
+  expect(screen.getByRole('status').textContent).not.toContain('manual failure');
+  await observe({ ...base, compaction_error: 'new overflow failure', compaction_operations: [operation('committed', false)] });
+  fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
+  expect(screen.getByRole('status').textContent).toContain('new overflow failure');
   await observe({ ...base, compaction_count: 1, latest_compaction: { operation_id: 'other-operation', generation: '1', checkpoint_id: 'other-checkpoint', activation_id: '1', tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' } });
-  expect(server.client.getSnapshot().views.A.compactionRequest).toEqual(request);
+  expect(server.client.getSnapshot().views.A.compactionRequest).toBeUndefined();
   expect(screen.getByRole('status').textContent).toContain('Context compacted');
   expect(screen.getByRole('status').textContent).not.toContain('manual failure');
 });

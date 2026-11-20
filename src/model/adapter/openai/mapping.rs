@@ -76,12 +76,11 @@ pub(crate) fn is_explicit_format_rejection(
     let rejected_field = match provider_code {
         Some("unsupported_parameter") => provider_param == Some(expected_field),
         Some("unsupported_value") => {
-            provider_param == Some(expected_field)
-                || matches!(
-                    (expected_field, provider_param),
-                    ("response_format", Some("response_format.type"))
-                        | ("text.format", Some("text.format.type"))
-                )
+            matches!(
+                (expected_field, provider_param),
+                ("response_format", Some("response_format.type"))
+                    | ("text.format", Some("text.format.type"))
+            )
         }
         _ => false,
     };
@@ -715,7 +714,7 @@ mod tests {
             );
             assert_eq!(
                 classify(400, "unsupported_value", Some(field), "rejected", field),
-                ModelErrorKind::NativeFormatUnsupported,
+                ModelErrorKind::InvalidRequest,
             );
             let type_field = format!("{field}.type");
             assert_eq!(

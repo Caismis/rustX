@@ -427,6 +427,8 @@ async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance(
                                 if derived.transformations.contains(&crate::model::projected::SemanticTransformation::Summary)
                         ) {
                             10_000
+                         } else if matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.kind == crate::message::types::InboundKind::Context(crate::message::types::ContextKind::NativeEnvironment)) {
+                            5_000
                         } else if message.canonical_id().is_some_and(|id| id.as_str() == "recent") {
                             15_000
                         } else {

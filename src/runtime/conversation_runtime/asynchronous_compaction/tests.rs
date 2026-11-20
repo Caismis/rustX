@@ -8,6 +8,7 @@ use crate::runtime::conversation_runtime::test_support::*;
 
 mod cancellation;
 mod idle_fit;
+mod supervision;
 
 fn permission_reminder_ids(
     request: &crate::model::ModelRequest,

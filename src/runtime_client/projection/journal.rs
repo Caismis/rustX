@@ -862,6 +862,7 @@ impl RuntimeClientProjection {
             self.snapshot.context.compaction_in_progress = false;
             self.snapshot.context.compaction_progress = None;
         }
+        self.snapshot.context.compaction_error = None;
         self.snapshot.context.occupancy = occupancy.cloned();
         self.snapshot.context.compaction_count = self
             .snapshot

@@ -385,3 +385,28 @@ async fn assert_later_start_owns_reminder(fixture: &IdleFixture) {
         fixture.model.requests()[1]
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn idle_owner_remains_busy_through_deferred_status_publication() {
+    let fixture = ready_fixture().await;
+    set_input_limit(&fixture, fixture.with_reminder - 1);
+    let (settling, finish) = cancellation::install_gate(&fixture.work.defer_settlement_gate);
+    let epoch = {
+        let mut state = fixture.runtime.inner.lock_state();
+        state.manual_compaction = None;
+        fixture.runtime.inner.idle_epoch_locked(&state).unwrap()
+    };
+    let runtime = fixture.runtime.clone();
+    let install = tokio::spawn(async move { runtime.inner.install_ready_async_when_idle().await });
+    within_liveness_guard("idle settlement", settling)
+        .await
+        .unwrap();
+    assert!(!fixture.runtime.claim_idle(epoch));
+    assert!(matches!(
+        fixture.runtime.admit_compaction(None, None),
+        Err(super::super::super::ManualCompactionError::Busy)
+    ));
+    finish.send(()).unwrap();
+    install.await.unwrap();
+    fixture.runtime.shutdown().await.unwrap();
+}

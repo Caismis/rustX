@@ -41,6 +41,7 @@ pub(crate) struct PreparedInstallation {
     candidate: CheckpointCandidate,
     proof: super::super::coverage::VerifiedPrefixCoverage,
     after: u64,
+    carryover_level: Option<crate::model::CarryoverDetailLevel>,
     tokens_before: TokenMeasurement,
     occupancy: super::super::occupancy::ContextOccupancy,
 }
@@ -131,16 +132,19 @@ pub(crate) fn preview_generated(
     let mut resources = CompactionResources::at_cut(store, cut, ResourceLimits::default())
         .map_err(resource_failure)?;
     let compiled =
-        super::super::checkpoint::compile_checkpoint(&candidate, |source, body_required| {
+        match super::super::checkpoint::compile_checkpoint(&candidate, |source, body_required| {
             resources
                 .dependency(source, body_required)
-                .map_err(|error| error.to_string())
-        })
-        .map_err(|error| {
-            CompactionExecutionError::Durable(format!(
-                "current Summary candidate cannot compile: {error}"
-            ))
-        })?;
+                .map_err(resource_failure)
+        }) {
+            Ok(compiled) => compiled,
+            Err(CompactionExecutionError::Context(error))
+                if error.kind == ContextErrorKind::CannotFit =>
+            {
+                return Ok(ActivationPreview::Inadmissible(error));
+            }
+            Err(error) => return Err(error),
+        };
     let retained: crate::model::SelectedModelInput = compiled.messages.into();
     let count_original = |input: &crate::model::SelectedModelInput,
                           id: &crate::runtime::identity::MessageId| {
@@ -176,25 +180,38 @@ pub(crate) fn preview_generated(
     let engine = &current.context.engine;
     let historical_before = engine.estimate_model_input(&history.messages, "", &[]);
     let historical_after = engine.estimate_model_input(&retained, "", &[]);
-    let assembled = super::super::engine::assemble_context_input(
-        &retained,
-        current.constraints.staged_request_context,
-        current.constraints.carryover,
-        current.constraints.carryover_anchor,
-    )
-    .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
     let mut request = current.request.clone();
-    request.messages = engine
-        .rendered_input(&assembled)
-        .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
     request.continuation = None;
     request.continuation_source = None;
-    let after = engine.estimate_frozen_request(&request);
     let mut limit =
         engine.admissible_input_limit(current.context.compaction_budgets.primary_output_budget)?;
     if let Some(correction) = current.constraints.estimate_correction {
         limit = correction.apply(limit);
     }
+    let mut carryover = current.constraints.carryover;
+    let mut carryover_level = None;
+    let mut fallbacks = current.constraints.carryover_fallbacks.iter();
+    let after = loop {
+        let assembled = super::super::engine::assemble_context_input(
+            &retained,
+            current.constraints.staged_request_context,
+            carryover,
+            carryover.and(current.constraints.carryover_anchor),
+        )
+        .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
+        request.messages = engine
+            .rendered_input(&assembled)
+            .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
+        let after = engine.estimate_frozen_request(&request);
+        if after <= limit {
+            break after;
+        }
+        let Some(next) = fallbacks.next() else {
+            break after;
+        };
+        carryover = next.value.as_ref();
+        carryover_level = Some(next.level);
+    };
     if after > limit || historical_after >= historical_before {
         return Ok(ActivationPreview::Inadmissible(ContextError::new(
             if after > limit {
@@ -212,6 +229,7 @@ pub(crate) fn preview_generated(
             candidate,
             proof,
             after,
+            carryover_level,
             tokens_before: TokenMeasurement {
                 input_tokens: engine.estimate_frozen_request(current.request),
                 source: TokenMeasurementSource::Estimated,
@@ -274,7 +292,7 @@ pub(crate) fn activate_generated(
             turn_id: current.turn_id.clone(),
             timestamp: Utc::now(),
         };
-        match commit_compaction(conversation, store, input, None) {
+        match commit_compaction(conversation, store, input, prepared.carryover_level) {
             Err(CompactionExecutionError::HeadChanged) => {}
             Ok(completed) => return Ok(ActivationOutcome::Committed(Box::new(completed))),
             Err(error) => return Err(error),

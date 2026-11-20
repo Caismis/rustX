@@ -661,7 +661,18 @@ pub(crate) async fn generate_compaction(
     let mut reductions = 0u8;
     let mut accepted_fragments = 0u32;
     let mut output_budget = budgets.summary_output_budget;
-    let summary_output_ceiling = source.maximum_summary_output;
+    let output_ceiling = |budgets: super::CompactionBudgets| {
+        source.maximum_summary_output.min(
+            budgets.summary_output_budget.saturating_add(
+                u32::try_from(
+                    budgets
+                        .summary_input_limit
+                        .saturating_sub(MIN_SUMMARY_INPUT_LIMIT),
+                )
+                .unwrap_or(u32::MAX),
+            ),
+        )
+    };
     while !chunks.is_complete() {
         budget.check_start(cancellation)?;
         let estimate = |request: &super::summarizer::SummaryRequest| -> Result<u64, ContextError> {
@@ -704,7 +715,7 @@ pub(crate) async fn generate_compaction(
                     engine,
                     budgets,
                     &mut output_budget,
-                    summary_output_ceiling,
+                    output_ceiling(budgets),
                     resources.cut(),
                     cancellation,
                     before_call,
@@ -790,16 +801,16 @@ pub(crate) async fn generate_compaction(
             Err(error) if error.kind == ContextErrorKind::SummaryFormatChanged => {}
             Err(error)
                 if error.kind == ContextErrorKind::SummaryOutputExhausted
-                    && output_budget < summary_output_ceiling =>
+                    && output_budget < output_ceiling(budgets) =>
             {
                 budget.charge_recovery(cancellation)?;
-                output_budget = output_budget.saturating_mul(2).min(summary_output_ceiling);
+                output_budget = output_budget.saturating_mul(2).min(output_ceiling(budgets));
                 // Same unprocessed source, with more total output and a smaller
                 // input fragment. Provider-native reasoning controls are unchanged.
             }
             Err(error)
                 if error.kind == ContextErrorKind::SummaryInputTooLarge
-                    && budgets.summary_input_limit > MIN_SUMMARY_INPUT_LIMIT =>
+                    && current_input_limit > MIN_SUMMARY_INPUT_LIMIT =>
             {
                 let rejected_estimate = estimate(&request)?;
                 if rejected_estimate <= MIN_SUMMARY_INPUT_LIMIT {
@@ -814,14 +825,12 @@ pub(crate) async fn generate_compaction(
                 // Price the exact failed request and ensure that request no
                 // longer satisfies the next preflight, even when it was much
                 // smaller than the old nominal input limit.
-                let maximum = rejected_estimate
-                    .saturating_sub(1)
-                    .saturating_add(additional_output);
                 budget.charge_recovery(cancellation)?;
                 budgets.summary_input_limit = budget.shrink_summary_input_limit(
                     budgets.summary_input_limit,
+                    additional_output,
                     MIN_SUMMARY_INPUT_LIMIT,
-                    maximum,
+                    rejected_estimate - 1,
                     cancellation,
                 )?;
             }
@@ -975,13 +984,7 @@ pub(crate) async fn generate_compaction(
             crate::context::checkpoint::compile_checkpoint(&candidate, |source, body_required| {
                 resources
                     .dependency(source, body_required)
-                    .map_err(|e| e.to_string())
-            })
-            .map_err(|e| {
-                CompactionExecutionError::Context(ContextError::new(
-                    ContextErrorKind::MalformedHistory,
-                    e,
-                ))
+                    .map_err(resource_failure)
             })?;
         let after_projection = engine.build_projection_input(
             projection.surface_revision,
@@ -1053,7 +1056,7 @@ pub(crate) async fn generate_compaction(
             engine,
             budgets,
             &mut output_budget,
-            summary_output_ceiling,
+            output_ceiling(budgets),
             resources.cut(),
             cancellation,
             before_call,
@@ -1215,6 +1218,12 @@ async fn reduce_summary(
                 budget.charge_recovery(cancellation)?;
                 *output_budget = output_budget.saturating_mul(2).min(output_ceiling);
             }
+            Ok(summary) if summary.text.trim().is_empty() => {
+                return Err(ContextError::new(
+                    ContextErrorKind::SummaryFailed,
+                    "Summary reduction returned empty content",
+                ));
+            }
             result => return result,
         }
     }
@@ -1256,7 +1265,22 @@ fn advance_carryover<'a>(
     Ok(Some(alternative.level))
 }
 
-fn resource_failure(error: crate::durable::ConversationStoreError) -> CompactionExecutionError {
+impl From<crate::context::checkpoint::CheckpointError> for CompactionExecutionError {
+    fn from(error: crate::context::checkpoint::CheckpointError) -> Self {
+        match error {
+            crate::context::checkpoint::CheckpointError::Invalid(message) => {
+                ContextError::new(ContextErrorKind::MalformedHistory, message).into()
+            }
+            crate::context::checkpoint::CheckpointError::Capacity(message) => {
+                ContextError::new(ContextErrorKind::CannotFit, message).into()
+            }
+        }
+    }
+}
+
+pub(crate) fn resource_failure(
+    error: crate::durable::ConversationStoreError,
+) -> CompactionExecutionError {
     match error {
         crate::durable::ConversationStoreError::ResourceBoundExceeded(message) => {
             ContextError::new(ContextErrorKind::CannotFit, message).into()

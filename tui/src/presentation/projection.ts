@@ -176,17 +176,37 @@ export function deferredContent(state: PresentationState) {
  * Pure: the input state is never mutated, so a caller may keep the previous
  * value (for a diff, a test assertion, or an undo of a render).
  */
+function terminalSummaryNotices(context: PresentationState['context']): string[] {
+  return (context.compaction_operations ?? [])
+    .filter(({status}) => ['failed', 'cancelled', 'superseded', 'no_effect'].includes(status.phase))
+    .map(({status}) => status.operation_id);
+}
+
 export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
   const { cursor } = protocolEvent;
   let { event } = protocolEvent;
-  if (event.type === 'checkpoint_advanced') return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
+  if (event.type === 'checkpoint_advanced') {
+    const next = replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
+    if (next.conversationId === state.conversationId) {
+      next.dismissedCompactionNotices = next.context.latest_compaction && next.context.latest_compaction.checkpoint_id !== state.context.latest_compaction?.checkpoint_id
+        ? terminalSummaryNotices(state.context) : state.dismissedCompactionNotices;
+    }
+    return next;
+  }
   const native = nativeSnapshots.get(state);
   if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
   event = expandRuntimeEvent(native, event);
   const projected = foldRuntimeEvent(native, event);
   let view: TranscriptView = transcriptView(state);
-  for (const fact of transitionFacts(event)) view = adaptTranscript(view, fact, projected);
+  let dismissed = state.dismissedCompactionNotices;
+  for (const fact of transitionFacts(event)) {
+    view = adaptTranscript(view, fact, projected);
+    if (fact.type === 'context_compacted') {
+      dismissed = terminalSummaryNotices(fact.context);
+    }
+  }
   const next: PresentationState = { ...view, ...nativeFields(projected), cursor };
+  if (dismissed?.length) next.dismissedCompactionNotices = dismissed;
   nativeSnapshots.set(next, projected);
   preserveHistoryBindings(state, next);
   return next;

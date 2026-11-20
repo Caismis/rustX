@@ -6,6 +6,27 @@ use super::*;
 /// Maximum UTF-8 byte length of manual compaction focus instructions.
 pub const MANUAL_COMPACTION_INSTRUCTIONS_MAX_BYTES: usize = 4_096;
 
+/// Price the User reminder that the next primary start will stage after activation.
+pub(super) fn prospective_permission_reminder(
+    operation: &crate::runtime::identity::CompactionOperationId,
+    mode: crate::runtime::types::ApprovalMode,
+) -> crate::message::types::MessageBlock {
+    use crate::message::types::{
+        ContextKind, InboundKind, MessageBlock, UserMessageBlock, UserSource,
+    };
+    MessageBlock::User(UserMessageBlock {
+        id: crate::runtime::identity::MessageId::new(format!(
+            "rustx-context-idle-{operation}-permission-reminder"
+        )),
+        content: crate::context::assembly::permission_reminder_content(
+            &crate::runtime::permission::permission_reminder_text(mode),
+        ),
+        source: UserSource::Runtime,
+        kind: InboundKind::Context(ContextKind::NativeEnvironment),
+        timestamp: None,
+    })
+}
+
 /// The runtime-owned manual compaction currently holding the conversation.
 ///
 /// Manual compaction is not an attempt: it allocates no `AttemptId`, emits no
@@ -228,6 +249,7 @@ impl RuntimeInner {
         mut conversation: ConversationState,
         context_runtime: ContextRuntime,
         tools: Vec<ModelToolDefinition>,
+        reminder: crate::message::types::MessageBlock,
         system_sections: Vec<crate::context::AcceptedSystemSection>,
         cancellation: &AgentCancellation,
         budget: crate::context::compaction_budget::CompactionBudget,
@@ -262,6 +284,7 @@ impl RuntimeInner {
             None,
             &effective_system_prompt,
             &CompactionConstraints {
+                staged_request_context: std::slice::from_ref(&reminder),
                 focus: instructions.as_deref(),
                 ..CompactionConstraints::default()
             },
@@ -649,7 +672,13 @@ impl ConversationRuntime {
             // Manual maintenance has no attempt lease, but it still freezes
             // the exact capability definitions used for planning at the
             // same admission boundary as the model/context snapshot.
-            let tools = resources.capability().tool_registry().model_definitions();
+            let tools = resources
+                .capability()
+                .tool_registry()
+                .for_model(model.primary().capabilities())
+                .model_definitions();
+            let reminder =
+                prospective_permission_reminder(&operation_id, state.effective_approval_mode);
             let system_sections = resources
                 .context_assembly()
                 .system_sections(&resources.native_system_input())
@@ -707,6 +736,7 @@ impl ConversationRuntime {
                         conversation,
                         context_runtime,
                         tools,
+                        reminder,
                         system_sections,
                         &cancellation,
                         budget,
