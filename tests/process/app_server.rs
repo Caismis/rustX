@@ -114,7 +114,10 @@ impl Fixture {
         }
     }
     fn command(&self, listen: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rustx"));
+        self.command_with_program(env!("CARGO_BIN_EXE_rustx"), listen)
+    }
+    fn command_with_program(&self, program: impl AsRef<std::ffi::OsStr>, listen: &str) -> Command {
+        let mut command = Command::new(program);
         command
             .current_dir(self.root.path())
             .env("HOME", self.root.path().join("home"))
@@ -279,6 +282,64 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
                 .collect::<Vec<_>>(),
             ["rustx"]
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let provider = crate::common::FixtureServer::start_with_body(|_, _, _| {
+            crate::common::sse_fixture("openai_chat", "plain_text.sse")
+        })
+        .await;
+        let fixture = Fixture::new().await;
+        let home = fixture.root.path().join("home");
+        let source = home.join("rustx/rustx.toml");
+        let original = std::fs::read_to_string(&source).unwrap();
+        std::fs::write(
+            source,
+            original.replace("http://127.0.0.1:9/v1", &provider.url("/v1")),
+        )
+        .unwrap();
+
+        let (bin, rustx) = isolated_server_bin();
+        let mut child = Command::new(rustx)
+            .args(["app-server", "--listen", "stdio", "--runtime-root"])
+            .arg(fixture.root.path().join("runtime"))
+            .current_dir(fixture.root.path())
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", bin.path())
+            .env("TEST_KEY", "fixture")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let session = fixture.sessions[0].clone();
+        let target = attach(&client, session, 2).await;
+        start_turn(&client, &target, "standalone model request").await;
+        let state = settled(&client, &target).await;
+        assert!(state["messages"].to_string().contains("Hello world"));
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].contains("standalone model request"));
+        assert_eq!(std::fs::read_dir(bin.path()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(fixture.root.path().join("a"))
+                .unwrap()
+                .count(),
+            0
+        );
+        result(&client, Method::SessionDetach { target }).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
     })
     .await;
 }
@@ -4242,13 +4303,19 @@ async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
     bounded(async {
         use std::os::unix::fs::PermissionsExt;
         use tokio::io::AsyncReadExt;
-        let f = Fixture::new().await;
+        let fixtures = [Fixture::new().await, Fixture::new().await];
         let gate_dir = tempfile::tempdir_in("/tmp").unwrap();
         let socket = gate_dir.path().join("gate");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-        let bin = f.root.path().join("host-bin");
-        std::fs::create_dir(&bin).unwrap();
-        let uv = bin.join("uv");
+        let bin = staged_bin_dir();
+        let server = stage_binary(
+            bin.path(),
+            "rustx",
+            std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
+        );
+        let staged_client = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
+            .with_file_name("rustx-execution-client");
+        let uv = bin.path().join("uv");
         std::fs::write(
             &uv,
             r"#!/usr/bin/python3
@@ -4267,26 +4334,44 @@ else:
         )
         .unwrap();
         std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut child = f
-            .command("stdio")
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-            .env("UV_TEST_GATE", &socket)
-            .spawn()
-            .unwrap();
-        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
-        initialize_client(&client).await;
-        for cwd in ["a", "b"] {
-            result(
-                &client,
-                rustx::app_server::protocol::Method::SessionCreate {
-                    dynamic_tools: Vec::new(),
-                    submission: None,
-                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
-                        f.root.path().join(cwd),
-                    )),
-                },
-            )
-            .await;
+        // Only the real Execution Client receives this fixture's uv. Each
+        // trusted App Server launch enrolls one existing, exact Session.
+        let quote = |value: &std::path::Path| {
+            format!("'{}'", value.display().to_string().replace('\'', "'\\''"))
+        };
+        let wrapper = bin.path().join("rustx-execution-client");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport PATH={}:\"/usr/bin:/bin\" UV_TEST_GATE={}\nexec {} \"$@\"\n",
+                quote(bin.path()),
+                quote(&socket),
+                quote(&staged_client),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let workspaces = [
+            fixtures[0].root.path().join("a"),
+            fixtures[1].root.path().join("b"),
+        ];
+        let mut running = Vec::new();
+        for (index, (fixture, workspace)) in fixtures.iter().zip(&workspaces).enumerate() {
+            let session = &fixture.sessions[index];
+            let mut child = fixture
+                .command_with_program(&server, "stdio")
+                .args([
+                    "--local-execution-session",
+                    session.as_str(),
+                    "--local-execution-workspace",
+                ])
+                .arg(workspace)
+                .spawn()
+                .unwrap();
+            let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+            initialize_client(&client).await;
+            attach(&client, session.clone(), 2).await;
+            running.push((child, client));
         }
         let mut versions = std::collections::BTreeMap::new();
         for _ in 0..2 {
@@ -4297,21 +4382,23 @@ else:
                 (stream, event[2].as_i64().unwrap()),
             );
         }
-        client.close_output().await;
-        let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
-        loop {
-            if diagnostics
+        assert_eq!(versions.len(), 2);
+        let mut diagnostic_pipes = Vec::new();
+        for (child, client) in &mut running {
+            client.close_output().await;
+            let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
+            while !diagnostics
                 .next_line()
                 .await
                 .unwrap()
-                .unwrap()
+                .expect("stdio detached")
                 .contains("stdio detached")
-            {
-                break;
-            }
+            {}
+            diagnostic_pipes.push(diagnostics);
         }
-        let a = f.root.path().join("a").display().to_string();
-        let b = f.root.path().join("b").display().to_string();
+        let [a, b] = workspaces
+            .each_ref()
+            .map(|workspace| workspace.display().to_string());
         let (mut first, _) = versions.remove(&a).unwrap();
         let (mut pending, pending_pid) = versions.remove(&b).unwrap();
         first
@@ -4321,21 +4408,27 @@ else:
         let (_stream, event) = python_preparation_event(&listener).await;
         assert_eq!(event[0], "created");
         assert_eq!(event[1], a);
-        assert!(f.root.path().join("a/.venv/pyvenv.cfg").is_file());
-        assert!(child.try_wait().unwrap().is_none());
-        terminate(&child);
+        assert!(workspaces[0].join(".venv/pyvenv.cfg").is_file());
+        assert!(!workspaces[1].join(".venv").exists());
+        for (child, _) in &mut running {
+            assert!(child.try_wait().unwrap().is_none());
+            terminate(child);
+        }
         assert_eq!(
             pending.read(&mut [0u8; 1]).await.unwrap(),
             0,
             "SIGTERM closes the held uv only after cancellation"
         );
-        assert!(child.wait().await.unwrap().success());
+        for (mut child, client) in running {
+            assert!(child.wait().await.unwrap().success());
+            client.close().await;
+        }
         assert_eq!(
             kill(Pid::from_raw(i32::try_from(pending_pid).unwrap()), None),
             Err(nix::errno::Errno::ESRCH),
             "shutdown joined the uv process"
         );
-        client.close().await;
+        drop(diagnostic_pipes);
     })
     .await;
 }

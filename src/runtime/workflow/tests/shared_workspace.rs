@@ -92,26 +92,21 @@ fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
     serde_json::from_value(json!({"description":"Typed code through Bash","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
 }
 
-/// Admit the actual fixture interpreters through the explicit configured
-/// environment sent to the Bash Client.
-fn code_context(plane: &WorkflowTestPlane) -> (NativeContext, ExecutionFixture) {
+/// Establish the Client's verified interpreter before executing Code nodes.
+async fn code_context(plane: &WorkflowTestPlane) -> (NativeContext, ExecutionFixture) {
+    use rustx_execution_protocol::WorkspacePythonStatus;
     let workspace = plane.dir.path().join("workspace");
-    let bin = workspace.join(".venv/bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    if !bin.join("python3").exists() {
-        let output = std::process::Command::new("python3")
-            .args(["-c", "import sys; print(sys.executable)"])
-            .output()
-            .expect("Code tests require python3");
-        assert!(
-            output.status.success(),
-            "python3 did not report its executable"
-        );
-        let executable = String::from_utf8(output.stdout).unwrap();
-        let executable = executable.trim();
-        std::os::unix::fs::symlink(executable, bin.join("python3")).unwrap();
-        std::os::unix::fs::symlink(executable, bin.join("python")).unwrap();
-    }
+    std::fs::create_dir_all(&workspace).unwrap();
+    let venv = std::process::Command::new("python3")
+        .args(["-m", "venv", "--without-pip"])
+        .arg(workspace.join(".venv"))
+        .output()
+        .expect("Code tests require python3");
+    assert!(
+        venv.status.success(),
+        "{}",
+        String::from_utf8_lossy(&venv.stderr)
+    );
     let output = std::process::Command::new("node")
         .args(["-p", "process.execPath"])
         .output()
@@ -125,7 +120,6 @@ fn code_context(plane: &WorkflowTestPlane) -> (NativeContext, ExecutionFixture) 
     )
     .unwrap();
     let path = std::env::join_paths([
-        bin,
         node_bin,
         "/usr/local/bin".into(),
         "/usr/bin".into(),
@@ -138,7 +132,30 @@ fn code_context(plane: &WorkflowTestPlane) -> (NativeContext, ExecutionFixture) 
     let lifecycle = crate::agent::AttemptLifecycle::default().with_pre_tool_policy(Arc::new(
         crate::agent::lifecycle::ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess),
     ));
-    bound_bash_context(plane, lifecycle, environment)
+    let (context, execution) = bound_bash_context(plane, lifecycle, environment);
+    let (_, cancellation) = workflow_cancellation();
+    execution
+        .scope
+        .prepare_workspace_python(&cancellation)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            match execution
+                .scope
+                .workspace_python_status(&cancellation)
+                .await
+                .unwrap()
+            {
+                WorkspacePythonStatus::Ready => break,
+                WorkspacePythonStatus::Preparing => tokio::task::yield_now().await,
+                status => panic!("Client Python did not adopt the fixture environment: {status:?}"),
+            }
+        }
+    })
+    .await
+    .expect("Client Python readiness receipt");
+    (context, execution)
 }
 
 #[tokio::test]
@@ -195,7 +212,7 @@ async function main({message, payload}) {
         );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
-        let (context, _execution) = code_context(&plane);
+        let (context, _execution) = code_context(&plane).await;
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
@@ -255,7 +272,7 @@ function main() {
         );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
-        let (context, _execution) = code_context(&plane);
+        let (context, _execution) = code_context(&plane).await;
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
@@ -306,7 +323,7 @@ async fn code_results_over_the_workflow_bound_are_explicitly_rejected() {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
-        let (context, _execution) = code_context(&plane);
+        let (context, _execution) = code_context(&plane).await;
         let error = runtime
             .run_test_foreground(
                 Arc::new(
@@ -359,7 +376,7 @@ function main() {
         );
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
-        let (context, _execution) = code_context(&plane);
+        let (context, _execution) = code_context(&plane).await;
         let output = runtime
             .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
@@ -415,7 +432,7 @@ async fn code_wrong_output_types_support_defaults_and_explicit_fail_branches() {
             }
             let runtime = workflow_runtime(&plane);
             let (_, cancellation) = workflow_cancellation();
-            let (context, _execution) = code_context(&plane);
+            let (context, _execution) = code_context(&plane).await;
             let output = runtime
                 .run_test_foreground(
                     Arc::new(compile_test(definition).unwrap()),
@@ -447,7 +464,7 @@ async fn code_language_errors_stop_without_admitting_the_successor() {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
-        let (context, _execution) = code_context(&plane);
+        let (context, _execution) = code_context(&plane).await;
         let definition = code_definition(script, json!({"code_language":language}));
         assert!(
             runtime

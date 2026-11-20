@@ -2164,7 +2164,10 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
             final_turn(),
         ]
     };
-    let child = Child::require(root, scripts, false, true).await;
+    // The relay checks the child startup Session against the authenticated
+    // Client. Use the same catalog authority for this crash fixture's runtime
+    // and its Client reservation.
+    let (child, _lineage) = compose_session_child(root, 0, scripts, false).await;
     let registry = child.runtime().subagent_registry().expect("Agent registry");
     let agent_id = if reopening {
         let listing = registry.list_agents(1);
