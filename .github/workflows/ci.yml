@@ -344,6 +344,16 @@ jobs:
           shared-key: rust-contracts
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
+      # The Client Workspace Python suite exercises uv with two real Python
+      # minors. Use the runner's system Python alongside this staged version.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       # Compile the contracts lane's targets once with `--all-features` and stage
       # the emitted package binaries beside every emitted test harness executable.
       # Including `--test contracts --test provider` builds those binaries against

@@ -545,6 +545,18 @@ Managed Python setup failures. The catalog warmup timed out; the other
 case hit a PyPI wheel download timeout. Both passed unchanged when
 rerun separately, so the full run remains recorded as failed.
 
+The [FULL run on `55c8cdc94b1a515e4da921156c9befd376a43ee7`](https://github.com/Caismis/rustX/actions/runs/44770182145)
+passed the Linux Boundary test steps. Deterministic contracts reached the
+Client Workspace Python library and failed 11 cases before their intended
+assertions because that job did not install `uv`. The contracts job now
+uses the repository's Linux Python and `uv` setup. The system interpreter
+and Python 3.12 provide the two real minor versions required by the
+interpreter-selection cases. Locally the same revision passed all 6,154
+Server library tests. Four external Workflow cases then hit an ignored
+virtual environment generated under the reference example. All four
+passed with the same test executable after that generated directory was
+moved outside the source tree.
+
 ## Command cancellation, detach, and release (UI-owned `command/exec`)
 
 - Cancellation has one owner: `terminate` and UI detach only signal the
