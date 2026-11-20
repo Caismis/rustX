@@ -120,12 +120,18 @@ provider conformance cases pass, including the 17-image batch and the two
 provider request count it already asserts. The three Workflow repair cases
 still depend on the separate Subagent process's Session routing.
 
+The watcher migration makes `fs/watch` require the exact `sessionId`.
+The Client retains the physical watch descriptors and coalesces up to
+16 paths within a 16 KiB encoded-path budget. The Server owns the UI
+watch subscription and its publication fence. Unwatch settles on the
+independent control lane. Linux evidence includes the two Client
+descriptor-replacement tests, the private-mount watch with a Client-only
+sentinel, and all 28 existing App Server environment boundary tests on
+the watcher slice. Native macOS descriptor and teardown coverage still
+requires a macOS runner.
+
 The remaining #576 production work has these owners.
 
-- `src/app_server/filesystem.rs` still starts the native watch in the
-  Server's view. Route registration, physical observer cleanup and change
-  hints through the Session binding. Keep UI watch identity and notification
-  fencing on the Server.
 - `src/workspace_changes` still owns Git baseline, file snapshots and
   comparison reads on the Server. Move those physical operations while
   preserving the Server's attempt association and normalized result commit.
