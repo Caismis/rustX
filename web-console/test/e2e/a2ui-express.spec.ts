@@ -27,7 +27,7 @@ test('opens only valid HTTPS destinations from an Express card in assistant hist
       }
       await expect(chat).not.toContainText('root = Card');
       await expect(openHn).toBeEnabled();
-      for (const name of ['HTTP 链接', '相对链接', '脚本链接', '无效链接', '加载 11–15 名']) {
+      for (const name of ['HTTP 链接', '相对链接', '脚本链接', '无效链接']) {
         await expect(card.getByRole('button', { name, exact: true })).toBeDisabled();
       }
     };
@@ -101,7 +101,7 @@ test('Express inputs update only their own card and never submit another turn', 
     const submit = card.getByRole('button', { name: '提交到会话' });
     await expect(submit).toBeVisible();
     await expect(submit).toHaveAttribute('data-variant', 'default');
-    await expect(submit).toBeDisabled();
+    await expect(submit).toBeEnabled();
     await expect(composer).toHaveValue('');
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
     expect((await fixture.control('requests')).requests).toHaveLength(1);
@@ -157,6 +157,64 @@ test('updating a bound row redraws both charts and the table', async ({ page }, 
     await page.screenshot({ path: info.outputPath('linked-charts-narrow-dark.png') });
     expect((await fixture.control('requests')).requests).toHaveLength(1);
     expect(errors).toEqual([]);
+    passed = true;
+  } finally {
+    await stopDogfoodPage(page, fixture, passed);
+  }
+});
+
+test('renders the Express spec examples and sends only a real button activation', async ({ page }, info) => {
+  const fixture = await startDogfood('web_a2ui_official');
+  let passed = false;
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const wire = await wireProbe(page);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+    await composer.fill('Render official Express');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    const chat = page.getByLabel('Canonical conversation', { exact: true });
+    const cards = chat.locator('[data-a2ui-express]');
+    await expect(cards).toHaveCount(3);
+    await expect(cards.last().getByRole('listitem')).toHaveText([
+      'Connect your repository', 'Pick a framework preset', 'Deploy the main branch',
+    ]);
+    const template = cards.nth(1);
+    await expect(cards.first().getByRole('heading', { name: 'Enable notification' })).toBeVisible();
+    await expect(cards.first().locator('svg')).toHaveCount(1);
+    await expect(template.getByText('2026-11-20', { exact: true })).toBeVisible();
+    const rows = template.getByRole('listitem');
+    await expect(rows).toHaveCount(2);
+    const alpha = rows.nth(0);
+    const beta = rows.nth(1);
+    await expect(alpha.getByText('1', { exact: true })).toBeVisible();
+    await expect(alpha.getByText('$1,299.50', { exact: true })).toBeVisible();
+    await expect(beta.getByText('2', { exact: true })).toBeVisible();
+    await expect(beta.getByText('$1,499.25', { exact: true })).toBeVisible();
+    await beta.getByRole('slider', { name: 'Quantity' }).press('End');
+    await expect(beta.getByText('Quantity: 10.0', { exact: true })).toBeVisible();
+    await expect(alpha.getByText('Quantity: 3.0', { exact: true })).toBeVisible();
+
+    const reply = beta.getByRole('button', { name: 'Reply', exact: true });
+    await expect(reply).toBeEnabled();
+    await reply.evaluate((button: HTMLButtonElement) => button.click());
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
+    await composer.fill('Keep this draft');
+    await reply.click();
+    await expect(chat.getByText('Replying to Beta: 10', { exact: true })).toBeVisible();
+    await expect(chat.getByText('Reply accepted.', { exact: true })).toBeVisible();
+    await expect(composer).toHaveValue('Keep this draft');
+
+    await cards.first().getByRole('button', { name: 'Yes', exact: true }).click();
+    await expect(chat.getByText('Notifications accepted.', { exact: true })).toBeVisible();
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(3);
+    expect((await fixture.control('requests')).requests).toHaveLength(3);
+    expect(errors).toEqual([]);
+    await template.screenshot({ path: info.outputPath('express-official-template.png') });
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);

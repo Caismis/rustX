@@ -30,6 +30,7 @@ const declaredOnly: Record<string, { license: string | undefined; notice: string
   '@nodable/entities 3.1.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/nodable-entities-3.1.0.txt'), 'utf8') },
   'saxes 6.0.0': { license: 'ISC', notice: readFileSync(join(root, 'licenses/saxes-6.0.0.txt'), 'utf8') },
   '@iconify-json/lucide 1.2.144': { license: 'ISC', notice: readFileSync(join(root, 'licenses/iconify-json-lucide-1.2.144.txt'), 'utf8') },
+  '@lit-labs/ssr-dom-shim 1.6.0': { license: 'BSD-3-Clause', notice: readFileSync(join(root, 'licenses/lit-ssr-dom-shim-1.6.0.txt'), 'utf8') },
   'client-only 0.0.1': {
     license: 'MIT',
     notice: 'License: MIT, as declared in the package manifest; the published package contains no license file.\n'
@@ -40,7 +41,7 @@ function visit(file: string) {
   const pkg = JSON.parse(readFileSync(file, 'utf8'));
   const key = `${pkg.name} ${pkg.version}`;
   if (packages.has(key)) return;
-  const files = readdirSync(dirname(file)).filter(name => /^(license|licence|copying|notice)(\.|$)/i.test(name)).sort();
+  const files = readdirSync(dirname(file)).filter(name => /^(license|licence|copying|notice)(\.|$)/i.test(name) || name === 'LICENSE-MIT.txt').sort();
   const declared = declaredOnly[key];
   if (!files.length && declared) {
     if (pkg.license !== declared.license) throw new Error(`Declared license changed: ${key}`);

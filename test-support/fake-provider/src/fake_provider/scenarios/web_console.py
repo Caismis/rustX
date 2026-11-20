@@ -831,6 +831,58 @@ root = Card(Column([
 SCENARIOS["web_a2ui_express"] = web_a2ui_express
 
 
+def web_a2ui_official() -> Scenario:
+    # A2UI Express technical specification: notification card and @index template.
+    # github.com/a2ui-project/a2ui/blob/main/specification/proposals/express/a2ui_express.md
+    sample = """<a2ui>
+$/icon = "check"
+$/title = "Enable notification"
+$/description = "Choose whether to receive notifications."
+root = Card(main_column)
+main_column = Column([icon, title, description, actions], _, "center")
+icon = Icon($/icon)
+title = Text($/title, "h3")
+description = Text($/description, "body")
+actions = Row([yes_btn, no_btn], "center")
+yes_btn_text = Text("Yes")
+yes_btn = Button(yes_btn_text, _, Event("accept"))
+no_btn_text = Text("No")
+no_btn = Button(no_btn_text, _, Event("decline"))
+</a2ui>
+
+<a2ui>
+$/items = [
+  {label: "Alpha", quantity: 3, amount: 1299.5},
+  {label: "Beta", quantity: 7, amount: 1499.25}
+]
+$/date = "2026-11-20"
+root = Card(Column([Text(formatDate($/date, "yyyy-MM-dd")), itemList]))
+itemList = List(_template($/items, itemRow))
+itemRow = Row([
+  Text(@index(offset=1)), Text($label),
+  Slider(label="Quantity", min=0, max=10, value=$quantity),
+  Text(formatString("Quantity: ${formatNumber(value: quantity, decimals: 1)}")),
+  Text(formatCurrency($amount, currency="USD")),
+  Button(child=Text("Reply"), action=Event("reply", userMessage=formatString("Replying to ${label}: ${quantity}")))
+])
+</a2ui>
+
+<a2ui>
+root = List(marker="number", items=["Connect your repository", "Pick a framework preset", "Deploy the main branch"])
+</a2ui>"""
+
+    def expected(message: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(message,))
+
+    return Scenario("web_a2ui_official",
+        Step(expected("Render official Express"), Stream(Text(sample), Finish())),
+        Step(expected("Replying to Beta: 10"), Stream(Text("Reply accepted."), Finish())),
+        Step(expected("accept"), Stream(Text("Notifications accepted."), Finish())))
+
+
+SCENARIOS["web_a2ui_official"] = web_a2ui_official
+
+
 def web_a2ui_controls() -> Scenario:
     card = """<a2ui>
 $/score = 3

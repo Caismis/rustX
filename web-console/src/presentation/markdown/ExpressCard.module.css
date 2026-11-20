@@ -86,6 +86,12 @@
   align-items: stretch;
 }
 .Row > .text:first-child:not(:last-child) { flex: 1 1 10rem; min-inline-size: 0; }
+.Row[data-align='start'], .Column[data-align='start'] { align-items: flex-start; }
+.Row[data-align='center'], .Column[data-align='center'] { align-items: center; }
+.Row[data-align='end'], .Column[data-align='end'] { align-items: flex-end; }
+.Row[data-justify='center'], .Column[data-justify='center'] { justify-content: center; }
+.Row[data-justify='end'], .Column[data-justify='end'] { justify-content: flex-end; }
+.Row[data-justify='spaceBetween'], .Column[data-justify='spaceBetween'] { justify-content: space-between; }
 .list {
   margin: 0;
   padding: 0;
@@ -96,6 +102,11 @@
 }
 .list > li { padding: .55rem .875rem; }
 .list > li + li, .divider { border: 0; border-top: 1px solid var(--a2-border); }
+.list[data-marker='number'] { list-style: decimal inside; }
+.list[data-marker='number'] > li::marker { color: var(--a2-muted-foreground); }
+.list[data-direction='horizontal'] { display: flex; overflow-x: auto; }
+.list[data-direction='horizontal'] > li { flex: 0 0 auto; }
+.list[data-direction='horizontal'] > li + li { border-top: 0; border-inline-start: 1px solid var(--a2-border); }
 .divider { width: 100%; margin: 0; }
 
 .text { margin: 0; white-space: pre-wrap; }

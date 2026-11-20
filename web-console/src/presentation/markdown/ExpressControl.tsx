@@ -7,6 +7,7 @@ export interface ExpressControlProps {
   kind: string;
   props: Record<string, unknown>;
   onChange: (value: string | number | boolean | string[]) => void;
+  onActivate?: () => void;
   children?: ReactNode;
 }
 
@@ -51,7 +52,7 @@ function httpsDestination(value: unknown): string | undefined {
   }
 }
 
-function ControlButton({ props, children }: { props: Record<string, unknown>; children?: ReactNode }) {
+function ControlButton({ props, onActivate, children }: Pick<ExpressControlProps, 'props' | 'onActivate' | 'children'>) {
   const variant = text(props.variant);
   const destination = httpsDestination(props.openUrl);
   const appearance = props.color === 'danger' ? 'destructive'
@@ -59,11 +60,13 @@ function ControlButton({ props, children }: { props: Record<string, unknown>; ch
       : variant === 'soft' ? 'secondary'
         : variant === 'borderless' || variant === 'ghost' ? 'ghost' : 'outline';
   return (
-    <button type="button" disabled={!destination} data-slot="button" data-variant={appearance}
+    <button type="button" disabled={!destination && !onActivate} data-slot="button" data-variant={appearance}
       data-size={props.size === 'sm' || props.size === 'xs' ? 'sm' : 'lg'}
       className={clsx(css.button, props.block === true && css.fullWidth)}
       onClick={event => {
-        if (destination && event.isTrusted) window.open(destination, '_blank', 'noopener,noreferrer');
+        if (!event.isTrusted) return;
+        if (destination) window.open(destination, '_blank', 'noopener,noreferrer');
+        else onActivate?.();
       }}>
       {children}
     </button>
@@ -196,9 +199,9 @@ function ControlChoicePicker({ props, onChange }: { props: Record<string, unknow
   );
 }
 
-export function ExpressControl({ kind, props, onChange, children }: ExpressControlProps): ReactNode {
+export function ExpressControl({ kind, props, onChange, onActivate, children }: ExpressControlProps): ReactNode {
   switch (kind) {
-    case 'Button': return <ControlButton props={props}>{children}</ControlButton>;
+    case 'Button': return <ControlButton props={props} onActivate={onActivate}>{children}</ControlButton>;
     case 'Slider': return <ControlSlider props={props} onChange={onChange} />;
     case 'CheckBox': return <ControlCheckBox props={props} onChange={onChange} />;
     case 'TextField': return <ControlTextField props={props} onChange={onChange} />;

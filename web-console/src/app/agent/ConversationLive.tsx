@@ -36,6 +36,7 @@ import { TurnNavigator } from './TurnNavigator';
 import { transcriptContent, transcriptPresentation, turnAnchor } from '../../client/transcript';
 import { firstSubmissions } from '../new-conversation/first-submit';
 import { ConversationRunCanvasHost } from '../workflows/run-canvas/ConversationRunCanvasHost';
+import { ExpressEventContext } from '../../presentation/markdown/ExpressCard';
 
 export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, retry, forking, onHistorical, previewCurrent, onMode, versionDestination, messageVersionFocus, onRetryMessage, onSwitchMessageVersion }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean; historicalPending?: boolean; forking?: CompletedResponseView;
@@ -129,6 +130,29 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const contentView = useMemo(() => Symbol('root content view'), [view?.observation, sessionId, mode, scope?.selected]);
   const currentContentView = useRef(contentView); currentContentView.current = contentView;
   const ownsContent = useMemo(() => () => currentContentView.current === contentView && mode === 'chat' && !scope?.selected && !!view?.observation && !!sessionId && client.isAttachmentObservationCurrent(sessionId, view.observation), [contentView, mode, scope?.selected, client, sessionId, view?.observation]);
+  const [eventError, setEventError] = useState<{ owner: symbol; message: string }>();
+  const eventInFlight = useRef<symbol>(undefined);
+  const eventReady = !!view?.readable && !view.disabled && !view.readingPreview && !historicalPending
+    && !readingPending && mode === 'chat' && !scope?.selected;
+  const sendExpressEvent = useMemo(() => {
+    if (!eventReady || !sessionId || !view?.target || !view.observation) return undefined;
+    const { target, observation } = view;
+    const current = () => {
+      const live = client.getSnapshot().views[sessionId];
+      return ownsContent() && sameTarget(live?.target, target) && client.isAttachmentControlCurrent(sessionId, observation)
+        && !live?.snapshot?.shutting_down && !live?.snapshot?.durability_failure;
+    };
+    return (message: string) => {
+      if (!current() || eventInFlight.current === contentView) return;
+      eventInFlight.current = contentView;
+      setEventError(undefined);
+      void client.send(sessionId, message, [], 'send', undefined, current).catch(cause => {
+        if (current()) setEventError({ owner: contentView, message: cause instanceof Error ? cause.message : String(cause) });
+      }).finally(() => {
+        if (eventInFlight.current === contentView) eventInFlight.current = undefined;
+      });
+    };
+  }, [client, contentView, eventReady, ownsContent, sessionId, view?.observation, view?.target]);
   const ownsHistory=()=>{
     if(!view?.readingPreview||!view.history?.page.source_cut||currentContentView.current!==contentView||mode!=='chat'||scope?.selected)return false;
     const state=client.getSnapshot(),current=state.views[view.id];
@@ -243,11 +267,14 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       }}/>}<SessionPanel key={view.id} client={client} sessionId={view.id}/></>}
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       initialHistoryLoading={readingPending || view.readingPreview || view.history?.initialLoading} historical={!!view.history?.window && !view.readingPreview} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
+      <ExpressEventContext value={sendExpressEvent}>
       {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript accepted={[...(view.submissions ?? []), ...(view.sendingSubmissions ?? [])].filter(value => value.messageId !== submission?.acceptedMessageId && value.placement !== 'queued')} publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} readable={!readingPending && view.readable && !view.readingPreview} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!readingPending && !view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!readingPending && !view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={readingPending ? undefined : () => client.loadLater(view.id)} loadEarlier={readingPending ? undefined : () => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}
         editedMessage={view.retrying ? retry?.edited : undefined}
         userMessageHistory={messageControls && !view.readingPreview && !view.retrying ? {
           versions, retry: onRetryMessage, switchVersion,
         } : undefined}/>}
+      </ExpressEventContext>
+      {eventError?.owner === contentView && <p role="alert">{eventError.message}</p>}
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>

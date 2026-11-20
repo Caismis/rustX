@@ -48,6 +48,6 @@ function expressParts(source: string): Part[] {
 export function AssistantMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const parts = useMemo(() => expressParts(text), [text]);
   return <>{parts.map((part, index) => <Fragment key={part.start}>
-    {part.tree ? <ExpressCard key={part.text} surface={part.tree}/> : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
+    {part.tree ? <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/> : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
   </Fragment>)}</>;
 }

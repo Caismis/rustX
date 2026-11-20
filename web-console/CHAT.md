@@ -691,9 +691,30 @@ admission/discard releases those files. A known rejected create returns files to
 User-input count/byte limits are distinct from transfer limits and are independently
 validated by the native receipt collection owner before turn admission.
 
-## A2UI Express controls and charts
+## A2UI Express
 
-Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines, or in an `a2ui` code fence. Bind a control and a display component to the same data path to update the display locally. Each surface has its own values. Reopening a rendered message initializes the controls from its source. Action buttons display their labels and do not submit a chat turn.
+Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines or in an `a2ui` code fence. Each block owns its data model. Reopening a rendered message initializes its values from the source.
+
+| Area | Supported in chat |
+| --- | --- |
+| Layout | Named components, inline components, positional and named arguments, `_` for optional arguments, and simple Playground `List(items=[…], marker="number")` lists. |
+| Templates | `_template(path, component)` in child lists, named and inline templates, nested array scopes, and `@index()` with an optional offset. |
+| Binding | Root and nested data assignments, absolute `$/path` and row-relative `$field` paths, JSON Pointer escapes, dynamic values in arrays and maps, and local control writeback. |
+| Formatting | `formatString` with path and function interpolation, `formatNumber`, `formatCurrency`, `formatDate`, and `pluralize`. |
+| Actions | In an attached chat, a user click on an `Event` button sends a regular user message. A nonempty `userMessage` takes precedence. Otherwise the message contains the event name and any resolved context as JSON on a second line. `openUrl` opens an HTTPS destination in a separate tab on click. |
+
+Use `root` to declare each independent surface. Multi-turn surface updates, catalog switching, form validation checks, renderer RPC, and components outside the rustX catalog are outside the chat renderer's scope. The Playground's catalog also defines its own components and functions. [Express technical specification](https://github.com/a2ui-project/a2ui/blob/main/specification/proposals/express/a2ui_express.md) · [Playground catalog](https://github.com/CopilotKit/CopilotKit/tree/main/examples/showcases/a2ui-playground/src/a2ui/catalog)
+
+```a2ui
+$/items = [{name: "Alpha", price: 12.5}, {name: "Beta", price: 24}]
+root = List(_template($/items, item))
+item = Row([
+  Text(@index(1)),
+  Text($name),
+  Text(formatCurrency($price, "USD")),
+  Button(Text("Details"), action=Event("details", userMessage=formatString("Tell me more about ${name}")))
+])
+```
 
 The rustX display catalog adds three components for arrays of row objects.
 

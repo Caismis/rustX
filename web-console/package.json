@@ -24,6 +24,7 @@
     "build:host": "node-gyp rebuild --directory node_modules/node-pty && node-gyp rebuild --directory host/workspace-fs"
   },
   "dependencies": {
+    "@a2ui/web_core": "0.15.0",
     "@base-ui/react": "1.8.0",
     "@codemirror/lang-javascript": "6.2.5",
     "@codemirror/lang-jinja": "6.0.1",

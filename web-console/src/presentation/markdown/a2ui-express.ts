@@ -1,5 +1,13 @@
-/** Bounded reader for assistant-authored Express surfaces. */
+import { ARRAY_INDEX, MAX_DEPTH, MAX_SOURCE_LENGTH, bindingPath, evaluator, functions, lookup, scalarText, type Expr, type Scope } from './express-values';
+
 const signatures = {
+  Text: ['text', 'variant', 'weight'],
+  Column: ['children', 'justify', 'align', 'weight', 'wrap', 'gap'],
+  Row: ['children', 'justify', 'align', 'weight', 'wrap', 'gap'],
+  List: ['children', 'direction', 'align', 'weight', 'marker', 'gap', 'items'],
+  Card: ['child', 'weight', 'variant', 'children'],
+  Divider: ['axis', 'weight'],
+  Icon: ['name', 'weight', 'label', 'size'],
   Slider: ['label', 'min', 'max', 'value', 'steps', 'weight'],
   CheckBox: ['label', 'value', 'weight'],
   TextField: ['label', 'value', 'placeholder', 'variant', 'weight'],
@@ -9,40 +17,48 @@ const signatures = {
   Table: ['rows', 'columns', 'title'],
   LineChart: ['rows', 'x', 'y', 'title'],
   BarChart: ['rows', 'x', 'y', 'title'],
-} satisfies Record<string, string[]>;
+} satisfies Record<string, readonly string[]>;
 
-export type ExpressKind = 'Text' | 'Column' | 'List' | 'Card' | 'Row' | 'Divider' | keyof typeof signatures;
+export type ExpressKind = keyof typeof signatures;
+type EventAction = { name: Expr; context?: Expr; userMessage?: Expr };
 export interface ExpressNode {
   kind: ExpressKind;
   children: ExpressNode[];
-  text?: string;
-  textTemplate?: TextPart[];
-  variant?: string;
-  props?: Record<string, unknown>;
-  bindings?: Record<string, string[]>;
+  props: Record<string, unknown>;
+  bindings: Record<string, string[]>;
+  scope: Scope;
+  event?: EventAction;
 }
 export interface ExpressSurface {
   root: ExpressNode;
   data: Record<string, unknown>;
+  render: (data: Record<string, unknown>) => ExpressNode | null;
+  resolve: (data: Record<string, unknown>) => ReturnType<typeof evaluator>;
 }
+
+type Child = RawNode | { template: RawNode; path: string };
+type RawNode = { reference: string } | {
+  kind: ExpressKind;
+  children: Child[];
+  props: Record<string, Expr>;
+  event?: EventAction;
+};
 
 type Token =
   | { type: 'ident'; value: string }
   | { type: 'string'; value: string }
   | { type: 'number'; value: number }
-  | { type: 'ref'; path: string[] }
+  | { type: 'ref'; path: string }
   | { type: 'punct'; value: string }
   | { type: 'eof' };
 
 const PUNCT = new Set(['=', '(', ')', '[', ']', '{', '}', ',', ':']);
-const IDENT_START = /[A-Za-z_]/;
-const IDENT_PART = /[A-Za-z0-9_]/;
+const IDENTIFIER = /@?[\p{XID_Start}_][\p{XID_Continue}]*/uy;
 // Path segments accept any run of non-delimiter characters so unicode keys
 // (`$/标题`) work; `/` separates segments and every grammar punct terminates.
 const SEGMENT = /^[^\s\/()[\]{},:="'`$=<>]+/;
-const NUMBER = /^-?\d+(\.\d+)?/;
+const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/;
 const EOF_TOKEN: Token = { type: 'eof' };
-const MAX_SOURCE_LENGTH = 65536;
 
 function isSpace(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v';
@@ -50,8 +66,7 @@ function isSpace(ch: string): boolean {
 
 /**
  * Split express source into tokens. Returns null on any character the
- * grammar cannot place (including unterminated strings and `$` not followed
- * by a `/`-path), which the caller treats as malformed input.
+ * grammar cannot place (including unterminated strings), which the caller treats as malformed input.
  */
 function tokenize(source: string): Token[] | null {
   if (source.length > MAX_SOURCE_LENGTH) return null;
@@ -66,14 +81,17 @@ function tokenize(source: string): Token[] | null {
       i = end < 0 ? source.length : end + 1;
       continue;
     }
-    if (ch === '"') {
-      let j = i + 1;
+    const raw = source.startsWith('r"', i);
+    if (ch === '"' || raw) {
+      const start = raw ? i + 1 : i;
+      const quote = source.startsWith('"""', start) ? '"""' : '"';
+      let j = start + quote.length;
       let value = '';
       let closed = false;
       while (j < source.length) {
         const c = source[j];
-        if (c === '"') { closed = true; j++; break; }
-        if (c === '\\') {
+        if (source.startsWith(quote, j)) { closed = true; j += quote.length; break; }
+        if (!raw && c === '\\') {
           j++;
           if (j >= source.length) return null;
           const esc = source[j];
@@ -98,36 +116,32 @@ function tokenize(source: string): Token[] | null {
       continue;
     }
     if (ch === '$') {
-      if (source[i + 1] !== '/') return null;
-      const path: string[] = [];
-      let j = i + 2;
+      let j = i + 1;
+      if (source[j] === '/') j++;
       for (;;) {
-        const m = SEGMENT.exec(source.slice(j));
-        if (m === null) return null;
-        if (path.length >= 64 || (/^\d+$/.test(m[0]) && Number(m[0]) > 8192)) return null;
-        path.push(m[0]);
-        j += m[0].length;
+        const segment = SEGMENT.exec(source.slice(j));
+        if (!segment) break;
+        j += segment[0].length;
         if (source[j] !== '/') break;
         j++;
       }
-      tokens.push({ type: 'ref', path });
+      tokens.push({ type: 'ref', path: source.slice(i + 1, j) || '/' });
       i = j;
       continue;
     }
-    if (ch >= '0' && ch <= '9' || ch === '-' && source[i + 1] >= '0' && source[i + 1] <= '9') {
-      const m = NUMBER.exec(source.slice(i));
-      if (m === null) return null;
-      const value = Number(m[0]);
+    const number = /^[+-.0-9]$/.test(ch) ? NUMBER.exec(source.slice(i)) : null;
+    if (number) {
+      const value = Number(number[0]);
       if (!Number.isFinite(value)) return null;
       tokens.push({ type: 'number', value });
-      i += m[0].length;
+      i += number[0].length;
       continue;
     }
-    if (IDENT_START.test(ch)) {
-      let j = i + 1;
-      while (j < source.length && IDENT_PART.test(source[j])) j++;
-      tokens.push({ type: 'ident', value: source.slice(i, j) });
-      i = j;
+    IDENTIFIER.lastIndex = i;
+    const identifier = IDENTIFIER.exec(source);
+    if (identifier) {
+      tokens.push({ type: 'ident', value: identifier[0] });
+      i = IDENTIFIER.lastIndex;
       continue;
     }
     if (PUNCT.has(ch)) {
@@ -141,585 +155,347 @@ function tokenize(source: string): Token[] | null {
   return tokens;
 }
 
-/** Literal data value on the right of a `$/path =` binding. */
-type Value =
-  | { type: 'string'; value: string }
-  | { type: 'number'; value: number }
-  | { type: 'boolean'; value: boolean }
-  | { type: 'null' }
-  | { type: 'array'; items: Value[] }
-  | { type: 'object'; entries: [string, Value][] };
+const ROOT_SCOPE: Scope = { path: [] };
+const INVALID = Symbol('invalid Express');
+const literal = (value: unknown): Expr => ({ type: 'literal', value });
+const reserved = new Set(['true', 'false', 'null', '_']);
 
-/** Scalar operand for Text content and variants: literal or `$` reference. */
-type ScalarExpr =
-  | { type: 'literal'; value: string | number | boolean | null }
-  | { type: 'ref'; path: string[] };
-
-type TextPart = string | { path: string[] };
-type TextExpr = ScalarExpr | { type: 'format'; parts: TextPart[] };
-
-type PropertyExpr = { type: 'value'; value: unknown } | { type: 'ref'; path: string[] };
-
-/** Pre-resolution component: containers hold raw children; Text holds its operand. */
-type RawNode = { reference: string } | {
-  kind: ExpressKind;
-  children: RawNode[];
-  textExpr?: TextExpr;
-  properties?: Record<string, PropertyExpr>;
-  variant?: string;
-}
-
-/** Parsed program: the resolved-pending root plus the `$` binding store. */
-interface Program {
-  root: RawNode;
-  definitions: ReadonlyMap<string, RawNode>;
-  data: Record<string, unknown>;
-}
-
-const COMPONENT_KINDS = new Set<string>(['Card', 'Column', 'List', 'Row', 'Divider', 'Text', ...Object.keys(signatures)]);
-const INDEX_SEGMENT = /^\d+$/;
-// Bounds recursion on untrusted input; ~256 nesting levels is far beyond any
-// legitimate card, and deeper input falls back to the raw source.
-const MAX_PARSE_DEPTH = 256;
-
-/** Evaluate a literal binding value into plain JS data (null-prototype objects). */
-function evalValue(value: Value): unknown {
-  switch (value.type) {
-    case 'string':
-    case 'number':
-    case 'boolean':
-      return value.value;
-    case 'null':
-      return null;
-    case 'array':
-      return value.items.map(evalValue);
-    case 'object': {
-      const out: Record<string, unknown> = Object.create(null);
-      for (const [key, item] of value.entries) out[key] = evalValue(item);
-      return out;
-    }
-  }
-}
-
-/**
- * Deep-assign `value` at `path` inside `root`, creating intermediate objects
- * or arrays based on whether the next segment is numeric. Returns false on
- * type conflicts (a scalar or mismatched container already occupies a step).
- */
-function deepSet(root: Record<string, unknown>, path: readonly string[], value: unknown): boolean {
-  let cur: unknown = root;
-  for (let i = 0; i < path.length - 1; i++) {
-    const seg = path[i];
-    const container: Record<string, unknown> | unknown[] = INDEX_SEGMENT.test(path[i + 1]) ? [] : Object.create(null);
-    if (Array.isArray(cur)) {
-      if (!INDEX_SEGMENT.test(seg)) return false;
-      const idx = Number(seg);
-      const existing = cur[idx];
-      if (existing === undefined || existing === null) cur[idx] = container;
-      else if (typeof existing !== 'object') return false;
-      cur = cur[idx];
-    } else if (typeof cur === 'object' && cur !== null) {
-      const existing = (cur as Record<string, unknown>)[seg];
-      if (existing === undefined) (cur as Record<string, unknown>)[seg] = container;
-      else if (typeof existing !== 'object' || existing === null) return false;
-      cur = (cur as Record<string, unknown>)[seg];
-    } else {
-      return false;
-    }
-  }
-  const last = path[path.length - 1];
-  if (Array.isArray(cur)) {
-    if (!INDEX_SEGMENT.test(last)) return false;
-    cur[Number(last)] = value;
-  } else if (typeof cur === 'object' && cur !== null) {
-    (cur as Record<string, unknown>)[last] = value;
-  } else {
-    return false;
-  }
-  return true;
-}
-
-const MISSING = Symbol('a2ui-missing');
-
-/** Walk `path` through `data`; MISSING when any step is absent or mistyped. */
-function lookupPath(data: Record<string, unknown>, path: readonly string[]): unknown {
-  let cur: unknown = data;
-  for (const seg of path) {
-    if (Array.isArray(cur)) {
-      if (!INDEX_SEGMENT.test(seg)) return MISSING;
-      const idx = Number(seg);
-      if (idx >= cur.length) return MISSING;
-      cur = cur[idx];
-    } else if (typeof cur === 'object' && cur !== null) {
-      if (!Object.prototype.hasOwnProperty.call(cur, seg)) return MISSING;
-      cur = (cur as Record<string, unknown>)[seg];
-    } else {
-      return MISSING;
-    }
-  }
-  return cur;
-}
-
-/** Text displays scalar data bindings. Composite values need a nested path. */
-function scalarToText(value: unknown): string | null {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return null;
-}
-
-/** Compile absolute JSON Pointer placeholders and escaped literal `${` markers. */
-function parseTextTemplate(template: string): TextPart[] | null {
-  const parts: TextPart[] = [];
-  let end = 0;
-  for (const match of template.matchAll(/\\\$\{|\$\{([^{}]*)\}|\$\{/g)) {
-    if (match.index > end) parts.push(template.slice(end, match.index));
-    end = match.index + match[0].length;
-    if (match[0] === '\\\${') {
-      parts.push('${');
-      continue;
-    }
-    const pointer = match[1];
-    if (!pointer?.startsWith('/') || /~(?![01])/.test(pointer)) return null;
-    const path = pointer.slice(1).split('/');
-    if (path.length > 64) return null;
-    parts.push({ path: path.map(segment => segment.replaceAll('~1', '/').replaceAll('~0', '~')) });
-  }
-  if (end < template.length) parts.push(template.slice(end));
-  return parts;
-}
-
-function resolveTemplate(parts: TextPart[], data: Record<string, unknown>): string | null {
-  let result = '';
-  for (const part of parts) {
-    const value = typeof part === 'string' ? part : scalarToText(lookupPath(data, part.path));
-    if (value === null || result.length + value.length > MAX_SOURCE_LENGTH) return null;
-    result += value;
-  }
-  return result;
-}
-
-/**
- * Recursive-descent parser over the token stream. Grammar:
- *
- *   program    := statement* EOF
- *   statement  := ref '=' value            // `$/path =` data binding
- *               | 'root' '=' component     // the component tree (last wins)
- *   component  := ident '(' args ')'       // ident in {@link COMPONENT_KINDS}
- *   args       := child (',' child)*       // containers: components/arrays
- *               | textOperand (',' variant)? // Text
- *               | variant?                 // Divider
- *   child      := component | '[' child (',' child)* ']'   // arrays flatten
- *   scalar     := string | number | ref | 'true' | 'false' | 'null'
- *   textOperand := scalar | 'formatString' '(' ('value' '=')? string ')'
- *   variant    := string | number | ident
- *   value      := scalar-without-ref | array | object
- *
- * Trailing commas are tolerated before a closing bracket; every other
- * deviation returns null so the caller falls back to the raw source.
- */
 class Parser {
   private pos = 0;
-  private readonly definitions = new Map<string, RawNode>();
-  private readonly data: Record<string, unknown> = Object.create(null);
+  private readonly components = new Map<string, RawNode>();
+  private readonly variables = new Map<string, Expr>();
+  private data: Record<string, unknown> = Object.create(null);
+  private modelSlots = MAX_SOURCE_LENGTH;
 
   constructor(private readonly tokens: Token[]) {}
 
-  parse(): Program | null {
-    while (this.peek().type !== 'eof') {
-      if (!this.statement()) return null;
-    }
-    const root = this.definitions.get('root');
-    return root ? { root, data: this.data, definitions: this.definitions } : null;
+  parse(): ExpressSurface | null {
+    while (this.peek().type !== 'eof') this.statement();
+    const raw = this.components.get('root');
+    if (!raw) return null;
+    const { components, variables, data } = this;
+    const resolve = (model: Record<string, unknown>) => evaluator(model, variables, { remaining: 8192 });
+    const render = (model: Record<string, unknown>) => {
+      try {
+        const budget = { remaining: 8192 };
+        return resolveNode(raw, { model, components, variables, resolve: evaluator(model, variables, budget), budget }, ROOT_SCOPE, 0);
+      } catch {
+        return null;
+      }
+    };
+    const root = render(data);
+    return root && { root, data, render, resolve };
   }
 
-  private peek(): Token {
-    return this.tokens[this.pos] ?? EOF_TOKEN;
+  private peek(offset = 0): Token {
+    return this.tokens[this.pos + offset] ?? EOF_TOKEN;
   }
 
-  private atPunct(value: string): boolean {
-    const t = this.peek();
-    return t.type === 'punct' && t.value === value;
+  private at(value: string, offset = 0): boolean {
+    const token = this.peek(offset);
+    return token.type === 'punct' && token.value === value;
   }
 
-  private expectPunct(value: string): boolean {
-    if (!this.atPunct(value)) return false;
+  private take(value: string): boolean {
+    if (!this.at(value)) return false;
     this.pos++;
     return true;
   }
 
-  private statement(): boolean {
-    const t = this.peek();
-    if (t.type === 'ref') {
-      this.pos++;
-      if (!this.expectPunct('=')) return false;
-      const value = this.parseValue(0);
-      return value !== null && deepSet(this.data, t.path, evalValue(value));
-    }
-    if (t.type === 'ident' && !this.definitions.has(t.value)) {
-      this.pos++;
-      if (!this.expectPunct('=')) return false;
-      const node = this.parseComponent(0);
-      if (node === null) return false;
-      this.definitions.set(t.value, node);
-      return true;
-    }
-    return false;
+  private expect(value: string): void {
+    if (!this.take(value)) throw INVALID;
   }
 
-  private parseComponent(depth: number): RawNode | null {
-    if (depth > MAX_PARSE_DEPTH) return null;
-    const name = this.peek();
-    if (name.type !== 'ident') return null;
-    const kind = name.value as ExpressKind;
+  private statement(): void {
+    const key = this.peek();
     this.pos++;
-    if (!this.expectPunct('(')) return { reference: name.value };
-    if (!COMPONENT_KINDS.has(name.value)) return null;
-    let node: RawNode;
-    if (kind === 'Text') {
-      const textExpr = this.parseTextExpr();
-      if (textExpr === null) return null;
-      let variant: string | undefined;
-      if (this.atPunct(',')) {
-        this.pos++;
-        const parsed = this.parseVariant();
-        if (parsed === null) return null;
-        variant = parsed;
-      }
-      node = { kind, children: [], textExpr, variant };
-    } else if (Object.hasOwn(signatures, kind)) {
-      const parsed = this.parseProperties(kind as keyof typeof signatures, depth);
-      if (!parsed) return null;
-      node = parsed;
-    } else if (kind === 'Divider') {
-      let variant: string | undefined;
-      if (!this.atPunct(')')) {
-        const parsed = this.parseVariant();
-        if (parsed === null) return null;
-        variant = parsed;
-      }
-      node = { kind, children: [], variant };
+    this.expect('=');
+    if (key.type === 'ref' && key.path.startsWith('/')) {
+      const value = this.expression(0, false);
+      if (value.type !== 'literal') throw INVALID;
+      this.setData(bindingPath(key.path, ROOT_SCOPE), value.value);
+      return;
+    }
+    if (key.type !== 'ident' || reserved.has(key.value) || key.value.startsWith('@')
+      || this.components.has(key.value) || this.variables.has(key.value)) throw INVALID;
+    const first = this.peek();
+    if (first.type === 'ident' && this.at('(', 1) && Object.hasOwn(signatures, first.value)) {
+      this.components.set(key.value, this.component(0));
     } else {
-      const children: RawNode[] = [];
-      while (!this.atPunct(')')) {
-        const seq = this.parseChildSeq(depth + 1);
-        if (seq === null) return null;
-        children.push(...seq);
-        if (!this.atPunct(',')) break;
-        this.pos++;
-      }
-      node = { kind, children };
+      this.variables.set(key.value, this.expression(0));
     }
-    return this.expectPunct(')') ? node : null;
   }
 
-  private parseProperties(kind: keyof typeof signatures, depth: number): RawNode | null {
-    const names: readonly string[] = signatures[kind];
-    const seen = new Set<string>();
-    const properties: Record<string, PropertyExpr> = Object.create(null);
-    const children: RawNode[] = [];
-    let index = 0;
-    while (!this.atPunct(')')) {
-      let key = names[index++];
-      const first = this.peek(), next = this.tokens[this.pos + 1];
-      if (first.type === 'ident' && next?.type === 'punct' && next.value === '=') {
-        key = first.value;
-        this.pos += 2;
+  private setData(path: string[], value: unknown): void {
+    if (path.length === 0) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw INVALID;
+      this.data = value as Record<string, unknown>;
+      return;
+    }
+    let current = this.data;
+    for (const [index, key] of path.entries()) {
+      if (Array.isArray(current)) {
+        if (!ARRAY_INDEX.test(key) || Number(key) > 10000) throw INVALID;
+        this.modelSlots -= Math.max(0, Number(key) - current.length + 1);
+        if (this.modelSlots < 0) throw INVALID;
+        while (current.length < Number(key)) current.push(null);
       }
-      const argument = this.peek();
-      if (!key || !names.includes(key) || seen.has(key)) return null;
-      seen.add(key);
-      if (argument.type === 'ident' && argument.value === '_') {
-        this.pos++;
-      } else if (key === 'child') {
-        const child = this.parseComponent(depth + 1);
-        if (!child) return null;
-        children.push(child);
-      } else if (key === 'action') {
-        const url = this.parseAction();
-        if (url === null) return null;
-        if (url) properties.openUrl = url;
-      } else if (argument.type === 'ref') {
-        properties[key] = argument;
-        this.pos++;
+      const next = path[index + 1];
+      if (next === undefined) {
+        current[key] = value;
       } else {
-        const value = this.parseValue(depth + 1);
-        if (!value) return null;
-        properties[key] = { type: 'value', value: evalValue(value) };
+        current[key] ??= ARRAY_INDEX.test(next) && Number(next) <= 10000 ? [] : Object.create(null);
+        if (typeof current[key] !== 'object') throw INVALID;
+        current = current[key] as Record<string, unknown>;
       }
-      if (!this.expectPunct(',')) break;
     }
-    if (kind === 'Button' && children.length !== 1) return null;
-    return { kind, properties, children };
   }
 
-  private parseAction(): PropertyExpr | undefined | null {
-    const name = this.peek();
-    if (name.type !== 'ident') return null;
-    this.pos++;
-    if (!this.expectPunct('(')) return null;
-    const start = this.pos;
-    let nesting = 1;
-    while (nesting > 0) {
-      if (this.peek().type === 'eof') return null;
-      if (this.atPunct('(')) nesting++;
-      if (this.atPunct(')')) nesting--;
-      this.pos++;
-    }
-    // Only the URL operand is retained. Other actions remain display-only.
-    if (name.value !== 'openUrl') return undefined;
-    const args = this.tokens.slice(start, this.pos - 1);
-    const last = args.at(-1);
-    if (last?.type === 'punct' && last.value === ',') args.pop();
-    const [first, equals, namedValue] = args;
-    const value = args.length === 1 ? first
-      : args.length === 3 && first.type === 'ident' && first.value === 'url' && equals.type === 'punct' && equals.value === '='
-        ? namedValue : undefined;
-    if (value?.type === 'string') return { type: 'value', value: value.value };
-    if (value?.type === 'ref') return value;
-    return undefined;
-  }
-
-  /** One child position: a component, or an array literal flattened to nodes. */
-  private parseChildSeq(depth: number): RawNode[] | null {
-    if (depth > MAX_PARSE_DEPTH) return null;
-    if (this.atPunct('[')) {
-      this.pos++;
-      const items: RawNode[] = [];
-      while (!this.atPunct(']')) {
-        const seq = this.parseChildSeq(depth + 1);
-        if (seq === null) return null;
-        items.push(...seq);
-        if (!this.atPunct(',')) break;
-        this.pos++;
+  private arguments(names: readonly string[], read: (key: string) => void, positional = names.length): void {
+    this.expect('(');
+    const seen = new Set<string>();
+    let index = 0;
+    while (!this.take(')')) {
+      const t = this.peek();
+      let key: string;
+      if (t.type === 'ident' && this.at('=', 1)) {
+        key = t.value;
+        this.pos += 2;
+      } else {
+        while (seen.has(names[index])) index++;
+        if (index >= positional) throw INVALID;
+        key = names[index++];
       }
-      if (!this.expectPunct(']')) return null;
-      return items;
+      if (!names.includes(key) || seen.has(key)) throw INVALID;
+      seen.add(key);
+      const arg = this.peek();
+      if (arg.type === 'ident' && arg.value === '_') this.pos++;
+      else read(key);
+      if (!this.at(')')) this.expect(',');
     }
-    const node = this.parseComponent(depth);
-    return node === null ? null : [node];
   }
 
-  /** Text additionally accepts a template that reads absolute data paths. */
-  private parseTextExpr(): TextExpr | null {
-    const name = this.peek();
-    if (name.type !== 'ident' || name.value !== 'formatString') return this.parseScalarExpr();
-    this.pos++;
-    if (!this.expectPunct('(')) return null;
-    const argument = this.peek();
-    if (argument.type === 'ident' && argument.value === 'value') {
-      this.pos++;
-      if (!this.expectPunct('=')) return null;
-    }
-    const template = this.peek();
-    if (template.type !== 'string') return null;
-    this.pos++;
-    this.expectPunct(',');
-    if (!this.expectPunct(')')) return null;
-    const parts = parseTextTemplate(template.value);
-    return parts && { type: 'format', parts };
-  }
-
-  /** A literal scalar or a data reference. */
-  private parseScalarExpr(allowRef = true): ScalarExpr | null {
+  private component(depth: number): RawNode {
+    if (depth > MAX_DEPTH) throw INVALID;
     const t = this.peek();
-    switch (t.type) {
-      case 'string':
+    if (t.type !== 'ident') throw INVALID;
+    this.pos++;
+    if (!this.at('(')) return { reference: t.value };
+    if (!Object.hasOwn(signatures, t.value)) throw INVALID;
+    const kind = t.value as ExpressKind;
+    const children: Child[] = [];
+    const props: Record<string, Expr> = Object.create(null);
+    let event: EventAction | undefined;
+    this.arguments([...signatures[kind], 'id'], key => {
+      if (key === 'child' || key === 'children') children.push(...this.children(depth + 1));
+      else if (key === 'action') {
+        const action = this.peek();
+        if (action.type !== 'ident') throw INVALID;
         this.pos++;
-        return { type: 'literal', value: t.value };
-      case 'number':
-        this.pos++;
-        return { type: 'literal', value: t.value };
-      case 'ref':
-        if (!allowRef) return null;
-        this.pos++;
-        return { type: 'ref', path: t.path };
-      case 'ident': {
-        this.pos++;
-        if (t.value === 'true') return { type: 'literal', value: true };
-        if (t.value === 'false') return { type: 'literal', value: false };
-        if (t.value === 'null') return { type: 'literal', value: null };
-        return null;
-      }
-      default:
-        return null;
-    }
-  }
-
-  /** Variant operand: string, number, or bare identifier rendered literally. */
-  private parseVariant(): string | null {
-    const t = this.peek();
-    if (t.type === 'string' || t.type === 'ident') {
-      this.pos++;
-      return t.value;
-    }
-    if (t.type === 'number') {
-      this.pos++;
-      return String(t.value);
-    }
-    return null;
-  }
-
-  private parseValue(depth: number): Value | null {
-    if (depth > MAX_PARSE_DEPTH) return null;
-    const t = this.peek();
-    if (t.type === 'punct' && t.value === '[') {
-      this.pos++;
-      const items: Value[] = [];
-      while (!this.atPunct(']')) {
-        const item = this.parseValue(depth + 1);
-        if (item === null) return null;
-        items.push(item);
-        if (!this.atPunct(',')) break;
-        this.pos++;
-      }
-      return this.expectPunct(']') ? { type: 'array', items } : null;
-    }
-    if (t.type === 'punct' && t.value === '{') {
-      this.pos++;
-      const entries: [string, Value][] = [];
-      while (!this.atPunct('}')) {
-        const key = this.peek();
-        let name: string;
-        if (key.type === 'ident' || key.type === 'string') {
-          name = key.value;
-        } else if (key.type === 'number') {
-          name = String(key.value);
+        if (action.value === 'Event') {
+          const args = this.call(['name', 'context', 'userMessage'], depth + 1, 2);
+          if (!args.name) throw INVALID;
+          event = { name: args.name, context: args.context, userMessage: args.userMessage };
+        } else if (action.value === 'openUrl') {
+          const { url } = this.call(['url'], depth + 1);
+          if (url) props.openUrl = url;
         } else {
-          return null;
+          // Reject undeclared operations without evaluating or dispatching them.
+          throw INVALID;
         }
-        this.pos++;
-        if (!this.expectPunct(':')) return null;
-        const item = this.parseValue(depth + 1);
-        if (item === null) return null;
-        entries.push([name, item]);
-        if (!this.atPunct(',')) break;
-        this.pos++;
+      } else props[key] = this.expression(depth + 1);
+    }, signatures[kind].length);
+    if ((kind === 'Text' && !props.text) || (kind === 'Button' && children.length !== 1)) throw INVALID;
+    return { kind, children, props, event };
+  }
+
+  private children(depth: number): Child[] {
+    if (depth > MAX_DEPTH) throw INVALID;
+    if (this.take('[')) {
+      const children: Child[] = [];
+      while (!this.take(']')) {
+        children.push(...this.children(depth + 1));
+        if (!this.at(']')) this.expect(',');
       }
-      return this.expectPunct('}') ? { type: 'object', entries } : null;
+      return children;
     }
-    const scalar = this.parseScalarExpr(false);
-    if (scalar === null || scalar.type !== 'literal') return null;
-    if (scalar.value === null) return { type: 'null' };
-    if (typeof scalar.value === 'string') return { type: 'string', value: scalar.value };
-    if (typeof scalar.value === 'number') return { type: 'number', value: scalar.value };
-    return { type: 'boolean', value: scalar.value };
+    const token = this.peek();
+    if (token.type === 'ident' && token.value === '_template') {
+      this.pos++;
+      this.expect('(');
+      const path = this.peek();
+      if (path.type !== 'ref') throw INVALID;
+      this.pos++;
+      this.expect(',');
+      const template = this.component(depth + 1);
+      this.take(',');
+      this.expect(')');
+      return [{ path: path.path, template }];
+    }
+    return [this.component(depth)];
   }
+
+  private call(names: readonly string[], depth: number, positional?: number): Record<string, Expr> {
+    const args: Record<string, Expr> = Object.create(null);
+    this.arguments(names, key => { args[key] = this.expression(depth + 1); }, positional);
+    return args;
+  }
+
+  private expression(depth: number, dynamic = true): Expr {
+    if (depth > MAX_DEPTH) throw INVALID;
+    const t = this.peek();
+    if (dynamic && t.type === 'ref') {
+      this.pos++;
+      return t;
+    }
+    if (dynamic && t.type === 'ident' && !reserved.has(t.value)) {
+      this.pos++;
+      if (!this.at('(')) return { type: 'variable', name: t.value };
+      if (!Object.hasOwn(functions, t.value)) throw INVALID;
+      return { type: 'call', name: t.value, args: this.call(functions[t.value], depth + 1) };
+    }
+    if (this.take('[')) {
+      const items: Expr[] = [];
+      while (!this.take(']')) {
+        items.push(this.expression(depth + 1, dynamic));
+        if (!this.at(']')) this.expect(',');
+      }
+      return items.every(item => item.type === 'literal') ? literal(items.map(item => item.value)) : { type: 'list', items };
+    }
+    if (this.take('{')) {
+      const entries: Record<string, Expr> = Object.create(null);
+      while (!this.take('}')) {
+        const key = this.key();
+        this.expect(':');
+        entries[key] = this.expression(depth + 1, dynamic);
+        if (!this.at('}')) this.expect(',');
+      }
+      const pairs = Object.entries(entries);
+      if (!pairs.every((pair): pair is [string, Extract<Expr, { type: 'literal' }>] => pair[1].type === 'literal')) return { type: 'record', entries };
+      const value: Record<string, unknown> = Object.create(null);
+      for (const [key, entry] of pairs) value[key] = entry.value;
+      return literal(value);
+    }
+    this.pos++;
+    if (t.type === 'string' || t.type === 'number') return literal(t.value);
+    if (t.type === 'ident') {
+      if (t.value === 'true') return literal(true);
+      if (t.value === 'false') return literal(false);
+      if (t.value === 'null') return literal(null);
+    }
+    throw INVALID;
+  }
+
+  private key(): string {
+    const t = this.peek();
+    if (t.type !== 'ident' && t.type !== 'string' && t.type !== 'number') throw INVALID;
+    this.pos++;
+    return String(t.value);
+  }
+
 }
 
-/** Resolve a Text operand against the binding store; null when unresolvable. */
-function resolveText(expr: TextExpr, data: Record<string, unknown>): string | null {
-  if (expr.type === 'literal') return scalarToText(expr.value);
-  if (expr.type === 'format') return resolveTemplate(expr.parts, data);
-  const value = lookupPath(data, expr.path);
-  return value === MISSING ? null : scalarToText(value);
+interface Resolution {
+  model: Record<string, unknown>;
+  components: ReadonlyMap<string, RawNode>;
+  variables: ReadonlyMap<string, Expr>;
+  resolve: ReturnType<typeof evaluator>;
+  budget: { remaining: number };
 }
 
-/** Resolve a raw component tree into the public {@link ExpressNode} shape. */
-function resolveNode(node: RawNode, program: Program, budget: { remaining: number }, depth: number): ExpressNode | null {
-  if (--budget.remaining < 0 || depth > MAX_PARSE_DEPTH) return null;
-  if ('reference' in node) {
-    const target = program.definitions.get(node.reference);
-    return target ? resolveNode(target, program, budget, depth + 1) : null;
-  }
-  if (node.kind === 'Text') {
-    const template = node.textExpr?.type === 'format' ? node.textExpr.parts : undefined;
-    if (template && (budget.remaining -= template.length) < 0) return null;
-    const text = node.textExpr === undefined ? '' : resolveText(node.textExpr, program.data);
-    if (text === null) return null;
-    return {
-      kind: 'Text', children: [], text,
-      ...(template ? { textTemplate: template } : {}),
-      ...(node.textExpr?.type === 'ref' ? { bindings: { text: node.textExpr.path } } : {}),
-      ...(node.variant === undefined ? {} : { variant: node.variant }),
-    };
-  }
-  if (node.kind === 'Divider') {
-    return { kind: 'Divider', children: [], ...(node.variant === undefined ? {} : { variant: node.variant }) };
+function resolveNode(raw: RawNode, state: Resolution, scope: Scope, depth: number): ExpressNode {
+  const { model, components, resolve, budget } = state;
+  if (depth > MAX_DEPTH || --budget.remaining < 0) throw INVALID;
+  if ('reference' in raw) {
+    const node = components.get(raw.reference);
+    if (!node) throw INVALID;
+    return resolveNode(node, state, scope, depth + 1);
   }
   const children: ExpressNode[] = [];
-  for (const child of node.children) {
-    const resolved = resolveNode(child, program, budget, depth + 1);
-    if (resolved === null) return null;
-    children.push(resolved);
-  }
-  if (!node.properties) return { kind: node.kind, children };
-  const props: Record<string, unknown> = Object.create(null);
-  const bindings: Record<string, string[]> = Object.create(null);
-  for (const [key, expr] of Object.entries(node.properties)) {
-    if (expr.type === 'ref') {
-      bindings[key] = expr.path;
-      const value = lookupPath(program.data, expr.path);
-      props[key] = value === MISSING ? undefined : value;
+  for (const child of raw.children) {
+    if ('template' in child) {
+      const path = bindingPath(child.path, scope);
+      const list = lookup(model, path);
+      if (list === undefined || list === null) continue;
+      if (!Array.isArray(list) || list.length > budget.remaining) throw INVALID;
+      for (let index = 0; index < list.length; index++) {
+        children.push(resolveNode(child.template, state, { path: [...path, String(index)], index }, depth + 1));
+      }
     } else {
-      props[key] = expr.value;
+      children.push(resolveNode(child, state, scope, depth + 1));
     }
   }
-  if (['Table', 'LineChart', 'BarChart'].includes(node.kind)) {
-    if (!Array.isArray(props.rows) || !props.rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) return null;
-    const strings = (value: unknown) => Array.isArray(value) && value.every(item => typeof item === 'string');
-    if (node.kind === 'Table' ? props.columns !== undefined && !strings(props.columns)
-      : typeof props.x !== 'string' || !(typeof props.y === 'string' || strings(props.y))) return null;
-    // Bound rendered cells and plotted points, including repeated named components.
-    const fields = node.kind === 'Table'
-      ? (Array.isArray(props.columns) && props.columns.length ? props.columns.length : new Set(props.rows.flatMap(row => Object.keys(row))).size)
-      : (Array.isArray(props.y) ? props.y.length : 1);
-    if (!fields && node.kind !== 'Table') return null;
-    budget.remaining -= props.rows.length * Math.max(fields, 1);
-    if (budget.remaining < 0) return null;
+  const props: Record<string, unknown> = Object.create(null);
+  const bindings: Record<string, string[]> = Object.create(null);
+  for (const [key, expr] of Object.entries(raw.props)) {
+    props[key] = resolve(expr, scope);
+    if (key === 'value') {
+      // Resolving the property above already rejects circular variable aliases.
+      let binding: Expr | undefined = expr;
+      while (binding?.type === 'variable') binding = state.variables.get(binding.name);
+      if (binding?.type === 'ref') bindings[key] = bindingPath(binding.path, scope);
+    }
   }
-  return { kind: node.kind, children, props, bindings };
+  if (raw.kind === 'List' && Array.isArray(props.items)) {
+    budget.remaining -= props.items.length;
+    if (budget.remaining < 0) throw INVALID;
+  }
+  if (raw.kind === 'Table' || raw.kind === 'BarChart' || raw.kind === 'LineChart') {
+    if (!Array.isArray(props.rows) || !props.rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) throw INVALID;
+    const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
+    if (raw.kind === 'Table' ? props.columns !== undefined && !strings(props.columns)
+      : typeof props.x !== 'string' || !(typeof props.y === 'string' || strings(props.y) && props.y.length)) throw INVALID;
+    const fields = raw.kind === 'Table' ? (strings(props.columns) && props.columns.length
+      || new Set(props.rows.flatMap(row => Object.keys(row))).size) : (strings(props.y) ? props.y.length : 1);
+    budget.remaining -= props.rows.length * Math.max(fields, 1);
+    if (budget.remaining < 0) throw INVALID;
+  }
+  return { kind: raw.kind, children, props, bindings, scope, event: raw.event };
 }
 
-/** Strip an optional `<a2ui>...</a2ui>` wrapper so callers may pass either form. */
-function unwrapA2ui(source: string): string {
-  const text = source.trim();
-  return text.startsWith('<a2ui>') && text.endsWith('</a2ui>')
-    ? text.slice('<a2ui>'.length, -'</a2ui>'.length)
-    : text;
-}
-
-/**
- * Parse express source into a resolved node tree. Accepts the bare DSL or a
- * `<a2ui>`-wrapped block. Returns null for empty, partial, or malformed
- * input — including unresolved `$` references and missing `root` — so the
- * Markdown pipeline can fall back to showing the source verbatim.
- * @param source - Express DSL text (optionally `<a2ui>`-wrapped).
- * @returns The resolved root node, or null when the input is not valid express.
- */
 export function parseExpress(source: string): ExpressSurface | null {
-  const tokens = tokenize(unwrapA2ui(source));
-  if (tokens === null) return null;
-  const program = new Parser(tokens).parse();
-  if (program === null) return null;
-  const root = resolveNode(program.root, program, { remaining: 4096 }, 0);
-  return root && { root, data: program.data };
+  const text = source.trim();
+  const unwrapped = text.startsWith('<a2ui>') && text.endsWith('</a2ui>') ? text.slice(6, -7) : text;
+  try {
+    const tokens = tokenize(unwrapped);
+    return tokens && new Parser(tokens).parse();
+  } catch {
+    return null;
+  }
 }
 
-/** Copy only containers on the edited path. Each mounted surface owns its own model. */
+/** Only a control's resolved scalar binding is writable. */
 export function writeBinding(data: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
+  if (path.length === 0) return data;
   function write(parent: unknown, index: number): unknown {
     if (index === path.length) return value;
-    const key = path[index]!;
+    const key = path[index];
     if (Array.isArray(parent)) {
-      if (!INDEX_SEGMENT.test(key)) return parent;
+      if (!ARRAY_INDEX.test(key) || Number(key) >= parent.length) return parent;
       const copy = parent.slice();
       copy[Number(key)] = write(parent[Number(key)], index + 1);
       return copy;
     }
-    const copy = Object.assign(Object.create(null), parent && typeof parent === 'object' ? parent : undefined);
+    if (parent !== undefined && (parent === null || typeof parent !== 'object')) return parent;
+    const copy = Object.assign(Object.create(null), parent);
     copy[key] = write(copy[key], index + 1);
     return copy;
   }
   return write(data, 0) as Record<string, unknown>;
 }
 
-export function boundProps(node: ExpressNode, data: Record<string, unknown>): Record<string, unknown> {
-  const props = { ...node.props };
-  if (node.kind === 'Text') props.text = node.textTemplate ? resolveTemplate(node.textTemplate, data) : node.text;
-  for (const [key, path] of Object.entries(node.bindings ?? {})) {
-    const value = lookupPath(data, path);
-    props[key] = value === MISSING ? undefined : value;
+export function eventMessage(node: ExpressNode, resolve: ReturnType<typeof evaluator>): string | undefined {
+  const event = node.event;
+  if (!event) return undefined;
+  try {
+    const name = resolve(event.name, node.scope);
+    if (typeof name !== 'string' || !name.trim()) return undefined;
+    const message = event.userMessage && scalarText(resolve(event.userMessage, node.scope)).trim();
+    const context = !message && event.context && resolve(event.context, node.scope);
+    const text = message || (context && typeof context === 'object' && !Array.isArray(context) && Object.keys(context).length
+      ? name + '\n' + JSON.stringify(context) : name);
+    return text.length <= 16384 ? text : undefined;
+  } catch {
+    return undefined;
   }
-  return props;
 }
