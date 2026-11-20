@@ -557,6 +557,14 @@ virtual environment generated under the reference example. All four
 passed with the same test executable after that generated directory was
 moved outside the source tree.
 
+The [Linux Boundary run on `0f2444ca1`](https://github.com/Caismis/rustX/actions/runs/44776520497/job/136428338987)
+exposed the Server returning its watch permit before removing the retired
+UI watch ID. The directory/file replacement scenario could observe all
+permits returned and still get `EnvironmentCapacityOrConflict` on reuse.
+The Server now releases the slot and settles explicit unwatch after the
+old registration is removed. The terminal-order test holds the notification
+receipt and asserts that the old registration still owns its permit.
+
 ## Command cancellation, detach, and release (UI-owned `command/exec`)
 
 - Cancellation has one owner: `terminate` and UI detach only signal the

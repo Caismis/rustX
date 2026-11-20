@@ -442,9 +442,8 @@ impl AppServerHost {
         }
         failures
     }
-    /// Called after carrier teardown has dropped every native watch registry.
-    /// A notify handle's Drop requests shutdown; only callback destruction
-    /// returns its permit and proves that the native event loop has settled.
+    /// Waits for physical observer shutdown and release of the corresponding
+    /// UI watch registrations. Carrier teardown cancels pending publication.
     pub(crate) async fn settle_file_observers(&self) {
         let _settled = self
             .0

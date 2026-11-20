@@ -64,6 +64,11 @@ pub(crate) async fn watch_terminal_order() {
             let _ = event.emitted.send(());
         }
     }
+    assert_eq!(
+        fixture.host.file_observers().available_permits(),
+        31,
+        "the host retains retirement ownership until the old UI watch ID can be released"
+    );
     retirement
         .expect("automatic retirement was actually published")
         .send(())

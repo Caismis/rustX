@@ -268,6 +268,8 @@ pub(crate) async fn watch_recheck() {
             assert!(!change.retired, "the directory identity is unchanged");
         }
     }
+    let returned = bounded(capacity.acquire_many(31)).await.unwrap();
+    drop(returned);
     assert_eq!(capacity.available_permits(), 31);
     super::observed_mutation_hint(&connection, "directory", &directory, &next, || {
         std::fs::write(&next, b"still observed").unwrap();

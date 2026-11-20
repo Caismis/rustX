@@ -228,8 +228,10 @@ request for the exact Client watch. A confirmed receipt proves the native
 observer exited. A lost receipt reports `OutcomeUnknown` and fences the
 execution pair. UI disconnect, root retirement, and Server shutdown also
 end owner admission. The exact watch incarnation fences delayed hints
-and any queued retirement notice when an ID is reused. Graceful Client
-exit waits for native callback destruction.
+and any queued retirement notice when an ID is reused. After automatic
+retirement, the Server keeps the slot until the terminal notice settles
+and the old UI watch ID is released. Graceful Client exit waits for native
+callback destruction.
 
 ## Native management matrix
 

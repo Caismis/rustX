@@ -208,6 +208,7 @@ impl Observation {
             Ok(relative) => relative,
             Err(error) => {
                 self.remove();
+                drop(capacity);
                 let settled = if error.data == Some(ErrorData::OutcomeUnknown) {
                     Err(ErrorData::OutcomeUnknown)
                 } else {
@@ -230,12 +231,12 @@ impl Observation {
                 _ => Err(ErrorData::OutcomeUnknown),
             }
         };
-        drop(capacity);
-        self.settled.send_replace(Some(physically_settled));
         if !self.publication.stop.is_cancelled() && !self.events.closed.is_cancelled() {
             self.retired().await;
         }
         self.remove();
+        drop(capacity);
+        self.settled.send_replace(Some(physically_settled));
     }
 
     async fn register(&self) -> Result<PathBuf, RpcError> {
