@@ -170,3 +170,73 @@
 }
 
 .extensionBody { flex:1; min-width:0; min-height:0; overflow:visible; }
+
+.panel :global([data-dockkit-pane][data-sidebar-right-flash]),
+.panel :global([data-dockkit-float][data-sidebar-right-flash]) {
+  --sidebar-right-flash-color: var(--dsw-specific-sidebar-right-flash);
+  --sidebar-right-flash-ring: color-mix(in srgb, var(--sidebar-right-flash-color) 48%, transparent);
+  --sidebar-right-flash-near: color-mix(in srgb, var(--sidebar-right-flash-color) 16%, transparent);
+  --sidebar-right-flash-far: color-mix(in srgb, var(--sidebar-right-flash-color) 10%, transparent);
+}
+
+.panel :global([data-dockkit-pane][data-sidebar-right-flash]) {
+  position: relative;
+}
+
+.panel :global([data-dockkit-pane][data-sidebar-right-flash])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+  --sidebar-right-flash-from:
+    inset 0 0 0 1px var(--sidebar-right-flash-ring),
+    inset 0 2px 4px 0 var(--sidebar-right-flash-near),
+    inset 0 0 10px 0 var(--sidebar-right-flash-far);
+  --sidebar-right-flash-to:
+    inset 0 0 0 1px transparent, inset 0 2px 4px 0 transparent, inset 0 0 10px 0 transparent;
+}
+
+.panel :global([data-dockkit-float][data-sidebar-right-flash]) {
+  --sidebar-right-flash-from:
+    var(--dsw-elevation-prominent),
+    0 0 0 1px var(--sidebar-right-flash-ring),
+    0 2px 4px 0 var(--sidebar-right-flash-near),
+    0 0 10px 0 var(--sidebar-right-flash-far);
+  --sidebar-right-flash-to:
+    var(--dsw-elevation-prominent),
+    0 0 0 1px transparent, 0 2px 4px 0 transparent, 0 0 10px 0 transparent;
+}
+
+.panel :global([data-dockkit-pane][data-sidebar-right-flash])::after,
+.panel :global([data-dockkit-float][data-sidebar-right-flash]) {
+  animation-duration: calc(var(--ds-transition-duration-slow) * 2);
+  animation-timing-function: var(--ds-ease-in-out);
+}
+
+.panel :global([data-dockkit-pane][data-sidebar-right-flash='odd'])::after,
+.panel :global([data-dockkit-float][data-sidebar-right-flash='odd']) {
+  animation-name: flashOdd;
+}
+
+.panel :global([data-dockkit-pane][data-sidebar-right-flash='even'])::after,
+.panel :global([data-dockkit-float][data-sidebar-right-flash='even']) {
+  animation-name: flashEven;
+}
+
+@keyframes flashOdd {
+  from { box-shadow: var(--sidebar-right-flash-from); }
+  to { box-shadow: var(--sidebar-right-flash-to); }
+}
+
+@keyframes flashEven {
+  from { box-shadow: var(--sidebar-right-flash-from); }
+  to { box-shadow: var(--sidebar-right-flash-to); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel :global([data-dockkit-pane][data-sidebar-right-flash])::after,
+  .panel :global([data-dockkit-float][data-sidebar-right-flash]) {
+    animation-timing-function: step-end;
+  }
+}

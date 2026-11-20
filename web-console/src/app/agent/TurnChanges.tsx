@@ -7,11 +7,13 @@ import { ChangeComparison } from '../components/ChangesReview';
 import { useConversationPreferences } from '../conversation-preferences';
 
 /** A completed native Attempt's actual changes, unavailable after its runtime retires. */
-export function TurnChanges({attemptId,conversationId}: {attemptId:string;conversationId:string}) {
+export function TurnChanges({attemptId,conversationId,turn}: {attemptId:string;conversationId:string;turn?:number}) {
   const source=useObservationSource(), open=useContext(ChangesReviewContext);
   const [preferences]=useConversationPreferences();
   const identity=JSON.stringify([observationSourceIdentity(source),attemptId,conversationId]);
-  const observation=source&&'target' in source ? source.client.getSnapshot().views[source.target.session_id]?.attachmentObservation : undefined;
+  const view=source&&'target' in source ? source.client.getSnapshot().views[source.target.session_id] : undefined;
+  const observation=view?.attachmentObservation;
+  const outlineTurn=view?.turnOutline?.page?.turns.find(item => item.id.conversation_id === conversationId && item.id.attempt_id === attemptId)?.ordinal;
   const reviewOwned=useMemo(()=>source&&'target' in source ? changesReviewOwner(source.client,source.target) : ()=>false,[identity,source?.client,observation]);
   const [state,setState]=useState<{identity:string;summary:ChangesSummary|null}>();
   const active=preferences.codingView && !!source?.owned() && source.cut()?.conversation_id===conversationId;
@@ -27,6 +29,6 @@ export function TurnChanges({attemptId,conversationId}: {attemptId:string;conver
   // Never use a current runtime's records for a different historical lineage.
   const cut=source.cut();
   if(cut && cut.conversation_id!==conversationId)return null;
-  const request:ChangesReviewRequest={client:source.client,target:source.target,attemptId,summary:state.summary,index:0,owned:reviewOwned};
+  const request:ChangesReviewRequest={client:source.client,target:source.target,attemptId,summary:state.summary,index:0,turn:outlineTurn ?? turn,owned:reviewOwned};
   return <ChangedFiles changes={state.summary} openReview={index=>open?.({...request,index})} preview={index=><ChangeComparison request={request} index={index} preview/>}/>;
 }

@@ -169,6 +169,7 @@ function Surface({
   dropZones = 'edges', minPaneFraction = MIN_PANE_FRACTION, hideSplitWhenBlocked = false,
 }: DockSurfaceProps & { readonly draw: (callbacks: PaneCallbacks, preview: SizePreview | undefined) => ReactNode }): ReactNode {
   const surface = useRef<HTMLDivElement | null>(null)
+  const [stripOffsets] = useState(() => new Map<PaneId, number>())
   const [preview, setPreview] = useState<Preview>(NO_PREVIEW)
   const [fits, setFits] = useState(NO_FITS)
   const begin = useGesture(() => { setPreview(NO_PREVIEW) })
@@ -288,6 +289,7 @@ function Surface({
     renderTabMenuItems,
     chromePaneId: topRightPaneId(state),
     chrome,
+    stripOffsets,
   }
 
   return (

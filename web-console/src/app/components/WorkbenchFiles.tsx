@@ -151,7 +151,7 @@ export function WorkspaceFile({ path, call, view, onOpen, visible = true, naviga
     }}><TextLines text={value.text ?? ''}/>{more}</div>}
   </PreviewFrame>;
 }
-function OpenFileApp({ call, path, directory }: { call: WorkbenchCall; path: string; directory: boolean }) {
+export function OpenFileApp({ call, path, directory }: { call: WorkbenchCall; path: string; directory: boolean }) {
   const tx = useTranslation();
   const [apps, setApps] = useState<DesktopApplication[]>([]), [selected, setSelected] = useState<string>(), [menu, setMenu] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const live = useRef(true), pending = useRef(false);

@@ -2707,7 +2707,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "bd02987abf1d100ec41d9a80c4ee51c7e68965537851efdc92ce0be02395202e",
+      "local_sha256": "5c694019bd9181c92eb3e6211900127d55a3f890c0d6e6031a39320cfa809c06",
       "classification": "A",
       "additional_sources": [
         {
@@ -2828,7 +2828,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "b8f66c755cbbf8b7c47cfec94d58ea26241c30d44a9ddf201f8553aec2c86302",
+      "local_sha256": "00f94c4c6d4beebf78007821ffb4e7e84cc5f13880bb97a9ea4b2fd8b32c91b5",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -3009,7 +3009,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "5f4555fa1f03a38ea8dd550a928dad0d00a50bdbba5eeb760a6f3ea3211855c5",
+      "local_sha256": "618c75882402e024e82817407502166ced1d21f92d97233d521e252aacc0689f",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -4141,7 +4141,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "f1104d0cef17716a28eee101d2204300911e2f11d789f8023ffab218782f0991"
+      "local_sha256": "4410ad73562abdc306d41ed1a89ff9d1404ba00ef25c58fbec3db1cd5379d49d"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4636,6 +4636,7 @@
         "../../client/session-files",
         "../../locale/react",
         "../../presentation/dockkit/components/DockSurface",
+        "../../presentation/dockkit/components/dockkit.module.css",
         "../../presentation/dockkit/contract/adapter",
         "../../presentation/dockkit/contract/types",
         "../../presentation/dockkit/engine/controller",
@@ -4664,7 +4665,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "1784e060b7a9d1f06d9158afc24b79258aeb403818a6957cb3530f74edaf5853",
+      "local_sha256": "5b1f08b311775f888e52d2675a355376f7eb72247d26d94c75c208c3b621169a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -5025,7 +5026,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "d1a98b481a5db30b91eb6f7a488eef30d2a69a8fd63b2413c78bccc46338a00c"
+      "local_sha256": "bc0d6e238a4591ad469150f258ecf9862e0ec68e4ec9b83f5f006605de5fc098"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5141,7 +5142,7 @@
         "./render.ts",
         "react"
       ],
-      "local_sha256": "9205ac56cecaa8e5aae1c1b3bed638c4c814b6d0f55d70166eac9b191e8c3d58"
+      "local_sha256": "a36474018ceac43e17c1e8735a76544f9d7f96b6f55e970715c461d662374081"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/FloatLayer.tsx",
@@ -5246,7 +5247,7 @@
         "react",
         "react-dom"
       ],
-      "local_sha256": "322456b721eb48d911b5244c00c7a8c13b28bda6045154b9fe1c5d3559858f2d"
+      "local_sha256": "404d06412d6a68958cfa2615e3f3f35db4b842323153948f04c91995b57ec9b2"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
@@ -5269,7 +5270,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "d8932217462eabee2ac5344bde07ea5405cd29edf9e6ac84149a72198cfcabe9",
+      "local_sha256": "0fa62b4b81d1c174318b28e94e800e0dac763a2039408ffebf179fb5b22054a6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
@@ -5306,7 +5307,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "102ed447057b3f04745c3de395a61de6bf45ec6e906607f5ac2057d95f246e14"
+      "local_sha256": "7fa9ba867ea1245a8558458b8de555a2b05eb6ab88d0ef42fca25c2521753a65"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/measure.ts",
@@ -5355,7 +5356,7 @@
         "../engine/geometry.ts",
         "react"
       ],
-      "local_sha256": "4545a435acde3ad8091c7ebde17c89fe1454a6a93af41cd54e7972e10444466f"
+      "local_sha256": "e2113bc409a9aafa4e7a064a871ddce2be8a090f19b1fa3a8f21576410e392c0"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/contract/adapter.ts",

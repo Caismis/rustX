@@ -198,6 +198,13 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   // Tool changes arrive as their own transcript facts, never from requests.
   const requestFeedback = suppliedFeedback ?? noFeedback;
   const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
+  const turnOrdinals = new Map<string, number>();
+  for (const entry of entries) {
+    const owner = entry.turn_process ?? entry.completed_response?.origin ?? (entry.item.type === 'attempt_terminal' ? entry.item.turn : undefined);
+    if (!owner) continue;
+    const key = attemptOwnerKey(owner);
+    if (!turnOrdinals.has(key)) turnOrdinals.set(key, turnOrdinals.size + 1);
+  }
   const deliveredTurns = new Set<string>();
   const deliveryTail = (key: string, before?: string, owner?: {conversation_id:string;attempt_id?:string|null}) => {
     const turn = deliveries.get(key);
@@ -207,7 +214,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     deliveredTurns.add(key);
     const tools = [...entries.filter(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === key).flatMap(entry => entry.tool_calls ?? []),
       ...descriptors.filter(descriptor => descriptor.turn_process && attemptOwnerKey(descriptor.turn_process) === key).flatMap(descriptor => descriptor.tool_calls)];
-    return <>{owner?.attempt_id && <TurnChanges conversationId={owner.conversation_id} attemptId={owner.attempt_id}/>} {!!batches.length && <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>}<CreatedTasks tools={tools}/></>;
+    return <>{owner?.attempt_id && <TurnChanges conversationId={owner.conversation_id} attemptId={owner.attempt_id} turn={turnOrdinals.get(key)}/>} {!!batches.length && <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>}<CreatedTasks tools={tools}/></>;
   };
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [stepsOpen, setStepsOpen] = useState<ReadonlySet<string>>(new Set());

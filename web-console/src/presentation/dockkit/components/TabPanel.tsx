@@ -25,7 +25,7 @@ import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import clsx from 'clsx'
 import { IconCloseFillRegular, IconPlusOutlineRegular, Tooltip } from '../primitives'
-import type { DockZone, LayoutState, PaneNode, TabId } from '../contract/types.ts'
+import type { DockZone, LayoutState, PaneId, PaneNode, TabId } from '../contract/types.ts'
 import { getTab } from '../engine/tree.ts'
 import type { PaneCallbacks, SplitBlock } from './render.ts'
 import { TabMenu } from './TabMenu.tsx'
@@ -172,30 +172,53 @@ function useStripScrollFades(box: RefObject<HTMLDivElement | null>, tabs: readon
   }, [box, tabs])
 }
 
+/** Move the chip box to `left` immediately, bypassing smooth scroll-behavior. */
+function jumpTo(element: HTMLElement, left: number): void {
+  element.style.scrollBehavior = 'auto'
+  element.scrollLeft = left
+  element.style.removeProperty('scroll-behavior')
+}
+
 /**
  * Bring the active chip into the chip box's view whenever the active tab or
  * the row of chips changes: a tab opened or selected past the box's edge, or
  * moved there by a close or a reorder, scrolls the box to it, with the fade
  * band (24px) cleared so the chip is not under it. A chip already in view
- * moves nothing. Direct DOM, like the fades above: the box's scroll position
- * renders nothing.
+ * moves nothing. Preserves each pane's horizontal strip offset across remounts.
  */
 function useActiveChipInView(
   box: RefObject<HTMLDivElement | null>,
   chips: ReadonlyMap<TabId, HTMLElement>,
   tabs: readonly TabId[],
   activeTabId: TabId | undefined,
+  paneId: PaneId,
+  offsets: Map<PaneId, number> | undefined,
 ): void {
+  const placed = useRef<PaneId | undefined>(undefined)
+  useLayoutEffect(() => {
+    if (offsets === undefined) return undefined
+    const element = box.current
+    if (element === null) return undefined
+    return () => { offsets.set(paneId, element.scrollLeft) }
+  }, [box, paneId, offsets])
   useLayoutEffect(() => {
     const element = box.current
     const chip = activeTabId === undefined ? undefined : chips.get(activeTabId)
     /* v8 ignore next -- the box and the active tab's chip are rendered with the strip. */
     if (element === null || chip === undefined) return
+    const first = placed.current !== paneId
+    placed.current = paneId
+    const recorded = first ? offsets?.get(paneId) : undefined
+    if (recorded !== undefined) jumpTo(element, recorded)
     const bounds = element.getBoundingClientRect()
     const rect = chip.getBoundingClientRect()
-    if (rect.left < bounds.left) element.scrollLeft += rect.left - bounds.left - STRIP_FADE
-    else if (rect.right > bounds.right) element.scrollLeft += rect.right - bounds.right + STRIP_FADE
-  }, [box, chips, tabs, activeTabId])
+    let delta = 0
+    if (rect.left < bounds.left) delta = rect.left - bounds.left - STRIP_FADE
+    else if (rect.right > bounds.right) delta = rect.right - bounds.right + STRIP_FADE
+    if (delta === 0) return
+    if (first && recorded === undefined) jumpTo(element, element.scrollLeft + delta)
+    else element.scrollLeft += delta
+  }, [box, chips, tabs, activeTabId, paneId, offsets])
 }
 
 /** Width of the chip box's fade at a hidden side; mirrors the stylesheet's 24px. */
@@ -218,7 +241,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
   const [chips] = useState(() => new Map<TabId, HTMLElement>())
   const stripTabs = useRef<HTMLDivElement | null>(null)
   useStripScrollFades(stripTabs, pane.tabs)
-  useActiveChipInView(stripTabs, chips, pane.tabs, pane.activeTabId)
+  useActiveChipInView(stripTabs, chips, pane.tabs, pane.activeTabId, pane.id, callbacks.stripOffsets)
   const block = callbacks.splitBlock(pane.id)
   const target = callbacks.dropTarget
   const stripIndex = target !== undefined && target.kind === 'strip' && target.paneId === pane.id
@@ -283,9 +306,15 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
                 // replaced — which would abandon every drag. A drag that ends
                 // elsewhere fires no click, and its own operation carries focus.
                 onPointerDown={(event) => {
-                  // A secondary press is the menu, never a drag.
-                  if (event.button === 2) return
+                  // Secondary press opens the menu; middle press closes on auxclick without dragging.
+                  if (event.button === 1 || event.button === 2) return
                   callbacks.onTabPressed(tabId, event)
+                }}
+                onAuxClick={(event) => {
+                  if (event.button !== 1 || event.buttons !== 0 || !closable) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  callbacks.onCloseTab(tabId)
                 }}
                 onClick={(event) => {
                   event.stopPropagation()

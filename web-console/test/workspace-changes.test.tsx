@@ -32,7 +32,7 @@ it('a late comparison never appears under another file after a rapid switch',asy
     expect(ui.getByText('second file')).toBeTruthy();
     await act(async()=>server.socket.success(first,comparison('obsolete file\n')));
     expect(ui.queryByText('obsolete file')).toBeNull();
-    expect(ui.getByText('file-1.ts:1')).toBeTruthy();
+    expect(ui.container.querySelector('[data-diff-hunk-header]')?.textContent).toBe('@@ -1,1 +1,1 @@');
   } finally {server.client.disconnect();}
 });
 
@@ -108,14 +108,17 @@ it('keeps distinct native file indices when serialized paths and display names a
     const review=render(<ChangesReview request={open.mock.calls[0][0]} visible/>);
     await review.findByText('first original');
     expect(review.getByText('first changed')).toBeTruthy();
-    expect(review.getAllByRole('option').map(option=>(option as HTMLOptionElement).value)).toEqual(['0','1']);
+    fireEvent.click(review.getByRole('button',{name:'Select a file'}));
+    expect(review.getAllByRole('menuitem')).toHaveLength(2);
+    fireEvent.click(review.getByRole('button',{name:'Select a file'}));
     fireEvent.click(rows[1]);
     expect(open).toHaveBeenNthCalledWith(2,expect.objectContaining({index:1,summary:collided}));
     review.rerender(<ChangesReview request={open.mock.calls[1][0]} visible/>);
     await review.findByText('second original');
     expect(review.getByText('second changed')).toBeTruthy();
     expect(review.queryByText('first changed')).toBeNull();
-    fireEvent.change(review.getByRole('combobox'),{target:{value:'0'}});
+    fireEvent.click(review.getByRole('button',{name:'Select a file'}));
+    fireEvent.click(review.getAllByRole('menuitem')[0]!);
     await review.findByText('first original');
     expect(review.getByText('first changed')).toBeTruthy();
     expect(review.queryByText('second changed')).toBeNull();
@@ -205,10 +208,9 @@ it('a visible preview copies the admitted diff with the full path and truncation
     expect(ui.getByRole('button',{name:'Copied'})).toBeTruthy();
     expect(server.requests.filter(row=>row.request.method==='conversation/changeDiff')).toHaveLength(1);
     expect(ui.getByText('Only the first part of this comparison is shown.')).toBeTruthy();
-    ui.rerender(<ChangeComparison request={request} index={0}/>);
-    fireEvent.click(ui.getByRole('button',{name:'Copy'}));
-    await waitFor(()=>expect(writeText).toHaveBeenCalledTimes(2));
-    expect(writeText.mock.calls[1][0]).toBe(expected);
+    ui.rerender(<ChangeComparison request={request} index={0} split wrap/>);
+    expect(ui.container.querySelector('[data-review-view="split"]')).toBeTruthy();
+    expect(ui.container.querySelector('[data-review-wrap]')).toBeTruthy();
     expect(ui.getByText('Only the first part of this comparison is shown.')).toBeTruthy();
   } finally {
     if(original)Object.defineProperty(navigator,'clipboard',original);else Reflect.deleteProperty(navigator,'clipboard');

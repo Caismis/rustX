@@ -3,7 +3,7 @@ import { lazy, Suspense, useMemo, useEffect, useImperativeHandle, useLayoutEffec
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { WorkbenchRequest, WorkbenchTerminal, WorkbenchTarget } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
-import { WorkspaceFiles, fileTabView } from './WorkbenchFiles';
+import { WorkspaceFiles, OpenFileApp, fileTabView } from './WorkbenchFiles';
 import { WorkbenchFileNavigator } from './WorkbenchNavigator';
 import { viewersForPath } from './workbench-documents/definitions';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
@@ -16,6 +16,7 @@ import { CompassGlyph, GuideArtworkFiles, PluginArtworkTerminal, TerminalIcon, F
 import { readSidebarLayout, writeSidebarLayout } from './workbench-persistence';
 import { DockController } from '../../presentation/dockkit/engine/controller';
 import { DockLayout } from '../../presentation/dockkit/components/DockSurface';
+import dockCss from '../../presentation/dockkit/components/dockkit.module.css';
 import { dockPaneIds, findTabPane, getPane } from '../../presentation/dockkit/engine/tree';
 import type { LayoutState, PaneId, TabId, TabRecord } from '../../presentation/dockkit/contract/types';
 import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
@@ -43,6 +44,30 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
     writeSidebarLayout(storageKey,{layout:state,minted,history:{entries:[],cursor:0}});
   },[state,storageKey]);
   const root = useRef<HTMLDivElement>(null);
+  const flashSerial = useRef(0);
+  const flashCleanup = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => { flashCleanup.current?.(); }, []);
+  const flashPane = (paneId: PaneId) => {
+    const pane = root.current?.querySelector<HTMLElement>(`[data-dockkit-pane="${paneId}"], [data-dockkit-float="${paneId}"]`);
+    if (!pane) return;
+    flashCleanup.current?.();
+    let started: string | undefined;
+    const clear = () => {
+      pane.removeEventListener('animationstart', onStart);
+      pane.removeEventListener('animationend', onEnd);
+      pane.removeEventListener('animationcancel', onEnd);
+      delete pane.dataset.sidebarRightFlash;
+      if (flashCleanup.current === clear) flashCleanup.current = undefined;
+    };
+    const onStart = (event: AnimationEvent) => { if (event.target === pane) started = event.animationName; };
+    const onEnd = (event: AnimationEvent) => { if (event.target === pane && event.animationName === started) clear(); };
+    flashSerial.current += 1;
+    pane.dataset.sidebarRightFlash = flashSerial.current % 2 === 0 ? 'even' : 'odd';
+    pane.addEventListener('animationstart', onStart);
+    pane.addEventListener('animationend', onEnd);
+    pane.addEventListener('animationcancel', onEnd);
+    flashCleanup.current = clear;
+  };
   const focusRequest = useRef<{ paneId: PaneId; origin: Element | null; onRemoval?: boolean } | undefined>(undefined);
   const room = useRef<ReadonlyMap<PaneId, { row: boolean }>>(new Map());
   useLayoutEffect(() => {
@@ -105,17 +130,16 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
     const contentId=tab.kind==='file' ? `file:${tab.path}` : tab.kind==='files' ? `files:${paneId}` : tab.id ?? crypto.randomUUID();
     if (replacing) dock.replaceContent(active.id, { kind: tab.kind, contentId, title: tab.title ?? tab.path ?? '' });
     else {
+      const existing = Object.values(before.tabs).find(candidate => candidate.kind === tab.kind && candidate.contentId === contentId);
+      const existingPane = existing ? findTabPane(before, existing.id) : undefined;
+      const alreadyShown = !!existing && !!existingPane && existingPane.activeTabId === existing.id && (existingPane.host === 'float' ? floatingVisible : visible && before.expanded);
       const opened = dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
       if(active && active.id !== opened && active.kind==='start') dock.closeTab(active.id);
+      if (alreadyShown && existingPane) flashPane(existingPane.id);
     }
   };
   const openSideQuestion = (paneId = dock.activeDockPaneId()) => { if (renderSideQuestion) open(paneId, { kind: 'btw', id: 'btw', title: tx('agent:btw.title') }); };
-  useImperativeHandle(fileRef, () => ({ openSideQuestion, openTask: (id, title) => open(dock.activeDockPaneId(), { kind: 'schedule', id, title }), openChanges: request => {
-    const id = `changes:${request.target.attachment_id}:${request.attemptId}`;
-    reviews.current.set(id, request);
-    open(dock.activeDockPaneId(), {kind:'changes',id,title:tx('artifacts:changes.title',{count:request.summary.total})});
-    setFileFocus(value=>value+1);
-  }, openAgent: (id, title) => open(dock.activeDockPaneId(), { kind: 'subagent', id, title }), openFile: async (path, line) => {
+  const openWorkspaceFile = async (path: string, line?: number) => {
     const ticket = ++navigation.current, signal = lifetime.current?.signal;
     setError('');
     try {
@@ -132,7 +156,16 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
       }
       return true;
     } catch (cause) { if (!signal?.aborted && ticket === navigation.current) setError(String(cause)); return false; }
-  }}));
+  };
+  useImperativeHandle(fileRef, () => ({ openSideQuestion, openTask: (id, title) => open(dock.activeDockPaneId(), { kind: 'schedule', id, title }), openChanges: request => {
+    const id = `changes:${request.target.attachment_id}:${request.attemptId}`;
+    reviews.current.set(id, request);
+    const title = request.turn != null
+      ? tx('artifacts:changes.review-title', { turn: request.turn })
+      : tx('artifacts:changes.title', { count: request.summary.total });
+    open(dock.activeDockPaneId(), { kind: 'changes', id, title });
+    setFileFocus(value=>value+1);
+  }, openAgent: (id, title) => open(dock.activeDockPaneId(), { kind: 'subagent', id, title }), openFile: openWorkspaceFile }));
   const [, setFileFocus] = useState(0);
   useEffect(()=>{
     if(!active || !visible || !available) return;
@@ -257,10 +290,39 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
     }) : []),
   ].slice(0, PREVIEW_POLICY.activeBodies));
   residency.current.ids = [...mountedFileIds];
+  const closeMany = async (ids: readonly TabId[]) => {
+    for (const id of ids) {
+      const tab = dock.getSnapshot().state.tabs[id];
+      if (!tab) continue;
+      if (tab.kind === 'terminal') await close(id);
+      else void close(id);
+    }
+  };
+  const renderTabMenuItems = (tab: TabRecord, dismiss: () => void) => {
+    const current = dock.getSnapshot().state;
+    if (!current.tabs[tab.id]) return null;
+    const pane = findTabPane(current, tab.id);
+    const index = pane.tabs.indexOf(tab.id);
+    const others = pane.tabs.filter(id => id !== tab.id && canCloseTab(current, id));
+    const right = index < 0 ? [] : pane.tabs.slice(index + 1).filter(id => canCloseTab(current, id));
+    if (!canCloseTab(current, tab.id) && others.length === 0) return null;
+    return <>
+      <button type="button" role="menuitem" className={dockCss.menuItem} disabled={others.length === 0} data-dockkit-menu-close-others
+        onClick={() => { dismiss(); void closeMany(others); }}>
+        <span className={dockCss.menuItemIcon} aria-hidden="true" />
+        <span className={dockCss.menuItemLabel}>{tx('artifacts:workbench.close-others')}</span>
+      </button>
+      {right.length > 0 && <button type="button" role="menuitem" className={dockCss.menuItem} data-dockkit-menu-close-right
+        onClick={() => { dismiss(); void closeMany(right); }}>
+        <span className={dockCss.menuItemIcon} aria-hidden="true" />
+        <span className={dockCss.menuItemLabel}>{tx('artifacts:workbench.close-right')}</span>
+      </button>}
+    </>;
+  };
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body}>
-    {tab.kind==='btw' ? renderSideQuestion?.(active && pane.activeTabId === tab.id && state.activePaneId === pane.id && (pane.host === 'float' ? floatingVisible : visible && state.expanded)) : tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={active && pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, active && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
+    {tab.kind==='btw' ? renderSideQuestion?.(active && pane.activeTabId === tab.id && state.activePaneId === pane.id && (pane.host === 'float' ? floatingVisible : visible && state.expanded)) : tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={active && pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)} onOpenFile={available ? path => { void openWorkspaceFile(path); } : undefined} fileActions={available ? path => <OpenFileApp call={call} path={path} directory={false}/> : undefined}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, active && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
         {renderSideQuestion && <button type="button" className={css.entry} onClick={() => openSideQuestion(pane.id)}><span className={css.entryIcon}><IconQuestionOutline14 size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('agent:btw.title')}</span></span></button>}
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
@@ -276,7 +338,7 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
       canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
       canCloseTab={id=>canCloseTab(state,id)} onRoom={fits=>{room.current=fits;}}
       labels={{emptyPane:tx('artifacts:workbench.empty-pane'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split-limit'),splitPaneNarrow:tx('artifacts:workbench.split-room'),splitPaneShortcut:isMac?'Meta+\\':'Control+\\',splitPaneKeys:isMac?['⌘','\\']:['Ctrl','+','\\'],closeTab:tx('artifacts:workbench.close-tab'),closeTabShortcut:isMac?'Alt+Meta+W':'Alt+Control+W',closeTabKeys:isMac?['⌥','⌘','W']:['Ctrl','+','Alt','+','W'],addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.drop-center'),left:tx('artifacts:workbench.drop-left'),right:tx('artifacts:workbench.drop-right'),top:tx('artifacts:workbench.drop-top'),bottom:tx('artifacts:workbench.drop-bottom')}}}
-      keepMounted={tab=>tab.kind==='subagent'||tab.kind==='schedule'||mountedFileIds.has(tab.id)} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='btw'?<IconQuestionOutline14/>:tab.kind==='schedule'?<IconClockOutline16/>:tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{tab.kind==='schedule' && renderTaskTitle ? renderTaskTitle(tab.contentId,title(tab)??'') : title(tab)}</span></span>}
+      keepMounted={tab=>tab.kind==='subagent'||tab.kind==='schedule'||mountedFileIds.has(tab.id)} renderTab={body} renderTabMenuItems={renderTabMenuItems} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='btw'?<IconQuestionOutline14/>:tab.kind==='schedule'?<IconClockOutline16/>:tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:tab.kind==='changes'?null:<FileTypeIcon path={tab.title} size={16}/>}<span>{tab.kind==='schedule' && renderTaskTitle ? renderTaskTitle(tab.contentId,title(tab)??'') : title(tab)}</span></span>}
       chrome={<>
         {renderSideQuestion && <Tooltip label={tx('agent:btw.title')} side="bottom"><button type="button" className={panelCss.iconButton} aria-label={tx('agent:btw.title')} onClick={() => openSideQuestion()}><IconQuestionOutline14/></button></Tooltip>}
         <Tooltip label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} shortcutKeys={isMac?['⌥','⌘','↩']:['Ctrl','+','Alt','+','Enter']} side="bottom" delayMs={500}>

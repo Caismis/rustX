@@ -46,4 +46,6 @@ export interface PaneCallbacks {
   readonly chromePaneId: PaneId
   /** Those controls; absent means the strip ends at the kit's own split control. */
   readonly chrome: ReactNode
+  /** Preserved horizontal scroll offsets per pane across strip remounts. */
+  readonly stripOffsets?: Map<PaneId, number>
 }

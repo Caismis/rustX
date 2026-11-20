@@ -9,6 +9,7 @@ export interface ChangesReviewRequest {
   attemptId:string;
   summary:ChangesSummary;
   index:number;
+  turn?:number;
   owned:()=>boolean;
 }
 /** A sidebar review belongs to its native attachment, independently of which

@@ -70,3 +70,41 @@ it('retains review requests through duplicate and floating tabs, then releases e
   expect(reviews.values().next().value).toBe(reopened);
   expect([...reviews.values()]).not.toContain(first);
 });
+
+it('shows Turn N changes tab title, split/wrap review controls, and Close others/right tab context menu', async () => {
+  server = new Server(); await server.attached('A');
+  const authority = new WorkspaceAuthority(server.workspaceHost); await authority.observe();
+  const previews = new WorkbenchPreviewRetention(server.client, authority, new PreviewContentCache()); stop = previews.start();
+  const ref = createRef<WorkbenchHandle>();
+  const request = (attemptId: string, turn: number): ChangesReviewRequest => ({
+    client: server!.client, target: server!.client.target('A')!, attemptId, index: 0, turn, owned: () => true,
+    summary: { files: [{ path: '/workspace/A/file.txt', display: 'file.txt', added: 1, deleted: 1, binary: false, oversized: false }], total: 1, added: 1, deleted: 1 },
+  });
+  server.handlers.set('conversation/changeDiff', message => {
+    if (message.method !== 'conversation/changeDiff') throw Error('Unexpected method');
+    return { type: 'workspace_change_diff', comparison: { hunks: [{ old_start: 1, new_start: 1, old_text: 'before\n', new_text: `${message.params.attempt_id}\n` }], binary: false, oversized: false, truncated: false } };
+  });
+  const ui = render(<Workbench fileRef={ref} host={server.workspaceHost} previews={previews} scope={authority.getCatalog()!}
+    target={{ session_id: 'A', active_node: 'node-A' }} visible floatingVisible fullscreen={false} toggleFullscreen={() => {}} closePanel={() => {}}/>);
+
+  act(() => ref.current!.openChanges(request('attempt-1', 1)));
+  await ui.findByText('attempt-1');
+  expect(ui.getByRole('tab', { name: 'Turn 1 changes' })).toBeTruthy();
+  const splitBtn = ui.getByRole('button', { name: 'Side-by-side diff' });
+  act(() => { splitBtn.click(); });
+  expect(ui.container.querySelector('[data-review-view="split"]')).toBeTruthy();
+
+  act(() => ref.current!.openChanges(request('attempt-2', 2)));
+  await ui.findByText('attempt-2');
+  act(() => ref.current!.openChanges(request('attempt-3', 3)));
+  await ui.findByText('attempt-3');
+  const firstTab = ui.getByRole('tab', { name: 'Turn 1 changes' });
+  act(() => { firstTab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); });
+  expect(ui.getByRole('menuitem', { name: 'Close' })).toBeTruthy();
+  expect(ui.getByRole('menuitem', { name: 'Close other tabs' })).toBeTruthy();
+  const closeRight = ui.getByRole('menuitem', { name: 'Close tabs to the right' });
+  act(() => { closeRight.click(); });
+  expect(ui.queryByRole('tab', { name: 'Turn 2 changes' })).toBeNull();
+  expect(ui.queryByRole('tab', { name: 'Turn 3 changes' })).toBeNull();
+  expect(ui.getByRole('tab', { name: 'Turn 1 changes' })).toBeTruthy();
+});
