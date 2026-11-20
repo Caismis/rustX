@@ -1044,7 +1044,11 @@ panel = [
   AreaChart(title="Revenue by region", format="currency", data=$/sales),
   BarChart(title="Revenue comparison", format="currency", data=$/sales),
   Markdown("**North** led in February."),
-  Timeline(items=[])
+  Timeline(items=[
+    {title: "January close", time: "Jan 31", status: "done"},
+    {title: "February close", time: "Feb 28", status: "done"},
+    {title: "Sales review", time: "Mar 5", status: "current"}
+  ])
 ]
 </a2ui>
 

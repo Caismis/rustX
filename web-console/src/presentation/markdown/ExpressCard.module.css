@@ -26,6 +26,8 @@
   --a2-negative: oklch(0.52 0.21 29);
   --a2-amber: oklch(0.5 0.125 65);
   --a2-shadow: 0 1px 2px oklch(0 0 0 / 7%);
+  /* Keep renderer layers below the sticky composer without clipping tooltips. */
+  isolation: isolate;
   min-inline-size: 0;
   margin-block: 1rem;
   padding: var(--a2-inset);

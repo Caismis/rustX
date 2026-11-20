@@ -389,10 +389,33 @@ test('keeps Playground chart data, prose and supported siblings inline', async (
     for (const text of ['February', 'North', '$1,800', 'South', '$1,100']) {
       await expect(tooltip.getByText(text, { exact: true })).toBeVisible();
     }
-    await expect(card.locator('[data-a2-type="Timeline"]')).toHaveCount(1);
+    const timeline = card.locator('[data-a2-type="Timeline"]');
+    await expect(timeline.getByText('February close', { exact: true })).toBeVisible();
     await expect(card.locator('code')).toHaveCount(0);
-    expect(errors).toEqual([]);
     await line.screenshot({ path: info.outputPath('inline-playground-line.png') });
+
+    const marker = timeline.locator('li').filter({ hasText: 'February close' }).locator('svg');
+    await expect(marker).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      // Resizing can restore the scroll anchor before the sticky composer settles.
+      await expect.poll(() => marker.evaluate(async node => {
+        const scroll = node.closest<HTMLElement>('[data-conversation-scroll]')!;
+        const composer = scroll.querySelector('[data-composer-card]')!;
+        const center = (element: Element) => {
+          const { left, top, width, height } = element.getBoundingClientRect();
+          return { x: left + width / 2, y: top + height / 2 };
+        };
+        scroll.scrollBy({ top: center(node).y - center(composer).y, behavior: 'instant' });
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const { x, y } = center(node);
+        const hits = document.elementsFromPoint(x, y);
+        return { overlapsComposer: hits.includes(composer), composerInFront: composer.contains(hits[0] ?? null) };
+      }), { message: `Timeline marker scrolls beneath the composer at ${width}px` }).toEqual({ overlapsComposer: true, composerInFront: true });
+      await page.screenshot({ path: info.outputPath(`inline-timeline-under-composer-${width}.png`) });
+    }
+    expect(errors).toEqual([]);
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);
