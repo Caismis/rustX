@@ -109,7 +109,6 @@ pub(crate) async fn watch_terminal_order() {
 }
 
 pub(crate) async fn revocation_before_start() {
-    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     struct ReleaseOnDrop(crate::app_server::command::StartHold);
     impl Drop for ReleaseOnDrop {
         fn drop(&mut self) {
@@ -122,19 +121,7 @@ pub(crate) async fn revocation_before_start() {
                 let fixture = Fixture::with_session_count(None, 1).await;
                 grant(&fixture);
                 let marker = fixture.workspaces[0].join("business-started");
-                let trace = fixture.workspaces[0].join("native-trace");
-                // The supervisor diagnostics trace is the physical
-                // boundary's own observation surface — armed on the
-                // spawned Client, never a fault hook.
-                let mut execution = fixture
-                    .start_execution_with_env(
-                        0,
-                        &[(
-                            rustx_process_supervisor::bash_supervisor::diagnostics::TRACE_ENV,
-                            &trace.display().to_string(),
-                        )],
-                    )
-                    .await;
+                let mut execution = fixture.start_execution(0).await;
                 let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
                 initialize(&connection).await;
                 // The Server-side dispatch hold: revocation observed
@@ -147,7 +134,7 @@ pub(crate) async fn revocation_before_start() {
                     &[
                         "/bin/sh",
                         "-c",
-                        "printf started > business-started; printf READY; exec sleep 600",
+                        "printf '%s\n' \"$$\" > business-started; printf READY; exec sleep 600",
                     ],
                 );
                 params.tty = tty;
@@ -195,28 +182,24 @@ pub(crate) async fn revocation_before_start() {
                     marker.exists() == start_first,
                     "revocation={revocation}, tty={tty}, start_first={start_first}: only an authorized command can run"
                 );
-                let evidence: Vec<Entry> = std::fs::read_to_string(&trace)
-                    .unwrap_or_default()
-                    .lines()
-                    .map(|line| serde_json::from_str(line).unwrap())
-                    .collect();
-                assert_eq!(
-                    evidence
-                        .iter()
-                        .any(|entry| matches!(entry.event, Event::ShellGroup { .. })),
-                    start_first,
-                    "revocation={revocation}, tty={tty}: native spawn matches the winning authorization"
-                );
-                for entry in evidence {
-                    if let Event::ShellGroup { pid, .. } = entry.event {
-                        process_gone(pid);
-                    }
-                }
+
                 let mut operations = fixture.host.request_operations();
                 bounded(operations.wait_for(|count| *count == 0))
                     .await
                     .unwrap();
                 assert_eq!(*operations.borrow(), 0);
+                // The business process names its own pid before READY; `exec`
+                // keeps that pid for the long-running program, so the physical
+                // exit is observed on the exact business process after the
+                // operation drained.
+                if start_first {
+                    let pid: i32 = std::fs::read_to_string(&marker)
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .expect("business pid");
+                    process_gone(pid);
+                }
                 assert_eq!(fixture.manager.diagnostics().loaded, 0);
                 execution.kill().await.unwrap();
                 connection.close();
@@ -311,4 +294,45 @@ pub(crate) async fn watch_immediate_successor() {
             [] as [std::string::String; 0]
         );
     }
+}
+
+/// A poisoned supervisor trace variable reaches the real staged Client only
+/// through a test launcher; the Client must never create or append that path.
+pub(crate) async fn poisoned_trace_variable_is_never_authority() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let scratch = tempfile::tempdir().unwrap();
+    let poison = scratch.path().join("poisoned-trace");
+    let client = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    let launcher = scratch.path().join("poisoned-launcher");
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexport RUSTX_TEST_SUPERVISION_TRACE='{}'\nexec '{}' \"$@\"\n",
+            poison.display(),
+            client.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut execution = fixture.start_execution_via(0, Some(&launcher)).await;
+    let connection = std::sync::Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let params = parameters(&fixture, &["/bin/true"]);
+    let worker = connection.clone();
+    let command = tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+    let MethodResult::CommandExec { result } = bounded(command).await.unwrap() else {
+        panic!("the bound command completes through the real Client")
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert!(
+        !poison.exists(),
+        "a poisoned trace path must never be created"
+    );
+    execution.kill().await.unwrap();
+    connection.close();
 }

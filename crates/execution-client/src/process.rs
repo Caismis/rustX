@@ -209,16 +209,16 @@ pub(crate) struct Operations {
     admission: Admission,
     root: PackageDirectory,
     workspace: PathBuf,
-    /// The optional bounded supervisor diagnostics sink — the explicit
-    /// external observation capability the supervisor crate documents,
-    /// armed by the Client process's own environment. No fault seam.
-    diagnostics: Option<rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl>,
     /// The independent generation authority bound to every runner's
     /// START guard — a different signal family than each operation's
     /// invocation cancellation, so the grants never share a mutex.
     revoke: ProcessSignal,
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
     workers: Arc<WorkerCount>,
+    /// Test-only START holds, each owned by exactly one operation id.
+    #[cfg(test)]
+    start_holds:
+        Mutex<BTreeMap<OperationId, rustx_process_supervisor::process_runner::RunnerStartHold>>,
 }
 
 struct WorkerCount {
@@ -237,15 +237,6 @@ impl Operations {
             root: PackageDirectory::open(&admission.workspace)?,
             workspace: admission.workspace.clone(),
             admission,
-            diagnostics: std::env::var_os(
-                rustx_process_supervisor::bash_supervisor::diagnostics::TRACE_ENV,
-            )
-            .map(|trace| {
-                rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl {
-                    trace: Some(PathBuf::from(trace)),
-                    ..Default::default()
-                }
-            }),
             revoke: ProcessSignal::new(),
             runtime: Mutex::new(Some(
                 tokio::runtime::Builder::new_multi_thread()
@@ -257,6 +248,8 @@ impl Operations {
                 live: Mutex::new(0),
                 drained: Condvar::new(),
             }),
+            #[cfg(test)]
+            start_holds: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -568,7 +561,7 @@ impl Operations {
         let inner_arc = Arc::clone(&self.inner);
         let workers = Arc::clone(&self.workers);
         let workspace = self.workspace.clone();
-        let diagnostics = self.diagnostics.clone();
+        let control = self.run_control(&key);
         let cwd_fd = operation.cwd.descriptor().try_clone();
         let cwd_path = self.workspace.join(&spec.cwd);
         drop(inner);
@@ -603,16 +596,8 @@ impl Operations {
         runtime.spawn(async move {
             let _count = WorkerGuard(workers);
             run_operation(
-                inner_arc,
-                cwd_fd,
-                cwd_path,
-                workspace,
-                worker_key,
-                spec,
-                signal,
-                revoke,
-                input_rx,
-                diagnostics,
+                inner_arc, cwd_fd, cwd_path, workspace, worker_key, spec, signal, revoke, input_rx,
+                control,
             )
             .await;
         });
@@ -1020,7 +1005,7 @@ async fn run_operation(
     signal: ProcessSignal,
     revoke: ProcessSignal,
     mut input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
-    diagnostics: Option<rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl>,
+    control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
 ) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -1079,7 +1064,6 @@ async fn run_operation(
         settle_outcome(&inner, &key, SettledDisposition::Cancelled, None);
         return;
     }
-    let control = test_control(diagnostics);
     let spawned = SupervisedCommandRunner::spawn_program(&command_spec, control, Some(&invocation));
     let Ok((mut runner, mut stdout, mut stderr)) = spawned else {
         settle_outcome(&inner, &key, SettledDisposition::Failed, None);
@@ -1313,34 +1297,45 @@ fn record_input(
     }
 }
 
-/// The one optional diagnostic hookup: in production it carries only
-/// the external trace capability; under `cfg(test)` it additionally
-/// attaches the held-START seam the physical-boundary races arm.
-fn test_control(
-    diagnostics: Option<rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl>,
-) -> Option<rustx_process_supervisor::process_runner::RunnerTestControl> {
-    #[cfg(test)]
-    if let Some(hold) = START_HOLD.lock().expect("start hold").take() {
-        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
-        control.diagnostics = diagnostics.unwrap_or_default();
-        control.start_hold = Some(hold);
-        return Some(control);
+impl Operations {
+    /// The physical-boundary control for `key`. Production has no test
+    /// control; a test arms one START hold for exactly one operation.
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)] // production never carries a test control
+    fn run_control(
+        &self,
+        _key: &ProcessOperationKey,
+    ) -> Option<rustx_process_supervisor::process_runner::RunnerTestControl> {
+        None
     }
-    diagnostics.map(|diagnostics| {
+
+    #[cfg(test)]
+    fn run_control(
+        &self,
+        key: &ProcessOperationKey,
+    ) -> Option<rustx_process_supervisor::process_runner::RunnerTestControl> {
+        let hold = self
+            .start_holds
+            .lock()
+            .expect("start holds")
+            .remove(&key.operation)?;
         let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
-        control.diagnostics = diagnostics;
-        control
-    })
+        control.start_hold = Some(hold);
+        Some(control)
+    }
 }
 
+/// Arms one START hold for exactly `key`; no other operation can take it.
 #[cfg(test)]
-static START_HOLD: Mutex<Option<rustx_process_supervisor::process_runner::RunnerStartHold>> =
-    Mutex::new(None);
-
-#[cfg(test)]
-fn arm_start_hold() -> rustx_process_supervisor::process_runner::RunnerStartHold {
+fn arm_start_hold(
+    ops: &Operations,
+    key: &ProcessOperationKey,
+) -> rustx_process_supervisor::process_runner::RunnerStartHold {
     let hold = rustx_process_supervisor::process_runner::RunnerStartHold::new();
-    *START_HOLD.lock().expect("start hold") = Some(hold.clone());
+    ops.start_holds
+        .lock()
+        .expect("start holds")
+        .insert(key.operation, hold.clone());
     hold
 }
 
@@ -1653,7 +1648,7 @@ mod tests {
             &key,
             &spec(&["/bin/sh", "-c", "touch business-marker; exec sleep 30"]),
         );
-        let hold = arm_start_hold();
+        let hold = arm_start_hold(&ops, &key);
         ops.dispatch(ProcessRequest::Start { key: key.clone() });
         // Parked inside the physical START transaction — the grant is
         // entered but the crossing has not been published.
@@ -1675,6 +1670,54 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(200));
         assert!(!marker.exists(), "no business spawn after a held cancel");
+        ops.shutdown().ok();
+    }
+
+    #[test]
+    fn a_selected_start_hold_is_owned_by_exactly_one_operation() {
+        assert!(
+            supervisor_staged(),
+            "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let held = fresh_key(&adm);
+        let other = fresh_key(&adm);
+        register(
+            &ops,
+            &held,
+            &spec(&["/bin/sh", "-c", "touch held-marker; exec sleep 30"]),
+        );
+        register(
+            &ops,
+            &other,
+            &spec(&["/bin/sh", "-c", "touch other-marker"]),
+        );
+        let start_hold = arm_start_hold(&ops, &held);
+        // The other operation starts first: it must not receive the hold and
+        // runs to its own settlement.
+        ops.dispatch(ProcessRequest::Start { key: other.clone() });
+        let other_snapshot = await_settled(&ops, &other);
+        assert_eq!(other_snapshot.disposition, SettledDisposition::Known);
+        assert!(dir.path().join("other-marker").exists());
+        // The held operation parks inside its physical START transaction.
+        ops.dispatch(ProcessRequest::Start { key: held.clone() });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(start_hold.await_entered());
+        assert!(!dir.path().join("held-marker").exists());
+        // Cancelled while parked before the crossing: zero business spawn.
+        assert_eq!(
+            ops.cancel(&held),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        start_hold.release();
+        let held_snapshot = await_settled(&ops, &held);
+        assert_eq!(held_snapshot.disposition, SettledDisposition::Cancelled);
+        assert!(!dir.path().join("held-marker").exists());
         ops.shutdown().ok();
     }
 

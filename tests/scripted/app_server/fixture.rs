@@ -393,17 +393,16 @@ impl Fixture {
     /// and reap it explicitly. Panics when the preparation stage did not
     /// place a client binary beside the harness — there is no fallback.
     pub(super) async fn start_execution(&self, index: usize) -> tokio::process::Child {
-        self.start_execution_with_env(index, &[]).await
+        self.start_execution_via(index, None).await
     }
 
-    /// [`start_execution`](Self::start_execution) with explicit
-    /// environment entries forwarded to the cleared child environment —
-    /// used to arm the supervisor diagnostics trace, an observation
-    /// capability, never a fault hook.
-    pub(super) async fn start_execution_with_env(
+    /// [`start_execution`](Self::start_execution) through an explicit launcher
+    /// program. The launcher is a test artifact that execs the staged Client
+    /// with its own environment; the default path is the staged binary itself.
+    pub(super) async fn start_execution_via(
         &self,
         index: usize,
-        envs: &[(&str, &str)],
+        launcher: Option<&std::path::Path>,
     ) -> tokio::process::Child {
         let endpoint = self
             .manager
@@ -425,14 +424,13 @@ impl Fixture {
         let std_listener = std_listener.try_clone().unwrap();
         std_listener.set_nonblocking(true).unwrap();
         let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
-        let child = tokio::process::Command::new(&binary)
+        let child = tokio::process::Command::new(launcher.unwrap_or(&binary))
             .arg("--binding-file")
             .arg(endpoint.bootstrap_path())
             .arg("--workspace")
             .arg(endpoint.workspace())
             .current_dir("/")
             .env_clear()
-            .envs(envs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

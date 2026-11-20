@@ -120,3 +120,21 @@ Record local commands, actual head SHA, Actions checkout SHA, required Linux/mac
   real UI command (the saturation is covered at the control handle only);
   the Client-side ambient `RUSTX_TEST_SUPERVISION_TRACE` read in production
   `Operations::new` is still present and remains pending.
+
+## Supervisor trace authority removed (Execution Client)
+
+- The Client process no longer reads `RUSTX_TEST_SUPERVISION_TRACE` in
+  production: `Operations::new` carries no diagnostics, and the physical
+  runner receives `None` for every operation outside tests.
+- The native revocation scenario (`revocation_before_native_start_never_executes_an_independent_command`,
+  12 arms) proves the physical spawn by reading the business process's own
+  pid (`printf '%s\n' "$$"`, then `exec sleep 600`), and requires that pid
+  to be physically gone after the operation drains.
+- The START hold is owned per operation (`arm_start_hold(&ops, &key)`), not a
+  process-wide singleton. The Client test
+  `a_selected_start_hold_is_owned_by_exactly_one_operation` starts an
+  unheld operation first; the held operation is cancelled while parked and
+  classifies as `CancelledBeforeStart` with zero business marker.
+- Regression `poisoned_trace_variable_is_never_authority` runs a real staged
+  Client behind a launcher that sets only the poisoned trace variable, then
+  runs a bound command; the supplied path is never created.

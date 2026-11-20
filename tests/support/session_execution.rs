@@ -152,14 +152,6 @@ impl ExecutionFixture {
             let mut child = ChildGuard(
                 Command::new(staged_client())
                     .env_clear()
-                    // Deliberate forwarding only — the cleared child env
-                    // gains just the supervisor diagnostics sink when the
-                    // harness armed it.
-                    .envs(
-                        std::env::var("RUSTX_TEST_SUPERVISION_TRACE").map_or_default(|v| {
-                            vec![("RUSTX_TEST_SUPERVISION_TRACE".to_owned(), v)]
-                        }),
-                    )
                     .current_dir("/")
                     .arg("--binding-file")
                     .arg(endpoint.bootstrap_path())

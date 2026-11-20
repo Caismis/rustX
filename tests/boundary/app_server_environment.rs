@@ -8,6 +8,10 @@ async fn revocation_before_native_start_never_executes_an_independent_command() 
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::revocation_before_start()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn poisoned_trace_variable_is_never_authority() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::poisoned_trace_variable_is_never_authority()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detached_operations_release_without_touching_siblings() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::detached_operations_release_without_touching_siblings()).await;
 }
