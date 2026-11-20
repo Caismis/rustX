@@ -1,4 +1,4 @@
-//! Server ownership of the canonical WorkspaceChanges projection.
+//! Server ownership of the canonical `WorkspaceChanges` projection.
 use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
 use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
 use crate::runtime::identity::AttemptId;
