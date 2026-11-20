@@ -66,7 +66,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
       <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
         running={tool.state === 'running'}
         icon={tool.icon ?? <Icon size={14}/>}
-        title={tool.title} open={open && expandable} expandable={expandable} expandOnRowClick keepContentWhenOpen onToggle={toggle}
+        title={tool.title} open={open && expandable} expandable={expandable} expandOnRowClick={tool.variant !== 'image' || !showPathLink} keepContentWhenOpen onToggle={toggle}
         collapsedContent={<>{summary && <><span className={css.sep} data-shimmer-decoration aria-hidden/>
           {showPathLink ? <button type="button" className={css.fileLink} title={tool.path}
             onClick={event => { event.stopPropagation(); onOpenPath(); }} onKeyDown={summaryLinkKeyDown}><TextShimmer>{summary}</TextShimmer></button>

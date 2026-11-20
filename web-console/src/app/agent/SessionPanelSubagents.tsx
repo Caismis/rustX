@@ -17,6 +17,12 @@ function sessionRootAgents(agents: readonly RuntimeClientAgent[], oneShot?: Read
   return [...roots].sort((left, right) => Number(agentRunning(right)) - Number(agentRunning(left)));
 }
 
+export function useHasSessionSubagents(sessionId: string): boolean {
+  const scope = useSubagents();
+  if (!scope || scope.sessionId !== sessionId) return false;
+  return sessionRootAgents(scope.agents, scope.oneShot).length > 0;
+}
+
 export function SubagentsRunningIndicator({ sessionId, panelShown }: { sessionId: string; panelShown: boolean }) {
   const tx = useTranslation();
   const scope = useSubagents();

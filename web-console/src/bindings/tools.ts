@@ -60,7 +60,7 @@ export function toolCard(tool: ForegroundToolExecution): ToolCardView {
   const filePathLine = variant === 'read' ? positiveInt('offset') ?? positiveInt('line') : undefined;
   const href = variant === 'web' ? safeHttpUrl(string('url')) : undefined;
   const summary = variant === 'bash'
-    ? string('description')?.split('\n')[0] ?? string('command')?.split('\n')[0] ?? ''
+    ? string('description')?.split('\n')[0] ?? ''
     : detail ?? (variant === 'web' ? string('query') ?? string('url') : string(variant === 'search' ? 'pattern' : 'path')) ?? '';
   return {
     id: tool.call_id ?? undefined, background, jobId: launch?.jobId, promotion, path, filePathLine, href, imageResult, exitCode: result?.exit_code, truncated: result?.truncation?.truncated,

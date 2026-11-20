@@ -1688,7 +1688,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "002e85de462d28d2ff62e2eba108692338cad219f7f9abd67f40e7d549348387",
+      "local_sha256": "4481add55a0d29f95416c559273818d1bc61afc70330910315ae1818ed75c14e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -8628,7 +8628,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "8cba36c652504293ef1c3457a56d07222e6628c4505a0b2b3d3156a8a690bf5d"
+      "local_sha256": "28691f4404042c4f2676b54b574609b9727a7a769543aac6fc887729c4ad8e4f"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",

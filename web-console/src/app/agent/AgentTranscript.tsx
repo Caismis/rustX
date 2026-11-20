@@ -723,8 +723,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     {contextActivity}
     {retrying && <RunningStatus/>}
     {runningAttempt && <RunningStatus key={attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt})} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
-    <div className={css.turnSpacer} data-chat-turn-spacer="" aria-hidden="true"/>
-  </div></ToolDisclosureContext.Provider>;
+  </div><div className={css.turnSpacer} data-chat-turn-spacer="" aria-hidden="true"/></ToolDisclosureContext.Provider>;
 }
 
 function DescriptorContent({ descriptor, editor, actions }: { descriptor: RuntimeClientMessageDescriptor; editor?: ReactNode; actions?: ReactNode }) {
