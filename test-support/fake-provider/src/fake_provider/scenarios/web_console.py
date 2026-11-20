@@ -810,7 +810,8 @@ root = Card(Column([
   List([
     Row([Text($/models/0/name), Text($/models/0/verdict, "caption")]),
     Row([Text($/models/1/name), Text($/models/1/verdict, "caption")])
-  ])
+  ]),
+  Button(Text("打开 HN"), action=openUrl("https://news.ycombinator.com"))
 ]))
 </a2ui>
 ```

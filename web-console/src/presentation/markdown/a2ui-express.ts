@@ -399,8 +399,8 @@ class Parser {
         if (!child) return null;
         children.push(child);
       } else if (key === 'action') {
-        // Consume an opaque, balanced action expression. No action reaches the renderer.
-        if (argument.type !== 'ident' || argument.value !== 'Event') return null;
+        // Both agent events and catalog functions are opaque, display-only metadata.
+        if (argument.type !== 'ident') return null;
         this.pos++;
         if (!this.expectPunct('(')) return null;
         let nesting = 1;

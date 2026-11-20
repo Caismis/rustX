@@ -20,6 +20,8 @@ test('renders a fenced Express rating card in assistant history', async ({ page 
         await expect(chat.getByText(text, { exact: true })).toBeVisible();
       }
       await expect(chat).not.toContainText('root = Card');
+      const card = chat.locator('[data-a2ui-express]');
+      await expect(card.getByRole('button', { name: '打开 HN' })).toBeDisabled();
     };
     await assertCard();
     await page.screenshot({ path: info.outputPath('express-ratings.png') });

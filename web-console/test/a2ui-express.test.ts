@@ -11,6 +11,18 @@ describe('static Express trees', () => {
     expect(surface?.root.props).toMatchObject({ variant: 'solid', color: 'danger', size: 'sm', block: true });
     expect(surface?.root.children[0]?.text).toBe('Delete');
   });
+  it('keeps a card with both event and renderer function actions display-only', () => {
+    const surface = parseExpress(`$/date = "2026-11-20"
+root = Card(Column([
+  Text($/date),
+  Button(Text("More"), variant="primary", action=Event("load_more", {date: $/date})),
+  Button(Text("Open HN"), action=openUrl("https://news.ycombinator.com"))
+]))`);
+    const items = surface?.root.children[0]?.children;
+    expect(items?.map(item => item.kind)).toEqual(['Text', 'Button', 'Button']);
+    expect(items?.[2]?.children[0]?.text).toBe('Open HN');
+    expect(items?.slice(1).map(button => button.props?.action)).toEqual([undefined, undefined]);
+  });
   it.each(['root=Card(root)', 'root=Button(Text("Go"), Event("go"))', '<a2ui>root=Text("partial")', 'root=Text($/missing)'])('leaves invalid or unsupported input as source', source => {
     expect(parseExpress(source)).toBeNull();
   });
