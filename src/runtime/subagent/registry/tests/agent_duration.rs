@@ -114,7 +114,9 @@ async fn agent_duration_follows_driver_evidence_through_stopping_and_durable_ter
         assert_eq!(interval.started_at, base);
         assert_eq!(interval.observed_at, base + chrono::Duration::seconds(3));
         assert_eq!(
-            (base + chrono::Duration::seconds(5) - interval.started_at).num_milliseconds(),
+            (base + chrono::Duration::seconds(5))
+                .signed_duration_since(interval.started_at)
+                .num_milliseconds(),
             5_000
         );
         assert_eq!(active.duration.settled_ms, 0);
@@ -248,7 +250,10 @@ async fn agent_duration_freezes_at_durable_evidence_after_control_loss() {
     let interval = frozen.duration.active.as_ref().unwrap();
     assert!(!interval.running);
     assert_eq!(
-        (interval.observed_at - interval.started_at).num_milliseconds(),
+        interval
+            .observed_at
+            .signed_duration_since(interval.started_at)
+            .num_milliseconds(),
         3_000
     );
     assert_eq!(frozen.duration.settled_ms, 0);

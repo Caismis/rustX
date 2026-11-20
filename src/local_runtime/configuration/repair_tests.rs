@@ -3230,7 +3230,7 @@ fn a_failed_sync_after_the_confirmed_publication_is_uncertain_and_never_replayed
 
 /// The authored file bound, in bytes.
 fn bound() -> usize {
-    usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap()
+    usize::try_from(rustx_bounded_file::MAX_RESOURCE_BYTES).unwrap()
 }
 
 /// `prefix` padded with one comment line to exactly `size` bytes.
@@ -3272,7 +3272,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     let original = sized(&format!("schema_version = 9\n{USER}"), bound());
     fixture.write(&SourceTarget::User, &original);
     // The original itself is readable at exactly the bound.
-    assert!(crate::bounded_file::read_bounded(&fixture.path(&SourceTarget::User)).is_ok());
+    assert!(rustx_bounded_file::read_bounded(&fixture.path(&SourceTarget::User)).is_ok());
     let candidate = plan(original.as_bytes()).unwrap().candidate;
     assert_eq!(candidate.len(), bound() + 1);
     let sequence = fixture.sequence();
@@ -4156,6 +4156,7 @@ impl OpenWatch {
         Self()
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self))]
     fn opened(&self) -> bool {
         #[cfg(target_os = "linux")]
         match self.0.read_events() {
@@ -5003,7 +5004,7 @@ type Plant = fn(&Path, &Path, &str);
 /// leaves anything behind.
 #[test]
 fn unsupported_entries_and_oversized_documents_are_refused_without_effects() {
-    let bound = usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap();
+    let bound = usize::try_from(rustx_bounded_file::MAX_RESOURCE_BYTES).unwrap();
     let exact = format!("#{}\n", "x".repeat(bound - 2));
     let fixture = Fixture::new();
     fixture.write(&SourceTarget::User, USER);

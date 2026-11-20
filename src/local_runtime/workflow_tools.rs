@@ -13,7 +13,7 @@ use super::session_runtime_manager::SessionRuntimeManager;
 use crate::runtime::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::runtime::resources::SourceScope;
-use crate::runtime::workflow::{WorkflowToolChoice, WorkflowToolResult};
+use crate::runtime::workflow::WorkflowToolChoice;
 use crate::tools::mcp::{McpInvalidationState, McpServerBinding, McpServerRuntime, OwnedConnect};
 use crate::tools::workspace::Workspace;
 use std::collections::BTreeMap;
@@ -369,7 +369,9 @@ async fn list(
             tools: tools
                 .into_iter()
                 .map(|tool| WorkflowToolChoice {
-                    result: WorkflowToolResult::declared(tool.output_schema.as_ref()),
+                    result: crate::runtime::workflow::tool::tool_result_declared(
+                        tool.output_schema.as_ref(),
+                    ),
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.input_schema.into(),
@@ -397,6 +399,7 @@ fn python_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustx_workflow::WorkflowToolResult;
     use serde_json::json;
 
     fn large() -> WorkflowToolCatalog {

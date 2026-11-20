@@ -1,107 +1,22 @@
-//! Bounded scheduled-start contracts over native immutable resources.
-//!
-//! Preparation performs no graph effects and grants no execution authority.
-//! The Workflow owner must still retain/revalidate these resources through its
-//! configuration/lifecycle fence and durably claim the exact start before use.
-pub(crate) mod effects;
-pub mod lifecycle;
+//! Scheduled workflow preparation machinery; persisted contracts live in
+//! `rustx_durable::workflow::scheduled`.
 
-use super::{
-    WorkflowBlockProgram, WorkflowId, WorkflowNodeProgram, WorkflowProgram, WorkflowToolIdentity,
-};
+pub use rustx_durable::workflow::scheduled::*;
+pub(crate) mod effects;
+
+use super::{WorkflowBlockProgram, WorkflowId, WorkflowNodeProgram, WorkflowProgram};
 use crate::capabilities::ToolSourceId;
-use crate::capabilities::selection::ExactToolSelector;
 use crate::model::frozen::FrozenModelInvocation;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
-use crate::runtime::identity::{AgentId, RuntimeResourceRevision};
+use crate::runtime::identity::AgentId;
 use crate::runtime::resources::RuntimeResourceSnapshot;
 use crate::runtime::subagent::{InheritedExecutionPolicy, ResolvedSubagentSpec};
 use crate::scheduler::ScheduleBinding;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::Arc;
-
-/// Changes to compilation or dependency framing require a new contract.
-pub const SCHEDULED_WORKFLOW_COMPILER_CONTRACT: u32 = 3;
-/// Complete persisted descriptor bound, independent of argument payloads.
-pub const MAX_SCHEDULED_WORKFLOW_CONTRACT_BYTES: usize = 64 * 1024;
-/// Same initial argument budget as Scheduler reminder text.
-pub const MAX_SCHEDULED_WORKFLOW_ARGUMENT_BYTES: usize = 16 * 1024;
-
-/// Derived native graph limits, checked independently of the definition digest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduledWorkflowLimits {
-    pub steps: u32,
-    pub agents: u32,
-    pub model_calls: u32,
-    pub retained_bytes: u32,
-    pub timeout_ms: u64,
-}
-
-/// Provider and endpoint semantics, excluding credential source and value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduledProviderIdentity {
-    pub provider: String,
-    pub endpoint_digest: String,
-}
-
-/// Selected source's native transport, policy and credential-reference contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScheduledSourceIdentity {
-    pub source: ToolSourceId,
-    pub materialization_digest: String,
-}
-
-/// Complete effective dependencies at one static graph location.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ScheduledWorkflowDependency {
-    Tool {
-        path: Vec<String>,
-        selector: ExactToolSelector,
-        definition_digest: String,
-        source: Option<ScheduledSourceIdentity>,
-    },
-    Model {
-        path: Vec<String>,
-        invocation_digest: String,
-        provider: ScheduledProviderIdentity,
-    },
-    Agent {
-        path: Vec<String>,
-        definition_digest: String,
-        profile_digest: String,
-        primary_provider: ScheduledProviderIdentity,
-        summary_provider: Option<ScheduledProviderIdentity>,
-        sources: Vec<ScheduledSourceIdentity>,
-    },
-}
-
-/// Inert persistence contract; this value never authorizes a start or Claim.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PinnedScheduledWorkflow {
-    pub compiler_contract: u32,
-    pub binding: ScheduleBinding,
-    pub workspace: PathBuf,
-    pub root_agent_id: AgentId,
-    pub root_extensions_digest: String,
-    pub environment_digest: String,
-    pub definition: WorkflowToolIdentity,
-    pub arguments_digest: String,
-    pub limits: ScheduledWorkflowLimits,
-    pub execution_policy: InheritedExecutionPolicy,
-    pub approval_mode: ApprovalMode,
-    pub dependencies: Vec<ScheduledWorkflowDependency>,
-    /// Audit evidence only; unrelated generation changes are not mismatches.
-    pub observed_resource_revision: RuntimeResourceRevision,
-}
 
 /// A bound Agent node retained off-side, without starting a native child.
 pub struct PreparedScheduledAgent {
@@ -380,13 +295,15 @@ impl ScheduledWorkflowPreparation {
                         .available_tools()
                         .registration(definition)
                         .map_err(|_| Error::DependencyUnavailable)?;
-                    if registration.foreground() != crate::tools::deadline::ForegroundPolicy::Leaf {
+                    if registration.foreground()
+                        != rustx_types::tools::deadline::ForegroundPolicy::Leaf
+                    {
                         return Err(Error::DependencyUnavailable);
                     }
                     let source = selector
                         .source()
                         .map(|source| {
-                            let server = crate::tools::mcp::source_server_id(source);
+                            let server = crate::tools::mcp::executor::source_server_id(source);
                             let binding = self
                                 .resources
                                 .capability()

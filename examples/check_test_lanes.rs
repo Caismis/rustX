@@ -97,12 +97,7 @@ const REQUIREMENTS: &[Requirement] = &[
         "doc",
         "context::status::AgentStatusSurfaceView",
     ),
-    Requirement::new(
-        Profile::Full,
-        Platform::Linux,
-        "doc",
-        "conversation::ConversationState",
-    ),
+    Requirement::new(Profile::Full, Platform::Linux, "doc", "ConversationState"),
     Requirement::new(
         Profile::Full,
         Platform::Linux,
@@ -173,6 +168,7 @@ fn main() {
     let report = check(
         &steps,
         &metadata.targets,
+        &metadata.members,
         host,
         &jobs,
         REQUIREMENTS,
@@ -330,6 +326,15 @@ impl Requirement {
     }
 }
 
+/// Which packages a cargo test step's package selectors cover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackageScope {
+    /// The root package (or explicit `-p rustx`) only.
+    Root,
+    /// `--workspace` present: every member not dropped by `--exclude`.
+    Workspace,
+}
+
 /// One `cargo test` step of the workflow.
 #[derive(Clone, Debug)]
 struct Step {
@@ -348,9 +353,26 @@ struct Step {
     filters: Vec<String>,
     skips: Vec<String>,
     exact: bool,
+    /// `--workspace` present: the step selects every member not in
+    /// `member_excludes`.
+    scope: PackageScope,
+    /// Extracted (`rustx-*`) packages named by `-p` selectors.
+    member_packages: Vec<String>,
+    /// Packages dropped by `--exclude` selectors.
+    member_excludes: Vec<String>,
+    /// Target kinds the step selects for extracted packages; empty means the
+    /// command selects every non-doc kind (a bare `-p`/`--workspace` step).
+    member_kinds: BTreeSet<Kind>,
 }
 
 impl Step {
+    /// Whether the step runs tests of extracted workspace members rather
+    /// than the root package.
+    fn member_step(&self) -> bool {
+        !self.member_packages.is_empty()
+            || (self.scope == PackageScope::Workspace
+                && self.member_excludes.iter().any(|name| name == "rustx"))
+    }
     fn label(&self) -> String {
         format!(
             "{} {} job `{}` step `{}`",
@@ -376,6 +398,10 @@ struct PackageMetadata {
     canonical_manifest: PathBuf,
     targets: Vec<Target>,
     sources: BTreeMap<Target, PathBuf>,
+    /// Extracted workspace members (`rustx-*`): name → their target kinds
+    /// (Doc excluded). A member target no lane selects fails the member
+    /// coverage check.
+    members: BTreeMap<String, BTreeSet<Kind>>,
 }
 
 fn emit_stderr(stderr: &str, emit: &mut dyn FnMut(&str)) {
@@ -405,12 +431,74 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
     parse_metadata(&metadata)
 }
 
+/// Target kinds each extracted workspace member exposes; used to prove every
+/// non-doc kind is selected by some executing step on every platform.
+fn member_kinds(
+    packages: &[serde_json::Value],
+) -> Result<BTreeMap<String, BTreeSet<Kind>>, String> {
+    let mut members = BTreeMap::new();
+    for member in packages
+        .iter()
+        .filter(|package| package["name"].as_str().is_some_and(|name| name != "rustx"))
+    {
+        let name = member["name"].as_str().ok_or("a package has no name")?;
+        let mut kinds = BTreeSet::new();
+        for target in member["targets"]
+            .as_array()
+            .ok_or("a member package has no target list")?
+        {
+            let target_kinds: Vec<&str> = target["kind"]
+                .as_array()
+                .ok_or("a member target has no kind")?
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            match target_kinds.as_slice() {
+                ["bin"] => {
+                    kinds.insert(Kind::Bin);
+                }
+                ["example"] => {
+                    kinds.insert(Kind::Example);
+                }
+                ["test"] => {
+                    kinds.insert(Kind::Test);
+                }
+                ["bench"] => {
+                    kinds.insert(Kind::Bench);
+                }
+                ["custom-build"] => {}
+                all_lib
+                    if all_lib.iter().all(|kind| kind.ends_with("lib")) && !all_lib.is_empty() =>
+                {
+                    kinds.insert(Kind::Lib);
+                }
+                other => {
+                    return Err(format!(
+                        "member {name} target has unsupported kinds {other:?}"
+                    ));
+                }
+            }
+        }
+        members.insert(name.to_owned(), kinds);
+    }
+    Ok(members)
+}
+
 fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
     let packages = metadata["packages"]
         .as_array()
-        .filter(|packages| packages.len() == 1)
-        .ok_or("cargo metadata must describe exactly the one rustx package")?;
-    let package = &packages[0];
+        .ok_or("cargo metadata has no packages")?;
+    let package = if packages.len() == 1 {
+        &packages[0]
+    } else {
+        // The workspace also hosts the extracted `rustx-*` crates; lanes only
+        // cover the root package's targets.
+        packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("rustx"))
+            .ok_or("cargo metadata has no rustx package")?
+    };
+    let members = member_kinds(packages)?;
     let package_id = package["id"]
         .as_str()
         .filter(|id| !id.is_empty())
@@ -465,6 +553,7 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, Strin
         canonical_manifest,
         targets,
         sources,
+        members,
     })
 }
 
@@ -678,10 +767,68 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         filters: Vec::new(),
         skips: Vec::new(),
         exact: false,
+        scope: PackageScope::Root,
+        member_packages: Vec::new(),
+        member_excludes: Vec::new(),
+        member_kinds: BTreeSet::new(),
         profile: Profile::Full,
         affected: false,
     };
+    let (names_rustx, names_other) = parse_cargo_arguments(&mut step, cargo, targets)?;
+    parse_libtest_arguments(&mut step, libtest)?;
+    if names_other && names_rustx {
+        // `rustx` and extracted packages selected together: per-package
+        // feature and target resolution is not modeled, so reject instead
+        // of silently dropping the other selectors.
+        return Err(
+            "a `cargo test` step mixing `rustx` with other `-p` packages is not modeled by the lanes"
+                .into(),
+        );
+    }
+    if names_rustx && step.member_excludes.iter().any(|name| name == "rustx") {
+        return Err("a `cargo test` step cannot both select and exclude `rustx`".into());
+    }
+    if step.member_step() {
+        // The step exercises extracted `rustx-*` packages, not the root.
+        // Libtest selections are allowed and verified per member through
+        // member_lib_list: each `--skip` must exclude a listed member test and
+        // each positive filter must match a runnable one, so a selection here
+        // cannot silently run zero tests or drag the capacity suite into FAST.
+        // Kind selectors (`--lib` &c) resolved against the root package's
+        // targets; they name kinds the member packages share, not root
+        // coverage. Move them so the root lanes never claim them.
+        if step.targets.is_empty() {
+            // A bare `-p`/`--workspace --exclude rustx` step selects every
+            // non-doc kind each member has.
+            step.member_kinds.extend([
+                Kind::Lib,
+                Kind::Bin,
+                Kind::Example,
+                Kind::Test,
+                Kind::Bench,
+            ]);
+        } else {
+            step.member_kinds
+                .extend(step.targets.iter().map(|target| target.kind));
+            step.targets.clear();
+        }
+        return Ok(step);
+    }
+    if step.targets.is_empty() {
+        return Err("a cargo test step must select its targets explicitly".into());
+    }
+    Ok(step)
+}
+
+fn parse_cargo_arguments(
+    step: &mut Step,
+    cargo: &[&str],
+    targets: &[Target],
+) -> Result<(bool, bool), String> {
     let of = |kind: Kind| targets.iter().filter(move |target| target.kind == kind);
+    // `targets` holds only the root `rustx` package's targets; a `-p` step that
+    // names other packages selects none of them and contributes no coverage.
+    let (mut names_rustx, mut names_other) = (false, false);
     let mut cargo = cargo.iter();
     while let Some(argument) = cargo.next() {
         let mut named = |kind: Kind| -> Result<Target, String> {
@@ -708,7 +855,22 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
             "--example" => step.targets.push(named(Kind::Example)?),
             "--test" => step.targets.push(named(Kind::Test)?),
             "--bench" => step.targets.push(named(Kind::Bench)?),
-            "--all-features" | "--no-default-features" => step.features.push((*argument).into()),
+            // `--workspace` selects every member crate; it is forwarded
+            // verbatim like a feature flag so doctest discovery covers the
+            // extracted `rustx-*` crates too.
+            "--workspace" => {
+                step.scope = PackageScope::Workspace;
+                step.features.push((*argument).into());
+            }
+            "--all-features" | "--no-default-features" => {
+                step.features.push((*argument).into());
+            }
+            "--exclude" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                step.member_excludes.push((*name).into());
+            }
             "--features" | "-F" => {
                 let features = cargo
                     .next()
@@ -716,16 +878,28 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
                 step.features
                     .extend([(*argument).into(), (*features).into()]);
             }
+            "-p" | "--package" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                if *name == "rustx" {
+                    names_rustx = true;
+                } else {
+                    names_other = true;
+                    step.member_packages.push((*name).into());
+                }
+            }
             "--no-run" => step.executes = false,
             "--locked" | "--timings" => {}
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
     }
-    if step.targets.is_empty() {
-        return Err("a cargo test step must select its targets explicitly".into());
-    }
     step.targets.sort();
     step.targets.dedup();
+    Ok((names_rustx, names_other))
+}
+
+fn parse_libtest_arguments(step: &mut Step, libtest: &[&str]) -> Result<(), String> {
     let mut libtest = libtest.iter();
     while let Some(argument) = libtest.next() {
         match *argument {
@@ -739,7 +913,7 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
             filter => step.filters.push(filter.into()),
         }
     }
-    Ok(step)
+    Ok(())
 }
 
 /// libtest's own view of one harness.
@@ -766,10 +940,35 @@ trait Discovery {
         let count = ignored.len();
         Ok((listed.difference(&ignored).cloned().collect(), count))
     }
+
+    /// The libtest harness list of extracted member `member`'s lib target:
+    /// `cargo test -p <member> --lib <features> -- <libtest> --list`. Member
+    /// discovery is what makes a filter or `--skip` on a member step
+    /// verifiable instead of silently selecting zero tests.
+    fn member_lib_list(
+        &self,
+        member: &str,
+        features: &[String],
+        libtest: &[String],
+        ignored: bool,
+    ) -> Result<BTreeSet<String>, String>;
+
+    fn member_lib_runnable(
+        &self,
+        member: &str,
+        features: &[String],
+        libtest: &[String],
+    ) -> Result<(BTreeSet<String>, usize), String> {
+        let listed = self.member_lib_list(member, features, libtest, false)?;
+        let ignored = self.member_lib_list(member, features, libtest, true)?;
+        let count = ignored.len();
+        Ok((listed.difference(&ignored).cloned().collect(), count))
+    }
 }
 
 type ListKey = (Vec<String>, Target, Vec<String>, bool);
 type HarnessKey = (Vec<String>, Target);
+type MemberKey = (String, Vec<String>, Vec<String>, bool);
 
 struct CargoDiscovery<'a> {
     cargo: String,
@@ -779,6 +978,7 @@ struct CargoDiscovery<'a> {
     acquire_count: std::cell::Cell<usize>,
     harnesses: std::cell::RefCell<BTreeMap<HarnessKey, PathBuf>>,
     cache: std::cell::RefCell<BTreeMap<ListKey, BTreeSet<String>>>,
+    member_cache: std::cell::RefCell<BTreeMap<MemberKey, BTreeSet<String>>>,
 }
 
 impl<'a> CargoDiscovery<'a> {
@@ -797,6 +997,7 @@ impl<'a> CargoDiscovery<'a> {
             acquire_count: std::cell::Cell::new(0),
             harnesses: std::cell::RefCell::default(),
             cache: std::cell::RefCell::default(),
+            member_cache: std::cell::RefCell::default(),
         }
     }
 
@@ -935,6 +1136,56 @@ impl Discovery for CargoDiscovery<'_> {
             .map_err(|problem| format!("{rendered}: {problem}"))?
         };
         self.cache.borrow_mut().insert(key, listed.clone());
+        Ok(listed)
+    }
+
+    fn member_lib_list(
+        &self,
+        member: &str,
+        features: &[String],
+        libtest: &[String],
+        ignored: bool,
+    ) -> Result<BTreeSet<String>, String> {
+        // `-p <member>` already scopes the invocation; `--workspace` would
+        // re-widen it.
+        let features: Vec<String> = features
+            .iter()
+            .filter(|flag| flag.as_str() != "--workspace")
+            .cloned()
+            .collect();
+        let key = (
+            member.to_owned(),
+            features.clone(),
+            libtest.to_vec(),
+            ignored,
+        );
+        if let Some(listed) = self.member_cache.borrow().get(&key) {
+            return Ok(listed.clone());
+        }
+        let mut command = Command::new(&self.cargo);
+        command
+            .args([
+                "test", "-p", member, "--lib", "--locked", "--color", "never",
+            ])
+            .args(&features)
+            .arg("--")
+            .args(libtest)
+            .args(["--list", "--format", "terse"]);
+        if ignored {
+            command.arg("--ignored");
+        }
+        let rendered = format!("{command:?}");
+        let output = command
+            .current_dir(self.root)
+            .output()
+            .map_err(|error| format!("cannot run {rendered}: {error}"))?;
+        let listed = parse_libtest_terse(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        )
+        .map_err(|problem| format!("{rendered}: {problem}"))?;
+        self.member_cache.borrow_mut().insert(key, listed.clone());
         Ok(listed)
     }
 }
@@ -1194,9 +1445,11 @@ fn parse_doctest_list_with(
         .lines()
         .filter(|line| line.trim_start().starts_with("Doc-tests "))
         .count();
-    if running != 0 || doc_banners != 1 {
+    // `--workspace` emits one `Doc-tests <crate>` banner per member library;
+    // crates without doctests still count.
+    if running != 0 || doc_banners == 0 {
         return Err(format!(
-            "expected one Doc-tests banner and no unit harness in doctest stderr \
+            "expected Doc-tests banners and no unit harness in doctest stderr \
              (running={running}, doc_banners={doc_banners}):\n{stderr}"
         ));
     }
@@ -1205,14 +1458,12 @@ fn parse_doctest_list_with(
     let mut blocks = Vec::new();
     let mut block_tests = 0usize;
     let mut block_benchmarks = 0usize;
-    let mut saw_final = false;
+    // One `all doctests ran in` line terminates each doctest-bearing crate's
+    // block; member crates without doctests emit their `(0, 0)` summary with
+    // no timing line, so later blocks legitimately follow a final line.
+    let mut finals = 0usize;
 
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-        if saw_final {
-            return Err(format!(
-                "unexpected doctest output after final summary `{line}`"
-            ));
-        }
         if let Some((summary_tests, summary_benchmarks)) = parse_doctest_block_summary(line) {
             if (summary_tests, summary_benchmarks) != (block_tests, block_benchmarks) {
                 return Err(format!(
@@ -1230,7 +1481,7 @@ fn parse_doctest_list_with(
                      {block_benchmarks} benchmarks)"
                 ));
             }
-            saw_final = true;
+            finals += 1;
         } else if let Some(name) = line.strip_suffix(": test") {
             block_tests += 1;
             tests.insert(name.to_owned());
@@ -1241,12 +1492,20 @@ fn parse_doctest_list_with(
         }
     }
 
-    if block_tests != 0 || block_benchmarks != 0 || blocks.is_empty() || !saw_final {
+    if block_tests != 0 || block_benchmarks != 0 || blocks.is_empty() || finals == 0 {
         return Err(format!(
-            "incomplete doctest discovery output (blocks={blocks:?}, saw_final={saw_final})"
+            "incomplete doctest discovery output (blocks={blocks:?}, finals={finals})"
         ));
     }
     Ok(DoctestDiscovery { tests, blocks })
+}
+
+/// Whether an executing member step's package selection covers `member`:
+/// an explicit `-p` list or `--workspace` minus its excludes.
+fn step_covers_member(step: &Step, member: &str) -> bool {
+    step.member_packages.iter().any(|name| name == member)
+        || (step.scope == PackageScope::Workspace
+            && !step.member_excludes.iter().any(|name| name == member))
 }
 
 #[derive(Debug, Default)]
@@ -1259,6 +1518,7 @@ struct Report {
 fn check(
     steps: &[Step],
     targets: &[Target],
+    members: &BTreeMap<String, BTreeSet<Kind>>,
     host: Platform,
     jobs: &[String],
     requirements: &[Requirement],
@@ -1305,6 +1565,42 @@ fn check(
             }
         }
     }
+    // Extracted member coverage: on every platform where the workflow runs
+    // cargo test at all, each workspace member's targets must be selected by
+    // an executing member step. A new crate no lane selects fails closed.
+    for step in &executing {
+        for name in &step.member_packages {
+            if !members.contains_key(name) {
+                report.findings.push(format!(
+                    "{} names workspace member `{name}` that cargo metadata does not list",
+                    step.label()
+                ));
+            }
+        }
+    }
+    let test_platforms: BTreeSet<Platform> = executing.iter().map(|step| step.platform).collect();
+    for (member, kinds) in members {
+        for platform in &test_platforms {
+            let covered: BTreeSet<Kind> = executing
+                .iter()
+                .filter(|step| step.platform == *platform && step.member_step())
+                .filter(|step| {
+                    step.member_packages.iter().any(|name| name == member)
+                        || (step.scope == PackageScope::Workspace
+                            && !step.member_excludes.iter().any(|name| name == member))
+                })
+                .flat_map(|step| step.member_kinds.iter().copied())
+                .collect();
+            for kind in kinds {
+                if !covered.contains(kind) {
+                    report.findings.push(format!(
+                        "workspace member `{member}` {kind:?} tests are selected by no executing \
+                         member step on {platform}; assign them to a lane"
+                    ));
+                }
+            }
+        }
+    }
     for job in jobs {
         match steps.iter().find(|step| step.job == *job) {
             None => report
@@ -1328,6 +1624,197 @@ fn check(
         .iter()
         .flat_map(|step| step.targets.iter().map(|target| (step.profile, target)))
         .collect();
+
+    // Member-package selections are verified through real member libtest
+    // discovery: any executing member step in focus gets its covered members
+    // enumerated, so a member filter or `--skip` can no longer silently
+    // select nothing and FAST is proven not to run the capacity suite.
+    let member_steps: Vec<&Step> = focus
+        .iter()
+        .copied()
+        .filter(|step| step.member_step() && step.member_kinds.contains(&Kind::Lib))
+        .collect();
+    if !member_steps.is_empty() {
+        // FULL member completeness is stated over the whole platform, like
+        // the root completeness below: every member lib test an unfiltered
+        // run lists must be selected by some executing FULL member step.
+        let mut full_covered: BTreeMap<&String, BTreeSet<String>> = BTreeMap::new();
+        let mut universe: BTreeMap<&String, BTreeSet<String>> = BTreeMap::new();
+        let full_member_steps: Vec<&Step> = executing
+            .iter()
+            .copied()
+            .filter(|step| {
+                step.platform == host
+                    && step.profile == Profile::Full
+                    && step.member_step()
+                    && step.member_kinds.contains(&Kind::Lib)
+            })
+            .collect();
+        for step in &full_member_steps {
+            let arguments = step.libtest(&step.filters, &step.skips);
+            for member in members.keys().filter(|name| step_covers_member(step, name)) {
+                match discovery.member_lib_runnable(member, &step.features, &arguments) {
+                    Ok((names, _)) => {
+                        full_covered.entry(member).or_default().extend(names);
+                    }
+                    Err(problem) => report
+                        .findings
+                        .push(format!("{} member `{member}` lib: {problem}", step.label())),
+                }
+                match discovery.member_lib_runnable(member, &step.features, &[]) {
+                    Ok((names, _)) => {
+                        universe.entry(member).or_default().extend(names);
+                    }
+                    Err(problem) => report
+                        .findings
+                        .push(format!("{} member `{member}` lib: {problem}", step.label())),
+                }
+            }
+        }
+        if host == Platform::Linux {
+            for (member, universe) in &universe {
+                let covered = full_covered.get(member).cloned().unwrap_or_default();
+                let missing: Vec<&String> = universe.difference(&covered).collect();
+                if !missing.is_empty() {
+                    report.findings.push(format!(
+                        "{} runnable test(s) of member `{member}` lib on linux are executed by \
+                         no FULL member step, e.g. {:?}",
+                        missing.len(),
+                        &missing[..missing.len().min(5)]
+                    ));
+                }
+            }
+        }
+        for step in &member_steps {
+            let arguments = step.libtest(&step.filters, &step.skips);
+            let step_members: Vec<&String> = members
+                .keys()
+                .filter(|name| step_covers_member(step, name))
+                .collect();
+            let mut runnable_total = 0usize;
+            let mut scale = 0usize;
+            for member in &step_members {
+                match discovery.member_lib_runnable(member, &step.features, &arguments) {
+                    Ok((names, ignored)) => {
+                        report.summary.push(format!(
+                            "{} member `{member}` lib: {} runnable, {ignored} ignored selected",
+                            step.label(),
+                            names.len()
+                        ));
+                        scale += names
+                            .iter()
+                            .filter(|name| name.contains(SCALE_SUITE))
+                            .count();
+                        runnable_total += names.len();
+                    }
+                    Err(problem) => report
+                        .findings
+                        .push(format!("{} member `{member}` lib: {problem}", step.label())),
+                }
+            }
+            if runnable_total == 0 {
+                report.findings.push(format!(
+                    "{} selects no runnable member lib test",
+                    step.label()
+                ));
+            }
+            if step.profile == Profile::Fast && scale > 0 {
+                report.findings.push(format!(
+                    "{} selects {scale} member lib test(s) in the `{SCALE_SUITE}` capacity \
+                     suite; FAST must not run them",
+                    step.label()
+                ));
+            }
+            for skip in &step.skips {
+                let others: Vec<String> =
+                    step.skips.iter().filter(|s| *s != skip).cloned().collect();
+                let mut excluded = 0;
+                for member in &step_members {
+                    let with = discovery.member_lib_list(
+                        member,
+                        &step.features,
+                        &step.libtest(&step.filters, &step.skips),
+                        false,
+                    );
+                    let without = discovery.member_lib_list(
+                        member,
+                        &step.features,
+                        &step.libtest(&step.filters, &others),
+                        false,
+                    );
+                    match (with, without) {
+                        (Ok(with), Ok(without)) => {
+                            excluded += without.difference(&with).count();
+                        }
+                        (Err(problem), _) | (_, Err(problem)) => report
+                            .findings
+                            .push(format!("{} member `{member}` lib: {problem}", step.label())),
+                    }
+                }
+                if excluded == 0 {
+                    report.findings.push(format!(
+                        "{}: --skip `{skip}` excludes no member lib test; a stale selector",
+                        step.label()
+                    ));
+                }
+            }
+            for filter in &step.filters {
+                let only = std::slice::from_ref(filter);
+                let mut selected = 0usize;
+                let mut unskipped = 0usize;
+                let mut listed_any = false;
+                for member in &step_members {
+                    let selected_list = discovery.member_lib_list(
+                        member,
+                        &step.features,
+                        &step.libtest(only, &step.skips),
+                        false,
+                    );
+                    let unskipped_list = discovery.member_lib_list(
+                        member,
+                        &step.features,
+                        &step.libtest(only, &[]),
+                        false,
+                    );
+                    let ignored_list = discovery.member_lib_list(
+                        member,
+                        &step.features,
+                        &step.libtest(only, &[]),
+                        true,
+                    );
+                    match (selected_list, unskipped_list, ignored_list) {
+                        (Ok(selected_list), Ok(unskipped_list), Ok(ignored_list)) => {
+                            selected += selected_list.len();
+                            unskipped += unskipped_list.len();
+                            listed_any |= !unskipped_list.is_empty() || !ignored_list.is_empty();
+                        }
+                        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
+                            report
+                                .findings
+                                .push(format!("{} member `{member}` lib: {problem}", step.label()));
+                        }
+                    }
+                }
+                if selected == 0 && !listed_any {
+                    report.findings.push(format!(
+                        "{}: filter `{filter}` matches no member lib test; a stale selector",
+                        step.label()
+                    ));
+                } else if selected == 0 && unskipped == 0 {
+                    report.findings.push(format!(
+                        "{}: filter `{filter}` matches only #[ignore]d member lib tests",
+                        step.label()
+                    ));
+                } else if selected == 0 {
+                    report.findings.push(format!(
+                        "{}: every runnable member lib match of filter `{filter}` is excluded \
+                         by --skip",
+                        step.label()
+                    ));
+                }
+            }
+        }
+    }
 
     for (profile, target) in evaluated {
         let selecting: Vec<&Step> = executing
@@ -1354,6 +1841,19 @@ fn check(
                             "{} selects no runnable test of {target}",
                             step.label()
                         ));
+                    }
+                    if step.profile == Profile::Fast {
+                        let scale = runnable
+                            .iter()
+                            .filter(|name| name.contains(SCALE_SUITE))
+                            .count();
+                        if scale > 0 {
+                            report.findings.push(format!(
+                                "{} selects {scale} test(s) of {target} in the `{SCALE_SUITE}` \
+                                 capacity suite; FAST must not run them",
+                                step.label()
+                            ));
+                        }
                     }
                     if !step.affected {
                         unconditional
@@ -1424,6 +1924,10 @@ fn check(
     }
 
     for step in focus {
+        if step.member_step() {
+            // Member selections were verified against member discovery above.
+            continue;
+        }
         for filter in &step.filters {
             let only = std::slice::from_ref(filter);
             let selected = sum(discovery, step, &step.libtest(only, &step.skips));
@@ -1499,8 +2003,46 @@ mod tests {
     use super::*;
 
     /// A libtest stand-in: substring (or `--exact`) filters, `--skip`, and
-    /// `--ignored`, over a fixed per-target inventory of `(name, ignored)`.
-    struct Fake(BTreeMap<Target, Vec<(&'static str, bool)>>);
+    /// `--ignored`, over a fixed per-target inventory of `(name, ignored)`
+    /// plus a per-member lib inventory in `.1`.
+    struct Fake(
+        BTreeMap<Target, Vec<(&'static str, bool)>>,
+        BTreeMap<String, Vec<(&'static str, bool)>>,
+    );
+
+    fn select_member(
+        entries: &[(&'static str, bool)],
+        libtest: &[String],
+        ignored: bool,
+    ) -> BTreeSet<String> {
+        let exact = libtest.iter().any(|argument| argument == "--exact");
+        let matches = |name: &str, filter: &str| {
+            if exact {
+                name == filter
+            } else {
+                name.contains(filter)
+            }
+        };
+        let mut filters = Vec::new();
+        let mut skips = Vec::new();
+        let mut arguments = libtest.iter();
+        while let Some(argument) = arguments.next() {
+            match argument.as_str() {
+                "--skip" => skips.push(arguments.next().unwrap().as_str()),
+                "--exact" => {}
+                filter => filters.push(filter),
+            }
+        }
+        entries
+            .iter()
+            .filter(|(name, is_ignored)| {
+                (!ignored || *is_ignored)
+                    && (filters.is_empty() || filters.iter().any(|f| matches(name, f)))
+                    && !skips.iter().any(|skip| matches(name, skip))
+            })
+            .map(|(name, _)| (*name).to_owned())
+            .collect()
+    }
 
     impl Discovery for Fake {
         fn list(
@@ -1510,33 +2052,21 @@ mod tests {
             libtest: &[String],
             ignored: bool,
         ) -> Result<BTreeSet<String>, String> {
-            let exact = libtest.iter().any(|argument| argument == "--exact");
-            let matches = |name: &str, filter: &str| {
-                if exact {
-                    name == filter
-                } else {
-                    name.contains(filter)
-                }
-            };
-            let mut filters = Vec::new();
-            let mut skips = Vec::new();
-            let mut arguments = libtest.iter();
-            while let Some(argument) = arguments.next() {
-                match argument.as_str() {
-                    "--skip" => skips.push(arguments.next().unwrap().as_str()),
-                    "--exact" => {}
-                    filter => filters.push(filter),
-                }
-            }
-            Ok(self.0[target]
-                .iter()
-                .filter(|(name, is_ignored)| {
-                    (!ignored || *is_ignored)
-                        && (filters.is_empty() || filters.iter().any(|f| matches(name, f)))
-                        && !skips.iter().any(|skip| matches(name, skip))
-                })
-                .map(|(name, _)| (*name).to_owned())
-                .collect())
+            Ok(select_member(&self.0[target], libtest, ignored))
+        }
+
+        fn member_lib_list(
+            &self,
+            member: &str,
+            _features: &[String],
+            libtest: &[String],
+            ignored: bool,
+        ) -> Result<BTreeSet<String>, String> {
+            let entries = self
+                .1
+                .get(member)
+                .ok_or_else(|| format!("no member lib inventory for `{member}`"))?;
+            Ok(select_member(entries, libtest, ignored))
         }
     }
 
@@ -1552,36 +2082,42 @@ mod tests {
     }
 
     fn inventory() -> Fake {
-        Fake(BTreeMap::from([
-            (
-                Target::new(Kind::Lib, "rustx"),
-                vec![
-                    ("model::unit", false),
-                    ("model::measure", true),
-                    ("scripted_suites::agent::order", false),
-                    ("boundary_suites::durable::kill", false),
-                    ("manager::tests::residency", false),
-                    ("model::scale::thousand_turns", false),
-                ],
-            ),
-            (
-                Target::new(Kind::Doc, "rustx"),
-                vec![
-                    ("src/lib.rs - positive::Api (line 10)", false),
-                    ("src/lib.rs - negative::Api (line 20)", false),
-                ],
-            ),
-            (Target::new(Kind::Bin, "rustx"), vec![]),
-            (Target::new(Kind::Example, "tool"), vec![]),
-            (
-                Target::new(Kind::Test, "durable"),
-                vec![("recovery", false)],
-            ),
-            (
-                Target::new(Kind::Test, "contracts"),
-                vec![("fixture", false)],
-            ),
-        ]))
+        Fake(
+            BTreeMap::from([
+                (
+                    Target::new(Kind::Lib, "rustx"),
+                    vec![
+                        ("model::unit", false),
+                        ("model::measure", true),
+                        ("scripted_suites::agent::order", false),
+                        ("boundary_suites::durable::kill", false),
+                        ("manager::tests::residency", false),
+                        ("model::scale::thousand_turns", false),
+                    ],
+                ),
+                (
+                    Target::new(Kind::Doc, "rustx"),
+                    vec![
+                        ("src/lib.rs - positive::Api (line 10)", false),
+                        ("src/lib.rs - negative::Api (line 20)", false),
+                    ],
+                ),
+                (Target::new(Kind::Bin, "rustx"), vec![]),
+                (Target::new(Kind::Example, "tool"), vec![]),
+                (
+                    Target::new(Kind::Test, "durable"),
+                    vec![("recovery", false)],
+                ),
+                (
+                    Target::new(Kind::Test, "contracts"),
+                    vec![("fixture", false)],
+                ),
+            ]),
+            BTreeMap::from([(
+                "rustx-foo".to_owned(),
+                vec![("member::unit", false), ("member::scale::big", false)],
+            )]),
+        )
     }
 
     /// The repository's lane shape in miniature.
@@ -1637,7 +2173,7 @@ jobs:
       - name: Compile
         run: /usr/bin/time -l cargo test --lib --all-features --no-run
       - name: Native
-        run: '/usr/bin/time -l cargo test --lib --all-features -- --skip scripted_suites:: --skip manager::tests::'
+        run: '/usr/bin/time -l cargo test --lib --all-features -- --skip scripted_suites:: --skip manager::tests:: --skip ::scale::'
       - name: External
         run: cargo test --all-features --test durable
 ";
@@ -1654,7 +2190,7 @@ jobs:
 
     fn run(workflow: &str, host: Platform, fake: &Fake) -> Vec<String> {
         let steps = parse_workflow(workflow, &targets()).unwrap();
-        check(&steps, &targets(), host, &[], MACOS, fake).findings
+        check(&steps, &targets(), &BTreeMap::new(), host, &[], MACOS, fake).findings
     }
 
     fn findings_containing(findings: &[String], needle: &str) -> usize {
@@ -1715,7 +2251,16 @@ jobs:
         let mut targets = targets();
         targets.push(Target::new(Kind::Test, "fresh"));
         let steps = parse_workflow(WORKFLOW, &targets).unwrap();
-        let findings = check(&steps, &targets, Platform::Linux, &[], MACOS, &inventory()).findings;
+        let findings = check(
+            &steps,
+            &targets,
+            &BTreeMap::new(),
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
         assert_eq!(
             findings,
             [
@@ -1867,8 +2412,8 @@ jobs:
         );
         // A requirement skipped out of its platform is also reported.
         let workflow = WORKFLOW.replace(
-            "--skip manager::tests::'",
-            "--skip manager::tests:: --skip boundary_suites::'",
+            "--skip manager::tests:: --skip ::scale::'",
+            "--skip manager::tests:: --skip boundary_suites:: --skip ::scale::'",
         );
         let macos = run(&workflow, Platform::Macos, &inventory());
         assert_eq!(
@@ -1881,11 +2426,197 @@ jobs:
     }
 
     #[test]
+    fn an_unassigned_workspace_member_target_fails() {
+        const MEMBER_WORKFLOW: &str = r"
+jobs:
+  linux-lane:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['linux-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+  macos-lane:
+    runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['macos-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+";
+        let members = BTreeMap::from([(
+            "rustx-foo".to_owned(),
+            BTreeSet::from([Kind::Lib, Kind::Test]),
+        )]);
+        let steps = parse_workflow(MEMBER_WORKFLOW, &targets()).unwrap();
+        let findings = check(
+            &steps,
+            &targets(),
+            &members,
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
+        // `--lib` selects the member's lib on both platforms but never its
+        // integration target.
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| { finding.contains("workspace member `rustx-foo` Lib") })
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| {
+                    finding.contains("workspace member `rustx-foo` Test tests are selected")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_workspace_step_excluding_rustx_covers_members() {
+        const MEMBER_WORKFLOW: &str = r"
+jobs:
+  linux-lane:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['linux-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+  macos-lane:
+    runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['macos-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+";
+        let members = BTreeMap::from([("rustx-foo".to_owned(), BTreeSet::from([Kind::Lib]))]);
+        let steps = parse_workflow(MEMBER_WORKFLOW, &targets()).unwrap();
+        let findings = check(
+            &steps,
+            &targets(),
+            &members,
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| { finding.contains("workspace member `rustx-foo`") })
+        );
+    }
+
+    /// A member lane in FAST profile: the member step alone (the FULL member
+    /// coverage tests live on their own fixtures).
+    const MEMBER_FAST: &str = r"
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['fast']
+    env:
+      VERIFICATION_PROFILE: fast
+    steps:
+      - name: Members
+        run: 'cargo test --workspace --exclude rustx --lib --all-features --locked'
+";
+
+    fn member_findings(workflow: &str) -> Vec<String> {
+        let members = BTreeMap::from([("rustx-foo".to_owned(), BTreeSet::from([Kind::Lib]))]);
+        let steps = parse_workflow(workflow, &targets()).unwrap();
+        check(
+            &steps,
+            &targets(),
+            &members,
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings
+    }
+
+    #[test]
+    fn a_fast_member_step_cannot_run_the_capacity_suite() {
+        assert_eq!(
+            findings_containing(&member_findings(MEMBER_FAST), "FAST must not run them"),
+            1
+        );
+        // Skipping the capacity suite makes the same member step clean.
+        let workflow = MEMBER_FAST.replace("--locked'", "--locked -- --skip ::scale::'");
+        let findings = member_findings(&workflow);
+        assert_eq!(findings_containing(&findings, "FAST must not run them"), 0);
+        assert_eq!(
+            findings_containing(&findings, "excludes no member lib test"),
+            0
+        );
+    }
+
+    #[test]
+    fn a_member_skip_that_excludes_nothing_fails() {
+        let workflow =
+            MEMBER_FAST.replace("--locked'", "--locked -- --skip ::scale:: --skip nope::'");
+        assert_eq!(
+            findings_containing(
+                &member_findings(&workflow),
+                "--skip `nope::` excludes no member lib test"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_full_member_step_must_cover_the_whole_member_lib() {
+        // A member selection that drops tests leaves FULL coverage incomplete.
+        let workflow = MEMBER_FAST
+            .replace("VERIFICATION_PROFILE: fast", "VERIFICATION_PROFILE: full")
+            .replace("--locked'", "--locked -- member::unit'");
+        let findings = member_findings(&workflow);
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "of member `rustx-foo` lib on linux are executed by no FULL member step"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_member_filter_that_matches_nothing_fails() {
+        let workflow = MEMBER_FAST.replace("--locked'", "--locked -- nope::'");
+        assert_eq!(
+            findings_containing(
+                &member_findings(&workflow),
+                "filter `nope::` matches no member lib test"
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn a_job_is_checked_only_on_its_native_platform() {
         let steps = parse_workflow(WORKFLOW, &targets()).unwrap();
         let findings = check(
             &steps,
             &targets(),
+            &BTreeMap::new(),
             Platform::Linux,
             &["platform".into()],
             MACOS,
@@ -1910,8 +2641,8 @@ jobs:
                 "unsupported libtest option `--ignored`",
             ),
             (
-                "cargo test --workspace",
-                "unsupported cargo test option `--workspace`",
+                "cargo test --frozen",
+                "unsupported cargo test option `--frozen`",
             ),
             (
                 "cargo test -- boundary_suites::",
@@ -2175,6 +2906,29 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         assert_eq!(
             parse_doctest_list(true, zero, banner).unwrap().blocks,
             vec![(0, 0), (0, 0)]
+        );
+        // `--workspace`: every member library prints a `Doc-tests` banner;
+        // crates carrying doctests end with a timing line while empty crates
+        // only emit their `(0, 0)` summary between them.
+        let workspace_stdout = "\
+src/a.rs - a::Pos (line 10): test
+1 test, 0 benchmarks
+all doctests ran in 0.20s; merged doctests compilation took 0.20s
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+src/b.rs - b::Neg (line 20): test
+1 test, 0 benchmarks
+all doctests ran in 0.10s; merged doctests compilation took 0.10s
+";
+        let workspace_banner = "   Doc-tests rustx\n   Doc-tests rustx_types\n";
+        let workspace_parsed =
+            parse_doctest_list(true, workspace_stdout, workspace_banner).unwrap();
+        assert_eq!(
+            workspace_parsed.tests,
+            BTreeSet::from([
+                "src/a.rs - a::Pos (line 10)".to_owned(),
+                "src/b.rs - b::Neg (line 20)".to_owned(),
+            ])
         );
         // Unit harness stdout/stderr (`Running ...`), missing timing summary, count mismatch,
         // or garbage lines must fail closed.

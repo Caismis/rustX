@@ -2,6 +2,7 @@
 //! coordinator, not an Agent Attempt.
 
 use super::*;
+use crate::durable::observation::NativeObservationBatch;
 
 /// The runtime-owned manual compaction currently holding the conversation.
 ///
@@ -314,7 +315,10 @@ impl RuntimeInner {
         let Some(fanout) = self.pending.get() else {
             return;
         };
-        let batch = persisted.observation.as_deref();
+        let batch = persisted
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>());
         if !fanout
             .native_manual_compaction(request, batch)
             .is_installed()

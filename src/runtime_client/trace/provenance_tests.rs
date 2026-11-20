@@ -53,7 +53,7 @@ fn giant_original_provenance_retains_scope_digest_and_exact_canonical_metadata_s
     assert_eq!(view.role, TraceMessageRole::User);
     assert!(view.message_id.is_none());
     assert!(view.truncated);
-    assert!(crate::observation::bounded::bounded_bytes(&view, 4096).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(&view, 4096).is_some());
     let TraceInputProvenance::Original {
         source,
         conversation_id,
@@ -131,7 +131,7 @@ fn derived_provenance_admits_exact_byte_bounded_prefixes_without_copying_giant_a
     assert!(view.truncated);
     assert!(view.message_id.is_none());
     assert!(view.source.as_ref().unwrap().len() < 512);
-    assert!(crate::observation::bounded::bounded_bytes(&view, 8192).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(&view, 8192).is_some());
     let TraceInputProvenance::Derived {
         sources,
         checkpoint_sources,

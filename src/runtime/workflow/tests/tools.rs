@@ -375,9 +375,12 @@ fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
             detail: "remote effect unconfirmed".into(),
         },
     ] {
-        let error = contract
-            .project(&terminal(status.clone()), &test_instance("check", "check"))
-            .unwrap_err();
+        let error = crate::runtime::workflow::tool::tool_result_project(
+            &contract,
+            &terminal(status.clone()),
+            &test_instance("check", "check"),
+        )
+        .unwrap_err();
         assert_eq!(error.execution_status(), status);
         let parallel = WorkflowRunError::NodesFailed {
             failures: BTreeMap::from([("leaf".into(), error)]),
@@ -391,24 +394,33 @@ fn native_failure_matrix_and_explicit_projection_commit_no_business_values() {
         },
     )];
     assert!(
-        contract
-            .project(&result, &test_instance("check", "check"))
-            .is_err(),
+        crate::runtime::workflow::tool::tool_result_project(
+            &contract,
+            &result,
+            &test_instance("check", "check"),
+        )
+        .is_err(),
         "JSON-looking logs are never parsed"
     );
     assert_eq!(
-        WorkflowToolResult::Text {}
-            .project(&result, &test_instance("check", "check"))
-            .unwrap(),
+        crate::runtime::workflow::tool::tool_result_project(
+            &WorkflowToolResult::Text {},
+            &result,
+            &test_instance("check", "check"),
+        )
+        .unwrap(),
         json!({"text": "{\"passed\":true}"})
     );
     result.content = vec![ToolResultContent::Json {
         value: json!({"passed": "yes"}),
     }];
     assert!(
-        contract
-            .project(&result, &test_instance("check", "check"))
-            .is_err()
+        crate::runtime::workflow::tool::tool_result_project(
+            &contract,
+            &result,
+            &test_instance("check", "check"),
+        )
+        .is_err()
     );
 }
 
@@ -1219,12 +1231,12 @@ fn tool_results_are_declared_by_the_tool() {
         json!({"type":"string"}),
     ] {
         assert_eq!(
-            WorkflowToolResult::declared(Some(&open)),
+            crate::runtime::workflow::tool::tool_result_declared(Some(&open)),
             WorkflowToolResult::Text {}
         );
     }
     assert_eq!(
-        WorkflowToolResult::declared(None),
+        crate::runtime::workflow::tool::tool_result_declared(None),
         WorkflowToolResult::Text {}
     );
     let mut text = terminal(ToolExecutionStatus::Success);
@@ -1236,9 +1248,12 @@ fn tool_results_are_declared_by_the_tool() {
         ToolResultContent::Text(crate::message::content::TextBlock { text: "b".into() }),
     ];
     assert_eq!(
-        WorkflowToolResult::Text {}
-            .project(&text, &test_instance("check", "check"))
-            .unwrap(),
+        crate::runtime::workflow::tool::tool_result_project(
+            &WorkflowToolResult::Text {},
+            &text,
+            &test_instance("check", "check"),
+        )
+        .unwrap(),
         json!({"text": "a\nb"})
     );
 }

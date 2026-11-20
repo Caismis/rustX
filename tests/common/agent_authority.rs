@@ -12,7 +12,7 @@ pub(crate) fn admit_agent(
     mut envelope: rustx::events::types::RuntimeEventEnvelope,
 ) -> (
     rustx::events::types::RuntimeEventEnvelope,
-    rustx::runtime::subagent::DurableAgentAuthority,
+    rustx_durable::PrivateAgentAuthority,
 ) {
     if let rustx::events::types::RuntimeEvent::SubagentOwnershipCommitted {
         admitted_authority,
@@ -60,7 +60,11 @@ pub(crate) fn admit_agent(
                 },
             },
         };
-        return (envelope, authority);
+        return (
+            envelope,
+            rustx::runtime::inbound::private_authority(Some(&authority))
+                .expect("fixture authority converts"),
+        );
     }
     panic!("fixture requires native Agent ownership")
 }

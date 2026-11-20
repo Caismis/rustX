@@ -75,7 +75,8 @@ impl UserConfigManager {
             query,
             analysis,
             candidate_revision: crate::local_runtime::settings::revision(Some(&bytes)),
-            presentation: document.presentation_diagnostics(),
+            presentation: document
+                .presentation_diagnostics(&crate::runtime::workflow::authoring::declared_output),
         };
         if serde_json::to_vec(&report).map_or(true, |bytes| {
             bytes.len() > MAX_WORKFLOW_ANALYSIS_RESPONSE_BYTES

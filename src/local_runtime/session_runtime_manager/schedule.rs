@@ -562,11 +562,28 @@ impl SessionRuntimeManager {
                     let opened = tokio::task::spawn_blocking(move || {
                         let mut resources = current.resources.lock().expect("storage resources");
                         let access = resources.access.as_ref().expect("storage allocation");
+                        let allocation = access
+                            .database_path
+                            .parent()
+                            .ok_or(RuntimeManagerError::ScheduleStore(
+                                crate::durable::ConversationStoreError::Storage(
+                                    "missing allocation".into(),
+                                ),
+                            ))?;
+                        let lease = crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                            controller.clone(),
+                            allocation,
+                        )
+                        .map_err(|e| {
+                            RuntimeManagerError::ScheduleStore(
+                                crate::durable::ConversationStoreError::Storage(e.to_string()),
+                            )
+                        })?;
                         resources.store = Some(
                             SqliteConversationStore::recover_existing(
                                 current.binding.conversation_id.clone(),
                                 &access.database_path,
-                                &controller,
+                                std::sync::Arc::new(lease),
                             )
                             .map_err(RuntimeManagerError::ScheduleStore)?,
                         );

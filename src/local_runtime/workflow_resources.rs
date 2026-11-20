@@ -91,7 +91,7 @@ pub(crate) fn load(
         })
         .and_then(|(source_revision, document)| {
             let warnings: Vec<_> = document
-                .presentation_diagnostics()
+                .presentation_diagnostics(&crate::runtime::workflow::authoring::declared_output)
                 .into_iter()
                 .map(|diagnostic| {
                     let mut error = RuntimeResourceLoadError::new(diagnostic.reason)
@@ -139,7 +139,7 @@ pub(super) fn parse_source(
         ))
         .at(path, format!("workflows.{id}")));
     }
-    if !crate::workflow_file::yaml_expansion_within_bound(bytes) {
+    if !rustx_workflow::workflow_file::yaml_expansion_within_bound(bytes) {
         let mut failure = RuntimeResourceLoadError::new(
             "Workflow YAML expansion exceeds the 32 MiB decoder bound",
         )

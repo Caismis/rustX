@@ -12,7 +12,7 @@ pub(crate) fn admit_agent(
     mut envelope: crate::events::types::RuntimeEventEnvelope,
 ) -> (
     crate::events::types::RuntimeEventEnvelope,
-    crate::runtime::subagent::DurableAgentAuthority,
+    rustx_durable::PrivateAgentAuthority,
 ) {
     if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
         admitted_authority,
@@ -33,8 +33,10 @@ pub(crate) fn admit_agent(
                 skill_roots: Vec::new(),
                 selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                 agent: crate::runtime::subagent::SubagentName::parse(agent).unwrap(),
-                definition_digest: serde_json::from_value(serde_json::json!(definition_digest))
-                    .unwrap(),
+                definition_digest: serde_json::from_value::<
+                    crate::runtime::subagent::NamedAgentDefinitionDigest,
+                >(serde_json::json!(definition_digest))
+                .unwrap(),
                 execution_deadline: None,
                 instructions: "fixture".into(),
                 model: crate::model::frozen::test_frozen_model_spec(
@@ -52,7 +54,11 @@ pub(crate) fn admit_agent(
             },
             execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
         };
-        return (envelope, authority);
+        return (
+            envelope,
+            crate::runtime::inbound::private_authority(Some(&authority))
+                .expect("fixture authority converts"),
+        );
     }
     panic!("fixture requires native Agent ownership")
 }
@@ -83,9 +89,12 @@ pub(crate) fn child(
                 tool_call_id: ToolCallId::new(format!("call-{id}")),
             },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
+            serde_json::from_value::<String>(serde_json::json!("sha256:definition")).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            )))
+            .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &workspace,
             Utc::now(),
@@ -480,9 +489,12 @@ fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
                 tool_call_id: ToolCallId::new("cycle"),
             },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
+            serde_json::from_value::<String>(serde_json::json!("sha256:definition")).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            )))
+            .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &root.path().join("external"),
             Utc::now(),
@@ -831,9 +843,12 @@ fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() 
                 tool_call_id: ToolCallId::new("call"),
             },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
+            serde_json::from_value::<String>(serde_json::json!("sha256:definition")).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            )))
+            .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &root.path().join("external"),
             Utc::now(),
@@ -878,9 +893,12 @@ fn deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change() {
                 tool_call_id: ToolCallId::new("call"),
             },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
+            serde_json::from_value::<String>(serde_json::json!("sha256:definition")).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            )))
+            .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &root.path().join("external"),
             Utc::now(),

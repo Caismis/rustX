@@ -31,8 +31,7 @@ use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance
 use crate::skills::identity::definition_version_id;
 use crate::skills::source::{AutomaticSkillRoot, SkillSource};
 
-/// The canonical primary instructions file name of a Skill package.
-pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
+pub use rustx_types::skills::package::SKILL_MARKDOWN_FILE;
 
 /// The recommended maximum length of a standard Skill name.
 pub const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -456,7 +455,7 @@ fn collect_automatic_source(
     let mut files = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for root in roots {
-        crate::bounded_file::record_read(&root.root);
+        rustx_bounded_file::record_read(&root.root);
         let canonical = match super::discovery::canonical_root(&root.root) {
             Ok(path) => path,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -485,11 +484,11 @@ fn collect_automatic_source(
             continue;
         }
         for file in collection.files {
-            crate::bounded_file::record_read(&file);
+            rustx_bounded_file::record_read(&file);
             let Ok(path) = std::fs::canonicalize(&file) else {
                 continue;
             };
-            crate::bounded_file::record_read(&path);
+            rustx_bounded_file::record_read(&path);
             if seen.insert(path.clone()) {
                 files.push((file, path));
             }

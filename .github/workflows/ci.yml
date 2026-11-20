@@ -54,7 +54,7 @@ jobs:
       steps: ${{ steps.plan.outputs.steps }}
       browser: ${{ steps.plan.outputs.browser }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Classify the change and select the profile's jobs
         id: plan
         env:
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test notification filters, signing, and secret isolation
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
@@ -81,7 +81,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -143,7 +143,7 @@ jobs:
         run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
 
       - name: Install pinned Node for benchmark contract tests
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -181,7 +181,7 @@ jobs:
       VERIFICATION_PROFILE: fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -199,12 +199,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -219,11 +219,7 @@ jobs:
       - name: Run the FAST unit and contract core
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
-
-      - name: Run the SQLite store contracts (durable changes)
-        if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- --skip boundary_suites:: --skip ::scale:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
@@ -239,6 +235,16 @@ jobs:
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-features --locked --test process
+
+
+      # Unit tests of the extracted workspace crates (rustx-*), including
+      # rustx-durable's SQLite store contracts, run here unconditionally so a
+      # crates/** change cannot slip past FAST; only the `::scale::` capacity
+      # module is excluded. check_test_lanes enumerates each member's lib
+      # tests and fails closed when a new member is left unselected, when the
+      # skip matches nothing, or when a member `::scale::` test is selected.
+      - name: Run extracted workspace crate tests
+        run: 'cargo test --workspace --exclude rustx --lib --all-features --locked -- --skip ::scale::'
 
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
@@ -258,7 +264,7 @@ jobs:
       VERIFICATION_PROFILE: fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -309,7 +315,7 @@ jobs:
       CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -365,7 +371,15 @@ jobs:
       # proofs) are not executed by `--all-targets`; execute them explicitly
       # here against the compiled `--all-features` library.
       - name: Run doctests
-        run: cargo test --doc --all-features --locked
+        # --workspace so doctests that moved into the extracted rustx-*
+        # crates keep executing; the lane checker forwards it the same way.
+        run: cargo test --doc --workspace --all-features --locked
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      - name: Run extracted workspace crate tests
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
       # Cargo/libtest discovery of this lane's targets against every Linux
       # step that selects them: an unassigned target, a stale filter or
@@ -399,7 +413,7 @@ jobs:
       CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -416,12 +430,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -471,6 +485,9 @@ jobs:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: 'cargo test --lib --all-features --locked -- boundary_suites::'
 
+      # Extracted workspace crate unit tests run once, in rust-contracts:
+      # executing them here too was a measured six-to-seven-minute duplicate
+      # with no additional coverage.
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
       # --all-features the checker links the library unit the external
@@ -478,6 +495,312 @@ jobs:
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries
+
+  # Rust platform coverage is intentional, not duplicated by habit. macOS
+  # runs only platform-sensitive classes, natively; desktop-macos separately
+  # executes Node boundaries.
+  #
+  # - rust-platform-core (FAST): the seven external targets —
+  #   durable (SQLite/filesystem), process (spawned binary, signals,
+  #   stdio/WebSocket), subagent (child process/control socket), tools
+  #   (shell, PTY, filesystem, executable discovery), conformance (external
+  #   emulator process), cfg3_catalog (configuration source files and the
+  #   native writer lock race) and cfg3_managed_output (managed Tool output
+  #   storage). They link the ordinary rustX library, so core never compiles
+  #   the library test harness, the lane's dominant compilation (about 12
+  #   of its 24 compile minutes in run 39015122730).
+  # - rust-platform-boundaries (FULL): the same seven external targets, plus,
+  #   from the lib test binary, the source-module unit tests and the in-crate
+  #   boundary conformance suites (`boundary_suites::` — real SIGKILL process
+  #   death, bash supervision, staged subagent children, MCP stdio fixture
+  #   children), in one job. Running the lib half on a second runner in
+  #   parallel was measured and rejected: with both caches cold (run
+  #   39035924891) it shortened FULL by about one minute (39.0 vs 40.1 min)
+  #   for about 17 more macOS runner-minutes, because that runner compiles
+  #   the dependencies and the ordinary library again. The deterministic scripted contract
+  #   suites are `cfg(target_os = "linux")`: they are pure state-machine/
+  #   planning/manual-clock contracts whose invariants carry no OS semantics,
+  #   so compiling and rerunning them on macOS would be duplication without
+  #   platform value.
+  #
+  # The contracts and provider targets assert deterministic JSON/SSE
+  # translation with no process or filesystem semantics, so they are
+  # Linux-only.
+  rust-platform-core:
+    name: Platform-sensitive external boundaries (macOS core)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-platform-core']
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      VERIFICATION_PROFILE: fast
+      # Job-local build metadata only: assertions, overflow checks, unwind,
+      # optimization and release profiles retain their Cargo defaults.
+      # rust-cache hashes the CARGO prefix, including these settings.
+      CARGO_PROFILE_DEV_DEBUG: "1"
+      CARGO_PROFILE_TEST_DEBUG: "1"
+      # One rustX compilation peaks near 3.5 GB RSS on this runner
+      # (/usr/bin/time -l). -j2 lets rustc run two codegen workers inside the
+      # monolithic lib and lib-test units and overlaps one smaller unit
+      # alongside; the two all-feature library variants still never overlap
+      # because the compile steps keep them in separate cargo invocations, so
+      # the worst pairing stays under the 7 GB runner. The per-step
+      # /usr/bin/time RSS output and the cargo-timings artifact validate it.
+      # libtest keeps its existing concurrency, assertions, selectors and
+      # deadlines.
+      CARGO_BUILD_JOBS: "2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      # One lineage per lane; see the policy note in the `quality` job. The
+      # macOS lineages share nothing with any Linux lane: the action's key
+      # carries the runner OS, architecture and host triple.
+      - name: Cache Rust dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-platform-core
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Record native build environment
+        shell: bash
+        run: |
+          {
+            echo '## macOS native build measurement'
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            cargo -V
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+            echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
+            echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The conformance target and the in-crate boundary suites launch the
+      # provider emulator with `uv run`.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
+      # Compiling the external targets also builds every real executable
+      # against the same all-feature library; staging places them beside each
+      # emitted test harness executable.
+      - name: Compile the external boundary targets and stage the real executables
+        run: >-
+          /usr/bin/time -l python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      - name: Run the external boundary targets
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: >-
+          /usr/bin/time -l cargo test --all-features --locked
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      # Native macOS discovery: every required external target (see
+      # REQUIREMENTS in the checker) must execute here.
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      - name: Run extracted workspace crate tests
+        run: 'cargo test --workspace --exclude rustx --lib --all-features --locked -- --skip ::scale::'
+
+      - name: Check test lane coverage
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-core
+
+      - name: Native Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-core-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+          if-no-files-found: warn
+
+  rust-platform-boundaries:
+    name: Platform-sensitive boundaries (macOS full)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
+    runs-on: macos-latest
+    # Run 43460497372 spent 80m building; 100m cut off the test/coverage tail.
+    # Allow the full execution/coverage tail plus runner variance; see
+    # docs/issue-480/ci-budget.md. Individual test deadlines stay unchanged.
+    timeout-minutes: 150
+    env:
+      VERIFICATION_PROFILE: full
+      # Job-local build metadata only: assertions, overflow checks, unwind,
+      # optimization and release profiles retain their Cargo defaults.
+      # rust-cache hashes the CARGO prefix, including these settings.
+      CARGO_PROFILE_DEV_DEBUG: "1"
+      CARGO_PROFILE_TEST_DEBUG: "1"
+      # One rustX compilation peaks near 3.5 GB RSS on this runner
+      # (/usr/bin/time -l). -j2 lets rustc run two codegen workers inside the
+      # monolithic lib and lib-test units and overlaps one smaller unit
+      # alongside; the two all-feature library variants still never overlap
+      # because the compile steps keep them in separate cargo invocations, so
+      # the worst pairing stays under the 7 GB runner. The per-step
+      # /usr/bin/time RSS output and the cargo-timings artifact validate it.
+      # libtest keeps its existing concurrency, assertions, selectors and
+      # deadlines.
+      CARGO_BUILD_JOBS: "2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      # One lineage per lane; see the policy note in the `quality` job. The
+      # macOS lineages share nothing with any Linux lane: the action's key
+      # carries the runner OS, architecture and host triple.
+      - name: Cache Rust dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-platform-boundaries
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Record native build environment
+        shell: bash
+        run: |
+          {
+            echo '## macOS native build measurement'
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            cargo -V
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+            echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
+            echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The conformance target and the in-crate boundary suites launch the
+      # provider emulator with `uv run`.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
+      # Compiling the external targets first also builds every real executable
+      # against the same all-feature library; staging places them beside each
+      # emitted integration test harness executable.
+      - name: Compile the external boundary targets and stage the real executables
+        run: >-
+          /usr/bin/time -l python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      # App Server scripted contracts live under the manager's cfg(test) module
+      # to reach its private owner gates; their physical test class is still
+      # deterministic and Linux-only, despite this different name prefix.
+      #
+      # `--bins` executes zero tests today and removing it was measured, but it
+      # is retained so Cargo's normal target discovery picks up any future test
+      # added to a binary. `--test durable` is already fresh from the step
+      # above and re-emits the package binary records without recompiling the
+      # ordinary library so they stage beside the lib/bin test harnesses too.
+      - name: Compile unit and in-crate boundary test harnesses and stage the real executables
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+
+      - name: Run unit tests and the in-crate boundary suites
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        # The scripted contract suites are `cfg(target_os = "linux")` and are
+        # not compiled on macOS, so no `scripted_suites::` skip belongs here:
+        # a skip that excludes nothing fails the lane checker.
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::'
+
+      - name: Run the external boundary targets
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: >-
+          /usr/bin/time -l cargo test --all-features --locked
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      - name: Run extracted workspace crate tests
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+
+
+      # Native macOS discovery: both --skip selectors must still exclude
+      # tests, and `boundary_suites::` and every external target (see
+      # REQUIREMENTS in the checker) must execute here entirely.
+      - name: Check test lane coverage
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries
+
+      - name: Native Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+          if-no-files-found: warn
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.
@@ -490,7 +813,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -502,12 +825,12 @@ jobs:
       # The real-child integration suite drives the shared provider emulator,
       # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -583,7 +906,7 @@ jobs:
     # prior 15m budget for the native generator and both protocol checks.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
@@ -597,7 +920,7 @@ jobs:
         with:
           shared-key: app-server-protocol
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned protocol toolchain
@@ -613,20 +936,71 @@ jobs:
         working-directory: protocol/app-server
         run: pnpm typecheck
 
-  # Browser acceptance builds once and runs in the selected shards:
-  #
-  #   browser-prepare -> web-client
-  #                   -> browser-shard (FULL: 1/3, 2/3, 3/3) -> browser-report
-  #
-  # browser-prepare compiles the real App Server, native Tool supervisors and
-  # Artifact fixture and runs the one production Web build (Vite plus the
-  # artifact provenance check) from the checked-out source, then records them
-  # with their identity (commit, runner platform, Rust pin, Cargo command,
-  # Node ABI, pnpm, Playwright, dependency sources) and per-file checksums
-  # (web-console/scripts/browser-artifact.ts). Every consumer installs those
-  # exact files only after verifying that identity against its own checkout
-  # and runner; a mismatch fails, and nothing is rebuilt in its place. The
-  # archive is a run-scoped workflow artifact, never a cache entry.
+  desktop-macos:
+    name: Desktop adapter and Host (macOS Node)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['desktop-macos']
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop-host
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # The supervisor already compiles the rustx library; the real App Server
+      # binary for the TUI Save integration suite adds only its own link.
+      - name: Build native PTY ownership supervisor and the App Server
+        run: cargo build --bins --locked
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pinned Node dependencies
+        run: |
+          corepack enable
+          (cd web-console && corepack install && pnpm install --frozen-lockfile)
+          (cd tui && pnpm install --frozen-lockfile)
+      # The TUI Save integration suite drives the shared provider emulator.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the existing provider emulator
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      # Real macOS Node/filesystem/process execution, including a harmless Node
+      # child through launchDesktop. Fakes cover GUI argv and unavailable sessions;
+      # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
+      - name: Desktop adapter and Host boundaries
+        working-directory: web-console
+        run: >-
+          pnpm exec vitest run
+          test/desktop-host.test.ts
+          test/document-archive.test.ts
+          test/document-integration.test.ts
+          test/workbench-host.test.ts
+          test/terminal-lifecycle.test.ts
+          test/terminal-process.test.ts
+          test/office-macos-lifecycle.test.ts
+          test/office-macos.test.ts
+      - name: macOS sandbox diagnostics on failure
+        if: failure()
+        run: sudo log show --last 3m --style compact --predicate 'process == "sandboxd" OR eventMessage CONTAINS "deny"' | tail -150
+      # Client-local Save on the macOS filesystem: exclusive create, hard-link
+      # publication, link-count cleanup and every ownership interleaving, 0600
+      # creation under an inherited native ACL (macOS only), then byte-exact
+      # Save from a real stdio child and a real WebSocket server.
+      - name: TUI client-local Save (macOS filesystem, stdio and WebSocket)
+        working-directory: tui
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: node --test test/deliveries.test.ts test/delivery-integration.test.ts
+
   browser-prepare:
     name: Browser inputs (build once)
     needs: plan
@@ -634,8 +1008,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
@@ -680,14 +1054,14 @@ jobs:
           node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory"
       - name: Package the prepared inputs
         run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: browser-prepared
           path: ${{ runner.temp }}/browser-prepared.tar.zst
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/browser-inventory/
@@ -701,8 +1075,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Web dependencies
@@ -721,10 +1095,10 @@ jobs:
           pnpm typecheck
           pnpm test
       - uses: ./.github/actions/document-runtime
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -764,8 +1138,8 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.browser).shards }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
@@ -781,15 +1155,15 @@ jobs:
           (cd tui && pnpm install --frozen-lockfile)
           (cd dev && pnpm install --frozen-lockfile)
       - uses: ./.github/actions/document-runtime
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
       - uses: ./.github/actions/browser-inputs
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/inventory
@@ -809,7 +1183,7 @@ jobs:
         run: bash scripts/browser-tests.sh --test-list "$RUNNER_TEMP/inventory/shard-${{ matrix.shard }}.txt"
       - name: Shard report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-shard-${{ matrix.shard }}
           path: |
@@ -818,7 +1192,7 @@ jobs:
           if-no-files-found: ignore
       - name: Browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-evidence-shard-${{ matrix.shard }}
           path: web-console/test-results/
@@ -834,8 +1208,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       # Report aggregation uses locked development tools and existing artifacts.
@@ -846,14 +1220,27 @@ jobs:
           corepack enable
           corepack install
           pnpm install --frozen-lockfile --dev --ignore-scripts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/inventory
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: browser-shard-*
           path: ${{ runner.temp }}/shards
+      # v8 flattens the download into `path` when the pattern matches exactly
+      # one artifact (a one-shard FAST run); wrap it back under its shard dir
+      # so the coverage loop sees one layout either way.
+      - name: Normalize a single-shard artifact layout
+        run: |
+          if [ -f "$RUNNER_TEMP/shards/shard-report/identity.json" ]; then
+            shard=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/shards/shard-report/identity.json','utf8')).shard)")
+            dest="$RUNNER_TEMP/shards/browser-shard-$shard"
+            mkdir -p "$dest"
+            for entry in shard-report blob-report; do
+              [ -d "$RUNNER_TEMP/shards/$entry" ] && mv "$RUNNER_TEMP/shards/$entry" "$dest/$entry"
+            done
+          fi
       - name: Merge the shard reports
         working-directory: web-console
         env:
@@ -877,7 +1264,7 @@ jobs:
         run: test "${{ needs.browser-shard.result }}" = success
       - name: Merged browser report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-console-browser-report
           path: ${{ runner.temp }}/merged/
@@ -895,8 +1282,11 @@ jobs:
       - documentation-contracts
       - rust-contracts
       - rust-boundaries
+      - rust-platform-core
+      - rust-platform-boundaries
       - tui
       - app-server-protocol
+      - desktop-macos
       - browser-prepare
       - web-client
       - browser-shard
@@ -912,7 +1302,7 @@ jobs:
       # second parent is still head, and the PR base is an ancestor of the
       # first parent (an intermediate stack merge) rather than the parent
       # itself. Ordinary PRs still match parents `[base, head]` exactly.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Every selected job succeeded, at the right profile, for the current head

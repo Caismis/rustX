@@ -21,10 +21,10 @@ use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
 use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
-use crate::model::adapter::traits::{
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
+use crate::model::adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
@@ -1538,11 +1538,7 @@ fn stage_inputs<'a>(
 > {
     let plan = &tools.correlation;
     let origin = request.invocation.replay_origin();
-    let mut prefix = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache")
+    let mut prefix = crate::model::adapter::cache::lock(&request.messages)
         .responses
         .take()
         .filter(|prefix| {
@@ -1641,12 +1637,8 @@ fn finish_inputs<'a>(
         bytes: prefix.bytes,
         _lifetime: std::marker::PhantomData,
     };
-    let mut cache = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache");
-    if let Some(current) = cache.correlation.as_mut().filter(|current| {
+    let mut cache = crate::model::adapter::cache::lock(&request.messages);
+    if let Some(current) = cache.correlation.plan.as_mut().filter(|current| {
         current.epoch == tools.correlation.epoch && current.matches(&request.messages)
     }) {
         current.dirty.clear();

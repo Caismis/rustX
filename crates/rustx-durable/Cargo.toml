@@ -1,0 +1,46 @@
+[package]
+name = "rustx-durable"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+
+[dependencies]
+tempfile = "3.27.0"
+rustx-types = { path = "../rustx-types" }
+rustx-workflow = { path = "../rustx-workflow" }
+rustx-identity = { path = "../rustx-identity" }
+rustx-conversation = { path = "../rustx-conversation" }
+rustx-publication = { path = "../rustx-publication" }
+rustx-bounded-file = { path = "../rustx-bounded-file" }
+rustx-bounded-json = { path = "../rustx-bounded-json" }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint", "trace"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+schemars = { version = "1", features = ["chrono04"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+serde_yaml_ng = "0.10.0"
+sha2 = "0.10"
+rmp-serde = "1"
+base64 = "0.22"
+uuid = { version = "1.24", features = ["v7"] }
+strum = { version = "0.27.2", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "fs"] }
+futures-util = "0.3"
+nix = { version = "0.31.3", features = ["fs", "signal", "process"] }
+imbl = { version = "7.0.0", features = ["serde"] }
+libc = "0.2"
+
+[dev-dependencies]
+rustx-types = { path = "../rustx-types", features = ["test-fixtures"] }
+rustx-identity = { path = "../rustx-identity", features = ["test-fixtures"] }
+
+[features]
+# Deterministic in-process seams the monolith's own test suite drives through
+# the durable boundary (injection hooks, envelope-native-batch reads).
+test-hooks = ["test-fixtures"]
+issue-387-profile = ["rustx-types/issue-387-profile"]
+test-fixtures = ["rustx-types/test-fixtures", "rustx-identity/test-fixtures"]

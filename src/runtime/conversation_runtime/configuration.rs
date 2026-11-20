@@ -12,6 +12,7 @@ use super::{
 };
 use crate::runtime::configuration_commit::{
     ConfigurationChange, ConfigurationContent, StagedConfiguration, StagedOutcome,
+    configuration_change_between,
 };
 
 impl RuntimeInner {
@@ -459,7 +460,7 @@ impl RuntimeInner {
         let binding_revision = previous_binding
             .checked_add(1)
             .expect("Session binding revision exhausted");
-        let change = ConfigurationChange::between(
+        let change = configuration_change_between(
             reason,
             (previous_binding, binding_revision),
             (&state.resources, &state.model),
@@ -1006,7 +1007,7 @@ impl ConversationRuntime {
         );
         // The unit keeps its own commit identity: it changes the generation
         // future Attempts freeze, never the Session binding.
-        let change = ConfigurationChange::between(
+        let change = configuration_change_between(
             crate::runtime::configuration_commit::ConfigurationChangeReason::Source,
             (state.binding_revision, state.binding_revision),
             (&state.resources, &state.model),

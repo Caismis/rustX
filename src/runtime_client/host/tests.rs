@@ -1,7 +1,7 @@
-use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::scripted_suites::support::audit::assert_permission_reminder;
 mod compaction_head_tests;
 mod delivery_tests;
@@ -1868,7 +1868,7 @@ fn many_live_block_steps(
             .unwrap();
         }
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &super::super::snapshot::InFlightBlock::Text {
                     block_index: ContentBlockIndex::new(block),
                     text: text.clone()
@@ -2011,7 +2011,7 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
     );
     assert!(event_ref.readable_end > last.readable_end);
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             &after,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -4665,7 +4665,7 @@ async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
     assert!(
         crate::runtime::observation::PublicationProjectionCommit::native_batch(
             &sink,
-            committed.observation.as_deref().unwrap(),
+            committed.observation.native_batch().unwrap(),
         )
         .is_installed()
     );

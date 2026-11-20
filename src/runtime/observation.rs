@@ -2148,10 +2148,9 @@ impl PendingObservations {
     }
 }
 
-/// Closed dependency list for Trace's durable facts. Other native facts are
-/// deliberately excluded from Trace; they do not create a Trace-only cursor
-/// transition. Their owners continue publishing ordinary observations.
-pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
+#[cfg(test)]
+#[cfg(test)]
+fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
     match event {
         RuntimeEvent::AttemptStarted { .. }
         | RuntimeEvent::AttemptCompleted { .. }
@@ -2415,7 +2414,7 @@ mod tests {
                     panic!("finite source witness");
                 };
                 assert_eq!(witness.sequence, sequence);
-                assert!(crate::observation::bounded::bounded_bytes(witness, 16384).is_some());
+                assert!(rustx_types::observation::bounded::bounded_bytes(witness, 16384).is_some());
                 sequences.push(sequence);
             }
         }

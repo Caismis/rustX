@@ -1,5 +1,6 @@
 use super::*;
-use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
+use crate::runtime::workflow::WorkflowProgram;
+use rustx_types::runtime::workflow::WorkflowId;
 use serde_json::json;
 
 fn file() -> WorkflowFileDocument {
@@ -107,7 +108,7 @@ fn metadata_bounds_and_stale_references_have_distinct_non_destructive_outcomes()
     assert!(document.validate().is_ok());
     assert!(
         document
-            .presentation_diagnostics()
+            .presentation_diagnostics(&crate::runtime::workflow::authoring::declared_output)
             .iter()
             .any(|d| d.category == "presentation_reference")
     );
@@ -172,7 +173,7 @@ fn sized_code_document(target: usize) -> WorkflowFileDocument {
             "edges":[{"from":"start","to":"code"},{"from":"code","to":"done"}]}
     })).unwrap();
     let base = serde_json::to_vec(&document).unwrap().len();
-    let crate::runtime::workflow::WorkflowNodeDefinition::Code { code, .. } =
+    let rustx_workflow::definition::WorkflowNodeDefinition::Code { code, .. } =
         document.definition.block.nodes.get_mut("code").unwrap()
     else {
         unreachable!()
@@ -218,7 +219,7 @@ fn issue527_unicode_and_json_escaping_measure_encoded_bytes_independently() {
         document
     );
     let mut document = sized_code_document(1024 * 1024);
-    let crate::runtime::workflow::WorkflowNodeDefinition::Code { code, .. } =
+    let rustx_workflow::definition::WorkflowNodeDefinition::Code { code, .. } =
         document.definition.block.nodes.get_mut("code").unwrap()
     else {
         unreachable!()

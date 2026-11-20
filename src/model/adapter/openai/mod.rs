@@ -10,9 +10,9 @@
 
 pub mod chat_completions;
 mod client;
-pub mod config;
+pub use rustx_types::model::adapter::openai::config;
 pub(crate) mod mapping;
-pub(crate) mod qwen_xml;
+pub(crate) use rustx_types::model::adapter::openai::qwen_xml;
 pub mod responses;
 
 pub use chat_completions::OpenAiChatCompletionsAdapter;

@@ -10,6 +10,56 @@ modules. Session Controller operations and Workflow compilation/catalog modules
 retain their original native authorities and public paths. See the
 [engineering report](evidence/issue-560-final-report.md) and its disposition maps.
 
+## Workspace crate boundary (#560)
+
+`rustx` is a Cargo workspace whose `crates/rustx-*` members own shared
+contracts that lower layers need without pulling in the monolith:
+`rustx-identity` (canonical identity types), `rustx-types` (runtime, tool,
+model and message contracts at their original module paths),
+`rustx-bounded-json` and `rustx-bounded-file` (bounded readers), and
+`rustx-publication` (the durable user-facing publication plane: carryover
+accounting, coalescer and frame records). `rustx-conversation` owns the
+mutable conversation hot state: `ConversationState` is the single mutable
+authority, holding the canonical `MessageLedger` (identity-deduped,
+allocation-owning history), the `ConversationSurface` (the mutable active
+working set), `CanonicalSelection` and `CanonicalBodies` (the bounded weak-lease
+registry of canonical `ModelInputMessage` allocations shared by the Ledger, the
+Surface and selected-input manifests). Its prepare→install primitives
+(`bind_bodies`, `append_after_validation`, `append_shared_after_validation`,
+`shared`, `CanonicalBodies::admit`, Surface append) are `pub(crate)`-narrowed:
+cross-crate callers go through `ConversationState` entry points
+(`commit`, `prepare_owned_commit`/`prepare_owned_batch`, `install_prepared`,
+`from_shared_durable_head`, `bind_bodies`) and read accessors; the only
+`pub` primitives that remain are `CanonicalBodies::share` (durable projection
+leases bodies into `SelectedInputManifest`s) and `CanonicalSelection::append`
+(the status surface rebuilds one exact selection). The
+monolith re-exports each moved item at its original `crate::` path, so
+consumer paths do not change; extracted crates never depend back on `rustx`
+and keep dependencies pointing inward toward rustX-owned contracts.
+
+Under `rustx-types`, `model` holds the model contract plane:
+`input` (`ModelInputMessage`, canonical/request-only context, carryover
+rendering), `projected` (model-visible views, canonical body identity),
+`images` (frozen image payloads and PNG measurement), `transformations`
+(provider payload rewrites) and `uploads` (attachment upload accounting),
+plus the semantic-fingerprint cluster in `types`. Request selection stays
+with the monolith: `model::selected_input` owns manifest assembly and
+`assemble_selected_model_input` because they depend on Durable projection,
+the request cache and context token accounting, and `model::structured`,
+`auxiliary`, `occurrence`, `snapshot` and `media` remain on the same side of
+that line. Test-only instrumentation (`model::hash_work`, image decode
+counting, `agent::execution::attribution`) is compiled under
+`cfg(any(test, feature = "test-fixtures"))`, which the monolith enables only
+through its dev-dependency edge, so production builds never carry it.
+
+`rustx-types` also owns the continuation contract under `runtime`:
+`runtime::continuation` holds `ProviderContinuationState` (the provider
+boundary), `OpenAiResponsesContinuation`, `AnthropicContinuation` and
+`AcceptedOutputContinuationSource`. `from_accepted_output` takes the covered
+input's semantic fingerprint as a `String` rather than `&SelectedModelInput`,
+so the contract does not pull request selection back into the types crate;
+callers in the monolith pass `input.semantic_fingerprint()` explicitly.
+
 ## App Server environment services (#533)
 
 The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).

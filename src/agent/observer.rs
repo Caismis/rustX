@@ -29,8 +29,6 @@
 //!
 //! This module defines the seam only; it owns no state and no consumer.
 
-use crate::context::status::{AgentStatus, ContributionOpportunities};
-use crate::durable::TranscriptCursor;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
@@ -41,39 +39,7 @@ use crate::tools::types::ToolProgress;
 ///
 /// The observed status is the exact accepted value admitted as the canonical
 /// Agent Status User context message. It is emitted after model-turn-start
-/// arbitration and after that message's `observe_committed` callback.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentStatusObservation {
-    /// The attempt that composed the status.
-    pub attempt_id: AttemptId,
-    /// The turn number of the model request being prepared.
-    pub turn: u32,
-    /// The canonical Agent Status User message described by this observation.
-    pub status_message_id: crate::runtime::identity::MessageId,
-    /// The opportunity set that made this generation eligible.
-    pub opportunities: ContributionOpportunities,
-    /// The durable transcript position frozen when the `PostToolBatch`
-    /// opportunity in [`opportunities`](Self::opportunities) was established:
-    /// the canonical `ToolResult` batch's own position, read once at that
-    /// commit and never re-read afterwards.
-    ///
-    /// This is the placement fact of a `PostToolBatch` composition, and it is
-    /// deliberately frozen by the semantic owner rather than derived later.
-    /// Inbound acceptance is an independent durable boundary that may commit
-    /// between this freeze and `observe_status`; a consumer that instead read
-    /// "the newest durable position" when it folded this observation would
-    /// place the status after an unrelated inbound turn it has nothing to do
-    /// with.
-    ///
-    /// `None` when this composition had no `PostToolBatch` opportunity, or
-    /// when the batch that established one committed no visible transcript
-    /// item. A `FreshInbound` composition is placed by the exact inbound
-    /// message identity its opportunity carries, which is a stronger fact
-    /// than a position, so it needs nothing here.
-    pub post_tool_batch_anchor: Option<TranscriptCursor>,
-    /// The one composed structured status.
-    pub status: AgentStatus,
-}
+pub use rustx_durable::observation::status::AgentStatusObservation;
 
 /// The live observation seam of one agent attempt execution.
 ///

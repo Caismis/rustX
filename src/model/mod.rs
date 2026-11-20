@@ -12,18 +12,18 @@
 pub mod adapter;
 pub mod assembly;
 pub mod authoring;
-pub mod auxiliary;
+pub use rustx_types::model::auxiliary;
 pub mod catalog;
 mod compat;
-pub mod deadline;
-pub mod error;
-pub mod event;
-pub mod finish;
+pub use rustx_types::model::deadline;
+pub use rustx_types::model::error;
+pub use rustx_types::model::event;
+pub use rustx_types::model::finish;
 pub mod frozen;
-pub mod generation;
-pub mod generation_evidence;
-pub mod input;
-pub(crate) mod inspection;
+pub use rustx_types::model::generation;
+pub use rustx_types::model::generation_evidence;
+pub use rustx_types::model::input;
+pub(crate) use rustx_types::model::inspection;
 pub mod invocation;
 pub mod replay;
 pub(crate) mod selected_input;
@@ -114,12 +114,12 @@ pub(crate) fn chat_protocol() -> ModelProtocol {
     ModelProtocol::OpenAiChatCompletions
 }
 
-pub mod uploads;
+pub use rustx_types::model::uploads;
 
-pub mod images;
+pub use rustx_types::model::images;
+#[cfg(test)]
+mod images_tests;
 pub(crate) mod media;
 
 pub mod occurrence;
-pub mod projected;
-
-pub(crate) mod transformations;
+pub use rustx_types::model::projected;
