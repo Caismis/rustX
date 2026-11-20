@@ -1,0 +1,388 @@
+# Isolated Linux cache experiments for the CI optimization PR.
+#
+# Every lineage is prefixed `exp-linux-` so experiment entries can never be
+# restored by a production lane (the production `rust-*` shared-keys are
+# untouched), and only pushes to this experiment branch publish — the same
+# ownership contract as the production policy (untrusted pull_request code
+# is never a cache writer).
+#
+# Four variants, each compiling exactly what rust-boundaries compiles
+# (the seven external boundary targets + the lib test target), so numbers
+# compare directly against that lane's measured timings:
+#   exp-a-deps:    rust-cache dependency lineage only (production today).
+#   exp-b-ws:      rust-cache including first-party workspace crates.
+#   exp-c-sccache: sccache on the GitHub Actions cache backend, with an
+#                  actions/cache local-disk fallback.
+#   exp-d-combo:   rust-cache dependency lineage + sccache on top.
+#
+# The scenario under test is read from experiment/scenario.txt:
+#   cold    first publish run (no restore expected).
+#   hot     restore run with no source change.
+#   root    a comment appended to src/lib.rs (root crate change).
+#   shared  a comment appended to crates/rustx-types/src/lib.rs (shared crate).
+#   domain  a comment appended to crates/rustx-workflow/src/lib.rs (one
+#           domain crate).
+# The mutation is synthesized in the runner checkout only; it is never
+# committed.
+#
+# Metrics: restore/save durations come from the cache steps; compile time
+# and peak RSS from /usr/bin/time -v; sccache effectiveness from
+# `sccache --show-stats` taken before and after the compile — a run whose
+# counters stay at zero is reported as broken, not as a result.
+name: Cache experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - devin/linux-cache-experiments
+
+env:
+  CARGO_TERM_COLOR: always
+  # The experiments compile what rust-boundaries compiles under the same
+  # single-job serialization, so timings compare with that lane's numbers.
+  CARGO_BUILD_JOBS: "1"
+
+jobs:
+  experiment-prelude:
+    name: Apply the mutation scenario
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      scenario: ${{ steps.scenario.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the scenario
+        id: scenario
+        run: |
+          value=$(cat experiment/scenario.txt | tr -d '[:space:]')
+          case "$value" in
+            cold|hot|root|shared|domain) ;;
+            *) echo "unknown scenario $value"; exit 1 ;;
+          esac
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+      - name: Apply the source mutation
+        if: steps.scenario.outputs.value != 'cold' && steps.scenario.outputs.value != 'hot'
+        run: |
+          case "${{ steps.scenario.outputs.value }}" in
+            root)   file=src/lib.rs ;;
+            shared) file=crates/rustx-types/src/lib.rs ;;
+            domain) file=crates/rustx-workflow/src/lib.rs ;;
+          esac
+          printf '\n// cache-experiment scenario probe: %s %s\n' \
+            "${{ steps.scenario.outputs.value }}" "$(date +%s%N)" >> "$file"
+          git diff --stat
+
+  exp-a-deps:
+    name: A — rust-cache deps only
+    needs: experiment-prelude
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    env:
+      SCENARIO: ${{ needs.experiment-prelude.outputs.scenario }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply the source mutation
+        run: |
+          case "$SCENARIO" in
+            root)   file=src/lib.rs ;;
+            shared) file=crates/rustx-types/src/lib.rs ;;
+            domain) file=crates/rustx-workflow/src/lib.rs ;;
+            *) exit 0 ;;
+          esac
+          printf '\n// cache-experiment scenario probe: %s %s\n' "$SCENARIO" "$(date +%s%N)" >> "$file"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - name: Cache Rust dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: exp-linux-deps
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: Compile the boundary harnesses and the lib test target
+        run: >-
+          /usr/bin/time -v python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
+          --lib
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+      - name: Record experiment environment
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## exp-a-deps'
+            echo "scenario: $SCENARIO"
+            echo "rust-cache cache-hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo "target dir: $(du -sh target 2>/dev/null | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Native Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: exp-a-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+          if-no-files-found: warn
+
+  exp-b-ws:
+    name: B — rust-cache incl. workspace crates
+    needs: experiment-prelude
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    env:
+      SCENARIO: ${{ needs.experiment-prelude.outputs.scenario }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply the source mutation
+        run: |
+          case "$SCENARIO" in
+            root)   file=src/lib.rs ;;
+            shared) file=crates/rustx-types/src/lib.rs ;;
+            domain) file=crates/rustx-workflow/src/lib.rs ;;
+            *) exit 0 ;;
+          esac
+          printf '\n// cache-experiment scenario probe: %s %s\n' "$SCENARIO" "$(date +%s%N)" >> "$file"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - name: Cache Rust artifacts including workspace crates
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: exp-linux-ws
+          cache-workspace-crates: true
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: Compile the boundary harnesses and the lib test target
+        run: >-
+          /usr/bin/time -v python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
+          --lib
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+      - name: Record experiment environment
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## exp-b-ws'
+            echo "scenario: $SCENARIO"
+            echo "rust-cache cache-hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo "target dir: $(du -sh target 2>/dev/null | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Native Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: exp-b-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+          if-no-files-found: warn
+
+  exp-c-sccache:
+    name: C — sccache (GHA backend + disk fallback)
+    needs: experiment-prelude
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    env:
+      SCENARIO: ${{ needs.experiment-prelude.outputs.scenario }}
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 12G
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply the source mutation
+        run: |
+          case "$SCENARIO" in
+            root)   file=src/lib.rs ;;
+            shared) file=crates/rustx-types/src/lib.rs ;;
+            domain) file=crates/rustx-workflow/src/lib.rs ;;
+            *) exit 0 ;;
+          esac
+          printf '\n// cache-experiment scenario probe: %s %s\n' "$SCENARIO" "$(date +%s%N)" >> "$file"
+      - name: Point sccache at the runner-temp disk store
+        run: echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Local-disk sccache fallback
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sccache
+          key: exp-linux-sccache-disk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: sccache baseline counters
+        run: |
+          sccache --start-server || true
+          sccache --show-stats | tee /tmp/sccache-before.txt
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: Compile the boundary harnesses and the lib test target
+        run: >-
+          /usr/bin/time -v python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
+          --lib
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+      - name: sccache counters after compile
+        if: always()
+        run: |
+          sccache --show-stats | tee /tmp/sccache-after.txt
+          {
+            echo '## exp-c-sccache'
+            echo "scenario: $SCENARIO"
+            echo '### before'
+            echo '```'; cat /tmp/sccache-before.txt; echo '```'
+            echo '### after'
+            echo '```'; cat /tmp/sccache-after.txt; echo '```'
+            hits_after=$(grep -E '^(Cache hits|hits)' /tmp/sccache-after.txt | head -1)
+            misses_after=$(grep -iE 'miss' /tmp/sccache-after.txt | head -1)
+            echo "hits: $hits_after"
+            echo "misses: $misses_after"
+          } >> "$GITHUB_STEP_SUMMARY"
+          requests=$(grep -E 'Compile requests' /tmp/sccache-after.txt | awk '{print $NF}')
+          if [ "${requests:-0}" = "0" ]; then
+            echo '## sccache statistics broken'
+            echo 'sccache recorded zero compile requests: the counters cannot support a conclusion.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+  exp-d-combo:
+    name: D — rust-cache deps + sccache
+    needs: experiment-prelude
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    env:
+      SCENARIO: ${{ needs.experiment-prelude.outputs.scenario }}
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 12G
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply the source mutation
+        run: |
+          case "$SCENARIO" in
+            root)   file=src/lib.rs ;;
+            shared) file=crates/rustx-types/src/lib.rs ;;
+            domain) file=crates/rustx-workflow/src/lib.rs ;;
+            *) exit 0 ;;
+          esac
+          printf '\n// cache-experiment scenario probe: %s %s\n' "$SCENARIO" "$(date +%s%N)" >> "$file"
+      - name: Point sccache at the runner-temp disk store
+        run: echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - name: Cache Rust dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: exp-linux-combo
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Local-disk sccache fallback
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sccache
+          key: exp-linux-combo-sccache-disk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: sccache baseline counters
+        run: |
+          sccache --start-server || true
+          sccache --show-stats | tee /tmp/sccache-before.txt
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: Compile the boundary harnesses and the lib test target
+        run: >-
+          /usr/bin/time -v python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
+          --lib
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+      - name: sccache counters after compile
+        if: always()
+        run: |
+          sccache --show-stats | tee /tmp/sccache-after.txt
+          {
+            echo '## exp-d-combo'
+            echo "scenario: $SCENARIO"
+            echo "rust-cache cache-hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo '### before'
+            echo '```'; cat /tmp/sccache-before.txt; echo '```'
+            echo '### after'
+            echo '```'; cat /tmp/sccache-after.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          requests=$(grep -E 'Compile requests' /tmp/sccache-after.txt | awk '{print $NF}')
+          if [ "${requests:-0}" = "0" ]; then
+            echo '## sccache statistics broken'
+            echo 'sccache recorded zero compile requests: the counters cannot support a conclusion.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
