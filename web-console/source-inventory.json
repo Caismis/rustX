@@ -1006,7 +1006,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "9e311cd1cbd49d7ddfb8eb88ad0cdbe8164d7879151612e89d2316c27f865e6f"
+      "local_sha256": "2a2a55105bf34bc858d87a9766b493a55a34838123d1e12cfc70e45844be025a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1098,7 +1098,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "eecf7a6ad2330147413576fbd890884e7455e7e5ec4efd892d2b81336d2df1ec",
+      "local_sha256": "a76cdafa0e2cfc170840e1d8bfc0937dff3133552842d0bebfacf49834ddaff9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -3396,7 +3396,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "3a34de67b7aa8870f4bca9351fbf12dd62ecad09b7df30b9b61128f941f50f9a"
+      "local_sha256": "d7d39a92b8260504cd9d93001c0166977654905fb6fd1c66f6f416f32d550483"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
