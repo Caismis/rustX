@@ -93,7 +93,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "latest"
-      - run: uv sync --frozen
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
       - name: compile external test targets
         run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
       - name: compile lib + bins test units
@@ -137,7 +138,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "latest"
-      - run: uv sync --frozen
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
       - name: compile external test targets
         run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
       - name: compile lib + bins test units
@@ -180,7 +182,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "latest"
-      - run: uv sync --frozen
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
       - name: sccache zero stats
         run: sccache --zero-stats || true
       - name: compile external test targets
