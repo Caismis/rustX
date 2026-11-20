@@ -1,0 +1,135 @@
+.ticker, .candle {
+  --trend: var(--a2-muted-foreground);
+}
+:is(.ticker, .candle, .change)[data-trend='up'] { --trend: var(--a2-positive); }
+:is(.ticker, .candle, .change)[data-trend='down'] { --trend: var(--a2-negative); }
+
+.ticker {
+  overflow: hidden;
+  padding: 0;
+}
+
+.quoteHeader, .identity, .quote, .candleCaption {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+}
+
+.quoteHeader, .candleCaption { justify-content: space-between; align-items: flex-start; }
+.quoteHeader { padding: var(--a2-inset) var(--a2-inset) 0; }
+.identity { min-inline-size: 0; }
+.symbol, .tickerMark { font-family: var(--font-mono, monospace); }
+
+.tickerMark {
+  display: grid;
+  place-items: center;
+  min-inline-size: 2rem;
+  block-size: 2rem;
+  padding-inline: .25rem;
+  border: 1px solid var(--a2-border);
+  border-radius: var(--a2-radius-control);
+  background: var(--a2-muted);
+  font-size: .625rem;
+  font-weight: 700;
+}
+
+.muted { color: var(--a2-muted-foreground); font-size: .75rem; }
+
+.sample {
+  flex: none;
+  border: 1px solid color-mix(in oklch, var(--a2-amber) 26%, transparent);
+  border-radius: 999px;
+  padding: .05rem .45rem;
+  background: color-mix(in oklch, var(--a2-amber) 8%, var(--a2-card));
+  color: var(--a2-amber);
+  font-size: .625rem;
+  font-weight: 500;
+}
+
+.quote {
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding: .6rem var(--a2-inset) .4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote > strong { font-size: clamp(1.4rem, 4cqw, 1.9rem); line-height: 1.2; letter-spacing: -.025em; }
+.change, .candle, .sparkline { color: var(--trend, var(--a2-muted-foreground)); }
+.change {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .25rem;
+  font-size: .75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.sparkline { display: block; inline-size: 100%; block-size: 4.5rem; }
+
+.quoteStats, .keyValues {
+  display: grid;
+  gap: 0 1rem;
+  margin: 0;
+  font-size: .8125rem;
+}
+.quoteStats {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.75rem), 1fr));
+  padding: .55rem var(--a2-inset);
+  border-block-start: 1px solid var(--a2-border);
+}
+
+.quoteStats > div, .keyValues > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: .15rem .5rem;
+  min-inline-size: 0;
+  padding: .375rem 0;
+}
+.keyValues > div:not(:last-child) { border-block-end: 1px dashed var(--a2-border); }
+.quoteStats dt, .keyValues dt { color: var(--a2-muted-foreground); }
+.quoteStats dd, .keyValues dd { min-inline-size: 0; margin: 0 0 0 auto; font-weight: 550; font-variant-numeric: tabular-nums; }
+.keyValues small { display: block; color: var(--a2-muted-foreground); font-weight: 400; text-align: end; }
+
+@container (min-width: 27rem) {
+  .keyValues[data-columns='2'], .keyValues[data-columns='3'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (min-width: 39rem) {
+  .keyValues[data-columns='3'] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.candleCaption { margin-block-end: .5rem; }
+.candleSummary { text-align: end; font-variant-numeric: tabular-nums; }
+.candleSummary > strong { display: block; }
+
+@container (max-width: 26rem) {
+  .candlePlot { min-block-size: 8rem; overflow: visible; }
+  .candlePlot text { font-size: 22px; }
+  .candlePlot text[data-intermediate] { display: none; }
+}
+
+.alert {
+  --alert-tone: var(--a2-muted-foreground);
+  display: flex;
+  align-items: flex-start;
+  gap: .625rem;
+  padding: .75rem var(--a2-inset);
+  border: 1px solid var(--a2-border);
+  border-radius: var(--a2-radius);
+  background: color-mix(in oklch, var(--alert-tone) 6%, var(--a2-card));
+}
+.alert[data-tone='success'] { --alert-tone: var(--a2-positive); }
+.alert[data-tone='warning'] { --alert-tone: var(--a2-amber); }
+.alert[data-tone='error'] { --alert-tone: var(--a2-negative); }
+.alert > svg { flex: none; margin-block-start: .15rem; color: var(--alert-tone); }
+.alert p { margin: .125rem 0 0; color: var(--a2-muted-foreground); }
+
+.candle[data-active] rect {
+  stroke: var(--a2-foreground);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.stat { min-inline-size: 0; }
+.statGroup { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .75rem 1rem; }
+.statValue { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .45rem; }
+.statValue strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; line-height: 1.3; }

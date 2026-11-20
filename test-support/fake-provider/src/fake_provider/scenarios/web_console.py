@@ -908,6 +908,96 @@ root = Card(Column([
 SCENARIOS["web_a2ui_controls"] = web_a2ui_controls
 
 
+def web_a2ui_market() -> Scenario:
+    card = """<a2ui>
+$/candles = [
+  {date: "10-09", open: 233.84, high: 233.92, low: 229.11, close: 229.28},
+  {date: "10-12", open: 228.73, high: 228.86, low: 224.90, close: 226.32},
+  {date: "10-13", open: 224.34, high: 228.64, low: 223.06, close: 228.52},
+  {date: "10-14", open: 225.53, high: 226.00, low: 219.64, close: 221.30},
+  {date: "10-15", open: 215.30, high: 218.47, low: 212.85, close: 217.23},
+  {date: "10-16", open: 216.56, high: 218.68, low: 213.32, close: 214.13},
+  {date: "10-19", open: 218.10, high: 219.62, low: 214.70, close: 217.09},
+  {date: "10-20", open: 215.98, high: 218.46, low: 212.77, close: 216.47},
+  {date: "10-21", open: 220.96, high: 222.19, low: 217.66, close: 221.97},
+  {date: "10-22", open: 217.13, high: 218.88, low: 211.26, close: 212.21},
+  {date: "10-23", open: 210.99, high: 213.85, low: 210.18, close: 210.96},
+  {date: "10-26", open: 213.11, high: 217.75, low: 212.61, close: 216.00},
+  {date: "10-27", open: 218.31, high: 219.19, low: 215.53, close: 217.94},
+  {date: "10-28", open: 219.92, high: 219.99, low: 214.47, close: 215.38},
+  {date: "10-29", open: 214.36, high: 215.33, low: 212.08, close: 213.66},
+  {date: "10-30", open: 208.94, high: 209.06, low: 200.92, close: 204.64},
+  {date: "11-02", open: 207.53, high: 209.98, low: 201.66, close: 202.06},
+  {date: "11-03", open: 207.96, high: 209.14, low: 205.93, close: 206.69},
+  {date: "11-04", open: 203.50, high: 206.79, low: 199.68, close: 200.13},
+  {date: "11-05", open: 196.07, high: 196.25, low: 181.46, close: 181.60},
+  {date: "11-06", open: 191.10, high: 194.90, low: 185.22, close: 186.64},
+  {date: "11-09", open: 173.07, high: 179.92, low: 170.24, close: 178.67},
+  {date: "11-10", open: 173.97, high: 174.69, low: 165.89, close: 168.89},
+  {date: "11-11", open: 172.80, high: 177.54, low: 170.77, close: 173.73},
+  {date: "11-12", open: 151.01, high: 167.14, low: 148.80, close: 166.19},
+  {date: "11-13", open: 169.91, high: 170.00, low: 158.39, close: 162.85},
+  {date: "11-16", open: 159.02, high: 163.20, low: 155.01, close: 156.14},
+  {date: "11-17", open: 156.90, high: 158.19, low: 150.33, close: 155.46},
+  {date: "11-18", open: 159.19, high: 159.70, low: 150.40, close: 150.96},
+  {date: "11-19", open: 152.92, high: 158.13, low: 145.71, close: 145.98}
+]
+$/change = -4.98
+$/changePct = -3.30
+$/kv = [{label: "30d high", value: "$233.92"}, {label: "30d low", value: "$145.71"}, {label: "Avg volume (20d)", value: "259.9M"}, {label: "1mo change", value: "-32.8%"}]
+$/name = "NVIDIA Corporation"
+$/price = 145.98
+$/series = [229.28, 226.32, 228.52, 221.30, 217.23, 214.13, 217.09, 216.47, 221.97, 212.21, 210.96, 216.00, 217.94, 215.38, 213.66, 204.64, 202.06, 206.69, 200.13, 181.60, 186.64, 178.67, 168.89, 173.73, 166.19, 162.85, 156.14, 155.46, 150.96, 145.98]
+$/stats = [{label: "Open", value: "$152.92"}, {label: "Day range", value: "$145.71 to $158.13"}, {label: "Prev close", value: "$150.96"}, {label: "Volume", value: "320.6M"}]
+$/symbol = "NVDA"
+
+root = Column([ticker, candles, kv, note], _, _, _, _, 2)
+ticker = StockTicker($/symbol, $/name, $/price, $/change, $/changePct, _, $/series, $/stats, true)
+candles = CandlestickChart("Daily candles", "Last 30 sessions", _, "currency", _, $/candles)
+kv = KeyValueList("Key stats", $/kv, 2)
+note = Alert("Data source", "Real daily bars from Yahoo Finance (NVDA), unadjusted, as of 2026-11-19 close. Market cap and P/E omitted — not in the fetched dataset.")
+</a2ui>"""
+    return Scenario("web_a2ui_market", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Show the NVDA dashboard",)),
+        Stream(Text(card), Finish()),
+    ))
+
+
+SCENARIOS["web_a2ui_market"] = web_a2ui_market
+
+
+def web_a2ui_dashboard() -> Scenario:
+    reply = """Regional revenue was higher in February.
+
+<a2ui>
+-- The charts share the Playground's long-form series rows.
+$/sales = [
+  {x: "January", y: 1200, series: "North"},
+  {x: "February", y: 1800, series: "North"},
+  {x: "January", y: 900, series: "South"},
+  {x: "February", y: 1100, series: "South"}
+]
+root = Section("Revenue", "Regional sales", "January–February", panel)
+panel = [
+  StatGroup([{label: "Total", value: "$5,000"}, {label: "Regions", value: 2}]),
+  LineChart("Monthly trend", _, 220, "currency", _, $/sales),
+  AreaChart(title="Revenue by region", format="currency", data=$/sales),
+  BarChart(title="Revenue comparison", format="currency", data=$/sales),
+  Markdown("**North** led in February."),
+  Timeline(items=[])
+]
+</a2ui>
+
+Both regions contributed to the increase."""
+    return Scenario("web_a2ui_dashboard", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Show the sales dashboard",)),
+        Stream(Text(reply), Finish()),
+    ))
+
+
+SCENARIOS["web_a2ui_dashboard"] = web_a2ui_dashboard
+
+
 def web_a2ui_charts() -> Scenario:
     card = """<a2ui>
 $/sales = [{month: "一月", units: -2}, {month: "二月", units: 3}, {month: "三月", units: 10}]

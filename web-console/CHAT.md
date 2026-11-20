@@ -693,17 +693,19 @@ validated by the native receipt collection owner before turn admission.
 
 ## A2UI Express
 
-Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines or in an `a2ui` code fence. Each block owns its data model. Reopening a rendered message initializes its values from the source.
+Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines or in an `a2ui` code fence. Each block owns its data model. Reopening a rendered message initializes its values from the source. The chat embeds each completed view between the surrounding paragraphs and shows a status while a block is still streaming. It parses the DSL with the [pinned A2UI syntax reader](src/presentation/markdown/vendor/a2ui-express/README.md).
 
 | Area | Supported in chat |
 | --- | --- |
 | Layout | Named components, inline components, positional and named arguments, `_` for optional arguments, and simple Playground `List(items=[…], marker="number")` lists. |
 | Templates | `_template(path, component)` in child lists, named and inline templates, nested array scopes, and `@index()` with an optional offset. |
 | Binding | Root and nested data assignments, absolute `$/path` and row-relative `$field` paths, JSON Pointer escapes, dynamic values in arrays and maps, and local control writeback. |
+| Playground display | `Section`, `Heading`, `Title`, `Markdown`, `Alert`, `KeyValueList`, `Stat`, `StatGroup`, `Sparkline`, and `StockTicker`. |
+| Playground charts | `CandlestickChart` with OHLC `data` and `LineChart`, `AreaChart` and `BarChart` with `data=[{x, y, series?}, …]`. The chart draws the nearest point details on hover, tap, and arrow keys. |
 | Formatting | `formatString` with path and function interpolation, `formatNumber`, `formatCurrency`, `formatDate`, and `pluralize`. |
 | Actions | In an attached chat, a user click on an `Event` button sends a regular user message. A nonempty `userMessage` takes precedence. Otherwise the message contains the event name and any resolved context as JSON on a second line. `openUrl` opens an HTTPS destination in a separate tab on click. |
 
-Use `root` to declare each independent surface. Multi-turn surface updates, catalog switching, form validation checks, renderer RPC, and components outside the rustX catalog are outside the chat renderer's scope. The Playground's catalog also defines its own components and functions. [Express technical specification](https://github.com/a2ui-project/a2ui/blob/main/specification/proposals/express/a2ui_express.md) · [Playground catalog](https://github.com/CopilotKit/CopilotKit/tree/main/examples/showcases/a2ui-playground/src/a2ui/catalog)
+Use `root` to declare each independent surface. Multi-turn surface updates, catalog switching, form validation checks, renderer RPC, and components outside the rustX catalog are outside the chat renderer's scope. The Playground's catalog also defines its own components and functions. Unsupported components show an inline notice so supported siblings stay visible. The XY charts draw straight lines and grouped vertical bars. [Express technical specification](https://github.com/a2ui-project/a2ui/blob/main/specification/proposals/express/a2ui_express.md) · [Playground catalog](https://github.com/CopilotKit/CopilotKit/tree/main/examples/showcases/a2ui-playground/src/a2ui/catalog)
 
 ```a2ui
 $/items = [{name: "Alpha", price: 12.5}, {name: "Beta", price: 24}]

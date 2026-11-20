@@ -1,7 +1,12 @@
-import { ARRAY_INDEX, MAX_DEPTH, MAX_SOURCE_LENGTH, bindingPath, evaluator, functions, lookup, scalarText, type Expr, type Scope } from './express-values';
+import { isExpressNode, parseExpress as parseSyntax, type ExpressCallNode, type ExpressStatement, type ExpressValue } from './vendor/a2ui-express/visitor';
+import { ARRAY_INDEX, MAX_DEPTH, MAX_SOURCE_LENGTH, argumentsOf, bindingPath, evaluator, functions, lookup, scalarText, type Scope } from './express-values';
 
 const signatures = {
-  Text: ['text', 'variant', 'weight'],
+  Text: ['text', 'variant', 'weight', 'children', 'size'],
+  Heading: ['text', 'eyebrow', 'subtitle', 'level'],
+  Title: ['text', 'color', 'fontWeight', 'textAlign', 'tabularNums', 'size', 'strong'],
+  Markdown: ['text', 'streaming'],
+  Section: ['eyebrow', 'title', 'description', 'children'],
   Column: ['children', 'justify', 'align', 'weight', 'wrap', 'gap'],
   Row: ['children', 'justify', 'align', 'weight', 'wrap', 'gap'],
   List: ['children', 'direction', 'align', 'weight', 'marker', 'gap', 'items'],
@@ -17,10 +22,19 @@ const signatures = {
   Table: ['rows', 'columns', 'title'],
   LineChart: ['rows', 'x', 'y', 'title'],
   BarChart: ['rows', 'x', 'y', 'title'],
+  AreaChart: ['title', 'subtitle', 'height', 'format', 'unit', 'data', 'stacked', 'highlight'],
+  StockTicker: ['symbol', 'name', 'price', 'change', 'changePct', 'currency', 'series', 'stats', 'sample'],
+  CandlestickChart: ['title', 'subtitle', 'height', 'format', 'unit', 'data'],
+  KeyValueList: ['title', 'items', 'columns'],
+  Alert: ['title', 'message', 'tone'],
+  Stat: ['label', 'value', 'delta', 'trend', 'caption', 'tone', 'icon'],
+  StatGroup: ['items'],
+  Sparkline: ['label', 'values', 'value', 'delta', 'tone'],
 } satisfies Record<string, readonly string[]>;
 
-export type ExpressKind = keyof typeof signatures;
-type EventAction = { name: Expr; context?: Expr; userMessage?: Expr };
+type SupportedKind = keyof typeof signatures;
+export type ExpressKind = SupportedKind | 'Unsupported';
+type EventAction = { name: ExpressValue; context?: ExpressValue; userMessage?: ExpressValue };
 export interface ExpressNode {
   kind: ExpressKind;
   children: ExpressNode[];
@@ -36,429 +50,213 @@ export interface ExpressSurface {
   resolve: (data: Record<string, unknown>) => ReturnType<typeof evaluator>;
 }
 
-type Child = RawNode | { template: RawNode; path: string };
-type RawNode = { reference: string } | {
-  kind: ExpressKind;
-  children: Child[];
-  props: Record<string, Expr>;
-  event?: EventAction;
-};
-
-type Token =
-  | { type: 'ident'; value: string }
-  | { type: 'string'; value: string }
-  | { type: 'number'; value: number }
-  | { type: 'ref'; path: string }
-  | { type: 'punct'; value: string }
-  | { type: 'eof' };
-
-const PUNCT = new Set(['=', '(', ')', '[', ']', '{', '}', ',', ':']);
-const IDENTIFIER = /@?[\p{XID_Start}_][\p{XID_Continue}]*/uy;
-// Path segments accept any run of non-delimiter characters so unicode keys
-// (`$/标题`) work; `/` separates segments and every grammar punct terminates.
-const SEGMENT = /^[^\s\/()[\]{},:="'`$=<>]+/;
-const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/;
-const EOF_TOKEN: Token = { type: 'eof' };
-
-function isSpace(ch: string): boolean {
-  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v';
-}
-
-/**
- * Split express source into tokens. Returns null on any character the
- * grammar cannot place (including unterminated strings), which the caller treats as malformed input.
- */
-function tokenize(source: string): Token[] | null {
-  if (source.length > MAX_SOURCE_LENGTH) return null;
-  const tokens: Token[] = [];
-  let i = 0;
-  while (i < source.length) {
-    if (tokens.length >= 8192) return null;
-    const ch = source[i];
-    if (isSpace(ch)) { i++; continue; }
-    if (ch === '#' || source.startsWith('//', i)) {
-      const end = source.indexOf('\n', i);
-      i = end < 0 ? source.length : end + 1;
-      continue;
-    }
-    const raw = source.startsWith('r"', i);
-    if (ch === '"' || raw) {
-      const start = raw ? i + 1 : i;
-      const quote = source.startsWith('"""', start) ? '"""' : '"';
-      let j = start + quote.length;
-      let value = '';
-      let closed = false;
-      while (j < source.length) {
-        const c = source[j];
-        if (source.startsWith(quote, j)) { closed = true; j += quote.length; break; }
-        if (!raw && c === '\\') {
-          j++;
-          if (j >= source.length) return null;
-          const esc = source[j];
-          if (esc === 'u') {
-            const hex = source.slice(j + 1, j + 5);
-            if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
-            value += String.fromCharCode(parseInt(hex, 16));
-            j += 5;
-          } else {
-            value += esc === 'n' ? '\n' : esc === 't' ? '\t' : esc === 'r' ? '\r'
-              : esc === 'b' ? '\b' : esc === 'f' ? '\f' : esc;
-            j++;
-          }
-          continue;
-        }
-        value += c;
-        j++;
-      }
-      if (!closed) return null;
-      tokens.push({ type: 'string', value });
-      i = j;
-      continue;
-    }
-    if (ch === '$') {
-      let j = i + 1;
-      if (source[j] === '/') j++;
-      for (;;) {
-        const segment = SEGMENT.exec(source.slice(j));
-        if (!segment) break;
-        j += segment[0].length;
-        if (source[j] !== '/') break;
-        j++;
-      }
-      tokens.push({ type: 'ref', path: source.slice(i + 1, j) || '/' });
-      i = j;
-      continue;
-    }
-    const number = /^[+-.0-9]$/.test(ch) ? NUMBER.exec(source.slice(i)) : null;
-    if (number) {
-      const value = Number(number[0]);
-      if (!Number.isFinite(value)) return null;
-      tokens.push({ type: 'number', value });
-      i += number[0].length;
-      continue;
-    }
-    IDENTIFIER.lastIndex = i;
-    const identifier = IDENTIFIER.exec(source);
-    if (identifier) {
-      tokens.push({ type: 'ident', value: identifier[0] });
-      i = IDENTIFIER.lastIndex;
-      continue;
-    }
-    if (PUNCT.has(ch)) {
-      tokens.push({ type: 'punct', value: ch });
-      i++;
-      continue;
-    }
-    return null;
-  }
-  tokens.push(EOF_TOKEN);
-  return tokens;
-}
-
 const ROOT_SCOPE: Scope = { path: [] };
-const INVALID = Symbol('invalid Express');
-const literal = (value: unknown): Expr => ({ type: 'literal', value });
-const reserved = new Set(['true', 'false', 'null', '_']);
+const MAX_NODES = 8192;
+const literalOnly = new Set(['true', 'false', 'null', '_']);
 
-class Parser {
-  private pos = 0;
-  private readonly components = new Map<string, RawNode>();
-  private readonly variables = new Map<string, Expr>();
-  private data: Record<string, unknown> = Object.create(null);
-  private modelSlots = MAX_SOURCE_LENGTH;
-
-  constructor(private readonly tokens: Token[]) {}
-
-  parse(): ExpressSurface | null {
-    while (this.peek().type !== 'eof') this.statement();
-    const raw = this.components.get('root');
-    if (!raw) return null;
-    const { components, variables, data } = this;
-    const resolve = (model: Record<string, unknown>) => evaluator(model, variables, { remaining: 8192 });
-    const render = (model: Record<string, unknown>) => {
-      try {
-        const budget = { remaining: 8192 };
-        return resolveNode(raw, { model, components, variables, resolve: evaluator(model, variables, budget), budget }, ROOT_SCOPE, 0);
-      } catch {
-        return null;
-      }
-    };
-    const root = render(data);
-    return root && { root, data, render, resolve };
+function literal(value: ExpressValue, depth = 0): unknown {
+  if (depth > MAX_DEPTH) throw new Error('Express model is too deep');
+  if (Array.isArray(value)) return value.map(item => literal(item, depth + 1));
+  if (isExpressNode(value, 'map')) {
+    const entries: Record<string, unknown> = Object.create(null);
+    for (const [key, item] of Object.entries(value.entries)) entries[key] = literal(item, depth + 1);
+    return entries;
   }
+  if (value === null || typeof value !== 'object') return value;
+  throw new Error('Express model assignments require literal values');
+}
 
-  private peek(offset = 0): Token {
-    return this.tokens[this.pos + offset] ?? EOF_TOKEN;
-  }
-
-  private at(value: string, offset = 0): boolean {
-    const token = this.peek(offset);
-    return token.type === 'punct' && token.value === value;
-  }
-
-  private take(value: string): boolean {
-    if (!this.at(value)) return false;
-    this.pos++;
-    return true;
-  }
-
-  private expect(value: string): void {
-    if (!this.take(value)) throw INVALID;
-  }
-
-  private statement(): void {
-    const key = this.peek();
-    this.pos++;
-    this.expect('=');
-    if (key.type === 'ref' && key.path.startsWith('/')) {
-      const value = this.expression(0, false);
-      if (value.type !== 'literal') throw INVALID;
-      this.setData(bindingPath(key.path, ROOT_SCOPE), value.value);
-      return;
+function buildProgram(statements: ExpressStatement[]) {
+  const symbols = new Map<string, ExpressValue>();
+  let data: Record<string, unknown> = Object.create(null);
+  let modelSlots = MAX_SOURCE_LENGTH;
+  for (const statement of statements) {
+    if (statement[0] !== 'ASSIGN') throw new Error('Unsupported Express operation');
+    const [, key, expr] = statement;
+    if (!key.startsWith('$')) {
+      if (symbols.has(key) || literalOnly.has(key)) throw new Error('Invalid Express declaration');
+      symbols.set(key, expr);
+      continue;
     }
-    if (key.type !== 'ident' || reserved.has(key.value) || key.value.startsWith('@')
-      || this.components.has(key.value) || this.variables.has(key.value)) throw INVALID;
-    const first = this.peek();
-    if (first.type === 'ident' && this.at('(', 1) && Object.hasOwn(signatures, first.value)) {
-      this.components.set(key.value, this.component(0));
-    } else {
-      this.variables.set(key.value, this.expression(0));
-    }
-  }
-
-  private setData(path: string[], value: unknown): void {
+    if (key !== '$' && !key.startsWith('$/')) throw new Error('Expected an absolute data path');
+    const path = bindingPath(key.slice(1) || '/', ROOT_SCOPE);
+    const value = literal(expr);
     if (path.length === 0) {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw INVALID;
-      this.data = value as Record<string, unknown>;
-      return;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected an object model');
+      data = value as Record<string, unknown>;
+      continue;
     }
-    let current = this.data;
-    for (const [index, key] of path.entries()) {
+    let current = data;
+    for (const [index, segment] of path.entries()) {
       if (Array.isArray(current)) {
-        if (!ARRAY_INDEX.test(key) || Number(key) > 10000) throw INVALID;
-        this.modelSlots -= Math.max(0, Number(key) - current.length + 1);
-        if (this.modelSlots < 0) throw INVALID;
-        while (current.length < Number(key)) current.push(null);
+        if (!ARRAY_INDEX.test(segment) || Number(segment) > 10000) throw new Error('Invalid Express array index');
+        modelSlots -= Math.max(0, Number(segment) - current.length + 1);
+        if (modelSlots < 0) throw new Error('Express model limit');
+        while (current.length < Number(segment)) current.push(null);
       }
       const next = path[index + 1];
       if (next === undefined) {
-        current[key] = value;
+        current[segment] = value;
       } else {
-        current[key] ??= ARRAY_INDEX.test(next) && Number(next) <= 10000 ? [] : Object.create(null);
-        if (typeof current[key] !== 'object') throw INVALID;
-        current = current[key] as Record<string, unknown>;
+        current[segment] ??= ARRAY_INDEX.test(next) && Number(next) <= 10000 ? [] : Object.create(null);
+        if (typeof current[segment] !== 'object') throw new Error('Invalid Express model path');
+        current = current[segment] as Record<string, unknown>;
       }
     }
   }
-
-  private arguments(names: readonly string[], read: (key: string) => void, positional = names.length): void {
-    this.expect('(');
-    const seen = new Set<string>();
-    let index = 0;
-    while (!this.take(')')) {
-      const t = this.peek();
-      let key: string;
-      if (t.type === 'ident' && this.at('=', 1)) {
-        key = t.value;
-        this.pos += 2;
-      } else {
-        while (seen.has(names[index])) index++;
-        if (index >= positional) throw INVALID;
-        key = names[index++];
-      }
-      if (!names.includes(key) || seen.has(key)) throw INVALID;
-      seen.add(key);
-      const arg = this.peek();
-      if (arg.type === 'ident' && arg.value === '_') this.pos++;
-      else read(key);
-      if (!this.at(')')) this.expect(',');
-    }
-  }
-
-  private component(depth: number): RawNode {
-    if (depth > MAX_DEPTH) throw INVALID;
-    const t = this.peek();
-    if (t.type !== 'ident') throw INVALID;
-    this.pos++;
-    if (!this.at('(')) return { reference: t.value };
-    if (!Object.hasOwn(signatures, t.value)) throw INVALID;
-    const kind = t.value as ExpressKind;
-    const children: Child[] = [];
-    const props: Record<string, Expr> = Object.create(null);
-    let event: EventAction | undefined;
-    this.arguments([...signatures[kind], 'id'], key => {
-      if (key === 'child' || key === 'children') children.push(...this.children(depth + 1));
-      else if (key === 'action') {
-        const action = this.peek();
-        if (action.type !== 'ident') throw INVALID;
-        this.pos++;
-        if (action.value === 'Event') {
-          const args = this.call(['name', 'context', 'userMessage'], depth + 1, 2);
-          if (!args.name) throw INVALID;
-          event = { name: args.name, context: args.context, userMessage: args.userMessage };
-        } else if (action.value === 'openUrl') {
-          const { url } = this.call(['url'], depth + 1);
-          if (url) props.openUrl = url;
-        } else {
-          // Reject undeclared operations without evaluating or dispatching them.
-          throw INVALID;
-        }
-      } else props[key] = this.expression(depth + 1);
-    }, signatures[kind].length);
-    if ((kind === 'Text' && !props.text) || (kind === 'Button' && children.length !== 1)) throw INVALID;
-    return { kind, children, props, event };
-  }
-
-  private children(depth: number): Child[] {
-    if (depth > MAX_DEPTH) throw INVALID;
-    if (this.take('[')) {
-      const children: Child[] = [];
-      while (!this.take(']')) {
-        children.push(...this.children(depth + 1));
-        if (!this.at(']')) this.expect(',');
-      }
-      return children;
-    }
-    const token = this.peek();
-    if (token.type === 'ident' && token.value === '_template') {
-      this.pos++;
-      this.expect('(');
-      const path = this.peek();
-      if (path.type !== 'ref') throw INVALID;
-      this.pos++;
-      this.expect(',');
-      const template = this.component(depth + 1);
-      this.take(',');
-      this.expect(')');
-      return [{ path: path.path, template }];
-    }
-    return [this.component(depth)];
-  }
-
-  private call(names: readonly string[], depth: number, positional?: number): Record<string, Expr> {
-    const args: Record<string, Expr> = Object.create(null);
-    this.arguments(names, key => { args[key] = this.expression(depth + 1); }, positional);
-    return args;
-  }
-
-  private expression(depth: number, dynamic = true): Expr {
-    if (depth > MAX_DEPTH) throw INVALID;
-    const t = this.peek();
-    if (dynamic && t.type === 'ref') {
-      this.pos++;
-      return t;
-    }
-    if (dynamic && t.type === 'ident' && !reserved.has(t.value)) {
-      this.pos++;
-      if (!this.at('(')) return { type: 'variable', name: t.value };
-      if (!Object.hasOwn(functions, t.value)) throw INVALID;
-      return { type: 'call', name: t.value, args: this.call(functions[t.value], depth + 1) };
-    }
-    if (this.take('[')) {
-      const items: Expr[] = [];
-      while (!this.take(']')) {
-        items.push(this.expression(depth + 1, dynamic));
-        if (!this.at(']')) this.expect(',');
-      }
-      return items.every(item => item.type === 'literal') ? literal(items.map(item => item.value)) : { type: 'list', items };
-    }
-    if (this.take('{')) {
-      const entries: Record<string, Expr> = Object.create(null);
-      while (!this.take('}')) {
-        const key = this.key();
-        this.expect(':');
-        entries[key] = this.expression(depth + 1, dynamic);
-        if (!this.at('}')) this.expect(',');
-      }
-      const pairs = Object.entries(entries);
-      if (!pairs.every((pair): pair is [string, Extract<Expr, { type: 'literal' }>] => pair[1].type === 'literal')) return { type: 'record', entries };
-      const value: Record<string, unknown> = Object.create(null);
-      for (const [key, entry] of pairs) value[key] = entry.value;
-      return literal(value);
-    }
-    this.pos++;
-    if (t.type === 'string' || t.type === 'number') return literal(t.value);
-    if (t.type === 'ident') {
-      if (t.value === 'true') return literal(true);
-      if (t.value === 'false') return literal(false);
-      if (t.value === 'null') return literal(null);
-    }
-    throw INVALID;
-  }
-
-  private key(): string {
-    const t = this.peek();
-    if (t.type !== 'ident' && t.type !== 'string' && t.type !== 'number') throw INVALID;
-    this.pos++;
-    return String(t.value);
-  }
-
+  return { symbols, data };
 }
 
 interface Resolution {
   model: Record<string, unknown>;
-  components: ReadonlyMap<string, RawNode>;
-  variables: ReadonlyMap<string, Expr>;
+  symbols: ReadonlyMap<string, ExpressValue>;
   resolve: ReturnType<typeof evaluator>;
   budget: { remaining: number };
 }
 
-function resolveNode(raw: RawNode, state: Resolution, scope: Scope, depth: number): ExpressNode {
-  const { model, components, resolve, budget } = state;
-  if (depth > MAX_DEPTH || --budget.remaining < 0) throw INVALID;
-  if ('reference' in raw) {
-    const node = components.get(raw.reference);
-    if (!node) throw INVALID;
-    return resolveNode(node, state, scope, depth + 1);
-  }
-  const children: ExpressNode[] = [];
-  for (const child of raw.children) {
-    if ('template' in child) {
-      const path = bindingPath(child.path, scope);
-      const list = lookup(model, path);
-      if (list === undefined || list === null) continue;
-      if (!Array.isArray(list) || list.length > budget.remaining) throw INVALID;
-      for (let index = 0; index < list.length; index++) {
-        children.push(resolveNode(child.template, state, { path: [...path, String(index)], index }, depth + 1));
-      }
-    } else {
-      children.push(resolveNode(child, state, scope, depth + 1));
+function consume(state: Resolution, depth: number): void {
+  if (depth > MAX_DEPTH || --state.budget.remaining < 0) throw new Error('Express render limit');
+}
+
+function symbolOf(value: ExpressValue, state: Resolution): ExpressValue {
+  if (!isExpressNode(value, 'variable')) return value;
+  const symbol = state.symbols.get(value.name);
+  if (symbol === undefined) throw new Error('Unknown Express component or value');
+  return symbol;
+}
+
+function callSlot(value: ExpressValue): ExpressCallNode {
+  if (!isExpressNode(value, 'call')) throw new Error('Expected an Express call');
+  return value;
+}
+
+function appendChildren(value: ExpressValue, state: Resolution, scope: Scope, depth: number, children: ExpressNode[]): void {
+  consume(state, depth);
+  if (isExpressNode(value, 'variable')) {
+    appendChildren(symbolOf(value, state), state, scope, depth + 1, children);
+  } else if (Array.isArray(value)) {
+    for (const item of value) appendChildren(item, state, scope, depth + 1, children);
+  } else if (isExpressNode(value, 'call') && value.name === '_template') {
+    const [pathArg, template] = value.args;
+    if (!isExpressNode(pathArg, 'path') || template === undefined || value.args.length !== 2 || Object.keys(value.kwargs).length) {
+      throw new Error('Invalid Express list template');
     }
+    const path = bindingPath(pathArg.path, scope);
+    const list = lookup(state.model, path);
+    if (list === null || list === undefined) return;
+    if (!Array.isArray(list) || list.length > state.budget.remaining) throw new Error('Invalid Express template collection');
+    for (let index = 0; index < list.length; index++) {
+      children.push(resolveNode(template, state, { path: [...path, String(index)], index }, depth + 1));
+    }
+  } else {
+    children.push(resolveNode(value, state, scope, depth + 1));
   }
+}
+
+function resolveNode(value: ExpressValue, state: Resolution, scope: Scope, depth: number): ExpressNode {
+  consume(state, depth);
+  if (isExpressNode(value, 'variable')) return resolveNode(symbolOf(value, state), state, scope, depth + 1);
+  const call = callSlot(value);
+  const children: ExpressNode[] = [];
   const props: Record<string, unknown> = Object.create(null);
   const bindings: Record<string, string[]> = Object.create(null);
-  for (const [key, expr] of Object.entries(raw.props)) {
-    props[key] = resolve(expr, scope);
-    if (key === 'value') {
-      // Resolving the property above already rejects circular variable aliases.
-      let binding: Expr | undefined = expr;
-      while (binding?.type === 'variable') binding = state.variables.get(binding.name);
-      if (binding?.type === 'ref') bindings[key] = bindingPath(binding.path, scope);
+  let event: EventAction | undefined;
+  if (!Object.hasOwn(signatures, call.name)) {
+    if (Object.hasOwn(functions, call.name) || call.name === 'Event' || call.name === 'openUrl' || call.name === '_template') throw new Error('Expected an Express component');
+    return { kind: 'Unsupported', children, props: { name: call.name }, bindings, scope };
+  }
+  const kind = call.name as SupportedKind;
+  // Playground's Button(label, onClick) and the chat's child/variant/action
+  // form share the same rendered action slot.
+  const first = call.args[0];
+  const actionSecond = kind === 'Button' && (typeof first === 'string' || isExpressNode(first, 'path')) && isExpressNode(call.args[1], 'call');
+  const playgroundChart = (kind === 'LineChart' || kind === 'BarChart')
+    && (call.args.length >= 6 || Object.hasOwn(call.kwargs, 'data'));
+  const chartArgs = ['title', 'subtitle', 'height', 'format', 'unit', 'data'];
+  const parameters = actionSecond ? ['child', 'action'] : playgroundChart
+    ? [...chartArgs, ...(kind === 'LineChart' ? ['curve', 'highlight'] : ['stacked', 'horizontal', 'highlight'])]
+    : signatures[kind];
+  const extra = kind === 'Button' ? ['id', 'label', 'text', 'onClick'] : ['id'];
+  const args = argumentsOf(call, parameters, parameters.length, extra);
+  if (Object.hasOwn(args, 'action') && Object.hasOwn(args, 'onClick')) throw new Error('Duplicate Express action');
+  delete args.id;
+  for (const [key, arg] of Object.entries(args)) {
+    if (key === 'children' || key === 'child') {
+      if (kind === 'Button' && (typeof arg === 'string' || isExpressNode(arg, 'path'))) props.label = state.resolve(arg, scope);
+      else appendChildren(arg, state, scope, depth + 1, children);
+    } else if (key === 'action' || key === 'onClick') {
+      const action = callSlot(arg);
+      if (action.name === 'Event') {
+        const { name, context, userMessage } = argumentsOf(action, ['name', 'context', 'userMessage'], 2);
+        if (name === undefined) throw new Error('Expected an Express event name');
+        event = { name, context, userMessage };
+      } else if (action.name === 'openUrl') {
+        const { url } = argumentsOf(action, ['url']);
+        if (url !== undefined) props.openUrl = state.resolve(url, scope);
+      } else {
+        throw new Error('Unsupported Express action');
+      }
+    } else {
+      props[key] = state.resolve(arg, scope);
+      if (key === 'value') {
+        let binding = arg;
+        // Value resolution above already bounds variable alias chains.
+        while (isExpressNode(binding, 'variable')) binding = symbolOf(binding, state);
+        if (isExpressNode(binding, 'path')) bindings[key] = bindingPath(binding.path, scope);
+      }
     }
   }
-  if (raw.kind === 'List' && Array.isArray(props.items)) {
-    budget.remaining -= props.items.length;
-    if (budget.remaining < 0) throw INVALID;
+  if ((kind === 'Text' && !Object.hasOwn(args, 'text') && children.length === 0)
+    || (kind === 'Button' && children.length !== 1 && !scalarText(props.label ?? props.text))) {
+    throw new Error('Missing required Express argument');
   }
-  if (raw.kind === 'Table' || raw.kind === 'BarChart' || raw.kind === 'LineChart') {
-    if (!Array.isArray(props.rows) || !props.rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) throw INVALID;
+  const size = (value: unknown) => Array.isArray(value) ? value.length : 0;
+  const { budget } = state;
+  if (kind === 'List' || kind === 'KeyValueList' || kind === 'StatGroup') budget.remaining -= size(props.items);
+  if (kind === 'StockTicker') budget.remaining -= size(props.series) + size(props.stats);
+  if (kind === 'CandlestickChart') budget.remaining -= size(props.data) * 3;
+  if (kind === 'AreaChart' || playgroundChart) {
+    // Series share a category axis. Bound both dimensions before pivoting rows.
+    const records = Array.isArray(props.data) ? props.data : [];
+    const series = new Set(records.map(row => row && typeof row === 'object' ? row.series : undefined));
+    const categories = new Set(records.map(row => row && typeof row === 'object' ? row.x : undefined));
+    budget.remaining -= Math.max(records.length, series.size * categories.size);
+  }
+  if (kind === 'Sparkline') budget.remaining -= size(props.values);
+  if (budget.remaining < 0) throw new Error('Express chart budget');
+  if (kind === 'Table' || !playgroundChart && (kind === 'BarChart' || kind === 'LineChart')) {
+    if (!Array.isArray(props.rows) || !props.rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) throw new Error('Invalid chart data or budget');
     const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
-    if (raw.kind === 'Table' ? props.columns !== undefined && !strings(props.columns)
-      : typeof props.x !== 'string' || !(typeof props.y === 'string' || strings(props.y) && props.y.length)) throw INVALID;
-    const fields = raw.kind === 'Table' ? (strings(props.columns) && props.columns.length
+    if (kind === 'Table' ? props.columns !== undefined && !strings(props.columns)
+      : typeof props.x !== 'string' || !(typeof props.y === 'string' || strings(props.y) && props.y.length)) throw new Error('Invalid chart data or budget');
+    const fields = kind === 'Table' ? (strings(props.columns) && props.columns.length
       || new Set(props.rows.flatMap(row => Object.keys(row))).size) : (strings(props.y) ? props.y.length : 1);
     budget.remaining -= props.rows.length * Math.max(fields, 1);
-    if (budget.remaining < 0) throw INVALID;
+    if (budget.remaining < 0) throw new Error('Invalid chart data or budget');
   }
-  return { kind: raw.kind, children, props, bindings, scope, event: raw.event };
+  return { kind, children, props, bindings, scope, event };
 }
 
 export function parseExpress(source: string): ExpressSurface | null {
   const text = source.trim();
   const unwrapped = text.startsWith('<a2ui>') && text.endsWith('</a2ui>') ? text.slice(6, -7) : text;
+  if (unwrapped.length > MAX_SOURCE_LENGTH) return null;
   try {
-    const tokens = tokenize(unwrapped);
-    return tokens && new Parser(tokens).parse();
+    const { errors, statements } = parseSyntax(unwrapped);
+    if (errors.length || statements.length > MAX_NODES) return null;
+    const { symbols, data } = buildProgram(statements);
+    const entry = symbols.get('root');
+    if (entry === undefined) return null;
+    const render = (model: Record<string, unknown>) => {
+      try {
+        const budget = { remaining: MAX_NODES };
+        return resolveNode(entry, { model, symbols, budget, resolve: evaluator(model, symbols, budget) }, ROOT_SCOPE, 0);
+      } catch {
+        return null;
+      }
+    };
+    const root = render(data);
+    return root && { root, data, render, resolve: model => evaluator(model, symbols, { remaining: MAX_NODES }) };
   } catch {
     return null;
   }
@@ -490,8 +288,8 @@ export function eventMessage(node: ExpressNode, resolve: ReturnType<typeof evalu
   try {
     const name = resolve(event.name, node.scope);
     if (typeof name !== 'string' || !name.trim()) return undefined;
-    const message = event.userMessage && scalarText(resolve(event.userMessage, node.scope)).trim();
-    const context = !message && event.context && resolve(event.context, node.scope);
+    const message = event.userMessage === undefined ? '' : scalarText(resolve(event.userMessage, node.scope)).trim();
+    const context = !message && event.context !== undefined ? resolve(event.context, node.scope) : undefined;
     const text = message || (context && typeof context === 'object' && !Array.isArray(context) && Object.keys(context).length
       ? name + '\n' + JSON.stringify(context) : name);
     return text.length <= 16384 ? text : undefined;

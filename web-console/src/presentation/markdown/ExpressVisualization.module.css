@@ -79,6 +79,13 @@
   font-weight: 600;
 }
 
+.subtitle {
+  display: block;
+  color: var(--a2-muted-foreground);
+  font-size: .75rem;
+  font-weight: 400;
+}
+
 .chart {
   display: block;
   width: 100%;

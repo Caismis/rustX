@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
+import { AssistantMarkdown } from '../src/presentation/markdown/AssistantMarkdown';
 import { MarkdownText } from '../src/presentation/markdown/MarkdownText';
 afterEach(cleanup);
 const document = '# Heading\n\nText **bold** and *emphasis* [link](https://example.com) `inline`.\n\n> Quote\n\n1. First\n2. Second\n\n- Other\n\n| A | B |\n| - | - |\n| x | y |\n\n```rust\nfn main() {}\n```\n\nMath $x^2$ and \\(y\\).\n\n$$\na+b\n$$\n\nBad $\\notacommand$';
@@ -43,4 +44,15 @@ it('retains one current open-code node, with no historical AST chain per chunk',
   const closed = parser.update(`${source}\`\`\`\n\nafter`);
   expect([...closed.frozen, ...closed.tail].find(block => block.node.type === 'code')?.node)
     .toEqual(parseGfm(`${source}\`\`\`\n\nafter`).children[0]);
+});
+
+it('shows a pending inline view while reading Express and interleaves the result with prose', () => {
+  const before = 'Market summary.\n\n';
+  const open = before + '<a2ui>\nroot = Column([Stat("Sales", 42), Text("Settled state")])';
+  const view = render(<AssistantMarkdown text={open} streaming/>);
+  expect(view.getByRole('status').textContent).toContain('Preparing inline view');
+  expect(view.container.textContent).not.toContain('root = Column');
+  view.rerender(<AssistantMarkdown text={open + '\n</a2ui>\n\nClosing note.'}/>);
+  expect(view.queryByRole('status')).toBeNull();
+  expect(view.container.textContent).toMatch(/Market summary.*Sales42.*Settled state.*Closing note/s);
 });

@@ -1,3 +1,4 @@
+import { isExpressNode, type ExpressCallNode, type ExpressValue } from './vendor/a2ui-express/visitor';
 import {
   FormatCurrencyImplementation, FormatDateImplementation, FormatNumberImplementation, PluralizeImplementation,
 } from '@a2ui/web_core/catalogs/basic/v1';
@@ -9,13 +10,22 @@ export const MAX_SOURCE_LENGTH = 65536;
 export const MAX_DEPTH = 128;
 export const ARRAY_INDEX = /^(0|[1-9]\d*)$/;
 
-export type Expr =
-  | { type: 'literal'; value: unknown }
-  | { type: 'ref'; path: string }
-  | { type: 'variable'; name: string }
-  | { type: 'call'; name: string; args: Record<string, Expr> }
-  | { type: 'list'; items: Expr[] }
-  | { type: 'record'; entries: Record<string, Expr> };
+export function argumentsOf(call: ExpressCallNode, names: readonly string[], positional = names.length, extras: readonly string[] = []): Record<string, ExpressValue> {
+  if (call.args.length > positional) throw new Error('Too many Express arguments');
+  const args: Record<string, ExpressValue> = Object.create(null);
+  const seen = new Set<string>();
+  function assign(name: string, value: ExpressValue) {
+    if (seen.has(name)) throw new Error('Duplicate Express argument');
+    seen.add(name);
+    if (!isExpressNode(value, 'skipped')) args[name] = value;
+  }
+  call.args.forEach((value, index) => assign(names[index], value));
+  for (const [name, value] of Object.entries(call.kwargs)) {
+    if (!names.includes(name) && !extras.includes(name)) throw new Error('Unknown Express argument');
+    assign(name, value);
+  }
+  return args;
+}
 
 export const functions: Readonly<Record<string, readonly string[]>> = {
   formatString: ['value'],
@@ -33,7 +43,7 @@ const formatters = new Map([
 // can read surface data or select a function to invoke.
 const formatContext = new DataContext(new DataModel(), '/');
 const expressions = new ExpressionParser();
-const parsedTemplates = new Map<string, Expr[]>();
+const parsedTemplates = new Map<string, ExpressValue[]>();
 
 export interface Scope {
   path: string[];
@@ -65,18 +75,18 @@ export function scalarText(value: unknown): string {
 }
 
 type ParsePart = ReturnType<ExpressionParser['parseExpression']>;
-function interpolationExpr(part: ParsePart, restore: (text: string) => string): Expr {
+function interpolationExpr(part: ParsePart, restore: (text: string) => string): ExpressValue {
   if (part && typeof part === 'object') {
-    if ('path' in part && typeof part.path === 'string') return { type: 'ref', path: restore(part.path) };
+    if ('path' in part && typeof part.path === 'string') return { kind: 'path', path: restore(part.path) };
     if ('call' in part && typeof part.call === 'string') {
       const args = Object.fromEntries(Object.entries(part.args ?? {}).map(([key, value]) => [restore(key), interpolationExpr(value as ParsePart, restore)]));
-      return { type: 'call', name: part.call, args };
+      return { kind: 'call', name: part.call, args: [], kwargs: args };
     }
   }
-  return { type: 'literal', value: typeof part === 'string' ? restore(part) : part };
+  return typeof part === 'string' ? restore(part) : typeof part === 'number' || typeof part === 'boolean' ? part : null;
 }
 
-function parseTemplate(text: string): Expr[] {
+function parseTemplate(text: string): ExpressValue[] {
   if (!/~[01]/.test(text)) return expressions.parse(text).map(part => interpolationExpr(part, value => value));
   // The SDK expression scanner omits the JSON Pointer escape character.
   // Protect the two RFC 6901 escapes while scanning, then restore them in the AST.
@@ -88,24 +98,24 @@ function parseTemplate(text: string): Expr[] {
   return expressions.parse(protectedText).map(part => interpolationExpr(part, restore));
 }
 
-export function evaluator(data: Record<string, unknown>, variables: ReadonlyMap<string, Expr>, budget: { remaining: number }) {
+export function evaluator(data: Record<string, unknown>, variables: ReadonlyMap<string, ExpressValue>, budget: { remaining: number }) {
   let remainingText = MAX_SOURCE_LENGTH * 16;
-  function evaluate(expr: Expr, scope: Scope, depth = 0): unknown {
+  function evaluate(expr: ExpressValue, scope: Scope, depth = 0): unknown {
     if (depth > MAX_DEPTH || --budget.remaining < 0) throw new Error('Express evaluation limit');
-    switch (expr.type) {
-      case 'literal': return expr.value;
-      case 'ref': return lookup(data, bindingPath(expr.path, scope));
+    if (expr === null || typeof expr !== 'object') return expr;
+    if (Array.isArray(expr)) return expr.map(item => evaluate(item, scope, depth + 1));
+    switch (expr.kind) {
+      case 'path': return lookup(data, bindingPath(expr.path, scope));
       case 'variable': {
         const value = variables.get(expr.name);
-        if (!value) throw new Error('Unknown Express variable');
+        if (value === undefined) throw new Error('Unknown Express variable');
         return evaluate(value, scope, depth + 1);
       }
-      case 'record': return Object.fromEntries(Object.entries(expr.entries).map(([key, value]) => [key, evaluate(value, scope, depth + 1)]));
-      case 'list': return expr.items.map(item => evaluate(item, scope, depth + 1));
+      case 'map': return Object.fromEntries(Object.entries(expr.entries).map(([key, value]) => [key, evaluate(value, scope, depth + 1)]));
       case 'call': {
         const parameters = Object.hasOwn(functions, expr.name) ? functions[expr.name] : undefined;
-        if (!parameters || Object.keys(expr.args).some(key => !parameters.includes(key))) throw new Error('Unsupported Express function');
-        const args = Object.fromEntries(Object.entries(expr.args).map(([key, value]) => [key, evaluate(value, scope, depth + 1)]));
+        if (!parameters) throw new Error('Unsupported Express function');
+        const args = Object.fromEntries(Object.entries(argumentsOf(expr, parameters)).map(([key, value]) => [key, evaluate(value, scope, depth + 1)]));
         if (expr.name === '@index') return scope.index === undefined ? undefined : scope.index + (typeof args.offset === 'number' ? args.offset : 0);
         if (expr.name === 'formatString') {
           if (typeof args.value !== 'string') return '';
@@ -126,6 +136,7 @@ export function evaluator(data: Record<string, unknown>, variables: ReadonlyMap<
         }
         return formatters.get(expr.name)!.execute(args, formatContext);
       }
+      default: throw new Error('Unsupported Express value');
     }
   }
   return evaluate;

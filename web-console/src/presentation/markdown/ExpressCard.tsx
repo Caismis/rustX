@@ -2,8 +2,10 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import { eventMessage, writeBinding, type ExpressNode, type ExpressSurface } from './a2ui-express';
 import { scalarText } from './express-values';
 import { ExpressControl, type ExpressControlProps } from './ExpressControl';
-import { ExpressVisualization } from './ExpressVisualization';
+import { ExpressVisualization, PlaygroundChart } from './ExpressVisualization';
+import { ExpressAlert, ExpressCandlestick, ExpressKeyValues, ExpressSparkline, ExpressStat, ExpressStatGroup, ExpressStockTicker, UnsupportedExpressComponent } from './ExpressMarket';
 import { BundledIcon } from '../primitives/BundledIcon';
+import { MarkdownText } from './MarkdownText';
 import css from './ExpressCard.module.css';
 
 export const ExpressEventContext = createContext<((message: string) => void) | undefined>(undefined);
@@ -25,13 +27,32 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
   function renderNode(node: ExpressNode, index: number): ReactNode {
     const { props } = node;
     switch (node.kind) {
-      case 'Text': {
-        const variant = scalarText(props.variant);
+      case 'Text':
+      case 'Title': {
+        const variant = scalarText(props.variant ?? props.size) || (node.kind === 'Title' ? 'h3' : '');
         const Tag = /^h[1-6]$/.test(variant) ? variant as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' : variant === 'description' ? 'p' : 'span';
         return <Tag key={index} className={css.text} data-variant={variant}>
           {scalarText(props.text)}
+          {node.children.map(renderNode)}
         </Tag>;
       }
+      case 'Heading':
+      case 'Section': {
+        const level = scalarText(props.level);
+        const Heading = level === '1' ? 'h1' : level === '3' ? 'h3' : 'h2';
+        const eyebrow = scalarText(props.eyebrow);
+        const description = scalarText(props.description ?? props.subtitle);
+        const title = scalarText(props.title ?? props.text);
+        return <section key={index} className={css.Column}>
+          <header className={css.sectionHeader}>
+            {eyebrow && <span className={css.text} data-variant="label">{eyebrow}</span>}
+            <Heading className={css.text}>{title}</Heading>
+            {description && <p className={css.text} data-variant="description">{description}</p>}
+          </header>
+          {node.children.map(renderNode)}
+        </section>;
+      }
+      case 'Markdown': return <MarkdownText key={index} text={scalarText(props.text)} streaming={streaming && props.streaming === true}/>;
       case 'Divider': return <hr key={index} data-slot="separator" className={css.divider}/>;
       case 'Card': return <div key={index} data-slot="card" className={css.Card}>{node.children.map(renderNode)}</div>;
       case 'List': {
@@ -49,18 +70,28 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
       case 'Table':
       case 'LineChart':
       case 'BarChart': {
+        if (node.kind !== 'Table' && Object.hasOwn(props, 'data')) return <PlaygroundChart key={index} kind={node.kind} props={props}/>;
         const rows = Array.isArray(props.rows) ? props.rows.filter(row => row && typeof row === 'object' && !Array.isArray(row)) : [];
         return <ExpressVisualization key={index} kind={node.kind} rows={rows} columns={stringList(props.columns)}
           title={typeof props.title === 'string' ? props.title : undefined}
           x={typeof props.x === 'string' ? props.x : undefined} y={typeof props.y === 'string' ? props.y : stringList(props.y)}/>;
       }
+      case 'AreaChart': return <PlaygroundChart key={index} kind={node.kind} props={props}/>;
+      case 'StockTicker': return <ExpressStockTicker key={index} props={props}/>;
+      case 'CandlestickChart': return <ExpressCandlestick key={index} props={props}/>;
+      case 'KeyValueList': return <ExpressKeyValues key={index} props={props}/>;
+      case 'Alert': return <ExpressAlert key={index} props={props}/>;
+      case 'Sparkline': return <ExpressSparkline key={index} props={props}/>;
+      case 'Stat': return <ExpressStat key={index} props={props}/>;
+      case 'StatGroup': return <ExpressStatGroup key={index} props={props}/>;
+      case 'Unsupported': return <UnsupportedExpressComponent key={index} name={scalarText(props.name)}/>;
       case 'Button': {
         const activate = send && !streaming && node.event ? () => {
           const message = eventMessage(node, surface.resolve(data));
           if (message) send(message);
         } : undefined;
         return <ExpressControl key={index} kind={node.kind} props={props} onChange={() => {}} onActivate={activate}>
-          {node.children.map(renderNode)}
+          {node.children.length ? node.children.map(renderNode) : scalarText(props.label ?? props.text)}
         </ExpressControl>;
       }
       case 'Slider': case 'CheckBox': case 'ChoicePicker': case 'TextField': case 'DateTimeInput': {
@@ -74,8 +105,13 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
           {node.children.map(renderNode)}
         </LocalControl>;
       }
-      default: return <div key={index} className={css[node.kind]} data-align={scalarText(props.align)}
-        data-justify={scalarText(props.justify)}>{node.children.map(renderNode)}</div>;
+      default: {
+        const gap = typeof props.gap === 'number' ? Math.max(0, Math.min(16, props.gap)) * 4 : undefined;
+        return <div key={index} className={css[node.kind]} data-align={scalarText(props.align)}
+          data-justify={scalarText(props.justify)} style={gap === undefined ? undefined : { gap }}>
+          {node.children.map(renderNode)}
+        </div>;
+      }
     }
   }
 

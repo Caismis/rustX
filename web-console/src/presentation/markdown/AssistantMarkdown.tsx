@@ -1,18 +1,25 @@
-import { Fragment, useMemo } from 'react';
+import { Fragment, useMemo, useRef } from 'react';
+import { useTranslation } from '../../locale/react';
 import { MarkdownText } from './MarkdownText';
 import { parseExpress, type ExpressSurface } from './a2ui-express';
 import { ExpressCard } from './ExpressCard';
+import css from './ExpressCard.module.css';
 
-type Part = { start: number; text: string; tree?: ExpressSurface };
+type Part = { start: number; text: string; tree?: ExpressSurface; pending?: boolean };
 
-function expressParts(source: string): Part[] {
+function expressParts(source: string, streaming: boolean, cache: Map<string, ExpressSurface | null>): Part[] {
   if (!source.includes('<a2ui>') && !source.includes('a2ui')) return [{ start: 0, text: source }];
   const parts: Part[] = [];
   let consumed = 0;
   let fence: { marker: string; start: number; body: number; language: string } | undefined;
   let tag: number | undefined;
   function append(start: number, end: number, body: string) {
-    const tree = parseExpress(body);
+    let tree = cache.get(body);
+    if (tree === undefined) {
+      tree = parseExpress(body);
+      if (cache.size >= 8) cache.clear();
+      cache.set(body, tree);
+    }
     if (!tree) return;
     if (consumed < start) parts.push({ start: consumed, text: source.slice(consumed, start) });
     parts.push({ start, text: body, tree });
@@ -41,13 +48,24 @@ function expressParts(source: string): Part[] {
       tag = line.index;
     }
   }
+  const openFence = fence && (fence.language === 'a2ui' || source.slice(fence.body).trimStart().startsWith('<a2ui>'));
+  const pending = tag ?? (openFence ? fence?.start : undefined);
+  if (streaming && pending !== undefined) {
+    if (consumed < pending) parts.push({ start: consumed, text: source.slice(consumed, pending) });
+    parts.push({ start: pending, text: '', pending: true });
+    return parts;
+  }
   if (consumed < source.length || !parts.length) parts.push({ start: consumed, text: source.slice(consumed) });
   return parts;
 }
 
 export function AssistantMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const parts = useMemo(() => expressParts(text), [text]);
+  const tx = useTranslation();
+  const cache = useRef(new Map<string, ExpressSurface | null>());
+  const parts = useMemo(() => expressParts(text, streaming, cache.current), [text, streaming]);
   return <>{parts.map((part, index) => <Fragment key={part.start}>
-    {part.tree ? <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/> : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
+    {part.pending ? <div className={css.pending} role="status">{tx('interactions:express.preparing')}</div>
+      : part.tree ? <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>
+      : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
   </Fragment>)}</>;
 }

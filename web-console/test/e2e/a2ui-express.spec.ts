@@ -141,6 +141,13 @@ test('updating a bound row redraws both charts and the table', async ({ page }, 
     await expect(row.getByRole('cell', { name: '10', exact: true })).toBeVisible();
     expect(Number(await februaryPoint.getAttribute('cy'))).toBeLessThan(initialPointY);
     expect(Number(await februaryBar.getAttribute('height'))).toBeGreaterThan(initialBarHeight);
+    await februaryPoint.hover();
+    const tooltip = card.getByRole('tooltip');
+    await expect(tooltip).toContainText('二月');
+    await expect(tooltip).toContainText('10');
+    await februaryBar.hover();
+    await expect(tooltip).toContainText('二月');
+    await expect(tooltip).toContainText('10');
     await page.setViewportSize({ width: 1440, height: 1800 });
     await card.screenshot({ path: info.outputPath('linked-charts.png') });
     await page.emulateMedia({ colorScheme: 'dark' });
@@ -215,6 +222,106 @@ test('renders the Express spec examples and sends only a real button activation'
     expect((await fixture.control('requests')).requests).toHaveLength(3);
     expect(errors).toEqual([]);
     await template.screenshot({ path: info.outputPath('express-official-template.png') });
+    passed = true;
+  } finally {
+    await stopDogfoodPage(page, fixture, passed);
+  }
+});
+
+test('renders the Playground NVDA dashboard with all 30 reported OHLC bars', async ({ page }, info) => {
+  const fixture = await startDogfood('web_a2ui_market');
+  let passed = false;
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await expect(page).toHaveTitle('rustX');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Show the NVDA dashboard');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    const card = page.locator('[data-a2ui-express]');
+    await expect(card.getByText('NVIDIA Corporation')).toBeVisible();
+    await expect(card.getByText('$145.98', { exact: true })).toHaveCount(2);
+    await expect(card.getByText('Sample data', { exact: true })).toBeVisible();
+    const sparkline = card.getByRole('img', { name: 'Price trend' });
+    await expect(sparkline.locator('path[data-part="sparkline"]')).toBeVisible();
+
+    const chart = card.getByRole('img', { name: 'Daily candles' });
+    const bars = chart.locator('[data-part="candle"]');
+    await expect(bars).toHaveCount(30);
+    await expect(bars.last()).toContainText('11-19');
+    await expect(bars.last()).toContainText('$145.98');
+    await expect(chart.getByText('10-09', { exact: true })).toBeVisible();
+    await expect(chart.getByText('11-19', { exact: true })).toBeVisible();
+    await expect(card.getByText('Key stats', { exact: true })).toBeVisible();
+    await expect(card.getByText('259.9M', { exact: true })).toBeVisible();
+    await expect(card.getByText('Data source', { exact: true })).toBeVisible();
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+
+    await page.setViewportSize({ width: 1440, height: 1250 });
+    await card.screenshot({ path: info.outputPath('nvda-dashboard.png') });
+    await bars.nth(24).locator('rect').hover();
+    const tooltip = card.getByRole('tooltip');
+    for (const text of ['11-12', 'Open', '$151.01', 'High', '$167.14', 'Low', '$148.80', 'Close', '$166.19', 'Change', '+10.05%']) {
+      await expect(tooltip.getByText(text, { exact: true })).toBeVisible();
+    }
+    await expect(bars.nth(24)).toHaveAttribute('data-active', 'true');
+    await card.screenshot({ path: info.outputPath('nvda-dashboard-hover.png') });
+    await card.getByText('Daily candles', { exact: true }).hover();
+    await expect(tooltip).toHaveCount(0);
+    const focus = chart.locator('..');
+    await focus.press('End');
+    await expect(tooltip.getByText('11-19', { exact: true })).toBeVisible();
+    await focus.press('Escape');
+    await expect(tooltip).toHaveCount(0);
+    await focus.evaluate(element => (element as HTMLElement).blur());
+
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expect(chart).toBeVisible();
+    expect(await card.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await card.screenshot({ path: info.outputPath('nvda-dashboard-narrow.png') });
+    expect(errors).toEqual([]);
+    passed = true;
+  } finally {
+    await stopDogfoodPage(page, fixture, passed);
+  }
+});
+
+test('keeps Playground chart data, prose and supported siblings inline', async ({ page }, info) => {
+  const fixture = await startDogfood('web_a2ui_dashboard');
+  let passed = false;
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Show the sales dashboard');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    const chat = page.getByLabel('Canonical conversation', { exact: true });
+    const card = chat.locator('[data-a2ui-express]');
+    await expect(chat.getByText('Regional revenue was higher in February.', { exact: true })).toBeVisible();
+    await expect(chat.getByText('Both regions contributed to the increase.', { exact: true })).toBeVisible();
+    await expect(card.getByRole('heading', { name: 'Regional sales' })).toBeVisible();
+    await expect(card.getByText('$5,000', { exact: true })).toBeVisible();
+    const line = card.getByRole('img', { name: 'Monthly trend' });
+    const area = card.getByRole('img', { name: 'Revenue by region' });
+    const bar = card.getByRole('img', { name: 'Revenue comparison' });
+    await expect(line.locator('[data-part="line"]')).toHaveCount(2);
+    await expect(area.locator('[data-part="area"]')).toHaveCount(2);
+    await expect(bar.locator('[data-part="bar"]')).toHaveCount(4);
+    await line.locator('[data-part="point"]').nth(1).hover();
+    const tooltip = card.getByRole('tooltip');
+    for (const text of ['February', 'North', '$1,800.00', 'South', '$1,100.00']) {
+      await expect(tooltip.getByText(text, { exact: true })).toBeVisible();
+    }
+    await expect(card.getByText('This view can’t display Timeline yet.')).toBeVisible();
+    await expect(card.locator('code')).toHaveCount(0);
+    expect(errors).toEqual([]);
+    await line.screenshot({ path: info.outputPath('inline-playground-line.png') });
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);

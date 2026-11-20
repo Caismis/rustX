@@ -1,0 +1,45 @@
+.plot {
+  position: relative;
+  min-inline-size: 0;
+  border-radius: var(--a2-radius-control);
+}
+
+.plot:focus-visible {
+  outline: 2px solid var(--a2-ring);
+  outline-offset: 2px;
+}
+
+.tooltip {
+  --plot-tooltip-width: min(11rem, 100%);
+  position: absolute;
+  z-index: 1;
+  inset-block-start: .4rem;
+  left: clamp(0%, calc(var(--plot-position) - var(--plot-tooltip-width) / 2), calc(100% - var(--plot-tooltip-width)));
+  inline-size: var(--plot-tooltip-width);
+  box-sizing: border-box;
+  padding: .5rem .55rem;
+  border: 1px solid var(--a2-border);
+  border-radius: var(--a2-radius-control);
+  background: var(--a2-card);
+  color: var(--a2-foreground);
+  box-shadow: 0 7px 18px oklch(0 0 0 / 12%);
+  pointer-events: none;
+  font-size: .75rem;
+  line-height: 1.35;
+}
+
+.tooltip[data-bottom] { inset-block: auto .4rem; }
+.tooltip dl { display: grid; gap: .15rem; margin: .3rem 0 0; }
+.fact { display: flex; justify-content: space-between; gap: .35rem; min-inline-size: 0; }
+.fact dt { min-inline-size: 0; }
+.fact dd { min-inline-size: 0; margin: 0; overflow-wrap: anywhere; text-align: end; font-weight: 550; font-variant-numeric: tabular-nums; }
+.fact[data-emphasis] { padding: .125rem .25rem; border-radius: 4px; background: var(--a2-muted); font-weight: 600; }
+.swatch { display: inline-block; inline-size: .5em; block-size: .5em; margin-inline-end: .3em; border-radius: 2px; }
+
+.guide {
+  stroke: var(--a2-ring);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}

@@ -128,3 +128,17 @@ root = Column([ChoicePicker(value=selected), List(_template($/selection, Text(@i
   const data = writeBinding(surface.data, control.bindings.value, ['a', 'b']);
   expect(surface.render(data)?.children[1].children.map(item => item.props.text)).toEqual([1, 2]);
 });
+
+
+it('reads Playground comments, reusable child arrays and a labeled action', () => {
+  const surface = parseExpress(`
+-- Express comment
+rows = [Text("Visible sibling"), UnknownPanel("Unimplemented")]
+/* Inline action from the Playground catalog */
+root = Column(children=rows)
+`)!;
+  expect(surface.root.children.map(child => child.kind)).toEqual(['Text', 'Unsupported']);
+  const action = parseExpress('root=Button("Continue", Event("continue", userMessage="Next step"))')!;
+  expect(action.root.props.label).toBe('Continue');
+  expect(eventMessage(action.root, action.resolve(action.data))).toBe('Next step');
+});

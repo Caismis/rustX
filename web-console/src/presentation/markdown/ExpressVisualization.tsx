@@ -9,15 +9,25 @@ import { useId, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../locale/react';
+import { chartNumberFormatter, niceTicks, paddedDomain, r2, toNumber } from './express-chart-geometry';
+import { ExpressPlot } from './ExpressPlot';
+import plotCss from './ExpressPlot.module.css';
 import css from './ExpressVisualization.module.css';
 
+type ChartKind = 'LineChart' | 'BarChart' | 'AreaChart';
+
 export interface ExpressVisualizationProps {
-  kind: 'Table' | 'LineChart' | 'BarChart';
+  kind: 'Table' | ChartKind;
   title?: string;
   rows: readonly Record<string, unknown>[];
   x?: string;
   y?: string | string[];
   columns?: string[];
+  seriesLabels?: ReadonlyMap<string, string>;
+  subtitle?: string;
+  height?: number;
+  format?: string;
+  unit?: string;
 }
 
 const SERIES_COLORS = [
@@ -33,15 +43,9 @@ const CHART_W = 640;
 const CHART_H = 320;
 const MARGIN = { top: 14, right: 14, bottom: 30, left: 52 } as const;
 const PLOT_W = CHART_W - MARGIN.left - MARGIN.right;
-const PLOT_H = CHART_H - MARGIN.top - MARGIN.bottom;
 const MAX_X_LABELS = 12;
 /** Bars thinner than this still paint a visible sliver at the zero line. */
 const MIN_BAR_H = 1.5;
-
-/** Round to 2 decimals so emitted path data stays compact and stable. */
-function r2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 
 /** Compact number for cells, ticks, and point titles. */
 function formatNumber(value: number): string {
@@ -159,39 +163,12 @@ interface ChartModel {
   yDomain: [number, number];
 }
 
-function toNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-/** Expand a collapsed or tight domain so marks never sit on the frame. */
-function paddedDomain(lo: number, hi: number, ratio: number): [number, number] {
-  if (lo === hi) {
-    const delta = Math.max(1, Math.abs(lo) * 0.1);
-    return [lo - delta, hi + delta];
-  }
-  const pad = (hi - lo) * ratio;
-  return [lo - pad, hi + pad];
-}
-
-/** "Nice" 1/2/2.5/5×10ⁿ tick values covering [lo, hi], ~5 intervals. */
-function niceTicks(lo: number, hi: number): number[] {
-  const raw = (hi - lo) / 5 || 1;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const norm = raw / mag;
-  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
-  const ticks: number[] = [];
-  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9 && ticks.length < 24; v += step) {
-    ticks.push(Number(v.toPrecision(12)));
-  }
-  return ticks;
-}
-
 /**
  * Reduce rows + field names to plottable entries and series. Returns null
  * when nothing can be drawn (no rows, no usable x, or no numeric y data).
  * Entries sort by numeric x before series values align to them.
  */
-function buildChartModel(kind: 'LineChart' | 'BarChart', rows: readonly Record<string, unknown>[], x: string | undefined, y: string | string[] | undefined): ChartModel | null {
+function buildChartModel(kind: ChartKind, rows: readonly Record<string, unknown>[], x: string | undefined, y: string | string[] | undefined): ChartModel | null {
   const entries: PlotEntry[] = [];
   for (const [index, row] of rows.entries()) {
     if (x === undefined) {
@@ -208,7 +185,7 @@ function buildChartModel(kind: 'LineChart' | 'BarChart', rows: readonly Record<s
 
   // A line chart gets a linear x scale only when every plottable x is numeric;
   // bars and mixed/categorical data always use evenly spaced slots.
-  const xNumeric = kind === 'LineChart' && x !== undefined && entries.every(entry => entry.xNum !== null);
+  const xNumeric = kind !== 'BarChart' && x !== undefined && entries.every(entry => entry.xNum !== null);
   if (xNumeric) entries.sort((a, b) => (a.xNum ?? 0) - (b.xNum ?? 0));
 
   const explicit = typeof y === 'string' ? [y] : Array.isArray(y) ? y.filter((name): name is string => typeof name === 'string') : [];
@@ -266,18 +243,24 @@ function lineSegments(model: ChartModel, yScale: (v: number) => number, xAt: (in
   });
 }
 
-function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarChart'; title?: string; rows: readonly Record<string, unknown>[]; x?: string; y?: string | string[] }) {
+function ExpressChart({ kind, title, rows, x, y, seriesLabels, subtitle, height, format, unit }: Omit<ExpressVisualizationProps, 'kind'> & { kind: ChartKind }) {
   const id = useId();
   const tx = useTranslation();
   const model = useMemo(() => buildChartModel(kind, rows, x, y), [kind, rows, x, y]);
-  const kindLabel = tx(kind === 'LineChart' ? 'interactions:express.line-chart' : 'interactions:express.bar-chart');
+  const kindLabel = tx(kind === 'BarChart' ? 'interactions:express.bar-chart'
+    : kind === 'AreaChart' ? 'interactions:express.area-chart' : 'interactions:express.line-chart');
+  const chartHeight = height === undefined ? CHART_H : Math.max(150, Math.min(440, height));
+  const plotH = chartHeight - MARGIN.top - MARGIN.bottom;
+  const displayNumber = format || unit ? chartNumberFormatter(format, unit) : formatNumber;
+  const displayTick = format || unit ? chartNumberFormatter(format, unit, true) : formatNumber;
+  const label = (key: string) => seriesLabels?.get(key) ?? key;
 
   let body: ReactNode = <p className={css.empty}>{tx('interactions:express.no-data')}</p>;
   if (model !== null) {
     const count = model.entries.length;
     const [yLo, yHi] = model.yDomain;
     const ySpan = yHi - yLo;
-    const yScale = (value: number) => MARGIN.top + (1 - (value - yLo) / ySpan) * PLOT_H;
+    const yScale = (value: number) => MARGIN.top + (1 - (value - yLo) / ySpan) * plotH;
     const numeric = model.xNumeric && model.xDomain !== null;
     const [xLo, xHi] = model.xDomain ?? [0, 1];
     const xSpan = xHi - xLo;
@@ -288,7 +271,7 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
     const zeroY = yScale(0);
     const showZero = yLo < 0 && yHi > 0;
     const labelStep = Math.max(1, Math.ceil(count / MAX_X_LABELS));
-    const segments = kind === 'LineChart' ? lineSegments(model, yScale, xAt) : null;
+    const segments = kind === 'BarChart' ? null : lineSegments(model, yScale, xAt);
 
     // Grouped bars: one band per entry, series side by side inside it.
     const slotW = PLOT_W / count;
@@ -296,40 +279,55 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
     const barGap = model.series.length > 1 ? Math.min(3, groupW * 0.08) : 0;
     const barW = Math.max(0.5, (groupW - barGap * (model.series.length - 1)) / model.series.length);
 
-    const seriesNames = model.series.map(item => item.name).join(', ');
+    const seriesNames = model.series.map(item => label(item.name)).join(', ');
     const description = tx('interactions:express.chart-summary', { series: seriesNames, count });
 
     body = (
-      <svg
+      <ExpressPlot positions={model.entries.map((entry, index) => xAt(index, entry) / CHART_W)}
+        details={index => ({
+          title: model.entries[index].xText,
+          rows: model.series.flatMap(item => {
+            const value = item.values[index];
+            return value === null ? [] : [{ label: label(item.name), value: displayNumber(value), color: item.color }];
+          }),
+        })}>
+      {active => <svg
         className={css.chart}
-        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        viewBox={`0 0 ${CHART_W} ${chartHeight}`}
         role="img"
         aria-labelledby={`${id}-title`}
         aria-describedby={`${id}-desc`}
       >
         <title id={`${id}-title`}>{title || kindLabel}</title>
         <desc id={`${id}-desc`}>{description}</desc>
+        {active !== undefined && <line className={plotCss.guide} x1={xAt(active, model.entries[active])}
+          x2={xAt(active, model.entries[active])} y1={MARGIN.top} y2={MARGIN.top + plotH}/>}
         {yTicks.map(tick => (
           <g key={tick}>
             <line className={css.grid} x1={MARGIN.left} x2={MARGIN.left + PLOT_W} y1={r2(yScale(tick))} y2={r2(yScale(tick))} />
-            <text className={css.tick} x={MARGIN.left - 8} y={r2(yScale(tick))} textAnchor="end" dy="0.35em">{formatNumber(tick)}</text>
+            <text className={css.tick} x={MARGIN.left - 8} y={r2(yScale(tick))} textAnchor="end" dy="0.35em">{displayTick(tick)}</text>
           </g>
         ))}
         {showZero && <line className={css.zero} data-part="zero" x1={MARGIN.left} x2={MARGIN.left + PLOT_W} y1={r2(zeroY)} y2={r2(zeroY)} />}
-        <line className={css.axis} data-part="axis" x1={MARGIN.left} x2={MARGIN.left + PLOT_W} y1={MARGIN.top + PLOT_H} y2={MARGIN.top + PLOT_H} />
-        {kind === 'LineChart' && model.series.map((item, seriesIndex) => {
+        <line className={css.axis} data-part="axis" x1={MARGIN.left} x2={MARGIN.left + PLOT_W} y1={MARGIN.top + plotH} y2={MARGIN.top + plotH} />
+        {kind !== 'BarChart' && model.series.map((item, seriesIndex) => {
           const runs = segments?.[seriesIndex] ?? [];
           return (
             <g key={`${item.name}-${seriesIndex}`}>
-              {runs.filter(run => run.length > 1).map((run, runIndex) => (
-                <path
-                  key={runIndex}
+              {runs.filter(run => run.length > 1).map((run, runIndex) => {
+                const path = run.map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'}${r2(point.x)} ${r2(point.y)}`).join(' ');
+                const bottom = r2(yScale(Math.max(yLo, Math.min(0, yHi))));
+                return <g key={runIndex}>
+                  {kind === 'AreaChart' && <path data-part="area" fill={item.color} fillOpacity={0.22}
+                    d={`${path} L${r2(run.at(-1)!.x)} ${bottom} L${r2(run[0].x)} ${bottom} Z`}/>}
+                  <path
                   className={css.line}
                   data-part="line"
                   style={{ stroke: item.color }}
-                  d={run.map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'}${r2(point.x)} ${r2(point.y)}`).join(' ')}
+                  d={path}
                 />
-              ))}
+                </g>;
+              })}
               {runs.flatMap((run, runIndex) => run.map((point, pointIndex) => (
                 <circle
                   key={`${runIndex}-${pointIndex}`}
@@ -340,7 +338,7 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
                   cy={r2(point.y)}
                   r={3}
                 >
-                  <title>{`${point.xText} · ${item.name}: ${formatNumber(point.value)}`}</title>
+                  <title>{`${point.xText} · ${label(item.name)}: ${displayNumber(point.value)}`}</title>
                 </circle>
               )))}
             </g>
@@ -372,7 +370,7 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
                   width={r2(barW)}
                   height={r2(height)}
                 >
-                  <title>{`${entry.xText} · ${item.name}: ${formatNumber(value)}`}</title>
+                  <title>{`${entry.xText} · ${label(item.name)}: ${displayNumber(value)}`}</title>
                 </rect>
               );
             })}
@@ -384,7 +382,7 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
               key={tick}
               className={css.tick}
               x={r2(MARGIN.left + (tick - xLo) / xSpan * PLOT_W)}
-              y={CHART_H - MARGIN.bottom + 15}
+              y={chartHeight - MARGIN.bottom + 15}
               textAnchor="middle"
             >
               {formatNumber(tick)}
@@ -395,26 +393,29 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
               key={index}
               className={css.tick}
               x={r2(xAt(index, entry))}
-              y={CHART_H - MARGIN.bottom + 15}
+              y={chartHeight - MARGIN.bottom + 15}
               textAnchor="middle"
             >
               {entry.xText}
             </text>
           ))}
-      </svg>
+      </svg>}
+      </ExpressPlot>
     );
   }
 
   return (
     <figure className={css.figure}>
-      {title !== undefined && title !== '' && <figcaption className={css.title}>{title}</figcaption>}
+      {(title || subtitle) && <figcaption className={css.title}>
+        {title}{subtitle && <span className={css.subtitle}>{subtitle}</span>}
+      </figcaption>}
       {body}
       {model !== null && (
         <ul className={css.legend}>
           {model.series.map((item, index) => (
             <li key={`${item.name}-${index}`}>
               <span className={css.swatch} style={{ background: item.color }} />
-              {item.name}
+              {label(item.name)}
             </li>
           ))}
         </ul>
@@ -423,7 +424,31 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
   );
 }
 
-export function ExpressVisualization({ kind, title, rows, x, y, columns }: ExpressVisualizationProps) {
-  if (kind === 'Table') return <ExpressTable title={title} rows={rows} columns={columns} />;
-  return <ExpressChart kind={kind} title={title} rows={rows} x={x} y={y} />;
+export function ExpressVisualization(props: ExpressVisualizationProps) {
+  if (props.kind === 'Table') return <ExpressTable title={props.title} rows={props.rows} columns={props.columns} />;
+  return <ExpressChart {...props} kind={props.kind}/>;
+}
+
+export function PlaygroundChart({ kind, props }: { kind: ChartKind; props: Record<string, unknown> }) {
+  const tx = useTranslation();
+  const rows = new Map<string | number, Record<string, unknown>>();
+  const labels = new Map<string, string>();
+  if (Array.isArray(props.data)) {
+    for (const item of props.data) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const { x, y, series } = item;
+      if ((typeof x !== 'string' && toNumber(x) === null) || toNumber(y) === null) continue;
+      const name = typeof series === 'string' ? series : undefined;
+      const key = name === undefined ? 'default' : `series:${name}`;
+      labels.set(key, name ?? tx('interactions:express.value'));
+      const row = rows.get(x) ?? Object.assign(Object.create(null), { x });
+      row[key] = y;
+      rows.set(x, row);
+    }
+  }
+  return <ExpressChart kind={kind} rows={[...rows.values()]} x="x" y={[...labels.keys()]} seriesLabels={labels}
+    title={typeof props.title === 'string' ? props.title : undefined}
+    subtitle={typeof props.subtitle === 'string' ? props.subtitle : undefined}
+    height={toNumber(props.height) ?? undefined} format={typeof props.format === 'string' ? props.format : undefined}
+    unit={typeof props.unit === 'string' ? props.unit : undefined}/>;
 }

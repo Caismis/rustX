@@ -70,6 +70,7 @@ for (const asset of ['dist/license.occt-import-js.txt', 'dist/license.occt.txt']
 }
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
 packages.set('CopilotKit A2UI Playground (adapted shadcn/ui catalog styles)', readFileSync(join(root, 'licenses/copilotkit-a2ui-playground.txt'), 'utf8'));
+packages.set('Google A2UI Express parser (vendored)', readFileSync(join(root, 'src/presentation/markdown/vendor/a2ui-express/LICENSE'), 'utf8'));
 const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\nModified CAD runtime source and rebuild instructions: cad-runtime-source/README.md\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');
 const path = join(root, 'public/THIRD-PARTY-NOTICES.txt');
 if (process.argv.includes('--write')) writeFileSync(path, output);

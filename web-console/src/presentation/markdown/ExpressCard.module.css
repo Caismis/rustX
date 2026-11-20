@@ -1,3 +1,11 @@
+.pending {
+  margin-block: 1rem;
+  padding: .75rem 1rem;
+  border: 1px solid var(--dsw-alias-border-l4);
+  border-radius: 12px;
+  font-size: .875rem;
+}
+
 .surface {
   --a2-background: oklch(1 0 0);
   --a2-foreground: oklch(0.145 0 0);
@@ -22,6 +30,9 @@
   --a2-chart-4: oklch(0.828 0.189 84.429);
   --a2-chart-5: oklch(0.769 0.188 70.08);
   --a2-chart-6: oklch(0.556 0 0);
+  --a2-positive: oklch(0.48 0.125 160);
+  --a2-negative: oklch(0.52 0.21 29);
+  --a2-amber: oklch(0.5 0.125 65);
   --a2-shadow: 0 1px 2px oklch(0 0 0 / 7%);
   min-inline-size: 0;
   margin-block: 1rem;
@@ -55,6 +66,9 @@
   --a2-chart-3: oklch(0.769 0.188 70.08);
   --a2-chart-4: oklch(0.627 0.265 303.9);
   --a2-chart-5: oklch(0.645 0.246 16.439);
+  --a2-positive: oklch(0.74 0.15 160);
+  --a2-negative: oklch(0.7 0.18 27);
+  --a2-amber: oklch(0.82 0.14 78);
   --a2-shadow: 0 1px 2px oklch(0 0 0 / 25%);
   color-scheme: dark;
 }
@@ -124,4 +138,9 @@
 .Column > .text:is([data-variant='label'], [data-variant='caption']) + .text:is(h1, h2, h3),
 .Column > .text:is(h1, h2, h3) + .text[data-variant='description'] {
   margin-block-start: calc(.375rem - var(--a2-gap));
+}
+
+.sectionHeader {
+  display: grid;
+  gap: .2rem;
 }
