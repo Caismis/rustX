@@ -1,0 +1,228 @@
+name: cache-candidates
+
+# Round-3 production candidates for the #570 macOS caching problem, on an
+# isolated experiment PR (base = the #570 branch). Two candidates plus a
+# baseline control, all in ONE run so they draw hosts from the same pool:
+#
+#   base   production-exact: deps-only rust-cache. Documents the current
+#          always-cold behaviour (the rust-platform-* lineages are never
+#          published — ci.yml save-if requires `push` on `main`, and main's
+#          ci.yml has no macOS lanes).
+#   cand-a deps-only rust-cache + toolchain normalization: uninstall every
+#          rustup toolchain except the pinned 1.100.0 BEFORE the cache step,
+#          so the action's env-hash no longer sees the image-dependent
+#          preinstalled toolchain list (image 20261102.0473.1 ships 1.99.1,
+#          image 20261117.0516.1 does not). Saves on this PR's merge ref.
+#   cand-b Codex-style: NO rust-cache. Explicit actions/cache for cargo-home
+#          (registry/bin/git-db) keyed on Cargo.lock + rust-toolchain.toml
+#          hashes — image-invariant — plus sccache on the ghac backend for
+#          compiled objects. CARGO_INCREMENTAL=0 on this job only, because
+#          incremental rustc calls are non-cacheable under sccache; that env
+#          delta is part of what adopting cand-b would change vs production.
+#
+# Scope safety: every key is `cand-`-prefixed; writes happen only on this
+# PR's merge ref (pull_request trigger only — no push trigger, so a commit
+# never starts the same macOS matrix twice); production rust-platform-*
+# lineages can neither restore nor be polluted by these entries.
+
+on:
+  pull_request:
+    branches: [devin/1794960987-macos-ci-build-speed]
+  workflow_dispatch:
+
+concurrency:
+  group: cache-cand-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Production-identical build knobs (ci.yml). Adopting either candidate must
+  # not change debug info, codegen, or test semantics.
+  CARGO_PROFILE_DEV_DEBUG: 1
+  CARGO_PROFILE_TEST_DEBUG: 1
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  # Control: exactly what production does today (minus the useless restore —
+  # its lineage can never exist). The per-run comparator for both candidates.
+  base:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - uses: ./.github/actions/libclang
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cand-base-deps
+          save-if: false
+      - run: |
+          {
+            echo "## baseline (production deps-only, no save)"
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            rustup toolchain list
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "latest"
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: compile external test targets
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
+      - name: compile lib + bins test units
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: base-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+
+  # Candidate A: production deps-only cache with an image-invariant key.
+  # Normalizing installed toolchains BEFORE rust-cache removes the
+  # image-version component from the action's env-hash, so the same merge
+  # ref restores the same lineage regardless of which runner image wins.
+  cand-a:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Normalize rustup toolchains for cache-key stability
+        run: |
+          rustup toolchain list | sed 's/[[:space:]].*//' | grep -v '^1\.100\.0' \
+            | while read -r tc; do rustup toolchain uninstall "$tc"; done
+          rustup toolchain list
+      - uses: ./.github/actions/libclang
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cand-a-deps
+          save-if: true
+      - run: |
+          {
+            echo "## cand-a (deps-only, normalized toolchain list)"
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            rustup toolchain list
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "latest"
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: compile external test targets
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
+      - name: compile lib + bins test units
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cand-a-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+
+  # Candidate B: Codex parity — explicit cargo-home download cache (key has
+  # no env component at all, so image changes cannot move it) + sccache/ghac
+  # for compiled objects. No rust-cache. CARGO_INCREMENTAL=0 here only.
+  cand-b:
+    runs-on: macos-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_ERROR_LOG: /tmp/sccache-err.log
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_CACHE_SIZE: 8G
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - uses: ./.github/actions/libclang
+      - name: Hash cache inputs
+        id: hash
+        run: |
+          echo "lock=$(shasum -a 256 Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "tc=$(shasum -a 256 rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Restore cargo-home (downloads)
+        id: cargo-home
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cand-b-cargo-home-Darwin-arm64-${{ steps.hash.outputs.lock }}-${{ steps.hash.outputs.tc }}
+          restore-keys: |
+            cand-b-cargo-home-Darwin-arm64-${{ steps.hash.outputs.lock }}-
+            cand-b-cargo-home-Darwin-arm64-
+      # JS action: the runner injects ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN
+      # / ACTIONS_RESULTS_URL into it; a run: step cannot reach ghac.
+      - name: install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - run: |
+          {
+            echo "## cand-b (cargo-home + sccache ghac, incremental=0)"
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            rustup toolchain list
+            echo "cargo-home hit: ${{ steps.cargo-home.outputs.cache-hit }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "latest"
+      - working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: sccache zero stats
+        run: sccache --zero-stats || true
+      - name: compile external test targets
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --timings --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output
+      - name: compile lib + bins test units
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+      - name: sccache stats
+        if: always()
+        run: |
+          sccache --show-stats || true
+          echo "--- error log ---"
+          tail -40 /tmp/sccache-err.log 2>/dev/null || true
+      - name: Save cargo-home
+        if: steps.cargo-home.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cand-b-cargo-home-Darwin-arm64-${{ steps.hash.outputs.lock }}-${{ steps.hash.outputs.tc }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cand-b-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
