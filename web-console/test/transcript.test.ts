@@ -12,14 +12,21 @@ it('prepends overlapping pages exactly once and retains native numeric order', (
   expect(prependTranscript(next, { entries: [entry(9), entry(10)], next_cursor: '9' })).toEqual(next);
   expect(prependTranscript(next, { entries: [] }).page.next_cursor).toBeUndefined();
 });
-it('ordinary live refresh retains provable overlap; gaps discard the cache', () => {
+it('ordinary live refresh retains provable overlap; a forward head slide retains loaded history', () => {
   const first = replaceTranscript({ entries: [entry(8), entry(9)], next_cursor: '8' });
   const live = refreshTranscript(first, { entries: [entry(9), entry(10)], next_cursor: '9' });
   expect(live.epoch).toBe(first.epoch);
   expect(live.page.entries?.map(item => item.cursor)).toEqual(['8', '9', '10']);
-  const gap = refreshTranscript(live, { entries: [entry(20)], next_cursor: '20' });
-  expect(gap.epoch).toBeGreaterThan(live.epoch);
-  expect(gap.page.entries).toEqual([entry(20)]);
+  // Every held row is strictly older than the delivered head: an atomic burst
+  // slid the bounded window past them. Loaded committed rows stay retained.
+  const slid = refreshTranscript(live, { entries: [entry(20)], next_cursor: '20' });
+  expect(slid.epoch).toBe(live.epoch);
+  expect(slid.page.entries?.map(item => item.cursor)).toEqual(['8', '9', '10', '20']);
+  // A backward or interleaved replacement is a genuine discontinuity.
+  const divergent = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `other-${n}`, role: 'assistant', content: [{ type: 'text', text: `Other ${n}` }] } } });
+  const rewritten = refreshTranscript(slid, { entries: [divergent(9), divergent(20)], next_cursor: '20' });
+  expect(rewritten.epoch).toBeGreaterThan(slid.epoch);
+  expect(rewritten.page.entries?.map(item => item.cursor)).toEqual(['9', '20']);
 });
 it('a live message arriving during older read survives and advances only the live cursor', async () => {
   server = new Server(); server.snapshots.set('A', { ...snapshot(), transcript: { entries: [entry(10)], next_cursor: '10' } });

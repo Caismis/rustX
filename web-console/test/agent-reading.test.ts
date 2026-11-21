@@ -90,7 +90,9 @@ it('reads native pages at the child cut and retains accumulated history', async 
   expect(reader.getSnapshot().history?.page.entries?.map(entry => entry.cursor)).toEqual(['0', '1', '2']);
   reader.returnToLatest();
   for (let n = 132; n < 800; n++) reader.observe({ ...live(n), transcript: { entries: [entry(n - 1), entry(n)], next_cursor: String(n - 1) } });
-  expect(reader.getSnapshot().history?.page.entries!.length).toBe(669);
+  // The three windowed rows {0,1,2} remain retained after the live head slides
+  // forward past them; the accumulated live window appends behind them.
+  expect(reader.getSnapshot().history?.page.entries!.length).toBe(670);
   const loaded = reader.getSnapshot().history!.page.entries;
   reader.returnToLatest();
   expect(reader.getSnapshot().history!.page.entries).toBe(loaded);
