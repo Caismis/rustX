@@ -22,7 +22,7 @@ for(const width of [1440,390])for(const language of ['python3','javascript'] as 
       await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'Workflows',exact:true}).click();await page.getByRole('button',{name:'code',exact:true}).click();
       await expect(page).toHaveTitle(/rustX$/);
       const card=page.locator(`.react-flow__node[data-id='${viewId([],'node','code')}']`);await card.focus();await card.press('Enter');
-      await page.getByRole('button',{name:'Settings',exact:true}).click();await choose(page.getByRole('region',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('region',{name:'Settings',exact:true}).getByRole('button',{name:'Save',exact:true}).click();await page.getByRole('button',{name:'工作流',exact:true}).click();
+      await page.getByRole('button',{name:'Settings',exact:true}).click();await choose(page.getByRole('region',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('button',{name:'工作流',exact:true}).click();
       await card.focus();await card.press('Enter');
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});
       await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);await expect(panel.getByRole('button',{name:/AI|生成代码|生成提示词/})).toHaveCount(0);

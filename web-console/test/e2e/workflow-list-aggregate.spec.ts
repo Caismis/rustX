@@ -187,7 +187,6 @@ for (const width of [1440, 390])
         await expect(panel.getByRole('textbox', { name: 'Output name', exact: true })).toHaveCount(2);
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
         await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
         await page.getByRole('button', { name: '工作流', exact: true }).click();
         await activate('merge');
         const zhPanel = page.getByRole('complementary', { name: '检查器', exact: true });
