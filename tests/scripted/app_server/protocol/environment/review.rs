@@ -147,12 +147,12 @@ pub(crate) async fn terminal_signals() {
     let result = completion(&connection, command).await;
     assert_eq!(result.status, ExecStatus::ProcessControlFailed);
     assert_eq!(result.exit_code, None);
-    execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,
         [] as [std::string::String; 0]
     );
+    execution.kill().await.unwrap();
 }
 
 pub(crate) async fn output_after_cap() {
@@ -196,12 +196,12 @@ pub(crate) async fn output_after_cap() {
         assert_eq!(result.status, ExecStatus::Terminated);
         assert!(result.stdout_truncated);
     }
-    execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,
         [] as [std::string::String; 0]
     );
+    execution.kill().await.unwrap();
 }
 
 pub(crate) async fn watch_recheck() {
@@ -322,12 +322,12 @@ pub(crate) async fn watch_recheck() {
     assert_eq!(capacity.available_permits(), 32);
     release.send(()).unwrap();
     bounded(lock).await.unwrap().unwrap();
-    execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,
         [] as [std::string::String; 0]
     );
+    execution.kill().await.unwrap();
     unwatch_queued_retirement().await;
 }
 
@@ -604,11 +604,11 @@ pub(crate) async fn detached_operations_release_without_touching_siblings() {
         b"SIBLING"
     );
     sibling.close();
-    execution.kill().await.unwrap();
     assert_eq!(
         bounded(fixture.host.drain()).await,
         [] as [std::string::String; 0]
     );
+    execution.kill().await.unwrap();
 }
 
 /// A release refused before the wire as a busy data lane is retried within the
@@ -646,9 +646,9 @@ pub(crate) async fn release_retries_prewire_busy_then_releases() {
         ]
     );
     connection.close();
-    execution.kill().await.unwrap();
     assert_eq!(
         bounded(fixture.host.drain()).await,
         [] as [std::string::String; 0]
     );
+    execution.kill().await.unwrap();
 }

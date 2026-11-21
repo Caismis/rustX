@@ -196,6 +196,15 @@ pub(crate) async fn revocation_before_start() {
                     .await
                     .unwrap();
                 assert_eq!(*operations.borrow(), 0);
+                if revocation == "host" {
+                    // The Host closes new dispatch before the physical
+                    // receipt. A released request slot alone cannot prove
+                    // that the Client has reaped the business process.
+                    assert_eq!(
+                        bounded(fixture.host.settle_execution()).await,
+                        [] as [std::string::String; 0]
+                    );
+                }
                 // The business process names its own pid before READY; `exec`
                 // keeps that pid for the long-running program, so the physical
                 // exit is observed on the exact business process after the
@@ -209,12 +218,16 @@ pub(crate) async fn revocation_before_start() {
                     process_gone(pid);
                 }
                 assert_eq!(fixture.manager.diagnostics().loaded, 0);
-                execution.kill().await.unwrap();
                 connection.close();
+                // Host admission closes synchronously; physical Client
+                // revocation settles independently. Keep the real peer alive
+                // until the Host has collected its receipt.
                 assert_eq!(
                     bounded(fixture.host.drain()).await,
-                    [] as [std::string::String; 0]
+                    [] as [std::string::String; 0],
+                    "revocation={revocation}, tty={tty}, start_first={start_first}"
                 );
+                execution.kill().await.unwrap();
             }
         }
     }
