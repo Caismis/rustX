@@ -944,15 +944,19 @@ impl std::error::Error for RuntimeResourceLoadError {}
 /// Returns a bounded diagnostic when an existing directory cannot be canonicalized,
 /// a candidate cannot be inspected/read, or selected content is not UTF-8.
 pub fn load_project_context_files(
-    workspace: &Path,
+    workspace: Option<&Path>,
     user_directory: &Path,
 ) -> Result<Vec<ProjectContextFile>, RuntimeResourceLoadError> {
-    let workspace = std::fs::canonicalize(workspace).map_err(|error| {
-        RuntimeResourceLoadError::new(format!(
-            "cannot canonicalize workspace {}: {error}",
-            workspace.display()
-        ))
-    })?;
+    let workspace = workspace
+        .map(|workspace| {
+            std::fs::canonicalize(workspace).map_err(|error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot canonicalize workspace {}: {error}",
+                    workspace.display()
+                ))
+            })
+        })
+        .transpose()?;
     let user_directory = match std::fs::canonicalize(user_directory) {
         Ok(path) => Some(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -964,7 +968,7 @@ pub fn load_project_context_files(
         }
     };
     let mut files: Vec<ProjectContextFile> = Vec::new();
-    for directory in user_directory.iter().chain(std::iter::once(&workspace)) {
+    for directory in user_directory.iter().chain(workspace.iter()) {
         if let Some(file) = load_context_file_from_directory(directory)?
             && !files.iter().any(|existing| existing.path == file.path)
         {
@@ -1096,8 +1100,9 @@ mod tests {
         std::fs::write(middle.join("AGENTS.md"), "middle agents").expect("middle AGENTS");
         std::fs::write(child.join("AGENTS.md"), "child agents").expect("child AGENTS");
 
-        let files = load_project_context_files(&child, &directory.path().join("missing-user"))
-            .expect("project context");
+        let files =
+            load_project_context_files(Some(&child), &directory.path().join("missing-user"))
+                .expect("project context");
         let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
         assert_eq!(
             files
@@ -1135,12 +1140,12 @@ mod tests {
             std::fs::write(root.join("CLAUDE.md"), "other guidance").unwrap();
         }
         assert_eq!(
-            load_project_context_files(&workspace, &global).unwrap(),
+            load_project_context_files(Some(&workspace), &global).unwrap(),
             [] as [crate::runtime::resources::ProjectContextFile; 0]
         );
         std::fs::write(global.join("AGENTS.md"), "global").unwrap();
         std::fs::write(workspace.join("AGENTS.md"), "workspace").unwrap();
-        let files = load_project_context_files(&workspace, &global).unwrap();
+        let files = load_project_context_files(Some(&workspace), &global).unwrap();
         assert_eq!(
             files
                 .iter()
@@ -1157,8 +1162,9 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(workspace.join("AGENTS.md"), b"\xef\xbb\xbfwith bom").expect("context file");
 
-        let files = load_project_context_files(&workspace, &directory.path().join("missing-user"))
-            .expect("project context");
+        let files =
+            load_project_context_files(Some(&workspace), &directory.path().join("missing-user"))
+                .expect("project context");
         let canonical_workspace = std::fs::canonicalize(&workspace).expect("canonical workspace");
         let selected = files
             .iter()
@@ -1171,8 +1177,8 @@ mod tests {
     fn overlapping_global_and_workspace_context_is_loaded_once() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("AGENTS.md"), "shared guidance").unwrap();
-        let files =
-            load_project_context_files(directory.path(), &directory.path().join(".")).unwrap();
+        let files = load_project_context_files(Some(directory.path()), &directory.path().join("."))
+            .unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].content, "shared guidance");
     }

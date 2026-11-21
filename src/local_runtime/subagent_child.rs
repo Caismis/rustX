@@ -197,17 +197,26 @@ pub async fn run_subagent_child() -> i32 {
         Ok(spec) => spec,
         Err(code) => return code,
     };
-    let runtime_root = spec.runtime_root().ok();
-    if let Err(detail) =
-        crate::tools::execution_environment::install_child_snapshot(runtime_root.as_deref())
-    {
-        let _ = write_child_frame(
-            &mut control,
-            &ChildFrame::StartupError(DiagnosticFrame { message: detail }),
-        )
-        .await;
-        return 2;
-    }
+    let execution_scope = if let Some(grant) = spec.execution.clone() {
+        match grant
+            .open(&spec.session_id, &spec.workspace, &control)
+            .await
+        {
+            Ok(scope) => Some(scope),
+            Err(error) => {
+                let _ = write_child_frame(
+                    &mut control,
+                    &ChildFrame::StartupError(DiagnosticFrame {
+                        message: format!("Session execution handoff: {error}"),
+                    }),
+                )
+                .await;
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
     // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
     // supervised process unit — reaches the parent only through it.
@@ -223,9 +232,9 @@ pub async fn run_subagent_child() -> i32 {
     // The nested containment authority is installed BEFORE any composition
     // step can create a supervised process unit, so no unit can ever slip
     // past the anchor gate.
-    if let Err(detail) =
-        crate::runtime::nested_containment::install_authority(dispatcher.anchor_authority())
-    {
+    if let Err(detail) = rustx_process_supervisor::nested_containment::install_authority(
+        dispatcher.anchor_authority(),
+    ) {
         eprintln!("subagent child: {detail}");
         return 2;
     }
@@ -243,7 +252,15 @@ pub async fn run_subagent_child() -> i32 {
                 return 2;
             }
         };
-    let code = match Box::pin(run_child(&mut dispatcher, &handle, spec, &physical_lease)).await {
+    let code = match Box::pin(run_child(
+        &mut dispatcher,
+        &handle,
+        spec,
+        &physical_lease,
+        execution_scope,
+    ))
+    .await
+    {
         Ok(()) => 0,
         // A startup failure was already reported through `StartupError`
         // by `run_child` when the channel allowed.
@@ -260,10 +277,6 @@ pub async fn run_subagent_child() -> i32 {
             3
         }
     };
-    // Process-owned Python probes can outlive the conversation's semantic
-    // result. Their physical settlement must release nested anchors while
-    // the parent control writer is still alive, before its final queue drain.
-    crate::tools::workspace_python::shutdown().await;
     dispatcher.shutdown().await;
     code
 }
@@ -320,8 +333,10 @@ async fn run_child(
     handle: &ChildControlHandle,
     spec: SubagentChildSpec,
     physical_lease: &crate::runtime::subagent::physical_recovery::ChildPhysicalLease,
+    execution_scope: Option<super::session_runtime_manager::SessionExecutionScope>,
 ) -> Result<(), ChildExit> {
     let mut lifetime = ChildPhysicalLifetime::new(handle);
+    lifetime.preparation.execution_scope = execution_scope;
     let result = Box::pin(run_child_inner(dispatcher, handle, spec, &mut lifetime)).await;
     // Every normal return, including validation, composition and protocol
     // failure, reaches this one proof-producing epilogue. Aborting this owner
@@ -2057,6 +2072,7 @@ pub(crate) mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
+            execution: None,
             workspace: workspace.clone(),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
@@ -2144,7 +2160,7 @@ pub(crate) mod tests {
         let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
         let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
         let handle = dispatcher.handle();
-        let result = run_child(&mut dispatcher, &handle, spec, &lease).await;
+        let result = run_child(&mut dispatcher, &handle, spec, &lease, None).await;
         assert!(
             matches!(&result, Err(ChildExit::Startup(message))
             if message.contains("output") && message.contains("schema")),
@@ -2180,7 +2196,7 @@ pub(crate) mod tests {
             let lease = child_physical_lease(&spec);
             let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
             let handle = dispatcher.handle();
-            let result = run_child(&mut dispatcher, &handle, spec, &lease).await;
+            let result = run_child(&mut dispatcher, &handle, spec, &lease, None).await;
             dispatcher.shutdown().await;
             (result, lease)
         });
@@ -2258,7 +2274,7 @@ pub(crate) mod tests {
         let session = spec.session_id.clone();
         let mut composed = tokio::spawn(async move {
             let lease = child_physical_lease(&spec);
-            let outcome = Box::pin(run_child(&mut dispatcher, &handle, spec, &lease)).await;
+            let outcome = Box::pin(run_child(&mut dispatcher, &handle, spec, &lease, None)).await;
             (outcome, dispatcher, lease)
         });
 

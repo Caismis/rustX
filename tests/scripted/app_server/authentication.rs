@@ -45,8 +45,12 @@ async fn rpc(socket: &mut Socket, call: Method) -> MethodResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_admission() {
     bounded(async {
-        let f=Fixture::with_session_count(None,0).await;
+        let f=Fixture::with_session_count(None,1).await;
         f.manager.bind_process_policy(crate::local_runtime::app_server_policy::AppServerPolicy {environment_roots:f.workspaces.to_vec(),..Default::default()});
+        // fs/getMetadata dispatches through Session A's admitted Execution
+        // Client; the child is owned and reaped by this test.
+        let mut execution=f.start_execution(0).await;
+        let session_id=f.sessions[0].id.clone();
         let secret=b"host-signing-secret-with-at-least-32-bytes";
         let clock=Arc::new(AtomicI64::new(100));
         let signed=jsonwebtoken::encode(&jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),&serde_json::json!({"exp":110,"nbf":90,"iss":"host","aud":"rustx","role":"readonly","thread":"unrelated"}),&jsonwebtoken::EncodingKey::from_secret(secret)).unwrap();
@@ -65,9 +69,9 @@ async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_adm
                 let MethodResult::Initialized {capabilities,..}=rpc(&mut socket,Method::Initialize(InitializeParams {protocol_version:APP_SERVER_PROTOCOL_VERSION,client:ClientIdentity {name:if browser {"browser"}else{"native"}.into(),version:"1".into()},presentation:PresentationCapabilities::default()})).await else {panic!("initialized")};
                 assert!(capabilities.shared_writable_clients);
                 let path=f.workspaces[0].join(format!("trusted-environment-{index}-{browser}"));
-                assert!(matches!(rpc(&mut socket,Method::FsWriteFile {path:path.display().to_string(),data_base64:"dHJ1c3RlZA==".into(),expected_revision:None}).await,MethodResult::FileMetadata {..}));
-                assert!(matches!(rpc(&mut socket,Method::FsGetMetadata {path:path.display().to_string()}).await,MethodResult::FileMetadata {..}));
-                let params=serde_json::from_value(serde_json::json!({"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
+                assert!(matches!(rpc(&mut socket,Method::FsWriteFile {session_id:session_id.clone(),path:path.display().to_string(),data_base64:"dHJ1c3RlZA==".into(),expected_revision:None}).await,MethodResult::FileMetadata {..}));
+                assert!(matches!(rpc(&mut socket,Method::FsGetMetadata {session_id:session_id.clone(),path:path.display().to_string()}).await,MethodResult::FileMetadata {..}));
+                let params=serde_json::from_value(serde_json::json!({"sessionId":session_id,"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
                 let MethodResult::CommandExec {result}=rpc(&mut socket,Method::CommandExec(params)).await else {panic!("equal command eligibility")};
                 assert_eq!(result.exit_code,Some(0));
                 assert!(matches!(rpc(&mut socket,Method::SkillsList {target:crate::local_runtime::configuration::settings::SourceTarget::User,offset:0,limit:32,expected_revision:None}).await,MethodResult::Skills {..}));
@@ -89,6 +93,7 @@ async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_adm
             }
             drop(peers);stop.cancel();server.await.unwrap().unwrap();
         }
+        execution.kill().await.unwrap();
         f.close().await;
     }).await;
 }

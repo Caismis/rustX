@@ -17,16 +17,16 @@ use super::super::{CapabilityCoordinator, CapabilityCoordinatorConfig};
 use crate::capabilities::selection::SourceToolSelection;
 use crate::capabilities::{AgentActivation, CapabilitySourceState, ToolSourceId};
 use crate::runtime::identity::{ConversationId, McpServerId};
-use crate::runtime::process_runner::{
-    CapturedProcessResult, ProcessOutcomeIntent, RunnerTestControl, SupervisedCommandSpec,
-    SupervisedProcessRunner,
-};
 use crate::runtime::resources::ManagedPythonCatalog;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::python::{PythonToolStore, discover_package};
 use crate::tools::workspace::Workspace;
+use rustx_process_supervisor::process_runner::{
+    CapturedProcessResult, ProcessOutcomeIntent, RunnerTestControl, SupervisedCommandSpec,
+    SupervisedProcessRunner,
+};
 
 const DELAY: Duration = Duration::from_millis(100);
 

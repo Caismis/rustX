@@ -156,15 +156,20 @@ pub enum Method {
     },
     #[serde(rename = "fs/readFile")]
     FsReadFile {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         offset: u64,
         #[serde(rename = "maxBytes")]
+        #[schemars(range(min = 1, max = 65536))]
         max_bytes: usize,
         #[serde(rename = "expectedRevision")]
         expected_revision: Option<String>,
     },
     #[serde(rename = "fs/writeFile")]
     FsWriteFile {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         #[serde(rename = "dataBase64")]
         data_base64: String,
@@ -173,24 +178,40 @@ pub enum Method {
     },
     #[serde(rename = "fs/readDirectory")]
     FsReadDirectory {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         offset: usize,
+        #[schemars(range(min = 1, max = 128))]
         limit: usize,
         #[serde(rename = "expectedRevision")]
         expected_revision: Option<String>,
     },
     #[serde(rename = "fs/getMetadata")]
-    FsGetMetadata { path: String },
+    FsGetMetadata {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
+        path: String,
+    },
     #[serde(rename = "fs/createDirectory")]
-    FsCreateDirectory { path: String, recursive: bool },
+    FsCreateDirectory {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
+        path: String,
+        recursive: bool,
+    },
     #[serde(rename = "fs/remove")]
     FsRemove {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         recursive: bool,
         force: bool,
     },
     #[serde(rename = "fs/copy")]
     FsCopy {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         #[serde(rename = "sourcePath")]
         source_path: String,
         #[serde(rename = "destinationPath")]
@@ -199,6 +220,8 @@ pub enum Method {
     },
     #[serde(rename = "fs/watch")]
     FsWatch {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         #[serde(rename = "watchId")]
         watch_id: String,
         path: String,
@@ -1417,6 +1440,9 @@ pub enum ErrorData {
     EnvironmentUnauthorized,
     EnvironmentResourceNotFound,
     EnvironmentCapacityOrConflict,
+    /// The Session's local execution endpoint does not exist or its
+    /// admitted Client is gone; there is no fallback reader.
+    ExecutionUnavailable,
     Auxiliary {
         reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
     },

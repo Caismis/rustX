@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 import { RpcFailure } from '../../src/client/errors';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
-import { connectRemote, openEmptySession } from './shell-actions';
+import { connectRemote, createBoundSession, openExistingSession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
 
@@ -102,9 +102,10 @@ for (const width of [1440, 390]) {
       writeFileSync(source, 'approval_mode = "full_access"\n[agent]\nworkflows = ["history_flow"]\n[agent.tools]\nbuiltin = ["read"]\n');
       await page.setViewportSize({ width, height: 1000 });
       await routeWorkspaceHost(page, fixture);
+      const session = await createBoundSession(fixture);
       await page.goto('/');
       await connectRemote(page, fixture.endpoint, fixture.token);
-      const session = await openEmptySession(page, fixture, 'Workspace A');
+      await openExistingSession(page, session);
       const effective = async () => {
         const target = await wire.attachedTarget(session);
         const { projection } = await wire.read('session/effectiveConfiguration', target);

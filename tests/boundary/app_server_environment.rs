@@ -8,6 +8,22 @@ async fn revocation_before_native_start_never_executes_an_independent_command() 
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::revocation_before_start()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn poisoned_trace_variable_is_never_authority() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::poisoned_trace_variable_is_never_authority()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detached_operations_release_without_touching_siblings() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::detached_operations_release_without_touching_siblings()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detach_during_data_and_control_backpressure() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::detach_during_data_and_control_backpressure()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn release_retries_prewire_busy_then_releases() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::release_retries_prewire_busy_then_releases()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unwatched_callback_cannot_interfere_with_an_immediate_identity_successor() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::watch_immediate_successor()).await;
 }
@@ -16,7 +32,7 @@ async fn terminal_signals_preserve_program_handlers_and_settle_default_or_lost_o
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::terminal_signals()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn watch_identity_recheck_survives_atomic_write_lock_contention() {
+async fn watch_rechecks_atomic_writes_and_stops_while_the_data_lane_is_held() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::watch_recheck()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -139,4 +155,70 @@ async fn skill_large_metadata_and_body_use_bounded_native_ranges() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn skill_catalog_pages_trim_by_encoded_bytes_and_resume_at_exact_offset() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::skill_catalog_page_scenario()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_returns_the_client_cancelled_snapshot_without_retiring_the_binding() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::start_returns_the_client_cancelled_snapshot()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_reports_an_admitted_client_with_lost_control_as_unconfirmed() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_control_is_unconfirmed_in_host_drain()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::refused_register_does_not_allocate_a_cancellation_tombstone()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::delete_revoke_does_not_pin_residency_or_forget_failure()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_capture_discard_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::queued_capture_discard_hands_off_to_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_preparation_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::cancelled_preparation_hands_off_to_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_workspace_release_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::queued_workspace_release_hands_off_to_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn released_output_preserves_the_unclaimed_input_receipt() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::released_output_preserves_the_unclaimed_input_receipt()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_input_cleanup_retires_an_open_binding() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::expired_input_cleanup_settles_the_binding(false)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_input_cleanup_preserves_the_terminal_revoke_receipt() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::expired_input_cleanup_settles_the_binding(true)).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconcile_waiting_for_client_does_not_retain_the_unloaded_writer() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::reconcile_waiting_for_client_does_not_retain_the_unloaded_writer()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unknown_mutation_cancel_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::unknown_mutation_cancel_hands_off_to_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_relay_joins_the_physical_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::child_relay_joins_the_physical_binding_revocation()).await;
 }

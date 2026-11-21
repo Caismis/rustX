@@ -1,0 +1,19 @@
+[package]
+name = "rustx-text-edit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "The pure rustX multi-edit algorithm: exact-then-fuzzy anchor planning over an LF-normalized snapshot with BOM and line-ending preservation, BOM/CRLF aware, typed resource bounds — no filesystem or Agent dependency."
+publish = false
+
+[dependencies]
+rustx-execution-protocol = { path = "../execution-protocol" }
+unicode-normalization = "0.1.24"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

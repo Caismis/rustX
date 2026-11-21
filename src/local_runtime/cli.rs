@@ -34,7 +34,7 @@ pub enum Command {
         request: InitializationRequest,
         json: bool,
     },
-    AppServer(crate::app_server::process::Request),
+    AppServer(Box<crate::app_server::process::Request>),
 }
 
 impl Command {
@@ -85,7 +85,7 @@ enum PublicCommand {
     #[command(
         after_help = "Native bindings default to ~/rustx/rustx.toml and ~/rustx/runtime only when omitted. User resources remain ~/rustx/.agents. WebSocket requires a dedicated token file; stdio requires owned pipes or sockets. Help and startup diagnostics use stderr; stdout belongs to the protocol."
     )]
-    AppServer(crate::app_server::process::AppServerArgs),
+    AppServer(Box<crate::app_server::process::AppServerArgs>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -270,7 +270,7 @@ pub fn parse_command(
             Err(error) => return Err(ArgumentError(error.to_string())),
         };
     Ok(match parsed.command {
-        PublicCommand::AppServer(args) => Command::AppServer(args.into_request()),
+        PublicCommand::AppServer(args) => Command::AppServer(Box::new(args.into_request())),
         PublicCommand::Init(args) => Command::Init {
             json: args.json,
             request: args.into_request(),

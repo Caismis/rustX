@@ -305,7 +305,10 @@ async fn resource_http_pages_templates_direct_uris_blobs_and_errors_are_bounded(
         )
         .await;
     assert_eq!(large.status, ToolExecutionStatus::Success);
-    assert!(large.managed_output.is_some());
+    assert!(matches!(
+        large.managed_output.as_deref(),
+        Some(crate::tools::types::ManagedOutputContinuation::Unavailable { .. })
+    ));
     assert!(large.truncation.is_some());
     for uri in ["fixture://invalid-blob", "fixture://error"] {
         let result = connection
@@ -1048,7 +1051,7 @@ fn resource_error_redacts_nested_keys_values_and_diagnostics_before_bounding() {
 }
 
 #[tokio::test]
-async fn resource_error_redaction_survives_named_helpers_and_aggregate_spills() {
+async fn resource_error_redaction_survives_named_helpers_and_aggregate_overflow() {
     use crate::capabilities::ToolSourceId;
     use crate::tools::mcp::{
         McpResourceBinding, McpRuntimeGeneration, McpRuntimeRetirementRegistry,
@@ -1109,7 +1112,7 @@ async fn resource_error_redaction_survives_named_helpers_and_aggregate_spills() 
     let aggregate = run_helper(&helpers[0], serde_json::json!({}), &tools).await;
     assert!(matches!(
         aggregate.managed_output.as_deref(),
-        Some(crate::tools::types::ManagedOutputContinuation::Complete { .. })
+        Some(crate::tools::types::ManagedOutputContinuation::Unavailable { .. })
     ));
     assert_redacted(&aggregate, secret);
     for generation in generations {

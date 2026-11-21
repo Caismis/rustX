@@ -543,6 +543,7 @@ export function describeRpcError(error: RpcError): string {
     case "response_serialization_failed": return "the response could not be encoded";
     case "connection_closed": return "the connection closed before native output was accepted";
     case "environment_unauthorized": return "the path is outside the instance environment grants";
+    case "execution_unavailable": return "this Session has no available Execution Client";
     case "environment_resource_not_found": return "the native environment resource is unavailable";
     case "environment_capacity_or_conflict": return "native environment capacity was reached or the resource changed";
     case "outcome_unknown": return "the operation outcome is unknown; inspect authoritative state before retrying";

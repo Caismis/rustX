@@ -118,6 +118,7 @@ pub(crate) struct ApplicationState {
     version: u64,
     scopes: BTreeMap<String, ConfigurationApplication>,
     pending: BTreeMap<String, ApplicationIdentity>,
+    bound_captures: BTreeMap<crate::runtime::identity::SessionId, Arc<()>>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
@@ -270,6 +271,9 @@ impl ConfigurationApplications {
         state.scope_targets.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
+        state
+            .bound_captures
+            .retain(|session, _| session.as_ref() != scope);
         state.deferred.remove(scope);
         state.reasons.remove(scope);
         state.staged_in.remove(scope);
@@ -294,6 +298,50 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    pub(crate) fn source_cut(&self, workspace: &std::path::Path) -> [u64; 2] {
+        use super::settings::SourceTarget;
+        [
+            SourceTarget::User,
+            SourceTarget::Workspace {
+                directory: workspace.to_path_buf(),
+            },
+        ]
+        .map(|target| {
+            self.scopes
+                .get(&target.application_scope())
+                .map_or(0, |view| view.desired.attempt)
+        })
+    }
+
+    pub(crate) fn begin_bound_capture(
+        &mut self,
+        session: crate::runtime::identity::SessionId,
+    ) -> Arc<()> {
+        let ticket = Arc::new(());
+        self.bound_captures.insert(session, ticket.clone());
+        ticket
+    }
+
+    pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {
+        self.bound_captures.remove(session);
+    }
+
+    pub(crate) fn finish_bound_capture(
+        &mut self,
+        session: &crate::runtime::identity::SessionId,
+        ticket: &Arc<()>,
+    ) -> bool {
+        if self
+            .bound_captures
+            .get(session)
+            .is_some_and(|current| Arc::ptr_eq(current, ticket))
+        {
+            self.bound_captures.remove(session);
+            return true;
+        }
+        false
+    }
+
     /// Runtime catalog publication changes the native baseline, not authored
     /// intent. Reprepare the latest captured input, including its model choice.
     pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str) -> bool {
@@ -347,13 +395,42 @@ impl ApplicationState {
         persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let key = super::capture::canonical_directory(&input.cwd)?;
-        let mut capture = match self.creation_capture(configuration, &key, credentials)? {
+        let capture = match self.creation_capture(configuration, &key, credentials)? {
             std::borrow::Cow::Borrowed(capture) => capture.clone(),
             std::borrow::Cow::Owned(capture) => {
                 self.available.insert(key.clone(), capture.clone());
                 capture
             }
         };
+        Self::admit_initial(capture, input, credentials, persisted)
+    }
+
+    /// A Client-bound document has Session authority; two Clients can serve
+    /// different authored bytes at the same logical path. This capture never
+    /// borrows or populates the directory's Session-creation cache.
+    pub(crate) fn initial_bound_session(
+        configuration: &super::UserConfigManager,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    ) -> Result<super::AdmittedSessionConfig, String> {
+        let capture = configuration
+            .capture_bound_application(
+                &super::SessionConfigInput::new(input.cwd.clone()),
+                credentials,
+                endpoint,
+            )?
+            .context?;
+        Self::validate_default(&capture, credentials)?;
+        Self::admit_initial(capture, input, credentials, true)
+    }
+
+    fn admit_initial(
+        mut capture: super::ProspectiveSessionConfig,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        persisted: bool,
+    ) -> Result<super::AdmittedSessionConfig, String> {
         capture.input.model = Some(
             input
                 .model
@@ -542,6 +619,7 @@ impl ApplicationState {
         Self::validate_default(capture, credentials)?;
         capture.validate_resource_authority()?;
         if self.current(scope, identity)
+            && self.scope_sources.contains_key(scope)
             && self
                 .desired_sources
                 .get(&capture.input.cwd)
@@ -630,10 +708,31 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
         self.record_source(source, &input);
-        self.reasons
-            .insert(scope.clone(), ConfigurationChangeReason::Source);
         self.scope_sources
             .insert(scope.clone(), source.to_path_buf());
+        self.capture_session_source(scope, source, input)
+    }
+
+    /// A bound Session never publishes its Client's view into the
+    /// path-keyed authoring cache or reloads from that cache.
+    pub(crate) fn capture_bound_source(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        self.scope_sources.remove(&scope);
+        self.capture_session_source(scope, source, input)
+    }
+
+    fn capture_session_source(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        self.reasons
+            .insert(scope.clone(), ConfigurationChangeReason::Source);
         self.own_scope(&scope, source);
         if let Ok(capture) = &input
             && let Some(current) = self.scopes.get(&scope)
@@ -725,6 +824,40 @@ impl ApplicationState {
             self.desired_process = Some(policy.clone());
         }
         self.source_inputs.insert(scope, process);
+    }
+
+    /// Summarize what was observed through the bound consumers of this
+    /// Workspace. Their individual Sessions retain application diagnostics.
+    /// This does not authorize source writes or seed the creation cache.
+    pub(crate) fn record_bound_reconciliation(
+        &mut self,
+        target: &super::settings::SourceTarget,
+        directory: &std::path::Path,
+        consumers: &[super::super::session::SessionId],
+    ) {
+        let revisions: BTreeMap<_, _> = consumers
+            .iter()
+            .filter_map(|session| {
+                let revision = self
+                    .scopes
+                    .get(session.as_ref())?
+                    .desired
+                    .input_revision
+                    .clone()?;
+                Some((std::path::PathBuf::from(session.as_ref()), revision))
+            })
+            .collect();
+        let revision =
+            (!revisions.is_empty()).then(|| super::capture::source_manifest_revision(&revisions));
+        let scope = target.application_scope();
+        self.own_scope(&scope, directory);
+        self.desire(scope.clone(), revision);
+        self.pending.remove(&scope);
+        self.scopes
+            .get_mut(&scope)
+            .expect("bound observation scope")
+            .units
+            .clear();
     }
 
     pub(crate) fn record_source(

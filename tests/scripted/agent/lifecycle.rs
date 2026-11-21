@@ -2062,15 +2062,15 @@ async fn deferred_post_tool_context_cannot_bypass_a_later_policy_rejection() {
 // Native pre-tool interaction and Tool Plane settlement
 // ---------------------------------------------------------------------------
 
-/// Native definitions and configured approval policy, with a watch at
-/// executor start and an approval oneshot. The pending publication is the
-/// rendezvous: start must remain false until an affirmative decision.
+/// Native definitions and configured approval policy. Filesystem executors
+/// observe a test gate and Bash reports physical START from the real Client.
 #[tokio::test]
 async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access() {
     use crate::agent::lifecycle::ConfiguredApprovalPolicy;
     use crate::observation::trace::{TraceState, TraceToolOutcome};
     use crate::runtime::ApprovalMode;
     use crate::runtime::permission::review::{PermissionReviewVerdict, ScriptedPermissionReviewer};
+    use tokio::io::AsyncWriteExt as _;
     for name in ["write", "edit", "bash"] {
         for decision in ["allow", "deny", "cancel", "full_access", "automatic_deny"]
             .into_iter()
@@ -2083,10 +2083,25 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 .into_iter()
                 .find(|tool| tool.name == name)
                 .unwrap();
-            let (probe, mut handle) =
-                GatedTool::new(definition.clone(), Arc::new(Mutex::new(Vec::new())));
             let mut tools = ToolRegistry::new();
-            probe.register(&mut tools);
+            let (mut handle, business) = if name == "bash" {
+                let registration = fixture
+                    .registry
+                    .registrations()
+                    .into_iter()
+                    .find(|native| native.definition.id == definition.id)
+                    .expect("native Bash registration");
+                tools = ToolRegistry::from_registrations([registration]).unwrap();
+                (
+                    None,
+                    Some(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap()),
+                )
+            } else {
+                let (probe, handle) =
+                    GatedTool::new(definition.clone(), Arc::new(Mutex::new(Vec::new())));
+                probe.register(&mut tools);
+                (Some(handle), None)
+            };
             let mut arguments = match name {
                 // Plan elevates non-fast-path defaults only with a nonblank
                 // elevation_reason; otherwise the call is Denied and never Asks.
@@ -2101,11 +2116,14 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                     "elevation_reason":"lifecycle approval fixture"
                 }),
                 // `true` is proven read-only; use an unproven redirect so Plan Asks.
-                "bash" => serde_json::json!({
-                    "command":"printf x >/tmp/rustx-lifecycle-ask",
-                    "execution_mode":"foreground",
-                    "elevation_reason":"lifecycle approval fixture"
-                }),
+                "bash" => {
+                    let port = business.as_ref().unwrap().local_addr().unwrap().port();
+                    serde_json::json!({
+                        "command":format!("printf x >> bash-approval-marker; exec 3<>/dev/tcp/127.0.0.1/{port}; read -r -u 3"),
+                        "execution_mode":"foreground",
+                        "elevation_reason":"lifecycle approval fixture"
+                    })
+                }
                 _ => unreachable!(),
             };
             if decision == "oversized_allow" {
@@ -2145,12 +2163,23 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                     },
                 },
             ));
-            let tool_runtime = common::tool_runtime("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
+            let tool_runtime = Arc::new(common::tool_runtime_with_execution(
+                "conv_393d0148-e012-70f2-88f3-59c22ab51ae1",
+            ));
+            let bash_marker = tool_runtime.workspace().root().join("bash-approval-marker");
+            if name == "edit" {
+                std::fs::write(
+                    tool_runtime.storage_root().join("workspace/test.txt"),
+                    "old",
+                )
+                .unwrap();
+            }
             let store = tool_runtime.durable_store();
             let capability = common::capability_lease(tools, &tool_runtime).await;
             let task = {
                 let model = model.clone();
                 let cancellation = cancellation.clone();
+                let tool_runtime = tool_runtime.clone();
                 tokio::spawn(async move {
                     let result = AgentExecution::new(
                         request(tool_runtime.conversation_id().clone(), &model),
@@ -2171,7 +2200,13 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             };
             let mut pending_record_id = None;
             if !matches!(decision, "full_access" | "automatic_deny") {
-                pending.wait_for(|count| *count == 1).await.unwrap();
+                if pending.wait_for(|count| *count == 1).await.is_err() {
+                    let audit = task.await.unwrap();
+                    panic!(
+                        "{name}/{decision} settled before publishing approval: {:?}",
+                        tool_messages(&audit)
+                    );
+                }
                 let trace = crate::runtime_client::trace::TraceProjection::new(store.as_ref())
                     .unwrap()
                     .page(None, 32)
@@ -2184,11 +2219,12 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 assert!(!tool_record.tool.as_ref().unwrap().started);
                 assert_eq!(tool_record.tool.as_ref().unwrap().outcome, None);
                 pending_record_id = Some(tool_record.id.clone());
-                assert!(!*handle.started.borrow(), "{name} started before approval");
-                assert_eq!(
-                    handle.invocations(),
-                    [] as [crate::tools::types::ToolInvocation; 0]
-                );
+                if let Some(handle) = &handle {
+                    assert!(!*handle.started.borrow(), "{name} started before approval");
+                    assert_eq!(handle.invocations(), [] as [ToolInvocation; 0]);
+                } else {
+                    assert!(!bash_marker.exists(), "Bash started before approval");
+                }
                 let observed = facts.lock().unwrap()[0].clone();
                 assert_eq!(observed.tool_id, definition.id);
                 assert_eq!(observed.mode, ToolInvocationMode::Foreground);
@@ -2215,8 +2251,19 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 }
             }
             if matches!(decision, "allow" | "oversized_allow" | "full_access") {
-                handle.await_started().await;
-                handle.release_and_await_completion().await;
+                if let Some(handle) = &mut handle {
+                    handle.await_started().await;
+                    handle.release_and_await_completion().await;
+                } else {
+                    let (mut process, _) = tokio::time::timeout(
+                        GATED_TOOL_LIVENESS_GUARD,
+                        business.as_ref().unwrap().accept(),
+                    )
+                    .await
+                    .expect("approved Bash physically started")
+                    .unwrap();
+                    process.write_all(b"go\n").await.unwrap();
+                }
             }
             let audit = task.await.unwrap();
             assert_single_terminal(&audit.event_history);
@@ -2265,20 +2312,28 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 .count();
             if matches!(decision, "deny" | "cancel" | "automatic_deny") {
                 assert_eq!(starts, 0);
-                assert_eq!(
-                    handle.invocations(),
-                    [] as [crate::tools::types::ToolInvocation; 0]
-                );
+                if let Some(handle) = &handle {
+                    assert_eq!(handle.invocations(), [] as [ToolInvocation; 0]);
+                } else {
+                    assert!(!bash_marker.exists(), "refused Bash started");
+                }
             } else {
                 assert_eq!(starts, 1);
-                assert_eq!(handle.invocations().len(), 1);
-                // Foreground Bash privately stages its executor for timeout handoff.
-                let executor_mode = if name == "bash" {
-                    ToolInvocationMode::Background
+                if let Some(handle) = &handle {
+                    let invocations = handle.invocations();
+                    assert_eq!(invocations.len(), 1);
+                    assert_eq!(invocations[0].mode, ToolInvocationMode::Foreground);
                 } else {
-                    ToolInvocationMode::Foreground
-                };
-                assert_eq!(handle.invocations()[0].mode, executor_mode);
+                    assert_eq!(std::fs::read(&bash_marker).unwrap(), b"x");
+                    assert_eq!(
+                        tool_messages(&audit)[0].result.status,
+                        ToolExecutionStatus::Success
+                    );
+                    assert_eq!(
+                        tool_runtime.background().all_snapshots(),
+                        [] as [crate::tools::background::BackgroundExecutionSnapshot; 0]
+                    );
+                }
             }
             if matches!(decision, "full_access" | "automatic_deny") {
                 assert!(
@@ -2726,8 +2781,9 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         observation.tool_id == ToolId::new("tool-read") && observation.origin == ToolOrigin::Builtin
     }
 
-    // 1. The real native tool plane: the actual registered Read capability.
-    let fixture = common::native_fixture();
+    // 1. The real native tool plane: the actual registered Read capability,
+    //    bound to a real Session execution route as composition binds it.
+    let fixture = common::native_fixture_with_execution(Vec::new());
     std::fs::write(
         fixture.runtime.workspace().root().join("notes.txt"),
         "hello\n",
@@ -3372,7 +3428,7 @@ fn a_semantic_owner_has_at_most_one_observer() {
 /// model-facing name is not part of the observation at all.
 #[tokio::test]
 async fn observer_reads_the_native_read_target_from_validated_arguments() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_with_execution(Vec::new());
     std::fs::write(
         fixture.runtime.workspace().root().join("notes.txt"),
         "hello\n",

@@ -223,22 +223,41 @@ jobs:
 
       - name: Run the SQLite store contracts (durable changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
 
       - name: Run the runtime client response contracts (runtime client changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:runtime-client']
-        run: 'cargo test --lib --all-features --locked -- runtime_client::response:: --skip ::scale::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- runtime_client::response:: --skip ::scale::'
 
       - name: Run the real-process App Server and CLI workflows
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-features --locked --test process
+
+      - name: Run the Execution Client boundary
+        run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
+
+      - name: Run the Execution Client WebSocket boundary
+        run: cargo test -p rustx-execution-client --test websocket --all-features --locked
+
+      # The binary's own unit tests (`mutation::`, `process::`) live
+      # outside the `bootstrap` integration target; FULL's contracts lane
+      # already runs workspace `--bins` with staged companions, but FAST
+      # must not skip them — and the process tests exec the real
+      # `bash-supervisor`, which the preparation stage must place beside
+      # the test binary or the real-spawn cases would silently skip.
+      - name: Stage the Execution Client binary harness
+        run: >-
+          python3 test-support/prepare_native_tests.py --
+          cargo test -p rustx-execution-client --bins --all-features --locked --no-run
+      - name: Run the Execution Client binary units
+        run: cargo test -p rustx-execution-client --bins --all-features --locked
 
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
@@ -285,8 +304,8 @@ jobs:
   # provider, or a network beyond loopback fixture servers. (Unit tests of
   # boundary-owning modules still exercise their module's own primitive —
   # the bash tool's unit tests spawn bash, the uv backend's run uv — which
-  # is what `--bins` is for: it builds the `bash-supervisor` binary those
-  # unit tests exec.)
+  # is what `--bins` is for: it builds the `rustx-process-supervisor`
+  # package's `bash-supervisor` binary those unit tests exec.)
   #
   # Semantic class and compilation placement are different axes: the lib
   # test binary also contains the in-crate *boundary conformance* suites, so
@@ -324,6 +343,16 @@ jobs:
         with:
           shared-key: rust-contracts
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      # The Client Workspace Python suite exercises uv with two real Python
+      # minors. Use the runner's system Python alongside this staged version.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
       # Compile the contracts lane's targets once with `--all-features` and stage
       # the emitted package binaries beside every emitted test harness executable.
@@ -397,6 +426,8 @@ jobs:
       # Same compiler serialization as rust-contracts. Targets, assertions,
       # libtest concurrency, and the 90-minute ceiling stay.
       CARGO_BUILD_JOBS: "1"
+      # Keep the non-incremental Boundary harness within hosted runner memory.
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -469,7 +500,13 @@ jobs:
       - name: Run the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- boundary_suites::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- boundary_suites::'
+
+      - name: Run the Execution Client boundary
+        run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
+
+      - name: Run the Execution Client WebSocket boundary
+        run: cargo test -p rustx-execution-client --test websocket --all-features --locked
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With

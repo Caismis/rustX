@@ -1872,7 +1872,6 @@ impl Driver {
             venv.success(),
             "the reference workspace needs a default Python environment"
         );
-        rustx::tools::workspace_python::prepare_now(&workspace).await;
 
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),

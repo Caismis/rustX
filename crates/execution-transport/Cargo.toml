@@ -1,0 +1,31 @@
+[package]
+name = "rustx-execution-transport"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "Transport mechanics for the rustX execution boundary: one EncodedRecord per Unix frame or WebSocket binary message, shared absolute-deadline I/O, endpoint validation, and rustls support. Protocol DTOs and admission policy stay in their own crates."
+publish = false
+
+[dependencies]
+rustx-execution-protocol = { path = "../execution-protocol" }
+serde = "1"
+serde_json = "1"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+bytes = "1"
+rustls = { version = "0.23.43", default-features = false, features = ["std", "ring", "tls12", "logging"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
+webpki-roots = "0.26"
+nix = { version = "0.31.3", default-features = false, features = ["fs", "poll", "net"] }
+
+rcgen = "0.13"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

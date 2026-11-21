@@ -3,6 +3,119 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_bound_load_rechecks_user_revision_at_retained_publication() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let mut client = fixture.start_execution(0).await;
+        let (entered, capture_ready) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "before_bound_initial_publication",
+            move || {
+                entered.send(()).unwrap();
+                released.recv().unwrap();
+            },
+        );
+        let loading = fixture.load(0);
+        capture_ready.await.unwrap();
+        let path = &fixture.manager.configuration.source_bindings().config_path;
+        let mut document: toml::Table =
+            toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        document.insert(
+            "tool_deadline_policy".into(),
+            toml::Value::Table(toml::from_str("hard_deadline_ms = 23456").unwrap()),
+        );
+        std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::User)
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        loading.await.unwrap().unwrap();
+        {
+            let bindings = fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap();
+            let binding = &bindings[&fixture.sessions[0].id];
+            assert_eq!(binding.config.tool_deadline_policy.hard_deadline_ms, 23_456);
+        }
+        client.kill().await.unwrap();
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn blocked_bound_capture_leaves_other_source_transactions_available() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 2).await;
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let (parked, parked_receipt) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let exchange = tokio::task::spawn_blocking(move || {
+            endpoint.hold_data_exchange_for_test(|| {
+                parked.send(()).unwrap();
+                released.recv().unwrap();
+            })
+        });
+        parked_receipt.await.unwrap();
+        let (entered, reading) = tokio::sync::oneshot::channel();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("before_bound_source_read", move || {
+                entered.send(()).unwrap();
+            });
+        let manager = fixture.manager.clone();
+        let workspace = fixture.workspaces[0].clone();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[tool_deadline_policy]\nhard_deadline_ms = 34567\n",
+        )
+        .unwrap();
+        let reconciliation = tokio::spawn(async move {
+            manager
+                .reconcile_configuration(&SourceTarget::Workspace {
+                    directory: workspace,
+                })
+                .await
+        });
+        reading.await.unwrap();
+        let unrelated = SourceTarget::Workspace {
+            directory: fixture.workspaces[1].clone(),
+        };
+        fixture.manager.source_settings(&unrelated).await.unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&unrelated)
+            .await
+            .unwrap();
+        assert!(!reconciliation.is_finished());
+        release.send(()).unwrap();
+        exchange.await.unwrap().unwrap();
+        reconciliation.await.unwrap().unwrap();
+        {
+            let state = fixture.manager.applications.lock();
+            let applied = state.view(fixture.sessions[0].id.as_ref()).unwrap();
+            assert!(applied.desired.input_revision.is_some(), "{applied:?}");
+        }
+        client.kill().await.unwrap();
+    }))
+    .await;
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn native_source_application_identity_uses_exact_facts_not_projection() {
@@ -32,7 +145,11 @@ async fn native_source_application_identity_uses_exact_facts_not_projection() {
     assert!(serde_json::to_vec(&projection).is_err());
     let capture = |manager: &SessionRuntimeManager| {
         let mut state = manager.applications.lock();
-        manager.capture_source_consumers(&mut state, &target);
+        assert!(
+            manager
+                .capture_source_consumers(&mut state, &target)
+                .is_empty()
+        );
         state
             .view(&target.application_scope())
             .unwrap()
@@ -1169,4 +1286,146 @@ async fn disabled_workflow_external_sources_do_not_block_session_creation_or_rel
         }
         fixture.close().await;
     }
+}
+
+#[cfg(target_os = "linux")]
+fn workspace_overlay_launcher(mount: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let launcher = mount.join("client");
+    let staged = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    std::os::unix::fs::symlink(staged, mount.join("client-real")).unwrap();
+    std::fs::write(
+        &launcher,
+        r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}" --bind "$bin/physical" "$4" -- "$bin/client-real" "$@"
+"#,
+    ).unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    launcher
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn bound_configuration_load_and_reconcile_without_any_server_workspace_directory() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::rename(workspace, &physical).unwrap();
+        let document = physical.join("rustx.toml");
+        std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 23456\n").unwrap();
+        let launcher = workspace_overlay_launcher(mount.path());
+        assert!(!workspace.exists());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let retained = || {
+            fixture.manager.sessions.configuration_bindings.lock().unwrap()[&fixture.sessions[0].id]
+                .config.tool_deadline_policy.hard_deadline_ms
+        };
+        assert_eq!(retained(), 23_456);
+
+        let source = SourceTarget::Workspace { directory: workspace.clone() };
+        let old = {
+            let state = fixture.manager.applications.lock();
+            state.view(fixture.sessions[0].id.as_ref()).and_then(|application| application.desired.input_revision)
+        };
+        std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 34567\n").unwrap();
+        let observation = fixture.manager.reconcile_configuration(&source).await.unwrap();
+        assert_eq!(observation.scope, source.application_scope());
+        assert!(observation.desired.input_revision.is_some());
+        let application = applied(&fixture, 0).await;
+        assert_ne!(application.desired.input_revision, old);
+        assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let effective = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap();
+        assert_eq!(effective.tool_deadline.hard_deadline_ms, 34_567);
+
+        std::fs::write(&document, "[agent]\nworkflows = [\"client-resource\"]\n").unwrap();
+        fixture.manager.reconcile_configuration(&source).await.unwrap();
+        let application = settled(&fixture, 0).await;
+        assert!(matches!(
+            &application.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { diagnostic } if diagnostic.contains("selected Workspace Workflows are unavailable")
+        ), "{application:?}");
+        assert!(!workspace.exists());
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_lost() {
+    use crate::local_runtime::configuration::settings::{EffectiveConfiguration, SourceTarget};
+    use crate::runtime::subagent::SubagentName;
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::create_dir(&physical).unwrap();
+        let document = physical.join("rustx.toml");
+        let write_policy = |deadline| {
+            std::fs::write(&document, format!(
+                "[agent]\nagents=['reviewer']\nskills=[]\n[tool_deadline_policy]\nhard_deadline_ms={deadline}\n"
+            )).unwrap();
+        };
+        write_policy(23_456);
+        let user_agents = fixture.manager.configuration.source_bindings().home_directory.join("rustx/.agents/agents");
+        let workspace_agents = workspace.join(".agents/agents");
+        let write_role = |root: &std::path::Path, label| {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join("reviewer.toml"), format!("description='Review'\ninstructions='{label}'\nskills=[]\n")).unwrap();
+        };
+        write_role(&user_agents, "User reviewer");
+        write_role(&workspace_agents, "Workspace reviewer");
+        let launcher = workspace_overlay_launcher(mount.path());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let reviewer = SubagentName::parse("reviewer").unwrap();
+        let instructions = || runtime.runtime_resources().subagents().get(&reviewer).unwrap().instructions().to_owned();
+        assert_eq!(instructions(), "Workspace reviewer");
+
+        let original_root = workspace.with_extension("retained");
+        std::fs::rename(workspace, &original_root).unwrap();
+        let target = SourceTarget::Workspace { directory: workspace.clone() };
+        for (deadline, replace) in [(34_567, false), (45_678, true)] {
+            if replace {
+                // Still canonical, but independently owned and has no Agent
+                // collection. It must not grant the lower User definition.
+                std::fs::create_dir(workspace).unwrap();
+            }
+            write_policy(deadline);
+            fixture.manager.reconcile_configuration(&target).await.unwrap();
+            let application = applied(&fixture, 0).await;
+            assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
+            assert!(matches!(&application.units[&ApplyUnit::Capabilities],
+                UnitApplication::Failed { diagnostic } if diagnostic.contains("Workspace authored resources unavailable")
+            ), "{application:?}");
+            assert_eq!(EffectiveConfiguration::adopted(&runtime).unwrap().tool_deadline.hard_deadline_ms, deadline);
+            assert_eq!(instructions(), "Workspace reviewer");
+        }
+
+        std::fs::remove_dir(workspace).unwrap();
+        std::fs::rename(original_root, workspace).unwrap();
+        write_role(&workspace_agents, "Restored Workspace reviewer");
+        fixture.manager.reconcile_configuration(&target).await.unwrap();
+        let application = applied(&fixture, 0).await;
+        assert_eq!(application.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
+        assert_eq!(instructions(), "Restored Workspace reviewer");
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    })).await;
 }

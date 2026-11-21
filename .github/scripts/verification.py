@@ -69,9 +69,9 @@ TEST_PRESERVING = ("added", "modified")
 SURFACES = {
     "documentation": ("*.md", "docs/**", "web-console/*.md", "tui/*.md"),
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
-             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
+             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**", "crates/**"),
     "protocol": ("protocol/**",),
-    "web": ("web-console/**", "src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"),
+    "web": ("web-console/**", "crates/process-supervisor/src/interactive_supervisor.rs", "crates/process-supervisor/src/supervised_unit.rs"),
     "tui": ("tui/**",),
     "dev": ("dev/**",),
 }

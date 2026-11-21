@@ -1,3 +1,30 @@
+[workspace]
+members = [
+    "crates/confined-fs",
+    "crates/document-reader",
+    "crates/execution-client",
+    "crates/execution-protocol",
+    "crates/execution-server",
+    "crates/execution-transport",
+    "crates/process-supervisor",
+    "crates/text-edit",
+]
+# A bare `cargo test`/`cargo build` at the root selects every member, so the
+# execution-boundary crates share the default verification surface. `-p`
+# selection keeps working unchanged for scripts that need the root alone.
+default-members = [
+    ".",
+    "crates/confined-fs",
+    "crates/document-reader",
+    "crates/execution-client",
+    "crates/execution-protocol",
+    "crates/execution-server",
+    "crates/execution-transport",
+    "crates/process-supervisor",
+    "crates/text-edit",
+]
+resolver = "3"
+
 [package]
 name = "rustx"
 version = "0.1.0"
@@ -26,20 +53,12 @@ name = "rustx"
 path = "src/main.rs"
 
 [[bin]]
-name = "bash-supervisor"
-path = "src/bin/bash_supervisor.rs"
-
-[[bin]]
-name = "interactive-supervisor"
-path = "src/bin/interactive_supervisor.rs"
-
-[[bin]]
 name = "workflow-renderer"
 path = "src/bin/workflow_renderer.rs"
 
 [dependencies]
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
-uuid = { version = "1.24", features = ["v7"] }
+uuid = { version = "1.24", features = ["v4", "v7"] }
 serde = { version = "1", features = ["derive", "rc"] }
 # Correctly rounded float parsing: authored request-parameter numbers must read
 # back as exactly the binary64 value that was written (and that JSON clients
@@ -75,8 +94,8 @@ tower = { version = "0.5", default-features = false }
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 # Reuse the validator's resource resolver when compiling invocation envelopes.
 referencing = "=0.60.2"
-# The native-search substrate behind Glob and Grep. These are implementation
-# dependencies of the shared traversal and of the Grep engine only: no `rg`
+# Glob/Grep pattern validation compiled Server-side for model-facing
+# diagnostics; the physical engines live on the Execution Client. No `rg`
 # executable is ever spawned, and none of their defaults are part of the
 # model-facing tool contract.
 globset = "0.4.19"
@@ -84,8 +103,7 @@ ignore = "0.4.33"
 # POSIX/bash AST for Issue #544 Bash read-only admission (ZCode semantic port).
 brush-parser = "0.4.0"
 grep-regex = "0.1.14"
-grep-searcher = "0.1.17"
-nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource", "term"] }
+nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource", "term", "uio"] }
 rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
 libc = "0.2"
 serde_yaml_ng = "0.10.0"
@@ -96,7 +114,6 @@ sha2 = "0.10"
 constant_time_eq = "0.4"
 jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc_rs"] }
 # Bounded line comparisons for captured per-turn workspace changes.
-similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
 # Bounded validation of native managed PNG image outputs.
@@ -127,24 +144,17 @@ tempfile = "3.27.0"
 # SQLite 3.53.2 includes the WAL-reset race fix required by concurrent checkpoints.
 # Keep checked u64/usize SQL conversions explicit with rusqlite's fallible_uint.
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint"] }
-# The parser-only document decode backend behind native Read (Issue #48).
-# rustX owns the supported-format whitelist (`.pdf`, `.docx`, `.xlsx`,
-# `.pptx`), the path contract, and all extraction policy; xberg only decodes.
-# Defaults are disabled and only the three format features plus the async
-# runtime are enabled: no `ocr`/`ocr-pipeline` (Tesseract/ONNX/ML), no
-# `tree-sitter`, no embeddings/NER/summarization/chunking, no `archives`,
-# no `url-ingestion`, no server/API/MCP surface ever compiles into rustX.
-# `disable_ocr: true` is also set at runtime; a scanned PDF therefore can
-# never fall back to OCR.
-xberg = { version = "1.0.14", default-features = false, features = [
-    "pdf",
-    "excel",
-    "office",
-    "tokio-runtime",
-] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# The proven descriptor-relative filesystem primitives the physical
+# Execution Client shares; there is no parallel implementation.
+rustx-confined-fs = { path = "crates/confined-fs" }
+rustx-execution-protocol = { path = "crates/execution-protocol" }
+rustx-execution-server = { path = "crates/execution-server" }
+rustx-execution-transport = { path = "crates/execution-transport" }
+rustx-process-supervisor = { path = "crates/process-supervisor" }
+rustx-text-edit = { path = "crates/text-edit" }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
@@ -165,6 +175,13 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+rustx-execution-client = { path = "crates/execution-client", features = ["test-support"] }
+rustx-process-supervisor = { path = "crates/process-supervisor", features = ["test-support"] }
+
+# The physical structured-document decoder — production code reaches it
+# only across the Execution Client process boundary; it is linked here
+# only for parser-boundary tests.
+rustx-document-reader = { path = "crates/document-reader" }
 rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"

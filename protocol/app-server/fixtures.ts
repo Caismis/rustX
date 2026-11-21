@@ -1733,14 +1733,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -1765,14 +1765,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -1828,14 +1828,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -1853,14 +1853,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -1874,7 +1874,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -1899,7 +1899,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1910,7 +1910,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -1929,7 +1929,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1940,7 +1940,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -2079,14 +2079,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -2111,14 +2111,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -2174,14 +2174,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -2199,14 +2199,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -2220,7 +2220,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -2245,7 +2245,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2256,7 +2256,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -2275,7 +2275,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2286,7 +2286,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -2425,14 +2425,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -2457,14 +2457,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -2520,14 +2520,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -2545,14 +2545,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -2566,7 +2566,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -2591,7 +2591,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2602,7 +2602,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -2621,7 +2621,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2632,7 +2632,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -2771,14 +2771,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -2803,14 +2803,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -2866,14 +2866,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -2891,14 +2891,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -2912,7 +2912,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -2937,7 +2937,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2948,7 +2948,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -2967,7 +2967,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2978,7 +2978,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -3117,14 +3117,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -3149,14 +3149,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -3212,14 +3212,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -3237,14 +3237,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -3258,7 +3258,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -3283,7 +3283,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3294,7 +3294,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -3313,7 +3313,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3324,7 +3324,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -3463,14 +3463,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -3495,14 +3495,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -3558,14 +3558,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -3583,14 +3583,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -3604,7 +3604,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -3629,7 +3629,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3640,7 +3640,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -3659,7 +3659,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3670,7 +3670,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -3809,14 +3809,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -3841,14 +3841,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -3904,14 +3904,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -3929,14 +3929,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -3950,7 +3950,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -3975,7 +3975,7 @@ export const fixtures = [
             },
             {
               "name": "glob",
-              "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+              "description": "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3986,7 +3986,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+                    "description": "An optional relative or absolute directory search root, inside the\nSession's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "limit": {
                     "type": "integer",
@@ -4005,7 +4005,7 @@ export const fixtures = [
             },
             {
               "name": "grep",
-              "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+              "description": "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -4016,7 +4016,7 @@ export const fixtures = [
                   },
                   "path": {
                     "type": "string",
-                    "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+                    "description": "An optional relative or absolute directory/file search root, inside\nthe Session's admitted Client workspace. Omit it to search the\nexecution cwd."
                   },
                   "glob": {
                     "type": "string",
@@ -5000,6 +5000,7 @@ export const fixtures = [
     "id": "environment-0",
     "method": "command/exec",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "command": [
         "/usr/bin/printf",
         "%s",
@@ -5051,6 +5052,7 @@ export const fixtures = [
     "id": "environment-4",
     "method": "fs/readFile",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file",
       "offset": "0",
       "maxBytes": 65536,
@@ -5062,6 +5064,7 @@ export const fixtures = [
     "id": "environment-5",
     "method": "fs/writeFile",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file",
       "dataBase64": "aGk=",
       "expectedRevision": "native-revision"
@@ -5072,6 +5075,7 @@ export const fixtures = [
     "id": "environment-6",
     "method": "fs/getMetadata",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file"
     }
   },
@@ -5080,6 +5084,7 @@ export const fixtures = [
     "id": "environment-7",
     "method": "fs/readDirectory",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace",
       "offset": 0,
       "limit": 32,
@@ -5091,6 +5096,7 @@ export const fixtures = [
     "id": "environment-8",
     "method": "fs/createDirectory",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/new",
       "recursive": true
     }
@@ -5100,6 +5106,7 @@ export const fixtures = [
     "id": "environment-9",
     "method": "fs/copy",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "sourcePath": "/workspace/file",
       "destinationPath": "/workspace/copy",
       "recursive": false
@@ -5110,6 +5117,7 @@ export const fixtures = [
     "id": "environment-10",
     "method": "fs/remove",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file",
       "recursive": false,
       "force": false
@@ -5120,6 +5128,7 @@ export const fixtures = [
     "id": "environment-11",
     "method": "fs/watch",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "watchId": "watch-fixture",
       "path": "/workspace"
     }

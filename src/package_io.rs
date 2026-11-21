@@ -5,11 +5,8 @@ use std::fs::{File, Metadata};
 use std::io::Write;
 use std::io::{Read, Seek};
 use std::os::fd::OwnedFd;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
-
-use rustix::fs::{Mode, OFlags, open, openat};
+use std::path::{Path, PathBuf};
 
 use crate::runtime::CancellationSignal;
 
@@ -20,142 +17,40 @@ thread_local! {
     pub(crate) static DIRECTORY_LISTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     pub(crate) static STREAMED_FILE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
-const DIRECTORY: OFlags = OFlags::RDONLY
-    .union(OFlags::DIRECTORY)
-    .union(OFlags::NOFOLLOW)
-    .union(OFlags::CLOEXEC);
 
 /// Every component is resolved relative to an already opened directory.
+/// The physical traversal lives in `rustx_confined_fs`; this wrapper adds
+/// the root package's test observability without duplicating any open.
 pub(crate) struct PackageDirectory {
-    fd: std::sync::Arc<OwnedFd>,
-    ancestors: Vec<(std::sync::Arc<OwnedFd>, std::ffi::OsString)>,
+    inner: rustx_confined_fs::PackageDirectory,
 }
 
 impl PackageDirectory {
     pub(crate) fn descriptor(&self) -> &OwnedFd {
-        &self.fd
+        self.inner.descriptor()
     }
     pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
-        let mut directory = Self {
-            fd: std::sync::Arc::new(open("/", DIRECTORY, Mode::empty())?),
-            ancestors: Vec::new(),
-        };
-        if !path.is_absolute() {
-            return Err(std::io::Error::other("package root must be absolute"));
-        }
-        for part in path.components() {
-            match part {
-                Component::RootDir => {}
-                Component::Normal(name) => directory = directory.child(name)?,
-                _ => return Err(std::io::Error::other("unsafe package root")),
-            }
-        }
-        Ok(directory)
+        rustx_confined_fs::PackageDirectory::open(path).map(|inner| Self { inner })
     }
 
     pub(crate) fn verify(&self) -> std::io::Result<()> {
-        for (index, (parent, name)) in self.ancestors.iter().enumerate() {
-            let child = self
-                .ancestors
-                .get(index + 1)
-                .map_or(&self.fd, |(descriptor, _)| descriptor);
-            let current =
-                rustix::fs::statat(parent.as_ref(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
-            let retained = rustix::fs::fstat(child.as_ref())?;
-            if (current.st_dev, current.st_ino) != (retained.st_dev, retained.st_ino) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "authorized directory replaced",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Detect a physical descendant, including case aliases on native filesystems.
-    pub(crate) fn contains(&self, file: &File) -> std::io::Result<bool> {
-        let source = rustix::fs::fstat(file)?;
-        for descriptor in
-            std::iter::once(&self.fd).chain(self.ancestors.iter().map(|(descriptor, _)| descriptor))
-        {
-            let current = rustix::fs::fstat(descriptor.as_ref())?;
-            if (source.st_dev, source.st_ino) == (current.st_dev, current.st_ino) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        self.inner.verify()
     }
 
     pub(crate) fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
-        self.verify()?;
-        let fd = openat(self.fd.as_ref(), name, DIRECTORY, Mode::empty())?;
-        let mut ancestors = self.ancestors.clone();
-        if name != "." {
-            ancestors.push((self.fd.clone(), name.to_os_string()));
-        }
-        let directory = Self {
-            fd: std::sync::Arc::new(fd),
-            ancestors,
-        };
-        directory.verify()?;
-        Ok(directory)
+        self.inner.child(name).map(|inner| Self { inner })
     }
 
     pub(crate) fn names(&self, limit: usize) -> std::io::Result<Vec<PathBuf>> {
         #[cfg(test)]
         DIRECTORY_LISTS.with(|count| count.set(count.get() + 1));
-        self.verify()?;
-        let mut names = Vec::new();
-        for entry in rustix::fs::Dir::read_from(self.fd.as_ref())? {
-            let entry = entry?;
-            let name = entry.file_name().to_bytes();
-            if name == b"." || name == b".." {
-                continue;
-            }
-            if names.len() == limit {
-                return Err(std::io::Error::other(format!(
-                    "package directory exceeds {limit} entries"
-                )));
-            }
-            names.push(PathBuf::from(std::ffi::OsStr::from_bytes(name)));
-        }
-        self.verify()?;
-        names.sort();
-        Ok(names)
+        self.inner.names(limit)
     }
 
     pub(crate) fn file(&self, relative: &Path) -> std::io::Result<File> {
         #[cfg(test)]
         OPENED_FILES.with(|files| files.borrow_mut().push(relative.to_path_buf()));
-        self.verify()?;
-        let mut parts = relative.components().peekable();
-        let mut directory = None;
-        while let Some(part) = parts.next() {
-            let Component::Normal(name) = part else {
-                return Err(std::io::Error::other("unsafe package-relative path"));
-            };
-            let parent = directory.as_ref().unwrap_or(self.fd.as_ref());
-            if parts.peek().is_none() {
-                let file = File::from(openat(
-                    parent,
-                    name,
-                    OFlags::RDONLY
-                        | OFlags::NOFOLLOW
-                        | OFlags::NONBLOCK
-                        | OFlags::CLOEXEC
-                        | OFlags::NOCTTY,
-                    Mode::empty(),
-                )?);
-                if !file.metadata()?.is_file() {
-                    return Err(std::io::Error::other(
-                        "package entry must be a regular file",
-                    ));
-                }
-                return Ok(file);
-            }
-            directory = Some(openat(parent, name, DIRECTORY, Mode::empty())?);
-        }
-        Err(std::io::Error::other("empty package-relative path"))
+        self.inner.file(relative)
     }
 }
 

@@ -106,10 +106,17 @@ async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
 async fn cancelled_attempt_does_not_start_a_final_workspace_observation() {
     let dir = tempfile::tempdir().unwrap();
     let configuration = configure_repository(&dir);
+    let execution = crate::session_execution_support::ExecutionFixture::new(
+        &dir.path().join("workspace").canonicalize().unwrap(),
+    );
+    let options = HeadlessRuntimeOptions {
+        execution_scope: Some(execution.scope.clone()),
+        ..HeadlessRuntimeOptions::default()
+    };
     let (registry, tool_script) = cause_probe_registry_and_script(Arc::new(WriteTracked {
         configuration: configuration.clone(),
     }));
-    let (runtime, model) = headless_runtime(
+    let (runtime, model) = headless_runtime_with_options(
         &dir,
         vec![
             tool_script,
@@ -121,6 +128,7 @@ async fn cancelled_attempt_does_not_start_a_final_workspace_observation() {
         ],
         Some(registry),
         None,
+        options,
     )
     .await;
     let pending = Arc::new(PendingObservations::new());
@@ -175,14 +183,22 @@ async fn cancelled_attempt_does_not_start_a_final_workspace_observation() {
 async fn cancelling_final_observation_releases_terminal_and_handoff_before_observation_release() {
     let dir = tempfile::tempdir().unwrap();
     let configuration = configure_repository(&dir);
+    let execution = crate::session_execution_support::ExecutionFixture::new(
+        &dir.path().join("workspace").canonicalize().unwrap(),
+    );
+    let options = HeadlessRuntimeOptions {
+        execution_scope: Some(execution.scope.clone()),
+        ..HeadlessRuntimeOptions::default()
+    };
     let (registry, tool_script) = cause_probe_registry_and_script(Arc::new(WriteTracked {
         configuration: configuration.clone(),
     }));
-    let (runtime, _) = headless_runtime(
+    let (runtime, _) = headless_runtime_with_options(
         &dir,
         vec![tool_script, one_turn_script(), one_turn_script()],
         Some(registry),
         None,
+        options,
     )
     .await;
     let pending = Arc::new(PendingObservations::new());

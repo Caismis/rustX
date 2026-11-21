@@ -63,7 +63,19 @@ export class Launcher {
       this.#active();
       try { accessSync(args.binary, constants.X_OK); }
       catch { throw new Error(`Native binary unavailable: ${args.binary}. Run cargo build --bins, or pass --binary /absolute/path/rustx.`); }
-      // Match Rust's current_exe(): helpers belong beside the resolved executable.
+      if (args.mode === 'app-server') {
+        const native = [...args.forwarded];
+        // Native owns command-only behavior; its only such form is exact --help.
+        const commandOnly = native.length === 1 && native[0] === '--help';
+        const listen = native.findIndex((argument, index) => index % 2 === 0 && argument === '--listen');
+        if (!commandOnly && listen === -1) native.push('--listen', 'stdio');
+        const ownerStdin = !commandOnly && (listen === -1 || native[listen + 1] === 'stdio')
+          ? 'shutdown-on-eof' : undefined;
+        this.#child({ component: 'app-server', command: args.binary, args: ['app-server', ...native], cwd: process.cwd(), protocolStdio: true, ownerStdin }, true);
+        return;
+      }
+      // Match Rust's current_exe(): helpers belong beside the resolved
+      // executable. Only the combined Web/TUI compositions need them.
       const binaryDirectory = dirname(realpathSync(args.binary));
       for (const name of ['bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
         const helper = join(binaryDirectory, name);
@@ -76,17 +88,6 @@ export class Launcher {
       }
       if (args.mode === 'tui') {
         this.#child({ component: 'tui', command: process.execPath, args: [join(this.#root, 'tui/src/main.ts'), '--binary', args.binary, ...args.forwarded], cwd: process.cwd(), terminal: true }, true);
-        return;
-      }
-      if (args.mode === 'app-server') {
-        const native = [...args.forwarded];
-        // Native owns command-only behavior; its only such form is exact --help.
-        const commandOnly = native.length === 1 && native[0] === '--help';
-        const listen = native.findIndex((argument, index) => index % 2 === 0 && argument === '--listen');
-        if (!commandOnly && listen === -1) native.push('--listen', 'stdio');
-        const ownerStdin = !commandOnly && (listen === -1 || native[listen + 1] === 'stdio')
-          ? 'shutdown-on-eof' : undefined;
-        this.#child({ component: 'app-server', command: args.binary, args: ['app-server', ...native], cwd: process.cwd(), protocolStdio: true, ownerStdin }, true);
         return;
       }
       for (const workspace of args.workspaces) if (!statSync(workspace).isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);

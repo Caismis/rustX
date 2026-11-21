@@ -94,4 +94,3 @@ mod runtime_client;
 mod skill_launch;
 mod subagent;
 mod tool_deadline;
-mod workspace_python;

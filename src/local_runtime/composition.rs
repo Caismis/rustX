@@ -387,6 +387,7 @@ pub struct LocalConversationCore {
     /// composition. A subagent child's generation is frozen by its parent and
     /// is never prepared again, so it has none.
     resource_loader: Option<Arc<LocalRuntimeResourceLoader>>,
+    standalone_execution: Option<super::session_runtime_manager::StandaloneExecution>,
 }
 
 impl std::fmt::Debug for LocalConversationCore {
@@ -405,7 +406,17 @@ impl LocalConversationCore {
     pub async fn shutdown(
         &self,
     ) -> Result<(), crate::runtime::conversation_runtime::ShutdownError> {
-        self.runtime.shutdown().await
+        let runtime = self.runtime.shutdown().await;
+        if let Some(execution) = &self.standalone_execution {
+            let settled = execution.shutdown().await.map_err(|detail| {
+                crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail,
+                }
+            });
+            runtime.and(settled)
+        } else {
+            runtime
+        }
     }
 
     /// Composes the shared semantic runtime from validated resolved launch inputs.
@@ -488,7 +499,13 @@ impl LocalConversationCore {
             .parent()
             .expect("Conversation database has an allocation")
             .to_path_buf();
-        let core = Self::compose_from_config_started(
+        let execution = super::session_runtime_manager::StandaloneExecution::start(
+            session_id.clone(),
+            current.locations.workspace.clone(),
+        )
+        .await
+        .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let mut core = Self::compose_from_config_started(
             &current,
             dependencies,
             registry,
@@ -499,9 +516,11 @@ impl LocalConversationCore {
             allocation,
             lifecycle,
             startup,
+            Some(execution.scope()),
         )
         .await?;
         catalog.commit_planned(planned)?;
+        core.standalone_execution = Some(execution);
         Ok(core)
     }
 
@@ -531,6 +550,7 @@ impl LocalConversationCore {
             artifacts_root,
             lifecycle,
             McpInitialSubmission::default(),
+            None,
         )
         .await
     }
@@ -547,6 +567,7 @@ impl LocalConversationCore {
         artifacts_root: PathBuf,
         lifecycle: Arc<crate::runtime::local_storage::ProductController>,
         startup: McpInitialSubmission,
+        execution_scope: Option<super::session_runtime_manager::SessionExecutionScope>,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now());
         startup
@@ -570,6 +591,7 @@ impl LocalConversationCore {
             startup,
             &crate::runtime::cancellation::CancellationSignal::new(),
             &dynamic_tools,
+            execution_scope,
         )
         .await
     }
@@ -589,6 +611,9 @@ impl LocalConversationCore {
         startup: McpInitialSubmission,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
         host_tools: &[crate::tools::host::HostToolDefinition],
+        execution_scope: Option<
+            crate::local_runtime::session_runtime_manager::SessionExecutionScope,
+        >,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now()); // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
@@ -644,6 +669,16 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
+            if let Some(scope) = execution_scope.clone() {
+                let preparation = crate::runtime::ExecutionCancellation::detached(
+                    cancellation.child(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                );
+                std::mem::drop(tokio::spawn(async move {
+                    let _ = scope.prepare_workspace_python(&preparation).await;
+                }));
+            }
+            tool_runtime_config.execution_scope = execution_scope;
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
@@ -725,7 +760,8 @@ impl LocalConversationCore {
                     // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
                 },
-            );
+            )
+            .with_execution_scope(tool_runtime.workspace().execution_scope().cloned());
             let workflow_runtime = WorkflowRuntime::new(
                 subagents.clone(),
                 tool_runtime.durable_store(),
@@ -945,6 +981,7 @@ impl LocalConversationCore {
                     capability,
                     workflow_terminal: None,
                     resource_loader: Some(resource_loader),
+                    standalone_execution: None,
                 })
             }
             .await;

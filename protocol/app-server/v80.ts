@@ -83,6 +83,7 @@ export type Request1 =
   | {
       method: 'fs/readFile';
       params: {
+        sessionId: SessionId;
         path: string;
         offset: string;
         maxBytes: number;
@@ -92,6 +93,7 @@ export type Request1 =
   | {
       method: 'fs/writeFile';
       params: {
+        sessionId: SessionId;
         path: string;
         dataBase64: string;
         expectedRevision?: string | null;
@@ -100,6 +102,7 @@ export type Request1 =
   | {
       method: 'fs/readDirectory';
       params: {
+        sessionId: SessionId;
         path: string;
         offset: number;
         limit: number;
@@ -109,12 +112,14 @@ export type Request1 =
   | {
       method: 'fs/getMetadata';
       params: {
+        sessionId: SessionId;
         path: string;
       };
     }
   | {
       method: 'fs/createDirectory';
       params: {
+        sessionId: SessionId;
         path: string;
         recursive: boolean;
       };
@@ -122,6 +127,7 @@ export type Request1 =
   | {
       method: 'fs/remove';
       params: {
+        sessionId: SessionId;
         path: string;
         recursive: boolean;
         force: boolean;
@@ -130,6 +136,7 @@ export type Request1 =
   | {
       method: 'fs/copy';
       params: {
+        sessionId: SessionId;
         sourcePath: string;
         destinationPath: string;
         recursive: boolean;
@@ -138,6 +145,7 @@ export type Request1 =
   | {
       method: 'fs/watch';
       params: {
+        sessionId: SessionId;
         watchId: string;
         path: string;
       };
@@ -1472,14 +1480,14 @@ export type CatalogKind = 'tools' | 'resources' | 'templates';
 export type SkillContentKind = 'instructions' | 'metadata';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ConversationId".
- */
-export type ConversationId = string;
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionId".
  */
 export type SessionId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConversationId".
+ */
+export type ConversationId = string;
 /**
  * Process-local live composition identity. Never a durable or transport identity.
  *
@@ -6775,6 +6783,9 @@ export type ErrorData =
       kind: 'environment_capacity_or_conflict';
     }
   | {
+      kind: 'execution_unavailable';
+    }
+  | {
       reason: AuxiliaryFailure;
       kind: 'auxiliary';
     }
@@ -8242,6 +8253,40 @@ export type HostToolContent = {
   type: 'inputText';
 };
 /**
+ * The complete upload envelope: JSON-RPC version, correlation identifier, and
+ * one closed method.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadEnvelope".
+ */
+export type HostUploadEnvelope = {
+  /**
+   * The JSON-RPC version.
+   */
+  jsonrpc: '2.0';
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  id: string | number;
+} & (
+  | {
+      method: 'item/tool/result/begin';
+      params: HostUploadBeginParams;
+    }
+  | {
+      method: 'item/tool/result/chunk';
+      params: HostUploadChunkParams;
+    }
+  | {
+      method: 'item/tool/result/end';
+      params: HostUploadEndParams;
+    }
+  | {
+      method: 'item/tool/result/abort';
+      params: HostUploadAbortParams;
+    }
+);
+/**
  * Direction-specific server output. Generic client replies cannot weaken
  * validation of typed server responses sharing the same JSON-RPC envelope.
  *
@@ -9518,6 +9563,10 @@ export interface ProtocolTypes {
  * via the `definition` "ExecParams".
  */
 export interface ExecParams {
+  /**
+   * The Session whose admitted Execution Client owns the process.
+   */
+  sessionId: string;
   /**
    * @minItems 1
    * @maxItems 256
@@ -11159,7 +11208,7 @@ export interface ScheduleRequestBudget {
   mutation_limit: number;
 }
 /**
- * Bounded paths and counts; whole file content is read only on demand.
+ * Bounded paths and counts from one completed observation.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ChangesSummary".
@@ -11177,9 +11226,6 @@ export interface ChangesSummary {
  * via the `definition` "ChangedFile".
  */
 export interface ChangedFile {
-  /**
-   * Absolute resolved Host path; never accepted from a comparison request.
-   */
   path: string;
   display: string;
   added: number;
@@ -11188,7 +11234,7 @@ export interface ChangedFile {
   oversized: boolean;
 }
 /**
- * An immutable, bounded comparison of a recorded file's two endpoints.
+ * Bounded comparison of the recorded endpoints of one file.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "FileComparison".
@@ -11200,7 +11246,7 @@ export interface FileComparison {
   truncated: boolean;
 }
 /**
- * Three lines of shared context around one group of edits.
+ * Three lines of shared context around a group of edits.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ComparisonHunk".
@@ -21985,6 +22031,302 @@ export interface InteractionRequester2 {
 export interface HostToolResponse {
   success: boolean;
   contentItems: HostToolContent[];
+}
+/**
+ * `item/tool/result/begin`: captures the immutable success and descriptors.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadBeginParams".
+ */
+export interface HostUploadBeginParams {
+  candidate: HostUploadCandidate;
+  /**
+   * The tool result's success flag, fixed at begin.
+   */
+  success: boolean;
+  /**
+   * The ordered item descriptors, at most [`MAX_ITEMS`].
+   *
+   * @maxItems 1024
+   */
+  items: HostUploadItem[];
+}
+/**
+ * The candidate being begun.
+ */
+export interface HostUploadCandidate {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * One item descriptor: its type tag and declared byte length.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadItem".
+ */
+export interface HostUploadItem {
+  /**
+   * The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.
+   */
+  typeTag: number;
+  /**
+   * The declared byte length of this item.
+   */
+  length: string;
+}
+/**
+ * `item/tool/result/chunk`: one ordered, bounded chunk of one item.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadChunkParams".
+ */
+export interface HostUploadChunkParams {
+  candidate: HostUploadCandidate1;
+  /**
+   * The current item's index.
+   */
+  itemIndex: number;
+  /**
+   * The strictly increasing chunk sequence, starting at `1`.
+   */
+  sequence: string;
+  /**
+   * The byte offset within the item.
+   */
+  offset: string;
+  /**
+   * The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].
+   */
+  dataBase64: string;
+  /**
+   * The SHA-256 of the decoded bytes.
+   */
+  sha256: string;
+}
+/**
+ * The candidate the chunk feeds.
+ */
+export interface HostUploadCandidate1 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * `item/tool/result/end`: echoes the begin metadata and closes the candidate.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadEndParams".
+ */
+export interface HostUploadEndParams {
+  candidate: HostUploadCandidate2;
+  /**
+   * The success flag, which must equal the begin's.
+   */
+  success: boolean;
+  /**
+   * The item descriptors, which must equal the begin's.
+   *
+   * @maxItems 1024
+   */
+  items: HostUploadItem[];
+  /**
+   * The declared total length, which must equal the sum of the items.
+   */
+  total: string;
+  /**
+   * The result digest over the canonical layout.
+   */
+  digest: string;
+}
+/**
+ * The candidate being ended.
+ */
+export interface HostUploadCandidate2 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * `item/tool/result/abort`: retires the candidate without a result.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadAbortParams".
+ */
+export interface HostUploadAbortParams {
+  candidate: HostUploadCandidate3;
+}
+/**
+ * The candidate being aborted.
+ */
+export interface HostUploadCandidate3 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * The identity one upload candidate belongs to. The Server callback
+ * incarnation, original request identifier, and tool call identity are the
+ * correlation; the Host subscription incarnation and upload identifier bind
+ * the candidate to one eligible participant.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadCandidate".
+ */
+export interface HostUploadCandidate4 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
 }
 /**
  * Native display metadata, shared by exact identity reads and catalog rows.

@@ -1,0 +1,29 @@
+[package]
+name = "rustx-execution-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "Server-side binding arbitration for the rustX execution protocol: reservation, authenticated connect, detach, and revocation. A library used by the Agent Server (rustx), not a new Agent."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+rustx-execution-protocol = { path = "../execution-protocol" }
+rustx-execution-transport = { path = "../execution-transport" }
+getrandom = { version = "0.3.4", features = ["std"] }
+sha2 = "0.10"
+constant_time_eq = "0.4"
+base64 = "0.22"
+nix = { version = "0.31.3", default-features = false, features = ["user", "fs", "socket"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

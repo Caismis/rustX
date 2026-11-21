@@ -53,6 +53,10 @@ mod ask_user;
 mod bash;
 pub(crate) use bash::NAME as BASH_TOOL_NAME;
 pub(crate) use bash::handoff::drive_private_bash;
+pub(crate) use bash::{
+    BashOutputLocator, PreparedBash, discard_private_output as discard_private_bash_output,
+    operation_at as bash_operation_at,
+};
 mod edit;
 mod glob;
 mod goal;
@@ -68,13 +72,14 @@ mod input;
 mod mutation;
 mod present;
 mod read;
+#[cfg(test)]
+pub(crate) use read::read_hooks;
 mod read_image;
 mod registration;
 pub(crate) use registration::input_schema;
-// The private native-search substrate shared by Glob and Grep. It is not a
-// tool: it is never registered, never reaches the model, and exists only
-// because Glob and Grep must observe one filesystem universe.
-mod search;
+// The shared Server-side projection of a physical-search failure — Glob
+// and Grep render the Client's wire codes onto the same diagnostics.
+mod search_failure;
 pub(crate) mod subagent;
 pub(crate) mod support;
 mod todo;
@@ -82,9 +87,11 @@ mod workflow;
 #[cfg(test)]
 pub(crate) use workflow::test_executor as test_workflow_executor;
 mod write;
+#[cfg(test)]
+pub(crate) use write::WriteTool;
 
 #[cfg(test)]
-pub(crate) use bash::{BashTestControl, BashTool};
+pub(crate) use bash::{BashTestControl, FixtureBashTool};
 #[cfg(test)]
 pub(crate) use grep::GrepTool;
 #[cfg(test)]
@@ -212,15 +219,11 @@ pub(crate) fn definitions(
         .collect()
 }
 
-// The per-invocation Bash supervisor process entry points are reachable
-// only from the supervisor binary and from test binaries via self-exec;
-// they are documented-hidden binary entry points, never tool-plane API. The
-// supervisor is an implementation detail of Bash execution ownership, so it
-// is owned by the Bash module and only re-exported here under its binary
-// entry-point path.
-#[cfg(unix)]
+// The trusted fixture executor is a root-side Bash construction that hands
+// the supervisor package's diagnostics contract to the real tool path; it is
+// a documented-hidden test capability, never tool-plane API.
 #[doc(hidden)]
-pub use bash::supervisor as bash_supervisor;
+pub use bash::fixture_executor;
 
 use crate::runtime::workflow::{WorkflowCatalog, WorkflowRuntime};
 use crate::tools::background::ConversationBackgroundRegistry;

@@ -56,7 +56,7 @@ pub async fn run_process(arguments: impl IntoIterator<Item = impl Into<OsString>
     match command {
         super::cli::Command::Help(help) => i32::from(write!(std::io::stderr(), "{help}").is_err()),
         super::cli::Command::AppServer(request) => {
-            crate::app_server::process::run_process(request).await
+            crate::app_server::process::run_process(*request).await
         }
         command => Box::pin(run_configuration_command(command)).await,
     }

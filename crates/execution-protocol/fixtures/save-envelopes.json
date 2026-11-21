@@ -1,0 +1,233 @@
+{
+  "reply/aborted": {
+    "save": {
+      "aborted": {
+        "cleanup": "removed",
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        }
+      }
+    }
+  },
+  "reply/begun": {
+    "save": {
+      "begun": {
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        }
+      }
+    }
+  },
+  "reply/chunked": {
+    "save": {
+      "chunked": {
+        "duplicate": false,
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "next_offset": "22",
+        "sequence": "1"
+      }
+    }
+  },
+  "reply/published": {
+    "save": {
+      "published": {
+        "extent": "complete",
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "length": "22",
+        "locator": "save:alpha-1",
+        "sha256": "02d606fe6abb801e6aca220c7223eaf02328233b65999bc66f23efdab4a6e9d6"
+      }
+    }
+  },
+  "reply/readability": {
+    "save": {
+      "readability": {
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "outcome": "readable"
+      }
+    }
+  },
+  "reply/sealed": {
+    "save": {
+      "sealed": {
+        "extent": "complete",
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "length": "22",
+        "sha256": "02d606fe6abb801e6aca220c7223eaf02328233b65999bc66f23efdab4a6e9d6"
+      }
+    }
+  },
+  "reply/unavailable": {
+    "save": {
+      "unavailable": {
+        "code": "capability-unavailable"
+      }
+    }
+  },
+  "request/abort": {
+    "save": {
+      "abort": {
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        }
+      }
+    }
+  },
+  "request/begin": {
+    "save": {
+      "begin": {
+        "content_format": "normalized-utf8-v1",
+        "owner": {
+          "conversation": "conv.alpha-1",
+          "generation": "1",
+          "incarnation": "00000000-0000-0000-0000-000000000001",
+          "instance": "instance-1",
+          "operation": "00000000-0000-0000-0000-000000000002",
+          "session": "ses_00000000-0000-7000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "request/chunk": {
+    "save": {
+      "chunk": {
+        "data_base64": "Y2h1bmstYnl0ZXMvd2l0aCtzbGFzaA==",
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "offset": "0",
+        "sequence": "1",
+        "sha256": "02d606fe6abb801e6aca220c7223eaf02328233b65999bc66f23efdab4a6e9d6"
+      }
+    }
+  },
+  "request/probe": {
+    "save": {
+      "probe": {
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        }
+      }
+    }
+  },
+  "request/publish": {
+    "save": {
+      "publish": {
+        "extent": "complete",
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "length": "22",
+        "sha256": "02d606fe6abb801e6aca220c7223eaf02328233b65999bc66f23efdab4a6e9d6"
+      }
+    }
+  },
+  "request/seal": {
+    "save": {
+      "seal": {
+        "extent": "contiguous-prefix",
+        "key": {
+          "candidate": "00000000-0000-0000-0000-00000000002a",
+          "owner": {
+            "conversation": "conv.alpha-1",
+            "generation": "1",
+            "incarnation": "00000000-0000-0000-0000-000000000001",
+            "instance": "instance-1",
+            "operation": "00000000-0000-0000-0000-000000000002",
+            "session": "ses_00000000-0000-7000-8000-000000000001"
+          }
+        },
+        "length": "22",
+        "sha256": "02d606fe6abb801e6aca220c7223eaf02328233b65999bc66f23efdab4a6e9d6"
+      }
+    }
+  }
+}

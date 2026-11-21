@@ -114,7 +114,10 @@ impl Fixture {
         }
     }
     fn command(&self, listen: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rustx"));
+        self.command_with_program(env!("CARGO_BIN_EXE_rustx"), listen)
+    }
+    fn command_with_program(&self, program: impl AsRef<std::ffi::OsStr>, listen: &str) -> Command {
+        let mut command = Command::new(program);
         command
             .current_dir(self.root.path())
             .env("HOME", self.root.path().join("home"))
@@ -146,6 +149,16 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
         .await
         .expect("outer liveness guard")
 }
+/// Reaps a detached `std` client process on scope exit.
+struct ReapChild(std::process::Child);
+
+impl Drop for ReapChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn terminate(child: &Child) {
     kill(
         Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -181,6 +194,2061 @@ async fn app_server_stdio_real_process_shared_conformance() {
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
     }))
+    .await;
+}
+
+#[tokio::test]
+async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let f = Fixture::new().await;
+        // Both recorded Session cwds become missing directories.
+        for name in ["a", "b"] {
+            std::fs::rename(
+                f.root.path().join(name),
+                f.root.path().join(format!("{name}-retired")),
+            )
+            .unwrap();
+        }
+        // A binary with no sibling helpers: the bare Server executable in
+        // its own directory (hard link on the source's own filesystem).
+        let (bin_dir, rustx) = isolated_server_bin();
+        let bin = bin_dir.path().to_path_buf();
+        // A stale handoff left behind under HOME must never be consumed: the
+        // missing workspace path it names stays missing and the file stays put.
+        let missing = f.root.path().join("a");
+        let admit = f
+            .root
+            .path()
+            .join("home/rustx/runtime/workspace-python/admit");
+        std::fs::create_dir_all(&admit).unwrap();
+        let stale = admit.join("stale.txt");
+        std::fs::write(&stale, format!("{}\n", missing.display())).unwrap();
+        let mut command = Command::new(&rustx);
+        command
+            .current_dir(f.root.path())
+            .env_clear()
+            .env("HOME", f.root.path().join("home"))
+            .env("PATH", &bin)
+            .args(["app-server", "--runtime-root"])
+            .arg(f.root.path().join("runtime"))
+            .args(["--listen", "stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().expect("spawn staged server");
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let MethodResult::Sessions { sessions, .. } = result(
+            &client,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("catalog")
+        };
+        for session in &f.sessions {
+            assert!(
+                sessions.iter().any(|summary| summary.id == *session),
+                "cold Session {session:?} not listed"
+            );
+        }
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Neither recorded cwd was resurrected, the stale handoff was ignored
+        // (unread and undeleted), and nothing was created beside the executable.
+        for name in ["a", "b"] {
+            assert!(!f.root.path().join(name).exists());
+        }
+        assert_eq!(
+            std::fs::read_to_string(&stale).unwrap(),
+            format!("{}\n", missing.display())
+        );
+        assert_eq!(
+            std::fs::read_dir(&bin)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>(),
+            ["rustx"]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let provider = crate::common::FixtureServer::start_with_body(|_, _, _| {
+            crate::common::sse_fixture("openai_chat", "plain_text.sse")
+        })
+        .await;
+        let fixture = Fixture::new().await;
+        let home = fixture.root.path().join("home");
+        let source = home.join("rustx/rustx.toml");
+        let original = std::fs::read_to_string(&source).unwrap();
+        std::fs::write(
+            source,
+            original.replace("http://127.0.0.1:9/v1", &provider.url("/v1")),
+        )
+        .unwrap();
+
+        let (bin, rustx) = isolated_server_bin();
+        let mut child = Command::new(rustx)
+            .args(["app-server", "--listen", "stdio", "--runtime-root"])
+            .arg(fixture.root.path().join("runtime"))
+            .current_dir(fixture.root.path())
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", bin.path())
+            .env("TEST_KEY", "fixture")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let session = fixture.sessions[0].clone();
+        let target = attach(&client, session, 2).await;
+        start_turn(&client, &target, "standalone model request").await;
+        let state = settled(&client, &target).await;
+        assert!(state["messages"].to_string().contains("Hello world"));
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].contains("standalone model request"));
+        assert_eq!(std::fs::read_dir(bin.path()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(fixture.root.path().join("a"))
+                .unwrap()
+                .count(),
+            0
+        );
+        result(&client, Method::SessionDetach { target }).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_spilling() {
+    bounded(Box::pin(async {
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use rustx::{
+            app_server::protocol::Method,
+            durable::SqliteConversationStore,
+            events::types::{AttemptOutcome, RuntimeEvent},
+            message::types::MessageBlock,
+            tools::{
+                limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
+                mcp::fixture::FixtureServer as McpFixture,
+                types::{ManagedOutputContinuation, ToolExecutionStatus},
+            },
+        };
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = Fixture::new().await;
+        let original_bytes = FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1;
+        let mcp_calls = fixture.root.path().join("mcp-calls");
+        let mcp = McpFixture {
+            result_bytes: Some(original_bytes),
+            echo_call_count_file: Some(mcp_calls.clone()),
+            ..McpFixture::default()
+        };
+        let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
+            move || Ok(mcp.clone()),
+            std::sync::Arc::default(),
+            StreamableHttpServerConfig::default(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mcp_server = tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+                .await
+                .unwrap();
+        });
+        let _mcp_server = tokio_util::task::AbortOnDropHandle::new(mcp_server);
+        let provider = crate::common::FixtureServer::start(|attempt, _| {
+            if attempt == 0 {
+                crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse")
+            } else {
+                crate::common::sse_fixture("openai_chat", "plain_text.sse")
+            }
+        })
+        .await;
+
+        let home = fixture.root.path().join("home");
+        let catalog = home.join("rustx/rustx.toml");
+        let authored = std::fs::read_to_string(&catalog)
+            .unwrap()
+            .replace("http://127.0.0.1:9/v1", &provider.url("/v1"));
+        let mut authored: toml::Value = toml::from_str(&authored).unwrap();
+        authored.as_table_mut().unwrap().insert(
+            "approval_mode".to_owned(),
+            toml::Value::String("full_access".to_owned()),
+        );
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".to_owned(),
+            toml::from_str("overflow = ['echo']").unwrap(),
+        );
+        std::fs::write(catalog, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        std::fs::create_dir_all(home.join("rustx/.agents")).unwrap();
+        std::fs::write(
+            home.join("rustx/.agents/mcp.toml"),
+            format!("[mcp_servers.overflow]\nurl = \"http://{address}/mcp\"\n"),
+        )
+        .unwrap();
+
+        let (bin, rustx) = isolated_server_bin();
+        let launch_probe = bin.path().join("rustx-execution-client");
+        std::fs::write(
+            &launch_probe,
+            "#!/bin/sh\nprintf 'launch\n' >> \"${0%/*}/client-launches\"\nexit 99\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(launch_probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let scratch = fixture.root.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let mut child = fixture
+            .command_with_program(rustx, "stdio")
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", bin.path())
+            .env("TMPDIR", &scratch)
+            .env("TEST_KEY", "fixture")
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let session = &fixture.sessions[0];
+        let target = attach(&client, session.clone(), 2).await;
+        start_turn(&client, &target, "overflow without execution binding").await;
+        let state = settled(&client, &target).await;
+        assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        assert_eq!(
+            std::fs::read_dir(&scratch).unwrap().count(),
+            0,
+            "no Spill before detach or shutdown"
+        );
+        assert!(
+            !bin.path().join("client-launches").exists(),
+            "zero Client starts before teardown"
+        );
+        result(&client, Method::SessionDetach { target }).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        let request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
+        let names: Vec<_> = request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"echo"),
+            "HTTP MCP tool not advertised: {names:?}"
+        );
+        assert!(
+            !bin.path().join("client-launches").exists(),
+            "zero Client starts"
+        );
+        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+        let runtime = fixture.root.path().join("runtime");
+        let controller = SessionController::open(&runtime).unwrap();
+        let access = controller.acquire_session(session, None).await.unwrap();
+        let store = SqliteConversationStore::open_existing(
+            access.node.conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        let page = store.read_events(None, 128).unwrap();
+        assert!(page.events.len() < 128, "complete attempt journal");
+        let commits: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
+                    Some((entry.sequence, message_id.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let [(commit_sequence, message_id)] = commits.as_slice() else {
+            panic!("one tool commit: {commits:?}");
+        };
+        let terminals: Vec<_> = page
+            .events
+            .iter()
+            .filter_map(|entry| {
+                AttemptOutcome::from_terminal_event(&entry.event)
+                    .map(|outcome| (entry.sequence, outcome))
+            })
+            .collect();
+        let [(terminal_sequence, AttemptOutcome::Completed { .. })] = terminals.as_slice() else {
+            panic!("one completed terminal: {terminals:?}");
+        };
+        assert!(commit_sequence < terminal_sequence);
+        let MessageBlock::Tool(tool) = store
+            .load_messages(std::slice::from_ref(message_id))
+            .unwrap()
+            .remove(0)
+        else {
+            panic!("canonical tool result");
+        };
+        let preview = tool.result.model_facing_projection();
+        assert_eq!(
+            tool.result.status,
+            ToolExecutionStatus::Success,
+            "{}",
+            preview.as_text()
+        );
+        assert_eq!(std::fs::read_to_string(mcp_calls).unwrap(), "echo\n");
+        assert_eq!(
+            tool.result
+                .truncation
+                .as_ref()
+                .and_then(|cut| cut.original_bytes),
+            Some(original_bytes as u64)
+        );
+        assert!(matches!(
+            tool.result.managed_output.as_deref(),
+            Some(ManagedOutputContinuation::Unavailable { diagnostic })
+                if diagnostic.contains("no eligible Execution Client save binding")
+        ));
+        assert!(!preview.as_text().contains("Read or Grep"));
+        for entry in ignore::WalkBuilder::new(&runtime)
+            .standard_filters(false)
+            .build()
+            .map(Result::unwrap)
+        {
+            let name = entry.file_name().to_string_lossy();
+            assert!(
+                !name.starts_with("r-") && !name.starts_with("e-"),
+                "unexpected Spill: {entry:?}"
+            );
+        }
+    }))
+    .await;
+}
+
+/// A fresh staging directory on the *same filesystem as the staged
+/// sources* so staging is a hard link — no write, so the staged inode
+/// can never still be counted as written at execve. (A tmpfs copy of
+/// the ~600 MB Server binary has a real transient ETXTBSY window under
+/// parallel load: the kernel still counts the just-closed writer when
+/// execve runs.) The returned guard owns the directory; it must outlive
+/// the spawned children.
+fn staged_bin_dir() -> tempfile::TempDir {
+    let base = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
+        .parent()
+        .unwrap();
+    tempfile::tempdir_in(base).unwrap()
+}
+
+fn stage_binary(bin: &std::path::Path, name: &str, source: &std::path::Path) -> PathBuf {
+    let destination = bin.join(name);
+    // Hard link required: the staging directory intentionally shares the
+    // source filesystem — a copy would reintroduce the exec/write race
+    // `staged_bin_dir` exists to avoid.
+    std::fs::hard_link(source, &destination).unwrap_or_else(|error| {
+        panic!("staged directory must share the source filesystem: {error}")
+    });
+    destination
+}
+
+fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
+    let bin = staged_bin_dir();
+    let rustx = stage_binary(
+        bin.path(),
+        "rustx",
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
+    );
+    (bin, rustx)
+}
+
+fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
+    let bin = staged_bin_dir();
+    // The Client is only ever the artifact preparation staged beside this
+    // harness — never a runtime build, a PATH lookup, or a fallback path.
+    let client = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    assert!(
+        client.is_file(),
+        "staged Execution Client is absent: {client:?}"
+    );
+    stage_binary(bin.path(), "rustx-execution-client", &client);
+    let rustx = stage_binary(
+        bin.path(),
+        "rustx",
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
+    );
+    (bin, rustx)
+}
+
+fn local_exec_command(
+    binary: &std::path::Path,
+    f: &Fixture,
+    session: &str,
+    workspace: &std::path::Path,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(f.root.path())
+        .env_clear()
+        .env("HOME", f.root.path().join("home"))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["app-server", "--runtime-root"])
+        .arg(f.root.path().join("runtime"))
+        .args(["--listen", "stdio"])
+        .arg("--local-execution-session")
+        .arg(session)
+        .arg("--local-execution-workspace")
+        .arg(workspace)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
+}
+
+/// The remote composition: the App Server binds a loopback WebSocket
+/// listener and publishes the bootstrap bundle for the operator —
+/// never launches a Client itself.
+fn remote_exec_command(
+    binary: &std::path::Path,
+    f: &Fixture,
+    session: Option<&str>,
+    bundle: &std::path::Path,
+) -> Command {
+    let mut command = Command::new(binary);
+    if let Some(session) = session {
+        command
+            .arg("app-server")
+            .arg("--execution-session")
+            .arg(session);
+    } else {
+        command.arg("app-server");
+    }
+    command
+        .current_dir(f.root.path())
+        .env_clear()
+        .env("HOME", f.root.path().join("home"))
+        .env("PATH", "/usr/bin:/bin")
+        .arg("--runtime-root")
+        .arg(f.root.path().join("runtime"))
+        .args(["--listen", "stdio"])
+        .args(["--execution-ws-listen", "127.0.0.1:0"])
+        .arg("--execution-bootstrap-out")
+        .arg(bundle)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
+}
+
+/// The operator step of the remote composition: the staged real Client
+/// started independently against the provisioned bundle — no
+/// environment, sealed stdio, exactly the documented invocation.
+fn staged_client_command(
+    bundle: &std::path::Path,
+    workspace: &std::path::Path,
+) -> std::process::Command {
+    let executable = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    assert!(
+        executable.is_file(),
+        "staged Execution Client is absent: {executable:?}"
+    );
+    let mut command = std::process::Command::new(&executable);
+    command
+        .arg("--binding-file")
+        .arg(bundle)
+        .arg("--workspace")
+        .arg(workspace)
+        .current_dir("/")
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+/// Polls a Session-routed read until the background accept loop admits
+/// the operator-spawned Client — bounded like the handshake budget.
+async fn await_admission(client: &driver::Driver, session: &SessionId, path: &std::path::Path) {
+    use rustx::app_server::protocol::*;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match rpc(
+            client,
+            10,
+            Method::FsReadFile {
+                session_id: session.clone(),
+                path: path.display().to_string(),
+                offset: 0,
+                max_bytes: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        {
+            Response::Success(_) => return,
+            Response::Failure(failure)
+                if failure.error.data == Some(ErrorData::ExecutionUnavailable) =>
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Client was not admitted within the bound"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            other @ Response::Failure(_) => panic!("admission probe: {other:?}"),
+        }
+    }
+}
+
+/// Grants exactly these environment roots in the fixture's authored
+/// config — the immutable allowlist the App Server's file queries are
+/// authorized against.
+fn grant_environment_roots(f: &Fixture, roots: &[PathBuf]) {
+    let authored = f.root.path().join("home/rustx/rustx.toml");
+    let mut source: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+    source.as_table_mut().unwrap().insert(
+        "app_server".into(),
+        toml::Value::try_from(serde_json::json!({ "environment_roots": roots })).unwrap(),
+    );
+    std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
+}
+
+#[tokio::test]
+async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
+    bounded(async {
+        let f = Fixture::new().await;
+        // The sibling Client is absent, so a workspace error proves the
+        // check fires before anything is spawned.
+        let (_bin, rustx) = isolated_server_bin();
+        // The fixture root is a normalized absolute path but is not the
+        // Session's recorded workspace.
+        let child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), f.root.path())
+            .spawn()
+            .expect("spawn staged server");
+        let output = child.wait_with_output().await.unwrap();
+        assert!(!output.status.success(), "unexpected success");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("not the Session's reserved workspace"),
+            "{stderr}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn local_execution_fails_exactly_when_the_sibling_client_is_absent() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let (_bin, rustx) = isolated_server_bin();
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        let child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .spawn()
+            .expect("spawn staged server");
+        let output = child.wait_with_output().await.unwrap();
+        assert!(!output.status.success(), "unexpected success");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("client executable is absent beside the server"),
+            "{stderr}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn local_execution_rejects_an_unknown_session() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let (_bin, rustx) = isolated_server_bin();
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        let child = local_exec_command(
+            &rustx,
+            &f,
+            "ses_00000000-0000-7000-8000-000000000001",
+            &workspace,
+        )
+        .spawn()
+        .expect("spawn staged server");
+        let output = child.wait_with_output().await.unwrap();
+        assert!(!output.status.success(), "unexpected success");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("local execution:"), "{stderr}");
+        assert!(!stderr.contains("client executable is absent"), "{stderr}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn local_execution_arguments_must_be_paired() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let output = Command::new(env!("CARGO_BIN_EXE_rustx"))
+            .current_dir(f.root.path())
+            .env("HOME", f.root.path().join("home"))
+            .args(["app-server", "--runtime-root"])
+            .arg(f.root.path().join("runtime"))
+            .args(["--listen", "stdio"])
+            .arg("--local-execution-session")
+            .arg(f.sessions[0].as_str())
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success(), "unpaired flag must fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("local-execution-workspace"), "{stderr}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn explicit_composition_launches_and_reaps_the_sibling_client() {
+    bounded(async {
+        use base64::Engine as _;
+        use rustx::app_server::protocol::*;
+        let f = Fixture::new().await;
+        // Both catalog workspaces are configured roots for this composition.
+        grant_environment_roots(
+            &f,
+            &[
+                std::fs::canonicalize(f.root.path().join("a")).unwrap(),
+                std::fs::canonicalize(f.root.path().join("b")).unwrap(),
+            ],
+        );
+
+        // Same filename in both workspaces: only Session A may be served.
+        let marker = b"only through the admitted client";
+        std::fs::write(f.root.path().join("a/marker"), marker).unwrap();
+        std::fs::write(f.root.path().join("b/marker"), b"decoy").unwrap();
+        std::os::unix::fs::symlink("marker", f.root.path().join("a/link")).unwrap();
+
+        let (_bin, rustx) = isolated_server_pair();
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .spawn()
+            .expect("spawn staged server");
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        // Readiness proves the Client connected and was admitted before
+        // the transport went up — the launch is real, not deferred.
+
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readFile through the admitted Client")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            marker
+        );
+        assert_eq!(chunk.next_offset, None);
+        // The stamp is the source-descriptor truth of the fixture file.
+        let expected = rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(f.root.path().join("a/marker")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(chunk.metadata.revision, expected.revision);
+        assert_eq!(chunk.metadata.identity, expected.identity);
+        assert_eq!(chunk.metadata.size, expected.size);
+
+        // Session B holds no endpoint: its decoy is never served.
+        let Response::Failure(failure) = rpc(
+            &client,
+            10,
+            Method::FsReadFile {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session B read must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        // An oversized range never leaves the parameter gate.
+        let Response::Failure(failure) = rpc(
+            &client,
+            11,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 65537,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("oversize read must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::InvalidParams));
+
+        // fs/getMetadata reports the leaf symlink itself — never
+        // followed — with the Client's own source stamp.
+        let MethodResult::FileMetadata { metadata } = result(
+            &client,
+            Method::FsGetMetadata {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("link").display().to_string(),
+            },
+        )
+        .await
+        else {
+            panic!("fs/getMetadata through the admitted Client")
+        };
+        assert!(metadata.is_symlink && !metadata.is_file);
+        let expected_link = std::fs::symlink_metadata(workspace.join("link")).unwrap();
+        assert_eq!(metadata.size, expected_link.len());
+
+        // fs/readDirectory pages the Session's root through the Client:
+        // both names, sorted, the link reported as a symlink.
+        let MethodResult::DirectoryPage { page } = result(
+            &client,
+            Method::FsReadDirectory {
+                session_id: f.sessions[0].clone(),
+                path: workspace.display().to_string(),
+                offset: 0,
+                limit: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readDirectory through the admitted Client")
+        };
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|e| e.file_name.as_str())
+                .collect::<Vec<_>>(),
+            ["link", "marker"]
+        );
+        assert_eq!(page.next_offset, None);
+        assert!(page.entries[0].metadata.is_symlink);
+        assert!(page.entries[1].metadata.is_file);
+
+        // Session B's unbound queries — and its write — fail the same way
+        // its read did. The unbound decoy is never a fallback target.
+        for method in [
+            Method::FsGetMetadata {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+            },
+            Method::FsReadDirectory {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                offset: 0,
+                limit: 16,
+                expected_revision: None,
+            },
+            Method::FsWriteFile {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"planted"),
+                expected_revision: None,
+            },
+        ] {
+            let Response::Failure(failure) = rpc(&client, 12, method).await else {
+                panic!("Session B query must fail")
+            };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
+        assert_eq!(
+            std::fs::read(f.root.path().join("b/marker")).unwrap(),
+            b"decoy"
+        );
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn remote_execution_shuts_down_cleanly_without_an_admitted_client() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (_bin, rustx) = isolated_server_bin();
+        let bundle = fixture.root.path().join("private").join("bootstrap");
+        let mut server = remote_exec_command(
+            &rustx,
+            &fixture,
+            Some(fixture.sessions[0].as_str()),
+            &bundle,
+        )
+        .spawn()
+        .unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        assert!(bundle.is_file());
+        terminate(&server);
+        let status = server.wait().await.unwrap();
+        assert!(status.success(), "{status}");
+        assert!(!bundle.exists());
+        client.close().await;
+    })
+    .await;
+}
+
+/// Remote-mode product proof: `rustx app-server --execution-*` publishes a
+/// `0600` WebSocket bootstrap, an operator-spawned staged Client connects
+/// through a genuine RFC 6455 upgrade — never a UDS stand-in — and
+/// Session-routed `fs` dispatch crosses the WebSocket channel while a
+/// second unbound Session is refused exactly as on the Unix transport.
+#[tokio::test]
+async fn remote_execution_serves_session_reads_over_websocket() {
+    bounded(async {
+        use base64::Engine as _;
+        use rustx::app_server::protocol::*;
+        use std::os::unix::fs::PermissionsExt;
+        let f = Fixture::new().await;
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        grant_environment_roots(&f, std::slice::from_ref(&workspace));
+        let marker = "remote ws payload — déjà vu".as_bytes();
+        std::fs::write(workspace.join("marker"), marker).unwrap();
+
+        let (_bin, rustx) = isolated_server_bin();
+        let private = f.root.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bundle = private.join("bootstrap");
+        let mut server = remote_exec_command(&rustx, &f, Some(f.sessions[0].as_str()), &bundle)
+            .spawn()
+            .expect("spawn staged server");
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        // Readiness implies the reservation published: the bundle is the
+        // `0600` create_new file the operator hands to the Client.
+        let mode = std::fs::metadata(&bundle)
+            .unwrap_or_else(|_| panic!("bootstrap bundle was not published"))
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "bootstrap must be owner-only");
+
+        let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
+        let mut execution = ReapChild(execution);
+
+        // Admission runs in the background accept loop while management
+        // already serves: the first Session-routed read polls until the
+        // admitted Client answers, bounded like the handshake budget.
+        await_admission(&client, &f.sessions[0], &workspace.join("marker")).await;
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 256,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readFile through the WS-admitted Client")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            marker
+        );
+        assert_eq!(chunk.next_offset, None);
+
+        // The same routed metadata and conditional write cross the WS
+        // channel — identical semantics to the Unix transport.
+        let MethodResult::FileMetadata { metadata } = result(
+            &client,
+            Method::FsGetMetadata {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+            },
+        )
+        .await
+        else {
+            panic!("fs/getMetadata through the WS-admitted Client")
+        };
+        assert!(metadata.is_file && !metadata.is_symlink);
+
+        let MethodResult::FileMetadata { metadata: written } = result(
+            &client,
+            Method::FsWriteFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("written").display().to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"ws written"),
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/writeFile through the WS-admitted Client")
+        };
+        assert_ne!(written.revision, "");
+        assert_eq!(
+            std::fs::read(workspace.join("written")).unwrap(),
+            b"ws written"
+        );
+
+        let mut argv = rustx::app_server::command::ExecParams {
+            session_id: f.sessions[0].clone(),
+            command: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"printf '%s:<%s>' "$#" "$1""#.into(),
+                "argv-proof".into(),
+                String::new(),
+            ],
+            cwd: workspace.display().to_string(),
+            env: std::collections::BTreeMap::new(),
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            size: None,
+        };
+        let MethodResult::CommandExec { result: command } =
+            result(&client, Method::CommandExec(argv.clone())).await
+        else {
+            panic!("empty argument must reach the real Client");
+        };
+        assert_eq!(command.exit_code, Some(0));
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(command.stdout_base64)
+                .unwrap(),
+            b"1:<>"
+        );
+        assert_eq!(command.stderr_base64, "");
+        for invalid in [
+            vec![String::new()],
+            vec!["/usr/bin/printf".into(), "x\0y".into()],
+        ] {
+            argv.command = invalid;
+            let Response::Failure(failure) =
+                rpc(&client, 52, Method::CommandExec(argv.clone())).await
+            else {
+                panic!("invalid argv must be refused");
+            };
+            assert_eq!(failure.error.data, Some(ErrorData::InvalidParams));
+        }
+
+        // Session B holds no endpoint — its routed read is refused
+        // exactly as on the Unix transport.
+        let Response::Failure(failure) = rpc(
+            &client,
+            11,
+            Method::FsReadFile {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session B read must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        client.close().await;
+        terminate(&server);
+        let output = server.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Orderly server teardown sends the WebSocket Close frame — the
+        // Client observes a clean EOF and exits successfully on its own.
+        let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = execution.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < bound,
+                "Client did not exit on channel EOF"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(status.success(), "gracefully closed Client must exit 0");
+    })
+    .await;
+}
+
+async fn assert_seeded_environment_tree(
+    client: &driver::Driver,
+    session: &SessionId,
+    workspace: &std::path::Path,
+) {
+    use rustx::app_server::protocol::*;
+    const CONTENT: &[u8] = b"one\r\ntwo\x00\xff\n";
+    let path = |relative: &str| workspace.join(relative).display().to_string();
+    std::fs::write(path("tree-source"), CONTENT).unwrap();
+    let copy = |destination: &str| Method::FsCopy {
+        session_id: session.clone(),
+        source_path: path("tree-source"),
+        destination_path: path(destination),
+        recursive: false,
+    };
+    result(
+        client,
+        Method::FsCreateDirectory {
+            session_id: session.clone(),
+            path: path("tree-copy/nested"),
+            recursive: true,
+        },
+    )
+    .await;
+    result(client, copy("tree-copy/nested/文本")).await;
+    assert_eq!(
+        std::fs::read(path("tree-copy/nested/文本")).unwrap(),
+        CONTENT
+    );
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session.clone(),
+            path: path("tree-copy/nested"),
+            offset: 0,
+            limit: 1,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("list copied tree")
+    };
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].file_name, "文本");
+    assert_eq!(page.entries[0].metadata.size, CONTENT.len() as u64);
+    assert_eq!(page.next_offset, None);
+    let control_name = "reports\t2026";
+    let parent = format!("tree-copy/{control_name}");
+    result(
+        client,
+        Method::FsCreateDirectory {
+            session_id: session.clone(),
+            path: path(&parent),
+            recursive: false,
+        },
+    )
+    .await;
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session.clone(),
+            path: path("tree-copy"),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("list names with literal controls");
+    };
+    assert_eq!(
+        page.entries
+            .iter()
+            .map(|entry| entry.file_name.as_str())
+            .collect::<Vec<_>>(),
+        ["nested", control_name]
+    );
+    let MethodResult::FileMetadata { metadata } = result(
+        client,
+        Method::FsGetMetadata {
+            session_id: session.clone(),
+            path: path(&parent),
+        },
+    )
+    .await
+    else {
+        panic!("stat the directory with a tab");
+    };
+    assert!(metadata.is_directory);
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session.clone(),
+            path: path(&parent),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("open the directory with a tab");
+    };
+    assert_eq!(page.entries, []);
+    let Response::Failure(error) = rpc(client, 48, copy("../escape")).await else {
+        panic!("copy must refuse a non-normal Workspace path")
+    };
+    assert_eq!(error.error.data, Some(ErrorData::EnvironmentUnauthorized));
+    assert!(!workspace.with_file_name("escape").exists());
+    result(
+        client,
+        Method::FsRemove {
+            session_id: session.clone(),
+            path: path("tree-copy"),
+            recursive: true,
+            force: false,
+        },
+    )
+    .await;
+    assert!(!workspace.join("tree-copy").exists());
+    assert_eq!(std::fs::read(path("tree-source")).unwrap(), CONTENT);
+}
+
+#[tokio::test]
+async fn execution_enrollment_precedes_client_and_workspace_configuration_readiness() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        use rustx_execution_protocol::Bootstrap;
+        use rustx_execution_protocol::transport::read_record;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let f = Fixture::new().await;
+        let workspace = f.root.path().join("a");
+        grant_environment_roots(&f, std::slice::from_ref(&workspace));
+        let project = workspace.join("rustx.toml");
+        std::fs::write(&project, b"[agent]\n").unwrap();
+        std::fs::write(workspace.join("marker"), b"authorized").unwrap();
+        let (_bin, rustx) = isolated_server_bin();
+        let private = f.root.path().join("bootstrap-private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bundle = private.join("binding");
+        let mut server = remote_exec_command(&rustx, &f, None, &bundle)
+            .env("TEST_KEY", "fixture")
+            .arg("--execution-workspace")
+            .arg(&workspace)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let bootstrap: Bootstrap = read_record(&mut std::fs::File::open(&bundle).unwrap()).unwrap();
+        let id = SessionId::parse(bootstrap.session.as_str()).unwrap();
+        assert!(!f.sessions.contains(&id));
+        assert_eq!(bootstrap.workspace, workspace);
+        assert!(matches!(
+            result(&client, Method::SessionRead { session_id: id.clone() }).await,
+            MethodResult::Session { session } if session.id == id
+        ));
+        let browse = || Method::FsReadDirectory {
+            session_id: id.clone(),
+            path: workspace.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        };
+        let Response::Failure(before) = rpc(&client, 18, browse()).await else {
+            panic!("browse before authenticated Client")
+        };
+        assert_eq!(before.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        let thread_id = app_server_conformance::thread_id(&client, id.clone()).await;
+        let Response::Failure(before_attach) = rpc(
+            &client,
+            42,
+            Method::SessionAttach {
+                thread_id: thread_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("configuration before authenticated Client");
+        };
+        assert!(
+            before_attach
+                .error
+                .message
+                .contains("no client is admitted"),
+            "{before_attach:?}"
+        );
+        assert_eq!(diagnostics(&client).await.loaded, 0);
+        std::fs::write(project, b"[broken").unwrap();
+        let _execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
+        await_admission(&client, &id, &workspace.join("marker")).await;
+        assert!(matches!(
+            result(&client, browse()).await,
+            MethodResult::DirectoryPage { page }
+                if page.entries.iter().any(|entry| entry.file_name == "marker")
+        ));
+        assert!(matches!(
+            rpc(&client, 44, Method::SessionAttach { thread_id }).await,
+            Response::Failure(_)
+        ));
+        assert!(matches!(
+            result(&client, Method::SessionRead { session_id: id }).await,
+            MethodResult::Session { .. }
+        ));
+        assert_eq!(diagnostics(&client).await.loaded, 0);
+        client.close().await;
+        terminate(&server);
+        let output = server.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    })
+    .await;
+}
+
+/// Identical seed content for the parity transcript — the same bytes,
+/// names, and link under both transports so the transcripts may differ
+/// only by transport, never by seed.
+fn seed_workspace(workspace: &std::path::Path, decoy_dir: &std::path::Path) {
+    std::fs::write(workspace.join("marker"), "såme payload — déjà vu ☃\n").unwrap();
+    std::fs::write(
+        workspace.join("s p a c e ü.txt"),
+        "escaped bytes — こんにちは\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("marker", workspace.join("link")).unwrap();
+    std::fs::write(decoy_dir.join("marker"), b"decoy").unwrap();
+}
+
+/// The identical seeded operation sequence both transports must serve
+/// byte-for-byte identical: UTF-8 and escaped-name reads, symlink
+/// metadata, the directory page, the missing-file typed failure, a
+/// conditional write that commits then conflicts, tree mutations, and the
+/// unbound Session's refused read and write. The transcript records only
+/// deterministic outcomes — revisions and identities are proven
+/// non-empty but never compared, since they are per-write identities.
+async fn seeded_operations(
+    client: &driver::Driver,
+    session_a: &SessionId,
+    session_b: &SessionId,
+    workspace_a: &std::path::Path,
+    decoy_marker: &std::path::Path,
+) -> Vec<String> {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::*;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let mut transcript = Vec::new();
+    let read_at = |path: &std::path::Path| Method::FsReadFile {
+        session_id: session_a.clone(),
+        path: path.display().to_string(),
+        offset: 0,
+        max_bytes: 256,
+        expected_revision: None,
+    };
+
+    // UTF-8 content read with a proven revision.
+    let MethodResult::FileChunk { chunk } =
+        result(client, read_at(&workspace_a.join("marker"))).await
+    else {
+        panic!("seeded marker read")
+    };
+    let bytes = b64.decode(&chunk.data_base64).unwrap();
+    transcript.push(format!(
+        "read:marker:{}:{}:{}:{}",
+        String::from_utf8(bytes).unwrap(),
+        chunk.next_offset.is_none(),
+        !chunk.metadata.revision.is_empty(),
+        !chunk.metadata.identity.is_empty()
+    ));
+
+    // Escaped-name UTF-8 read.
+    let MethodResult::FileChunk { chunk } =
+        result(client, read_at(&workspace_a.join("s p a c e ü.txt"))).await
+    else {
+        panic!("seeded escaped-name read")
+    };
+    transcript.push(format!(
+        "read:escaped:{}",
+        String::from_utf8(b64.decode(&chunk.data_base64).unwrap()).unwrap()
+    ));
+
+    // Symlink metadata is stamped exactly.
+    let MethodResult::FileMetadata { metadata } = result(
+        client,
+        Method::FsGetMetadata {
+            session_id: session_a.clone(),
+            path: workspace_a.join("link").display().to_string(),
+        },
+    )
+    .await
+    else {
+        panic!("seeded symlink metadata")
+    };
+    transcript.push(format!(
+        "meta:link:{}:{}:{}",
+        metadata.is_symlink, metadata.is_file, metadata.size
+    ));
+
+    // The directory page names both seeded names in the same order.
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session_a.clone(),
+            path: workspace_a.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("seeded directory page")
+    };
+    transcript.push(format!(
+        "dir:{}:{}",
+        page.entries
+            .iter()
+            .map(|entry| format!(
+                "{}:{}:{}",
+                entry.file_name, entry.metadata.is_file, entry.metadata.is_symlink
+            ))
+            .collect::<Vec<_>>()
+            .join("|"),
+        page.next_offset.is_none()
+    ));
+
+    // A missing file is the same typed failure on both transports.
+    let Response::Failure(failure) = rpc(
+        client,
+        21,
+        Method::FsReadFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("absent").display().to_string(),
+            offset: 0,
+            max_bytes: 64,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("the missing file must fail")
+    };
+    assert_eq!(
+        failure.error.data,
+        Some(ErrorData::EnvironmentResourceNotFound)
+    );
+    transcript.push("absent:EnvironmentResourceNotFound".to_string());
+
+    // A conditional write commits, a stale revision conflicts typed,
+    // and the committed revision chains the next write.
+    let MethodResult::FileMetadata { metadata: first } = result(
+        client,
+        Method::FsWriteFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("written").display().to_string(),
+            data_base64: b64.encode("written — 1\n"),
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("seeded write")
+    };
+    assert_ne!(first.revision, "");
+    transcript.push("write:created".to_string());
+
+    // The committed revision chains the next write.
+    let MethodResult::FileMetadata { metadata: second } = result(
+        client,
+        Method::FsWriteFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("written").display().to_string(),
+            data_base64: b64.encode("written — 2\n"),
+            expected_revision: Some(first.revision.clone()),
+        },
+    )
+    .await
+    else {
+        panic!("the chained write must commit")
+    };
+    assert_ne!(second.revision, "");
+    assert_ne!(second.revision, first.revision);
+    assert_eq!(
+        std::fs::read(workspace_a.join("written")).unwrap(),
+        "written — 2\n".as_bytes()
+    );
+    transcript.push("write:chained".to_string());
+
+    // A genuinely stale revision — valid format, superseded value —
+    // is the same typed conflict on both transports.
+    let Response::Failure(failure) = rpc(
+        client,
+        22,
+        Method::FsWriteFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("written").display().to_string(),
+            data_base64: b64.encode("stale\n"),
+            expected_revision: Some(first.revision.clone()),
+        },
+    )
+    .await
+    else {
+        panic!("the stale write must fail")
+    };
+    transcript.push(format!("write:stale:{:?}", failure.error.data));
+    assert_eq!(
+        std::fs::read(workspace_a.join("written")).unwrap(),
+        "written — 2\n".as_bytes(),
+        "the conflicted write never landed"
+    );
+
+    // The unbound Session's read and write are refused identically.
+    for (id, call) in [
+        (
+            23,
+            Method::FsReadFile {
+                session_id: session_b.clone(),
+                path: decoy_marker.display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        ),
+        (
+            24,
+            Method::FsWriteFile {
+                session_id: session_b.clone(),
+                path: decoy_marker.display().to_string(),
+                data_base64: b64.encode("planted"),
+                expected_revision: None,
+            },
+        ),
+    ] {
+        let Response::Failure(failure) = rpc(client, id, call).await else {
+            panic!("the unbound Session call must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+    }
+    assert_eq!(std::fs::read(decoy_marker).unwrap(), b"decoy");
+    transcript.push("unbound:ExecutionUnavailable".to_string());
+    assert_seeded_environment_tree(client, session_a, workspace_a).await;
+
+    transcript
+}
+
+/// Phase one of the parity proof: the seeded sequence over the local
+/// Unix sibling composition — readiness itself proves the sibling was
+/// launched and admitted before the transport served.
+async fn seeded_transcript_over_unix() -> Vec<String> {
+    let f = Fixture::new().await;
+    let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+    grant_environment_roots(&f, std::slice::from_ref(&workspace));
+    seed_workspace(&workspace, &f.root.path().join("b"));
+
+    let (_bin, rustx) = isolated_server_pair();
+    let mut server = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+        .spawn()
+        .expect("spawn staged server");
+    let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+    initialize_client(&client).await;
+    let transcript = seeded_operations(
+        &client,
+        &f.sessions[0],
+        &f.sessions[1],
+        &workspace,
+        &f.root.path().join("b/marker"),
+    )
+    .await;
+    client.close().await;
+    terminate(&server);
+    let output = server.wait_with_output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    transcript
+}
+
+/// Phase two: the identical sequence over the remote WebSocket
+/// composition — operator-spawned Client admitted through the genuine
+/// RFC 6455 upgrade.
+async fn seeded_transcript_over_websocket() -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new().await;
+    let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+    grant_environment_roots(&f, std::slice::from_ref(&workspace));
+    seed_workspace(&workspace, &f.root.path().join("b"));
+
+    let (_bin, rustx) = isolated_server_bin();
+    let private = f.root.path().join("private");
+    std::fs::create_dir(&private).unwrap();
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bundle = private.join("bootstrap");
+    let mut server = remote_exec_command(&rustx, &f, Some(f.sessions[0].as_str()), &bundle)
+        .spawn()
+        .expect("spawn staged server");
+    let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+    initialize_client(&client).await;
+    let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
+    let mut execution = ReapChild(execution);
+    await_admission(&client, &f.sessions[0], &workspace.join("marker")).await;
+    let transcript = seeded_operations(
+        &client,
+        &f.sessions[0],
+        &f.sessions[1],
+        &workspace,
+        &f.root.path().join("b/marker"),
+    )
+    .await;
+    client.close().await;
+    terminate(&server);
+    let output = server.wait_with_output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = execution.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "Client did not exit on channel EOF"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "gracefully closed Client must exit 0, got {status}"
+    );
+    transcript
+}
+
+/// Transport parity proof: the identical seeded operation sequence is
+/// served byte-for-byte identical — same bytes, same ordering, same
+/// typed failures — over the local Unix composition and the remote
+/// WebSocket composition.
+#[tokio::test]
+async fn websocket_and_unix_transports_serve_identical_seeded_operations() {
+    bounded(async {
+        let unix = seeded_transcript_over_unix().await;
+        let websocket = seeded_transcript_over_websocket().await;
+        assert_eq!(unix, websocket);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+async fn effective_tool_deadline(
+    client: &driver::Driver,
+    target: rustx::app_server::protocol::AttachmentTarget,
+) -> u64 {
+    use rustx::app_server::protocol::*;
+    use rustx::local_runtime::configuration::effective_observation::EffectiveFieldName;
+    let MethodResult::EffectiveConfiguration { projection } =
+        result(client, Method::ConfigurationGet { target }).await
+    else {
+        panic!("the bound Session has an effective configuration");
+    };
+    if let Some(configuration) = projection.inline {
+        return configuration.tool_deadline.hard_deadline_ms;
+    }
+    let policy = projection
+        .fields
+        .into_iter()
+        .find(|field| field.name == EffectiveFieldName::ToolDeadline)
+        .and_then(|field| field.value)
+        .expect("the bounded Tool Deadline field");
+    policy["hardDeadlineMs"]
+        .as_str()
+        .unwrap_or_else(|| panic!("exact deadline in {policy}"))
+        .parse()
+        .expect("decimal deadline")
+}
+
+/// Product-entrance proof of the Client's private mount view: the real
+/// two-process composition serves Session A's workspace from the
+/// Client's `bwrap` bind mount, never the Server's view of the same
+/// absolute path. Linux-only and opt-in — `bwrap` is a hard requirement
+/// of the proof, and the wrapping launcher exists only inside this
+/// fixture's private bin directory; no production override exists.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires Linux mount namespace; run test-support/prove_execution_mount_view.sh"]
+async fn explicit_composition_reads_from_client_mount_namespace() {
+    bounded(async {
+        use app_server_conformance::AppServerConformanceDriver as _;
+        use base64::Engine as _;
+        use rustx::app_server::protocol::*;
+        use rustx::local_runtime::configuration::application::{ApplyUnit, UnitApplication};
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some(),
+            "opt-in proof only: run test-support/prove_execution_mount_view.sh"
+        );
+        assert!(
+            std::fs::metadata("/usr/bin/bwrap")
+                .is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0),
+            "the mount-view proof requires an executable /usr/bin/bwrap"
+        );
+
+        let f = Fixture::new().await;
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        grant_environment_roots(&f, std::slice::from_ref(&workspace));
+
+        // The Server's own view of the workspace holds only a decoy the
+        // Client's mount never sees; the marker exists only in the
+        // physical directory the launcher bind-mounts over the workspace
+        // path inside the Client's mount namespace.
+        let decoy = workspace.join("server-only");
+        std::fs::write(&decoy, b"server-side only").unwrap();
+        let server_document = workspace.join("rustx.toml");
+        std::fs::write(&server_document, b"[server-side-invalid").unwrap();
+        let (bin_dir, rustx) = isolated_server_bin();
+        let bin = bin_dir.path();
+        // The staged sibling is the only trusted source for the real
+        // Client — never a runtime build, PATH lookup, or fallback.
+        let staged = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        assert!(
+            staged.is_file(),
+            "staged Execution Client is absent: {staged:?}"
+        );
+        stage_binary(bin, "client-real", &staged);
+        // The Client's own sibling supervisor, staged beside it exactly as
+        // the production executable boundary resolves it.
+        let supervisor = std::env::current_exe()
+            .unwrap()
+            .with_file_name("bash-supervisor");
+        assert!(
+            supervisor.is_file(),
+            "staged bash-supervisor is absent: {supervisor:?}"
+        );
+        stage_binary(bin, "bash-supervisor", &supervisor);
+        let physical = bin.join("physical");
+        std::fs::create_dir(&physical).unwrap();
+        let marker = b"mount-view proof marker";
+        std::fs::write(physical.join("marker"), marker).unwrap();
+        // The Client's writable scratch: a private tmpfs at its own path,
+        // outside the workspace and the bootstrap — the host /tmp and the
+        // bootstrap socket stay exactly as the Server sees them. A tmpfs is
+        // required: the owner-only snapshot check needs POSIX permissions.
+        let scratch = bin.join("tmp");
+        std::fs::create_dir(&scratch).unwrap();
+        // The test-only launcher: `$4` is the Server's explicit trusted
+        // `--workspace` value; the real Client still rechecks it byte for
+        // byte against the bootstrap record.
+        let launcher = bin.join("rustx-execution-client");
+        std::fs::write(
+            &launcher,
+            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexport TMPDIR=\"$bin/tmp\"\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind \"$bin/physical\" \"$4\" --tmpfs \"$bin/tmp\" -- \"$bin/client-real\" \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Before the exchange the Server's own view has no marker.
+        assert_eq!(
+            std::fs::metadata(workspace.join("marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+
+        let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .env("TEST_KEY", "fixture")
+            .spawn()
+            .expect("spawn staged server");
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+
+        // fs/readFile serves the marker through the admitted Client's
+        // mount view — bytes the Server's filesystem cannot see.
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readFile through the Client's mount view")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            marker
+        );
+        // The stamp is the physical source's own — ro-bind preserves the
+        // same dev:ino identity the Server would stamp.
+        let expected = rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(physical.join("marker")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(chunk.metadata.revision, expected.revision);
+        assert_eq!(chunk.metadata.identity, expected.identity);
+        assert_eq!(chunk.metadata.size, expected.size);
+
+        let MethodResult::FileMetadata { metadata } = result(
+            &client,
+            Method::FsGetMetadata {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+            },
+        )
+        .await
+        else {
+            panic!("fs/getMetadata through the Client's mount view")
+        };
+        assert!(metadata.is_file);
+        assert_eq!(metadata.revision, expected.revision);
+        assert_eq!(metadata.identity, expected.identity);
+
+        // The listing is the Client's view: the marker, never the
+        // Server-side decoy.
+        let MethodResult::DirectoryPage { page } = result(
+            &client,
+            Method::FsReadDirectory {
+                session_id: f.sessions[0].clone(),
+                path: workspace.display().to_string(),
+                offset: 0,
+                limit: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readDirectory through the Client's mount view")
+        };
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.file_name.as_str())
+                .collect::<Vec<_>>(),
+            ["marker"]
+        );
+
+        // The decoy is absent in the Client's view: NotFound, and no
+        // Server-local fallback can serve it either.
+        let Response::Failure(failure) = rpc(
+            &client,
+            11,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: decoy.display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("the Server-side decoy must stay unreachable")
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::EnvironmentResourceNotFound)
+        );
+
+        // The physical overlay is the only writable mount: fs/writeFile
+        // with the expected revision publishes new marker bytes inside
+        // the Client's mount view — the Server's view never gains one.
+        let rewritten = b"mount-view proof rewritten";
+        let MethodResult::FileMetadata { metadata: written } = result(
+            &client,
+            Method::FsWriteFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(rewritten),
+                expected_revision: Some(expected.revision.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("fs/writeFile through the Client's mount view")
+        };
+        assert_eq!(std::fs::read(physical.join("marker")).unwrap(), rewritten);
+        assert_eq!(
+            std::fs::metadata(workspace.join("marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        // The returned stamp is the Client's published descriptor: the
+        // replace allocated a new inode, so the identity is new too —
+        // it must describe the file now at the physical path exactly.
+        let published = rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(physical.join("marker")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written.identity, published.identity);
+        assert_eq!(written.revision, published.revision);
+        assert_ne!(written.revision, expected.revision);
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: Some(written.revision.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("read-after-write through the Client's mount view")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            rewritten
+        );
+
+        // A Session that never bound a Client cannot write at all — the
+        // Server-side decoy is not a fallback target.
+        let Response::Failure(failure) = rpc(
+            &client,
+            12,
+            Method::FsWriteFile {
+                session_id: SessionId::new("ses_00000000-0000-7000-8000-000000000099"),
+                path: decoy.display().to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"planted"),
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("an unbound Session's write must fail")
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::ExecutionUnavailable)
+        );
+        assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        std::fs::write(
+            physical.join("rustx.toml"),
+            b"[tool_deadline_policy]\nhard_deadline_ms = 34567\n",
+        ).unwrap();
+        let target = attach(&client, f.sessions[0].clone(), 25).await;
+        assert_eq!(effective_tool_deadline(&client, target.clone()).await, 34_567);
+        std::fs::write(
+            physical.join("rustx.toml"),
+            b"[tool_deadline_policy]\nhard_deadline_ms = 45678\n",
+        ).unwrap();
+        assert!(matches!(
+            result(
+                &client,
+                Method::ConfigurationReconcile {
+                    target: rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+                        directory: workspace.clone(),
+                    },
+                },
+            )
+            .await,
+            MethodResult::ConfigurationReceipt { .. }
+        ));
+        assert!(matches!(
+            result(
+                &client,
+                Method::SessionConfiguration { session_id: f.sessions[0].clone() },
+            )
+            .await,
+            MethodResult::SessionConfiguration { projection: Some(projection) }
+                if projection.inline.as_ref().is_some_and(|application| application.desired.input_revision.is_some())
+        ));
+        loop {
+            let notification = client.next_notification().await;
+            if let NotificationMethod::ConfigurationChanged { application } = notification.notification
+                && application.scope == target.session_id.to_string()
+            {
+                let application = application.inline.expect("bounded Session application");
+                match &application.units[&ApplyUnit::ExecutionPolicy] {
+                    UnitApplication::Preparing | UnitApplication::Ready => {}
+                    UnitApplication::Applied => break,
+                    outcome => panic!("the Client's deadline policy did not settle: {outcome:?}"),
+                }
+            }
+        }
+        assert_eq!(effective_tool_deadline(&client, target).await, 45_678);
+        assert_eq!(std::fs::read(server_document).unwrap(), b"[server-side-invalid");
+
+        // After the exchanges the Server's view is untouched: still no
+        // marker, the decoy intact.
+        assert_eq!(
+            std::fs::metadata(workspace.join("marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        // A foreground `command/exec` for the bound Session runs inside the
+        // Client's mount view: it reads the rewritten marker the Server can
+        // never see and writes a result only the physical directory holds.
+        let MethodResult::CommandExec { result: exec } = result(
+            &client,
+            Method::CommandExec(rustx::app_server::command::ExecParams {
+                session_id: f.sessions[0].clone(),
+                command: vec![
+                    "/bin/bash".into(),
+                    "-c".into(),
+                    "cat marker; printf client > process-marker".into(),
+                ],
+                cwd: workspace.display().to_string(),
+                env: std::collections::BTreeMap::new(),
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                timeout_ms: None,
+                size: None,
+            }),
+        )
+        .await
+        else {
+            panic!("command/exec through the Client's mount view")
+        };
+        let decode = |text: &str| {
+            String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(text).unwrap())
+                .into_owned()
+        };
+        assert_eq!(
+            exec.exit_code,
+            Some(0),
+            "status {:?}; stdout {:?}; stderr {:?}",
+            exec.status,
+            decode(&exec.stdout_base64),
+            decode(&exec.stderr_base64)
+        );
+        assert_eq!(
+            exec.status,
+            rustx::app_server::command::ExecStatus::Completed
+        );
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&exec.stdout_base64)
+                .unwrap(),
+            rewritten
+        );
+        assert_eq!(
+            std::fs::read(physical.join("process-marker")).unwrap(),
+            b"client"
+        );
+        assert_eq!(
+            std::fs::metadata(workspace.join("process-marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        // A Session that never bound a Client cannot run a command either.
+        let Response::Failure(failure) = rpc(
+            &client,
+            13,
+            Method::CommandExec(rustx::app_server::command::ExecParams {
+                session_id: SessionId::new("ses_00000000-0000-7000-8000-000000000099"),
+                command: vec!["/bin/true".into()],
+                cwd: workspace.display().to_string(),
+                env: std::collections::BTreeMap::new(),
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                timeout_ms: None,
+                size: None,
+            }),
+        )
+        .await
+        else {
+            panic!("an unbound Session's command must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    })
     .await;
 }
 
@@ -611,16 +2679,16 @@ async fn attach(
     id: i64,
 ) -> rustx::app_server::protocol::AttachmentTarget {
     use rustx::app_server::protocol::*;
-    let Response::Success(response) = rpc(
+    let response = rpc(
         client,
         id,
         Method::SessionAttach {
             thread_id: app_server_conformance::thread_id(client, session).await,
         },
     )
-    .await
-    else {
-        panic!("attach")
+    .await;
+    let Response::Success(response) = response else {
+        panic!("attach failed: {response:?}")
     };
     let MethodResult::Attached { target, .. } = response.result else {
         panic!("attached")
@@ -1445,17 +3513,23 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let mut child = user.command("ws://127.0.0.1:0")
                 .arg("--config").arg(config.join("rustx.toml"))
                 .arg("--token-file").arg(user.root.path().join("token"))
+                .arg("--local-execution-session").arg(user.sessions[0].as_str())
+                .arg("--local-execution-workspace").arg(user.root.path().join("a"))
                 .env("TEST_KEY", format!("fake-{identity}"))
                 .env("RUSTX_HOST_MARKER", identity).spawn().unwrap();
             let (endpoint, stderr) = websocket_startup(&mut child).await;
             startup_stderr.push(stderr);
             let client = driver::websocket(&endpoint).await;
             initialize_client(&client).await;
-            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            // Exercise writable catalog management while execution stays
+            // bound to the exact Session reserved before this Client started.
+            let MethodResult::SessionTransition { session: other, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
             }).await else { panic!("created") };
-            result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
-            let target = attach(&client, session.id, 2).await;
+            let session = user.sessions[0].clone();
+            assert_ne!(session, other.id);
+            result(&client, Method::SessionName { session_id: session.clone(), name: format!("user-{identity}-private") }).await;
+            let target = attach(&client, session, 2).await;
             processes.push(child); clients.push(client); targets.push(target);
         }
         assert_ne!(processes[0].id(), processes[1].id());
@@ -1495,7 +3569,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
             assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
             let projected = checkpoint_state(&clients[index], &targets[index]).await;
-            assert!(projected["messages"].to_string().contains(&format!("{identity}:fake-{identity}")));
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(!projected["messages"].to_string().contains(&format!("fake-{identity}")));
             assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
         }
         let mut selections = Vec::new();
@@ -1554,7 +3629,8 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
         let after = checkpoint_state(&recovered, &cold).await;
         assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
-        assert!(after["messages"].to_string().contains("b:fake-b"));
+        assert!(after["messages"].to_string().contains("b:unset"));
+        assert!(!after["messages"].to_string().contains("fake-b"));
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
@@ -2666,13 +4742,19 @@ async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
     bounded(async {
         use std::os::unix::fs::PermissionsExt;
         use tokio::io::AsyncReadExt;
-        let f = Fixture::new().await;
+        let fixtures = [Fixture::new().await, Fixture::new().await];
         let gate_dir = tempfile::tempdir_in("/tmp").unwrap();
         let socket = gate_dir.path().join("gate");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-        let bin = f.root.path().join("host-bin");
-        std::fs::create_dir(&bin).unwrap();
-        let uv = bin.join("uv");
+        let bin = staged_bin_dir();
+        let server = stage_binary(
+            bin.path(),
+            "rustx",
+            std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
+        );
+        let staged_client = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
+            .with_file_name("rustx-execution-client");
+        let uv = bin.path().join("uv");
         std::fs::write(
             &uv,
             r"#!/usr/bin/python3
@@ -2686,31 +4768,54 @@ if sys.argv[1] == '--version':
     print('uv 0.10.2')
 else:
     subprocess.run(['/usr/bin/python3', '-m', 'venv', '--without-pip', sys.argv[-1]], check=True)
-    s.sendall((json.dumps(['created', os.getcwd(), os.getpid()]) + '\n').encode())
+    s.sendall((json.dumps(['created', os.getcwd(), sys.argv[sys.argv.index('--directory') + 1]]) + '\n').encode())
 ",
         )
         .unwrap();
         std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut child = f
-            .command("stdio")
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-            .env("UV_TEST_GATE", &socket)
-            .spawn()
-            .unwrap();
-        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
-        initialize_client(&client).await;
-        for cwd in ["a", "b"] {
-            result(
-                &client,
-                rustx::app_server::protocol::Method::SessionCreate {
-                    dynamic_tools: Vec::new(),
-                    submission: None,
-                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
-                        f.root.path().join(cwd),
-                    )),
-                },
-            )
-            .await;
+        // Only the real Execution Client receives this fixture's uv. Each
+        // trusted App Server launch enrolls one existing, exact Session.
+        let quote = |value: &std::path::Path| {
+            format!("'{}'", value.display().to_string().replace('\'', "'\\''"))
+        };
+        let wrapper = bin.path().join("rustx-execution-client");
+        let scratch = gate_dir.path().join("scratch");
+        let client_pids = gate_dir.path().join("client-pids");
+        std::fs::create_dir(&scratch).unwrap();
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexport PATH={}:\"/usr/bin:/bin\" UV_TEST_GATE={} TMPDIR={}\nprintf '%s\\n' \"$$\" >> {}\nexec {} \"$@\"\n",
+                quote(bin.path()),
+                quote(&socket),
+                quote(&scratch),
+                quote(&client_pids),
+                quote(&staged_client),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let workspaces = [
+            fixtures[0].root.path().join("a"),
+            fixtures[1].root.path().join("b"),
+        ];
+        let mut running = Vec::new();
+        for (index, (fixture, workspace)) in fixtures.iter().zip(&workspaces).enumerate() {
+            let session = &fixture.sessions[index];
+            let mut child = fixture
+                .command_with_program(&server, "stdio")
+                .args([
+                    "--local-execution-session",
+                    session.as_str(),
+                    "--local-execution-workspace",
+                ])
+                .arg(workspace)
+                .spawn()
+                .unwrap();
+            let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+            initialize_client(&client).await;
+            attach(&client, session.clone(), 2).await;
+            running.push((child, client));
         }
         let mut versions = std::collections::BTreeMap::new();
         for _ in 0..2 {
@@ -2721,21 +4826,23 @@ else:
                 (stream, event[2].as_i64().unwrap()),
             );
         }
-        client.close_output().await;
-        let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
-        loop {
-            if diagnostics
+        assert_eq!(versions.len(), 2);
+        let mut diagnostic_pipes = Vec::new();
+        for (child, client) in &mut running {
+            client.close_output().await;
+            let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
+            while !diagnostics
                 .next_line()
                 .await
                 .unwrap()
-                .unwrap()
+                .expect("stdio detached")
                 .contains("stdio detached")
-            {
-                break;
-            }
+            {}
+            diagnostic_pipes.push(diagnostics);
         }
-        let a = f.root.path().join("a").display().to_string();
-        let b = f.root.path().join("b").display().to_string();
+        let [a, b] = workspaces
+            .each_ref()
+            .map(|workspace| workspace.display().to_string());
         let (mut first, _) = versions.remove(&a).unwrap();
         let (mut pending, pending_pid) = versions.remove(&b).unwrap();
         first
@@ -2745,21 +4852,37 @@ else:
         let (_stream, event) = python_preparation_event(&listener).await;
         assert_eq!(event[0], "created");
         assert_eq!(event[1], a);
-        assert!(f.root.path().join("a/.venv/pyvenv.cfg").is_file());
-        assert!(child.try_wait().unwrap().is_none());
-        terminate(&child);
+        let discovery = PathBuf::from(event[2].as_str().unwrap());
+        assert!(discovery.starts_with(&scratch) && discovery.is_dir());
+        let client_pids = std::fs::read_to_string(client_pids).unwrap();
+        let client_pids = client_pids.lines().map(|line| Pid::from_raw(line.parse().unwrap())).collect::<Vec<_>>();
+        assert_eq!(client_pids.len(), 2);
+        for pid in &client_pids { assert_eq!(kill(*pid, None), Ok(())); }
+        assert!(workspaces[0].join(".venv/pyvenv.cfg").is_file());
+        assert!(!workspaces[1].join(".venv").exists());
+        for (child, _) in &mut running {
+            assert!(child.try_wait().unwrap().is_none());
+            terminate(child);
+        }
         assert_eq!(
             pending.read(&mut [0u8; 1]).await.unwrap(),
             0,
             "SIGTERM closes the held uv only after cancellation"
         );
-        assert!(child.wait().await.unwrap().success());
+        for (mut child, client) in running {
+            assert!(child.wait().await.unwrap().success());
+            client.close().await;
+        }
         assert_eq!(
             kill(Pid::from_raw(i32::try_from(pending_pid).unwrap()), None),
             Err(nix::errno::Errno::ESRCH),
             "shutdown joined the uv process"
         );
-        client.close().await;
+        for pid in client_pids {
+            assert_eq!(kill(pid, None), Err(nix::errno::Errno::ESRCH), "Server reaped owned Client {pid}");
+        }
+        assert!(!discovery.exists(), "orderly Client exit removed its discovery directory");
+        drop(diagnostic_pipes);
     })
     .await;
 }

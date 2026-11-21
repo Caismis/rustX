@@ -5,7 +5,7 @@
 //! syntax admission, retains bounded input/output, and awaits physical reaping.
 use super::{BTreeMap, MAX_VALUE_BYTES, Value, WorkflowRunError, WorkflowValue, runtime};
 use crate::runtime::cancellation::ExecutionCancellation;
-use crate::runtime::process_runner::{
+use rustx_process_supervisor::process_runner::{
     ProcessOutcomeIntent, RunnerBackedProcessRunner, RunnerTestControl, SupervisedCommandSpec,
     SupervisedProcessRunner,
 };
@@ -77,7 +77,7 @@ pub(super) async fn render_with_control(
         cwd: input.path().to_owned(),
         command_environment: Vec::new(),
         timeout: Some(WALL_LIMIT),
-        cancellation: cancellation.child_signal(),
+        cancellation: cancellation.child_signal().physical(),
     };
     // The driver retains the input files through physical settlement even if
     // its result waiter is dropped. The existing runner owns every process;
@@ -127,7 +127,7 @@ pub(super) async fn render_with_control(
 }
 
 fn renderer_binary() -> PathBuf {
-    crate::runtime::process_runner::companion_binary("workflow-renderer")
+    rustx_process_supervisor::invocation::companion_binary("workflow-renderer")
 }
 
 /// Called only by the dedicated single-threaded renderer binary.

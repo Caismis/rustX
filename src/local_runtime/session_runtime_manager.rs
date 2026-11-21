@@ -24,6 +24,7 @@ use crate::runtime::identity::ConversationId;
 mod client;
 mod configuration;
 mod drain;
+mod execution;
 mod lifecycle;
 mod model_selection;
 #[cfg(feature = "issue-387-profile")]
@@ -32,6 +33,13 @@ mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
 pub(crate) mod status;
+pub(crate) use execution::{
+    ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, StandaloneExecution,
+    WorkspaceConfiguration, launch_sibling, workspace_entry,
+};
+pub use execution::{
+    EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,
+};
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
 mod source_watch;
@@ -340,7 +348,7 @@ impl ManagedRuntime {
 /// Sole strong composition owner, retained only by registry/transition machinery.
 #[derive(Debug)]
 struct ResidentRuntime {
-    status_read: Mutex<()>,
+    status_read: tokio::sync::Mutex<()>,
     status_wake: Arc<tokio::sync::Notify>,
     node: SessionNodeId,
     initialization: Arc<Initialization>,
@@ -427,6 +435,13 @@ impl ResidentRuntime {
             .wait_for(|count| *count == 0)
             .await
             .expect("resident owns operation drain");
+    }
+
+    async fn release_composition(&self) {
+        // Readers can still hold a native reference after shutdown. Take
+        // the composition under their guard before reporting writer absence.
+        let _status_read = self.status_read.lock().await;
+        self.composition.lock().expect("composition mutex").take();
     }
 
     fn try_observation_runtime(&self) -> Option<ConversationRuntime> {
@@ -623,6 +638,7 @@ pub struct SessionRuntimeManager {
         Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
+    execution: Arc<execution::SessionExecutionRegistry>,
     pub(in crate::local_runtime) configuration: UserConfigManager,
     pub(in crate::local_runtime) credentials: CredentialSnapshot,
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
@@ -861,6 +877,7 @@ impl SessionRuntimeManager {
                 #[cfg(test)]
                 reaper_waiting: None,
             }))),
+            execution: Arc::default(),
             process_policy: Arc::new(std::sync::RwLock::new(
                 configuration.app_server_policy().map_err(error)?,
             )),

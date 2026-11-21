@@ -214,6 +214,14 @@ pub struct ConversationRuntimeConfig {
     /// `compose_subagent_child` — always set it explicitly from their frozen
     /// composition.
     pub extensions: crate::extensions::NativeAgentExtensions,
+    /// The Session's non-owning execution route, bound by the
+    /// `SessionRuntimeManager` composition that owns this conversation.
+    /// `None` is the unbound route — every consumer must refuse honestly
+    /// rather than fall back to a Server-local filesystem path. A
+    /// subagent child carries none: its route belongs to the parent's
+    /// Session boundary and is not inherited.
+    pub execution_scope:
+        Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
 }
 
 impl ConversationRuntimeConfig {
@@ -245,6 +253,7 @@ impl ConversationRuntimeConfig {
             // composition, so this default is never the product decision in
             // production.
             extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            execution_scope: None,
         }
     }
 
@@ -390,8 +399,11 @@ impl ConversationToolRuntime {
         conversation_id: ConversationId,
         config: ConversationRuntimeConfig,
     ) -> Result<Self, ConversationRuntimeError> {
-        let workspace =
-            Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
+        let workspace = match config.execution_scope.clone() {
+            Some(scope) => Workspace::for_session(&config.workspace_root, scope),
+            None => Workspace::new(&config.workspace_root),
+        }
+        .map_err(ConversationRuntimeError::Workspace)?;
         if let Some(root) = &config.lifecycle {
             for path in [
                 config.artifacts_dir.clone(),

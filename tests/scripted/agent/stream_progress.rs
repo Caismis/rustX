@@ -611,9 +611,8 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
 
     // This regression isolates provider progress and Write execution;
     // approval ordering is covered by the native policy boundary suite.
-    let policies = rustx::tools::NativeToolPolicies::default();
-    let fixture = common::native_fixture_with(Vec::new(), policies);
-    let content = "0123456789abcdef".repeat(4096);
+    let fixture = common::native_fixture_with_execution(Vec::new());
+    let content = "0123456789abcdef".repeat(4097);
     let arguments = common::tool_call_envelope(serde_json::json!({
         "path": "large.txt",
         "content": content,

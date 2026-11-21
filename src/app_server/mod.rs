@@ -22,6 +22,7 @@ pub mod archive_download;
 pub(crate) mod delivery_access;
 pub(crate) mod product_host;
 
+pub mod host_upload;
 pub mod upload_transfer;
 
 pub(crate) mod workflow_documents;

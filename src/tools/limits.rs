@@ -6,12 +6,14 @@
 
 use std::time::Duration;
 
-/// The maximum bytes of one structured-document source that native Read
-/// hands to its document decoder (Issue #48). This is an extraction-resource
-/// bound, not a model-facing output bound: decoding happens before Read's
-/// 2000-line/50KB projection, so a huge archive-backed document must be
-/// rejected before unbounded parse work starts, not after.
-pub const MAX_DOCUMENT_SOURCE_BYTES: usize = 32 * 1024 * 1024;
+/// The maximum bytes of one structured-document source the Execution
+/// Client accepts for one document-page exchange (Issue #48). The value
+/// is the execution protocol's single wire policy — one bound for the
+/// Client's bounded acquisition and `rustx-document-reader`'s decode
+/// precheck, not a model-facing output bound: decoding happens before
+/// Read's 2000-line/50KB projection, so a huge archive-backed document
+/// must be rejected before unbounded parse work starts, not after.
+pub const MAX_DOCUMENT_SOURCE_BYTES: usize = rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES;
 
 /// The maximum model-facing bytes of one tool result payload.
 pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
@@ -25,12 +27,16 @@ pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
 /// make the canonical terminal record unbounded.
 pub const MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES: usize = 1024;
 
-/// The tool-owned content budget of the native sequential/search projections.
-pub const NATIVE_FILE_TOOL_MAX_BYTES: usize = 50 * 1024;
+/// The tool-owned content budget of the native sequential/search
+/// projections. The value is the execution protocol's text-page byte
+/// budget — one bound for the native Read page and the Execution
+/// Client's logical-text page.
+pub const NATIVE_FILE_TOOL_MAX_BYTES: usize = rustx_execution_protocol::MAX_TEXT_BYTES;
 
 /// The maximum number of complete lines returned by Read when its own byte
-/// budget is not reached first.
-pub const MAX_READ_LINES: usize = 2_000;
+/// budget is not reached first. The value is the execution protocol's
+/// text-page line budget — one bound for both projections.
+pub const MAX_READ_LINES: usize = rustx_execution_protocol::MAX_TEXT_LINES;
 
 /// The canonical bounded default number of Grep matches, used when the model
 /// omits `limit`.
@@ -41,12 +47,12 @@ pub const DEFAULT_GREP_MATCHES: u64 = 100;
 pub const DEFAULT_GLOB_RESULTS: u64 = 1_000;
 
 /// The maximum number of context lines Grep returns on each side of a
-/// matching line.
-pub const MAX_GREP_CONTEXT_LINES: u32 = 20;
+/// matching line — the shared wire bound.
+pub const MAX_GREP_CONTEXT_LINES: u32 = rustx_execution_protocol::MAX_SEARCH_CONTEXT_LINES;
 
 /// The maximum Unicode scalar values of one line Grep reports. A longer line
-/// is shortened with an explicit marker.
-pub const MAX_GREP_LINE_CHARS: usize = 500;
+/// is shortened with an explicit marker — the shared wire bound.
+pub const MAX_GREP_LINE_CHARS: usize = rustx_execution_protocol::SEARCH_PREVIEW_SCALARS;
 
 /// The maximum length of one progress message text.
 pub const MAX_PROGRESS_MESSAGE_BYTES: usize = 512;

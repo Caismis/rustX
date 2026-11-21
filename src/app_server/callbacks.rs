@@ -492,6 +492,15 @@ impl Callbacks {
     /// The sole response linearization. Envelope validation precedes this call;
     /// domain validation follows acquisition and cannot reopen this entry.
     pub(crate) fn respond(&self, client: &str, response: ClientReply) -> bool {
+        self.respond_for(client, response, None)
+    }
+
+    fn respond_for(
+        &self,
+        client: &str,
+        response: ClientReply,
+        expected_subscription: Option<&str>,
+    ) -> bool {
         let (validity, subscription) = {
             let state = self.state.lock().expect("callbacks");
             let Some(pending) = state.pending.get(response.id()) else {
@@ -504,7 +513,9 @@ impl Callbacks {
             else {
                 return false;
             };
-            if pending.recipients.get(client) != Some(&subscription.id) {
+            if pending.recipients.get(client) != Some(&subscription.id)
+                || expected_subscription.is_some_and(|id| id != subscription.id)
+            {
                 return false;
             }
             (pending.validity.clone(), subscription.clone())
@@ -518,25 +529,25 @@ impl Callbacks {
                     .upgrade()
                     .and_then(|owner| {
                         owner.with_pending_interaction_header(&interaction, |_| {
-                            self.claim(client, response)
+                            self.claim(client, &subscription.id, response)
                         })
                     })
                     .unwrap_or(false),
                 Some(Validity::Tool(cancellation)) => cancellation
-                    .with_active(|| self.claim(client, response))
+                    .with_active(|| self.claim(client, &subscription.id, response))
                     .unwrap_or(false),
-                None => self.claim(client, response),
+                None => self.claim(client, &subscription.id, response),
             })
             .unwrap_or(false)
     }
 
-    fn claim(&self, client: &str, response: ClientReply) -> bool {
+    fn claim(&self, client: &str, subscription: &str, response: ClientReply) -> bool {
         let mut state = self.state.lock().expect("callbacks");
         let id = response.id();
         let Some(pending) = state.pending.get(id) else {
             return false;
         };
-        if !pending.recipients.contains_key(client)
+        if pending.recipients.get(client).map(String::as_str) != Some(subscription)
             || !state.clients.get(client).is_some_and(|p| {
                 !p.closed.is_cancelled()
                     && p.threads.get(&pending.thread).map(|value| &value.id)
@@ -701,6 +712,7 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_server::host_upload::ValidatedEnd;
     use crate::app_server::protocol::{ClientSuccess, HostToolCall};
     fn running_lifecycle() -> crate::runtime::types::ConversationLifecycle {
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
@@ -728,6 +740,129 @@ mod tests {
             id,
             result: value,
         })
+    }
+
+    // The fixture has a genuinely empty body; the real #578 receiver must
+    // forward bounded evidence, not synthesize a complete body from a digest.
+    fn claim_empty(callbacks: &Callbacks, end: &ValidatedEnd) -> bool {
+        assert_eq!(end.total(), 0);
+        assert_eq!(end.items(), []);
+        let key = end.candidate();
+        let client = String::from(key.connection_incarnation.clone());
+        let subscription = String::from(key.subscription_incarnation.clone());
+        callbacks.respond_for(
+            &client,
+            reply(
+                key.request_id.clone(),
+                serde_json::json!({"success":end.success(),"contentItems":[]}),
+            ),
+            Some(&subscription),
+        )
+    }
+
+    /// Races one ordinary reply (success or a valid JSON-RPC error) against a
+    /// verified End, in either order and with the subscription optionally
+    /// replaced, and asserts exactly one winner.
+    fn race_case(end_first: bool, small_error: bool, replace: bool) {
+        use crate::app_server::host_upload::{
+            HostUploadCandidate, HostUploadExpected, HostUploadSlot, canonical_digest,
+        };
+        use crate::app_server::protocol::{ClientError, ClientRpcError, HostToolResponse};
+        let callbacks = Arc::new(Callbacks::default());
+        let thread = ConversationId::generate();
+        let host = callbacks.connect();
+        let other = callbacks.connect();
+        callbacks.subscribe_test(&host.id, &thread);
+        callbacks.subscribe_test(&other.id, &thread);
+        let mut ticket = callbacks
+            .request(thread.clone(), method(thread.clone()), None)
+            .unwrap();
+        let expected = {
+            let state = callbacks.state.lock().unwrap();
+            let pending = &state.pending[&ticket.id];
+            let ServerRequestMethod::ToolCall(call) = &pending.request.call else {
+                unreachable!()
+            };
+            HostUploadExpected {
+                callback_incarnation: callbacks.incarnation.clone().try_into().unwrap(),
+                connection_incarnation: host.id.clone().try_into().unwrap(),
+                subscription_incarnation: pending.recipients[&host.id].clone().try_into().unwrap(),
+                request_id: ticket.id.clone(),
+                thread_id: call.thread_id.clone(),
+                turn_id: call.turn_id.clone(),
+                call_id: call.call_id.clone(),
+                upload_id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
+            }
+        };
+        let candidate = HostUploadCandidate {
+            callback_incarnation: expected.callback_incarnation.clone(),
+            connection_incarnation: expected.connection_incarnation.clone(),
+            subscription_incarnation: expected.subscription_incarnation.clone(),
+            request_id: ticket.id.clone(),
+            thread_id: thread.clone(),
+            turn_id: expected.turn_id.clone(),
+            call_id: expected.call_id.clone(),
+            upload_id: expected.upload_id.clone(),
+        };
+        let mut slot = HostUploadSlot::new(expected);
+        slot.begin(candidate.clone(), true, &[]).unwrap();
+        assert!(slot.end(&candidate, true, &[], 0, &[0; 32]).is_err());
+        assert!(matches!(
+            ticket.reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        let end = slot
+            .end(&candidate, true, &[], 0, &canonical_digest(&[]))
+            .unwrap();
+        if replace {
+            callbacks.unsubscribe(&host.id, &thread);
+            callbacks.subscribe_test(&host.id, &thread);
+        }
+        let small = if small_error {
+            ClientReply::Error(ClientError {
+                jsonrpc: JsonRpcVersion::V2,
+                id: ticket.id.clone(),
+                error: ClientRpcError {
+                    code: -32000,
+                    message: "fixture".into(),
+                    data: None,
+                },
+            })
+        } else {
+            // Correlated and complete but rejected by domain decoding AFTER the claim.
+            reply(ticket.id.clone(), serde_json::json!({"invalid":true}))
+        };
+        let end_wins = end_first && !replace;
+        if end_first {
+            assert_eq!(claim_empty(&callbacks, &end), end_wins);
+        }
+        assert_eq!(callbacks.respond(&other.id, small), !end_wins);
+        let verdict = ticket.reply.try_recv().expect("exactly one winner");
+        if let ClientReply::Success(value) = verdict {
+            assert_eq!(
+                serde_json::from_value::<HostToolResponse>(value.result).is_ok(),
+                end_wins
+            );
+        } else {
+            assert!(small_error && !end_wins);
+        }
+        assert!(
+            !claim_empty(&callbacks, &end),
+            "no reopening after the winner"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_verified_end_can_compete_with_an_ordinary_reply() {
+        for (end_first, small_error, replace) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            race_case(end_first, small_error, replace);
+        }
     }
     #[tokio::test]
     async fn detach_revokes_only_the_departing_subscriber_without_leaking_capacity() {

@@ -476,6 +476,78 @@ impl SessionRuntimeManager {
         self.compose(access, startup, initialization).await
     }
 
+    fn initial_session_configuration(
+        &self,
+        access: &SessionAccess,
+    ) -> Result<super::super::configuration::AdmittedSessionConfig, RuntimeManagerError> {
+        use super::super::configuration::application::ApplicationState;
+        let session = &access.session.id;
+        let bindings = &self.sessions.configuration_bindings;
+        if let Some(paths) = bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)
+            .cloned()
+        {
+            return Ok(paths);
+        }
+        let input = access.settings.input();
+        for _ in 0..3 {
+            let endpoint = self.execution.configuration_endpoint(session)?;
+            if endpoint.is_none() {
+                self.repair_session_sources(&input);
+            }
+            let mut application = self.applications.lock();
+            let paths = if let Some(endpoint) = endpoint {
+                let source_cut = application.source_cut(&input.cwd);
+                drop(application);
+                let capture = ApplicationState::initial_bound_session(
+                    &self.configuration,
+                    &input,
+                    &self.credentials,
+                    &endpoint,
+                );
+                #[cfg(test)]
+                self.configuration
+                    .test_hooks
+                    .reach("before_bound_initial_publication");
+                application = self.applications.lock();
+                if application.source_cut(&input.cwd) != source_cut {
+                    continue;
+                }
+                if !self
+                    .execution
+                    .configuration_endpoint(session)?
+                    .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
+                {
+                    return Err(error(
+                        "Workspace configuration binding changed during capture",
+                    ));
+                }
+                capture.map_err(error)?
+            } else {
+                if self.execution.configuration_endpoint(session)?.is_some() {
+                    continue;
+                }
+                application
+                    .initial_binding(&self.configuration, &input, &self.credentials, true)
+                    .map_err(error)?
+            };
+            // Source ingestion takes the same lock before looking at retained Sessions.
+            let paths = bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .entry(session.clone())
+                .or_insert(paths)
+                .clone();
+            drop(application);
+            return Ok(paths);
+        }
+        Err(error(
+            "configuration sources changed during Session admission; retry the load",
+        ))
+    }
+
     #[allow(clippy::too_many_lines)] // one ordered ownership transaction
     async fn compose(
         &self,
@@ -509,32 +581,9 @@ impl SessionRuntimeManager {
                 "injected composition task panic"
             );
         }
-        let configuration = self.configuration.clone();
-        let credentials = self.credentials.clone();
-        let bindings = self.sessions.configuration_bindings.clone();
-        let applications = self.applications.clone();
         let owner = self.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
-            let retained = bindings
-                .lock()
-                .expect("Session configuration bindings")
-                .get(&access.session.id)
-                .cloned();
-            let paths = if let Some(paths) = retained {
-                paths
-            } else {
-                // Only a fresh resolution reads sources; repair them first.
-                owner.repair_session_sources(&access.settings.input());
-                let paths = applications
-                    .lock()
-                    .initial_binding(&configuration, &access.settings.input(), &credentials, true)
-                    .map_err(error)?;
-                bindings
-                    .lock()
-                    .expect("Session configuration bindings")
-                    .insert(access.session.id.clone(), paths.clone());
-                paths
-            };
+            let paths = owner.initial_session_configuration(&access)?;
             Ok::<_, RuntimeManagerError>((access, paths))
         })
         .await
@@ -574,6 +623,7 @@ impl SessionRuntimeManager {
             startup,
             &initialization.cancellation,
             &access.node.dynamic_tools,
+            Some(self.execution_scope(&access.session.id)),
         )
         .await
         .map_err(|failure| match failure {
@@ -690,7 +740,7 @@ impl SessionRuntimeManager {
                 .expect("process incarnation identity exhausted"),
         );
         Ok(Arc::new_cyclic(|resident| ResidentRuntime {
-            status_read: Mutex::new(()),
+            status_read: tokio::sync::Mutex::new(()),
             status_wake: Arc::new(tokio::sync::Notify::new()),
             node: access.node.id.clone(),
             initialization: initialization.clone(),
@@ -949,11 +999,11 @@ impl SessionRuntimeManager {
             drop(host);
             // Writer-transfer boundary: shutdown has permanently closed native
             // admission and proved settlement. Stale handles cannot reopen it.
-            runtime
-                .composition
-                .lock()
-                .expect("composition mutex")
-                .take();
+            #[cfg(test)]
+            if runtime.status_read.try_lock().is_err() {
+                owner.probe(&id).draining_status.send_replace(true);
+            }
+            runtime.release_composition().await;
             terminal.writer = WriterCertainty::Absent;
             if let Err(error) = shutdown {
                 owner

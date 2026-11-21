@@ -72,4 +72,13 @@ mod scripted_suites;
 #[cfg(test)]
 #[path = "../tests/boundary/mod.rs"]
 mod boundary_suites;
+
+/// The shared real Session-execution test rig: one compiled source
+/// serves this crate's unit tests and the integration test crates that
+/// `#[path]` it under `tests/common` (see the file's own docs). In this
+/// crate it is compiled once inside `scripted_suites::common` and
+/// re-exported here for the unit tests.
+#[cfg(test)]
+pub(crate) use crate::scripted_suites::common::session_execution as session_execution_support;
+
 pub mod credentials;

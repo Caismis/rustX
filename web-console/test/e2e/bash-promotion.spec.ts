@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
-import { connectRemote, openEmptySession } from './shell-actions';
+import { connectRemote, createBoundSession, openExistingSession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -12,10 +12,11 @@ test('default foreground Bash promotes the original process after 120 seconds an
   const wire = await wireProbe(page);
   let passed = false;
   try {
+    const session = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    const session = await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, session);
     const send = async (text: string) => {
       await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text);
       await page.getByRole('button', { name: 'Send', exact: true }).click();

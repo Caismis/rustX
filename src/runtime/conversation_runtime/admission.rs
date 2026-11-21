@@ -1046,6 +1046,8 @@ impl RuntimeInner {
                 )
                 .await;
             inner.finish_attempt(attempt_id, result);
+            // The drain acknowledgement covers the task's runtime reference.
+            drop(inner);
             drop(attempt_admission);
             drop(activity);
         });

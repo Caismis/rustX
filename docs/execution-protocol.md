@@ -1,0 +1,1526 @@
+# Execution Protocol and Binding Arbitration
+
+Status: accepted. The current implementation includes binding arbitration,
+authenticated local and WebSocket bootstrap, bounded filesystem queries and
+mutations, watches, and supervised process execution. The
+[acceptance ledger](exec-01-evidence.md) records the evidence and open #576
+requirements for the current PR.
+
+This ADR grounds its decisions in the verified server/client separation
+plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
+(SHA-256 `563462bf8da10b626491316b57143e9baeae95d1c5f899d2326e38a4dd90c9bc`)
+and in these issues:
+
+- First implementation issue:
+  <https://github.com/Caismis/rustX/issues/576>
+- Live-instance recovery and re-admission proof:
+  <https://github.com/Caismis/rustX/issues/577>
+- Follow-on execution boundary work:
+  <https://github.com/Caismis/rustX/issues/578>
+- Follow-on integration work:
+  <https://github.com/Caismis/rustX/issues/579>
+- Earlier Server/Client groundwork
+  (<https://github.com/Caismis/rustX/issues/571>) is still open at this
+  base; nothing here depends on it.
+
+Fixed reference commits from the plan (frozen snapshots, not
+"current HEAD" claims; only the plan hash above was re-verified): rustX
+`d82d7f9b8d9dd4f5064dba8d377103c8c6049d28`, Codex
+`ee344ca9458351a6ea102795fa73110ad3ede5dc`, Pi
+`22fc026b872b4a7df22ffa94e8fa00b873128054`. The actual implementation
+base of this branch is `f0cd4f59d`.
+
+## Decision
+
+### Crate and naming boundary
+
+The workspace has four execution members; the names are fixed.
+
+- `rustx-execution-protocol` (`crates/execution-protocol`): the single
+  wire definition — identity newtypes, `Hello`, `Admission`, `Reject`,
+  `HelloReply`, `ClientRequest`/`ClientReply`, `ReadError`, `DecimalU64`,
+  `Bootstrap`, the `Capability` vocabulary, the `transport` record
+  framing, and the frozen resource bounds. Both sides serialize these
+  exact DTOs; there is no duplicated contract type.
+- `rustx-execution-server` (`crates/execution-server`): a library for
+  binding arbitration and local acceptance owned by the Agent Server.
+  It is not a new Agent, not a binary, and not a transport deployment.
+  It deliberately does not depend on the confined-filesystem crate: the
+  Server arbitrates and dispatches, it never touches the workspace.
+- `rustx-confined-fs` (`crates/confined-fs`): the physical
+  descriptor-relative filesystem primitives — the proven
+  `PackageDirectory` and the bounded revision-checked range, metadata,
+and directory-page readers —
+  factored out of the Agent Server itself so both the runtime and the
+  Client share exactly one implementation. No Agent, cancellation,
+  store, or process dependency.
+- `rustx-execution-client` (`crates/execution-client`): the physical
+  Execution Client binary `rustx-execution-client`. Its runtime dependencies
+  include the protocol and transport crates, descriptor-relative filesystem
+  and document readers, and the physical process supervisor. The production
+  dependency tree excludes the Agent Server, canonical store and model adapters.
+- The main Agent Server remains the existing `rustx` package; its
+  `package_io` module and environment file readers are thin wrappers
+  over `rustx-confined-fs`, preserving every existing semantic.
+
+The implemented Client supports authenticated local and WebSocket binding,
+bounded file queries and tree mutations, conditional writes and edits,
+supervised processes, workspace observation, file watches, and Workspace
+Python. Its negotiated capabilities name the individual services the Client
+provides. A connection does not grant the reserved umbrella
+`Files`, `Python`, `StdioMcp`, `ContentTransfer`, or `ManagedOutput` capabilities.
+
+### Identities
+
+`SessionId`, `EnvironmentId`, `ClientInstanceId`, `ConnectionId`, and
+`Generation` are distinct wire newtypes. A `ClientInstanceId` is one
+physical Client process lifetime — it is an identity, never a credential.
+A `ConnectionId` is one transport connection — it is never the execution
+owner, and the Server generates it fresh per accept (16 bytes of OS
+randomness), never taking it from the peer or the transport. `Generation`
+is the binding generation: same-instance reconnects keep it, instance
+replacement increments it. On the wire a generation is exactly one
+canonical positive decimal string — no sign, no leading zero, no
+padding, no `u64` overflow — and malformed numeric wire forms are
+rejected, never coerced. `DecimalU64` — the wire type for byte offsets —
+is the same canonical decimal grammar widened to admit `"0"`, and both
+share one parser, so there is exactly one notion of a decimal number on
+this wire.
+
+### Record framing (implemented)
+
+`rustx_execution_protocol::transport::{read_record, read_optional_record,
+write_record}` is the single synchronous framing for `Read`/`Write`
+streams: a 4-byte
+big-endian length prefix followed by exactly one JSON DTO. The
+`MAX_ENCODED_FRAME_BYTES` bound covers the whole frame, prefix included,
+so payloads are limited to `MAX_RECORD_BYTES` (1 MiB − 4). Lengths of
+zero or over the bound are rejected from the prefix alone, before any
+allocation or body read. Serialization is split from emission:
+`encode_record` serializes into a bounded sink that fails at the limit
+— no oversized payload `Vec` is ever allocated — and returns an
+`EncodedRecord` whose `write_to` emits the prefix and bytes;
+`write_record` is the composition. Nothing reaches the wire until the
+whole record fits, and a caller that encodes first can fail before
+touching the stream at all. Parse and length
+errors are static messages that never expose payload bytes.
+`read_optional_record` additionally distinguishes the two ends of a
+stream: an EOF before the first prefix byte is a clean idle close
+(`Ok(None)`), while EOF anywhere inside a record — partial prefix or
+partial body — is a truncation error, never a silent end.
+
+### Negotiation (implemented)
+
+The Client's first and only binding-opening message is protocol v1:
+
+```rust
+pub struct Hello {
+    pub version: u16,
+    pub session: SessionId,
+    pub environment: EnvironmentId,
+    pub instance: ClientInstanceId,
+    pub generation: Generation,
+    pub workspace: PathBuf,
+    pub capabilities: BTreeSet<Capability>,
+    pub credential: BindingCredential,
+}
+```
+
+`Binding::reserve(reservation) -> io::Result<(Binding, BindingCredential)>`
+fixes the full expected identity — Session, Environment, Client instance,
+generation, the exact normalized absolute workspace, and the required
+capabilities — and issues the credential from OS randomness. The `Binding`
+stores only the SHA-256 verifier of the credential; the credential itself
+is returned once, for delivery through the trusted channel. The workspace
+check is purely lexical (`is_normalized_absolute_path`): absolute, root
+plus normal components only, no `.`/`..`, redundant, or trailing
+separators, and the filesystem is never touched.
+
+Every lane's Hello passes the same checks, under one mutex hold, in
+this order: the credential verifier first in constant time — no identity
+field may be probed without valid authentication — then `version` equals
+`PROTOCOL_VERSION` (incompatible versions are explicitly rejected; no
+implicit downgrade), then session, environment, instance, and generation
+each equal the reservation, then the workspace by literal `OsStr` bytes
+(so `/work//root` and `/work/./root` never alias `/work/root`), then —
+the data lane only — the advertised capabilities cover the required set.
+A `Hello` is never trusted to select required capabilities or the
+expected instance — those come only from the reservation.
+
+`Reject` carries machine-stable codes only. No reject, error, log, or
+`Debug` output echoes a submitted credential or any secret-bearing field.
+`BindingCredential` is exactly 32 random bytes as 64 lowercase hex
+characters; it is non-`Debug` (redacted), has no `Display`, and malformed
+wire forms — wrong length, uppercase, non-hex — are rejected without
+echoing the submitted value.
+
+### Paired lanes (implemented)
+
+Admission is always a *pair* of independently authenticated physical
+channels to the same binding — never a dispatch owner and a side door.
+The first message on each channel is the tagged `PeerHello::{Data,
+Control}`.
+
+- **Data half first.** A validated `PeerHello::Data(Hello)` allocates a
+  pending attempt: a fresh 256-bit `PairingNonce` challenge (redacted
+  `Debug`, only its SHA-256 verifier retained), a unique attempt id, and
+  the absolute pairing deadline — the same ~5-second budget the accept
+  armed, covering every lane's wait. Issuing a challenge consumes
+  nothing: `phase` stays `Reserved` and the attempt is not dispatchable.
+- **One attempt per Session, never superseded.** A second authenticated
+  data `Hello` while an attempt is live is refused `AlreadyConnected` —
+  a parallel claim cannot evict the honest pair's half, and at most one
+  pending attempt (and one watchdog) exists per Session.
+- **Challenge then store.** The `DataAdmission{admission, challenge}`
+  reply goes on the wire before the channel is stored into the attempt.
+  A correct nonce can only be learned from that reply, yet scheduling
+  lets a `ControlHello` legitimately arrive in the store window — a
+  verified nonce with no channel yet *waits* on a per-attempt signal,
+  bounded by the attempt's own deadline, never a refusal of the honest
+  pair. A wrong nonce never waits and never burns the attempt.
+- **The control half commits exactly once.** `PeerHello::Control
+  (ControlHello{…identity…, connection_nonce})` re-runs the identical
+  identity gate (capabilities excluded), verifies the nonce against the
+  pending verifier, and rechecks the data peer's liveness at the commit
+  itself — never relying on the watchdog having already won. The
+  transition to `Live` happens exactly once under the mutex; the
+  control lane's admission delivery is clamped to
+  `min(data_deadline, control_deadline)` so a delayed second half can
+  never stretch the budget, and a committed pair whose admission cannot
+  be delivered is detached with both lanes shut — a binding never stays
+  live on a pair the peer does not know it owns.
+- **The pending half is disposable.** A watchdog (one bounded thread)
+  polls the held lane for peer bytes or a close — either kills the
+  attempt and the reservation stays `Reserved` — and exits immediately
+  when the attempt settles by commit, discard, or fence (a cancel pipe
+  wakes it; it never sleeps on past settlement).
+- **`Pending` and `Rejected` are honest outcomes.** The data half's
+  accept reports `ChannelAccept::Pending`; the control half commits to
+  `Live` or rejects `InvalidPairing`/`AlreadyConnected`. A synthetic
+  `Binding::connect` exists only behind `cfg(test)` for pure-arbitration
+  tests — the product path never calls it.
+
+### The control lane (implemented)
+
+The control lane is an independently authenticated physical channel —
+not tunneled over the data wire, and never a second dispatch owner. The
+Client paces a continuous turn loop: each `ControlPoll{sequence,
+receipt, health}` carries a fresh nonce and acknowledges the previously
+delivered request; the Server's `ControlTurn{sequence, health,
+request}` must echo both before its request counts. Idle polls pace by
+a bounded period under per-frame deadlines — no busy-spin, and a
+delivered command's receipt arrives on the very next poll.
+
+- `ControlRequest::{Health{nonce}, CancelMutation{ticket}, Revoke}` map
+  to exact `ControlReply` receipts — `Healthy{nonce}`,
+  `MutationCancelled{ticket, disposition}`, `Revoked` — each verified
+  for the exact echo by the `ControlHandle` caller.
+- `CancelDisposition::{CancelledBeforeCommit, AlreadyCrossed, Unknown}`
+  is the Client's own arbitration: `CancelledBeforeCommit` proves the
+  publish never crossed; `AlreadyCrossed` that it had; `Unknown` that
+  no live ticket matched — never claimed "cancelled with no effect",
+  never retried.
+- The command budget is four queued plus in-flight commands. Health
+  probes receive `WouldBlock` immediately when full. Cancellation,
+  StopWatch, and Revoke can wait for a slot within the original absolute
+  command deadline. A delivered Revoke uses that same deadline for its
+  physical settlement receipt. A lost lane leaves an admitted Client's
+  settlement unconfirmed unless the binding recorded a valid receipt.
+- The `ControlHandle` is cloneable and independent of the data
+  connection's dispatch lock: health and cancel progress while a data
+  write is physically blocked mid-send (proven on both transports with
+  capped socket buffers and a real non-draining peer) and while every
+  one of the 8 endpoint data permits is held by a live exchange.
+- A lost control lane terminates the pair: the binding detaches or
+  revokes, both lanes' physical shutdown handles are seized without
+  touching the data lock, and no dispatch may start — never an implied
+  release or replacement. The Client mirrors it: its control worker's
+  RAII fence revokes local commit arbitration and interrupts the data
+  channel on *any* exit — protocol violation, EOF, or orderly stop.
+
+### Linearization and lifecycle (implemented)
+
+One mutex is the binding arbitration point: Hello validation, pairing
+commit, disconnect, and revocation all linearize under it. The phase
+machine is `Reserved → Live → Detached`, plus terminal `Revoked` from
+any phase, and `Live` always means a *committed pair* of lanes.
+
+- A failed Hello consumes nothing: `Reserved` stays `Reserved`, `Live`
+  stays `Live`.
+- While `Live` — or while a pending attempt is negotiating — a second
+  data Hello gets `AlreadyConnected`: at most one data lane per
+  Session binding, ever.
+- `disconnect(connection)` moves `Live → Detached` only for the current
+  live pair, seizing both lanes' shutdown handles. Losing either lane
+  detaches the pair identically — a stale or foreign disconnect is
+  ignored.
+- `Detached` rejects every Hello with `RecoveryRequired`. EOF never
+  reopens the reservation, so even the fully valid reserved identity
+  cannot replay its own credential after EOF — the static bootstrap file
+  grants no second admission. Re-admission requires the live-instance
+  recovery proof of #577, which this layer deliberately does not fake.
+- `revoke()` is immediate and terminal; a revoked binding rejects every
+  Hello and is never dispatchable again.
+- `status()` is observation only. Nothing may dispatch on a snapshot —
+  the phase may change before any use — so there is no `dispatchable()`
+  predicate to race against.
+
+### Local bootstrap (implemented)
+
+`Binding::reserve_local(reservation, socket_path, bootstrap_path)
+-> io::Result<(Binding, UnixListener)>` reserves the binding and
+publishes the trusted-channel bundle:
+
+- Both paths must be normalized absolute direct children of an existing
+  owner-only private directory (`0700`, owned by the process euid,
+  verified without following symlinks). World-accessible or
+  foreign-owned locations are refused, so an endpoint or credential can
+  never be planted there.
+- The socket is bound fresh: a preexisting filesystem entry is an error,
+  never silently unlinked.
+- The bootstrap file is written `create_new` — never overwriting — as
+  exactly one framed `Bootstrap` record, and `fchmod`'d to `0600` so the
+  process umask cannot weaken or strengthen it.
+- Failed publication leaves nothing: a bound socket path is removed on
+  bootstrap-write failure; a partially written bootstrap file is removed
+  by the file that created it — a preexisting `bootstrap_path` is
+  refused, not deleted.
+- Publication retains the proof of what it created: the `create_new`
+  file descriptor, the verified parent-directory descriptor, and the
+  file name. Teardown — failure cleanup and endpoint `Drop` alike —
+  removes the bundle only while `fstatat(AT_SYMLINK_NOFOLLOW)` through
+  that descriptor still proves the same type, device, and inode; a
+  replaced, symlinked, FIFO, or identical-bytes foreign file at the
+  path is preserved untouched, and no pathname is ever reopened, so a
+  FIFO replacement cannot block drain.
+- The published `Bootstrap` carries only the reservation's own facts —
+  socket path, protocol version, session, environment, instance,
+  generation, workspace, and the credential. It never carries
+  capabilities: the Client claims exactly what it implements from its
+  own build, so a tampered bundle can never make it advertise a feature
+  it lacks.
+
+`Binding::accept_local(stream)` performs the handshake on one accepted
+`UnixStream` under the shared `transport::DeadlineStream` wrapper:
+
+- One absolute deadline is armed once at accept entry —
+  `Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`, the single shared 5 s
+  constant owned by `rustx-execution-protocol::transport` — and covers
+  the entire handshake: the Hello read and parse, arbitration, the
+  admission write, and restoring blocking mode at `finish()`. It
+  is an absolute deadline, not an inactivity timeout: `DeadlineStream`
+  runs the stream nonblocking for the handshake's duration — every
+  I/O is attempted directly and a `WouldBlock` waits in `poll` for
+  at most the *remaining* budget, re-checking the deadline after each
+  I/O and each wait, so a stalled or trickling peer consumes the same
+  fixed budget and never re-arms it per byte or per record. Socket
+  timeouts are deliberately not the mechanism: `poll` readiness alone
+  never ends a record — `POLLHUP` is answered by a real `read`, so a
+  peer that closes immediately after delivering the final frame still
+  drains buffered bytes and then reports honest clean EOF, which a
+  `setsockopt` on an already fully closed socket cannot express on
+  every platform.
+- The deadline is re-checked inside the binding mutex immediately
+  before the `Reserved → Live` commit: a peer that lets it expire
+  during arbitration gets `TimedOut` and the binding stays `Reserved`.
+- The connection identity is generated fresh per accept from OS
+  randomness.
+- The reply is the typed `HelloReply` (`Result<Admission, Reject>`)
+  written as one framed record.
+- On success the committed connection returns as `LocalConnection`,
+  an RAII guard whose drop disconnects the binding; if writing the
+  admission or restoring blocking mode fails, the committed connection is
+  disconnected and the stream shut down — a binding never stays live on
+  a connection the peer does not know it owns, and never keeps a peer
+  whose post-handshake blocking mode could not be restored. `finish()`
+  restores blocking mode only on success; a failed handshake
+  stream is shut down still nonblocking.
+- `LocalConnection` exposes only typed, Server-initiated exchanges —
+  `ping()` (`Ping`/`Pong`), `read_range(...)` (`ReadRange`/`Range`),
+  `entry_metadata(...)` (`GetMetadata`/`Metadata`),
+  `directory_page(...)` (`ReadDirectory`/`Directory`),
+  `read_lines(...)` (`ReadLines`/`Lines`),
+  `read_document(...)` (`ReadDocument`/`DocumentPage`), and
+  `write_file(...)` (the `PrepareWrite`/`CommitWrite`/`AbortWrite`
+  sequence), and
+  `edit_file(...)` (`PrepareEdit` sharing the same ticketed
+  commit/abort) — never a raw
+  message path. Each first consults the capabilities the peer actually
+  advertised in its Hello: a connection that never claimed `ReadRange`,
+  `DirectoryMetadata`, `TreeMutations`, `ConditionalWrite`, `ConditionalEdit`,
+  `ReadLines`, or
+  `DocumentPages` gets
+  `io::ErrorKind::Unsupported` and
+  no request is written. Every exchange serializes the request with
+  `encode_record` *before* the gate, so an unencodable request fails
+  without touching the binding or the wire, then re-acquires the binding
+  mutex to prove this connection is still the live one before a byte is
+  written: a revocation or detach that wins the mutex first denies the
+  exchange outright, so no request can race past a revoke. Exactly one
+  request is sent and exactly one reply consumed; a `Range` reply is
+  trusted only after its base64 encoding fits the encoded-length bound
+  before decoding and decodes within the requested bound, its offset
+  echoes the request, its `next_offset` continues the delivered bytes
+  exactly (which must then fill the bound) without overflow, and its
+  stamp checks out: the revision is a 64-character lowercase-hex
+  SHA-256 stamp matching any expected revision, the identity is a
+  bounded `dev:ino` pair of two canonical decimals, and the stamped
+  size agrees with the delivered range — offset and end may not pass
+  it, `next_offset` is present exactly while the end stays short of
+  it, and a continued reply must have filled the bound. A transport
+  failure, truncation, unexpected reply type, malformed `Range`, or
+  offset overflow retires the stream —
+  `usable` is dropped, the binding is disconnected, and the socket is
+  shut down; it is never reused with a reply accounting that cannot be
+  trusted.
+
+### WebSocket transport (implemented)
+
+The shared `rustx-execution-transport` crate carries every record the
+same typed way on both channel kinds: `RecordChannel::{Unix, WebSocket}`
+sends exactly one bounded `EncodedRecord` per WebSocket binary message
+and decodes it through the same `decode_record_body` JSON bound as the
+Unix length-prefixed frame — identical `MAX_RECORD_BYTES`, identical
+serde, identical application semantics. The WebSocket RFC 6455 framing
+and TLS record layer are transport mechanics only; they carry no
+protocol meaning and are not a substitute for the independent
+control/backpressure work still tracked under T11 — RFC ping/pong does
+not discharge it.
+
+The Execution Client validates the bootstrap URL before any connect. It
+requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
+exact `/execution/v1` path. A port may be omitted to use 443. Userinfo,
+queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
+TLS verifies the certificate and IP SAN before the HTTP upgrade on both
+lanes. The upgrade rejects a wrong path and browser `Origin` headers.
+
+`Binding::reserve_websocket(reservation, listen, bootstrap_path,
+public_url)` reserves a numeric loopback listener. Port `0` selects an
+ephemeral port. A direct reservation generates a fresh TLS identity and
+publishes its `wss://` URL and base64 DER certificate in the owner-only
+bootstrap. That certificate is the Client's only trust anchor for the
+reservation. With `--execution-public-url`, the Client validates the
+operator's public ingress using WebPKI and, optionally, `--tls-ca-file`.
+The operator must secure the trusted cleartext hop from that ingress to
+the loopback listener. The Server authenticates the Client Hello and
+ignores proxy headers. Both modes publish the bundle through the same
+`create_new`, `0600` discipline as Unix.
+One Session holds exactly one endpoint mode — a `Unix` listener or a
+`WebSocket` listener, chosen at reservation — and a colliding Session
+claim reuses the existing reservation or is refused, never allocates a
+second Client.
+
+`admit_websocket_stream_deadline` runs the identical Hello/admission
+arbitration on an accepted TCP stream: credential first, then protocol
+version and identity, one absolute deadline from upgrade through
+admission, one live connection at most, `Detached`/`Revoked` terminals
+unchanged. The App Server's remote accept loop is bounded
+(at most four concurrent upgrades) and keeps accepting after failed or
+malformed upgrades until first admission or drain — each accepted peer
+carries the absolute deadline armed at accept time, so a flood of
+queued upgrades cannot outlive it, and the loop settles in-flight
+workers under a bounded wait rather than admitting past drain. After
+EOF there is no replacement without the recovery proof of #577.
+Revocation shuts a duplicated raw `TcpStream` — independent of any
+writer lock — which wakes a blocked WebSocket read exactly the way the
+Unix `shutdown` does. Close semantics mirror the Unix contract:
+`receive_optional` returns `Ok(None)` only for a genuine RFC 6455
+Close frame (the analogue of clean TCP EOF between records); a
+reset-without-close or a truncated frame mid-message is a transport
+error, never a silent end — the same distinction
+`read_optional_record` draws for the Unix stream.
+
+Teardown fences before it closes: the binding is marked `Revoked` and
+its duplicated shutdown handle seized in one atomic step under the
+binding lock — new admissions die at the gate immediately — and no
+registry, slot, or residency lock is ever held while network work
+runs. An idle stored connection then earns the orderly close: the
+Close frame is sent and flushed under a bounded teardown budget and
+the transport is shut down, never waiting for the peer's answering
+Close. A busy exchange, an in-flight handshake, or a committed stream
+not yet stored is interrupted by the seized handle's raw shutdown
+instead, so a stuck peer can never stall a fence or a drain;
+revocation and protocol failure close abruptly by the same design.
+
+The operator entry point is `rustx app-server --execution-session
+SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
+/private/dir/bundle [--execution-public-url wss://…/execution/v1]`,
+which conflicts with the local `--local-execution-*` composition flags
+and never launches a Client: the Session's workspace is resolved only
+from the trusted catalog, the reservation is published, and management
+keeps serving while the accept loop waits. The operator privately
+provisions the bundle (and any `--tls-ca-file`) to an independently
+started `rustx-execution-client --binding-file … --workspace …`; no
+Server environment or credential material is transmitted to it.
+
+### Workspace confinement and range reads (implemented)
+
+The physical filesystem discipline lives in `rustx-confined-fs`, factored
+out of `rustx` — the same `PackageDirectory` the Agent Server's package
+I/O was built on, not a parallel implementation. A root is opened once,
+component by component from `/` with `O_NOFOLLOW | O_DIRECTORY`, and held
+by descriptor; every retained ancestor identity is re-verified before
+each operation so a replaced directory is detected, never silently
+followed. `child` accepts exactly one normal component (or `.`), `names`
+bounds listings, `contains` proves descent by identity, and `file`
+resolves a path whose components are all normal, descriptor-relative
+with no symlink traversal — there is no way to address `..`, an
+absolute path, a non-normal component, or a special file.
+
+`rustx_confined_fs::read_range` is the bounded revision-checked read the
+Client serves: `max_bytes` must be within `1..=limit` (the Client's
+limit is `MAX_RAW_CHUNK_BYTES`, 64 KiB; the root runtime keeps its own
+`CHUNK_BYTES`), the file is opened through the caller's no-follow
+opener, its `FileMetadata` revision is stamped, the read seeks to
+`offset` and takes at most `max_bytes` — never a whole-file load — then
+the descriptor metadata and a freshly re-opened path's metadata must
+equal the pre-read stamp or the answer is a conflict, never unverified
+bytes. A supplied `expected_revision` likewise conflicts instead of
+serving a newer file. `FileMetadata`/`FileChunk` keep their established
+serde names and `schemars` schemas; the root crate re-exports them
+rather than duplicating the business types.
+
+On the wire the operation is `ClientRequest::ReadRange { relative_path,
+offset: DecimalU64, max_bytes: u32, expected_revision: Option<String>
+}` answered by `ClientReply::Range { data_base64, offset, next_offset,
+metadata }` or `ClientReply::Error { kind }` with the stable
+`ReadError` codes `invalid`, `denied`, `not-found`, `conflict`,
+`invalid-utf8`, `unsupported-document`, `document-too-large`,
+`document-decode-failed`, `no-text-layer`, `unavailable` — no raw
+paths, parser messages, or payload details cross
+back. `metadata`
+is a `FileStamp { size: DecimalU64, revision, identity,
+modified_at_ms }`: the source descriptor of the file the bytes were
+read from, projected from the same `FileChunk.metadata` the confined
+read already verified — the Client performs no second stat for the
+reply, and a nonregular result is denied rather than stamped. The wire
+file type is implicitly regular; `Range` never describes another kind.
+The Client validates `relative_path` to normal components only and
+enforces `1..=64 KiB` before touching the filesystem.
+
+The two query operations share the same exchange discipline.
+`ClientRequest::GetMetadata { relative_path }` is answered by
+`ClientReply::Metadata { metadata: EntryStamp }` — an `EntryStamp`
+pairs the `FileStamp` descriptor with an explicit `EntryKind`
+(`regular-file`, `directory`, `symlink`, `other`), stamped by
+`fstatat` with `AT_SYMLINK_NOFOLLOW` through the retained
+`PackageDirectory` so a leaf symlink reports itself, never its target.
+`ClientRequest::ReadDirectory { relative_path, offset: u32,
+limit: u32, expected_revision }` is answered by `ClientReply::Directory
+{ revision, entries, next_offset }`: at most `limit` (never more than
+`MAX_DIRECTORY_PAGE_ENTRIES`, 128) `PageEntry` records carrying a
+sorted name plus its own `EntryStamp`, a directory `FileStamp`
+revision for the expected-revision check, and a continuation cursor
+that is exactly `offset + entries.len()` while a full page is
+delivered. For both, an empty `relative_path` names the workspace root
+itself — the only path that may; every other path is validated to
+normal components, intermediate symlinks are refused, and the Server
+side applies the same name discipline on the reply: strictly
+increasing single components of at most 255 bytes each — never `/`,
+`.`, or `..`, while control characters remain ordinary literal name
+data on both DTO sides, matching the established product listing
+contract — plus valid stamps, and `MAX_DIRECTORY_NAMES` (4096) as
+the physical listing bound. A name
+the wire shape cannot honestly carry — a non-UTF-8 member — is
+reported `invalid` by the Client rather than emitted. Malformed replies — wrong cursor,
+unordered or illegal names, bad stamps — retire the stream and detach
+the binding exactly like a malformed `Range`.
+
+### Logical text pages (implemented)
+
+`ClientRequest::ReadLines { relative_path, offset: DecimalU64,
+limit: Option<DecimalU64>, expected_revision: Option<String> }` is
+answered by `ClientReply::Lines { metadata: FileStamp, text,
+total_lines: DecimalU64, shown_lines: u32, end: LineEnd }` or a typed
+`Error` — the bounded logical-text page the native Read tool projects,
+scanned physically by the Client under its workspace view. The file
+must be a leaf — never the root — and the offset is 1-based with any
+`limit` nonzero; both are refused `invalid` before touching the
+filesystem.
+
+One scanner owns the contract on both sides: `rustx_confined_fs`
+`scan_text` streams the source in fixed blocks — the file never lands
+in memory — with at most the three tail bytes of an incomplete UTF-8
+sequence carried between blocks. It validates UTF-8 across the
+*whole* source, including bytes after the requested page (a rejected
+page never hides an invalid tail; the wire code is `invalid-utf8`,
+a semantic refusal that never retires a healthy connection), counts
+every byte and `'\n'`-element — the trailing empty line included — and
+stages only the bounded output prefix and the current bounded line: a
+giant line is counted, never allocated. `text` is the shown elements
+joined by `'\n'` — at most `MAX_TEXT_BYTES` (50 KiB) — `total_lines`
+is the whole source's `split('\n')` count, `shown_lines` the shown
+element count (up to `MAX_TEXT_LINES`, 2000, counted elements plus
+one when a complete page keeps the trailing empty), and `end` is the
+`LineEnd` mirror of the scanner's stop reason: `complete`,
+`requested-limit`, `line-limit`, `byte-limit`,
+`first-line-too-large` (the first selected line's full byte length),
+or `offset-past-end`. The wire `MAX_TEXT_BYTES`/`MAX_TEXT_LINES`
+constants are the wire policy the Client hands the scanner — one
+policy, no duplicate bound.
+
+Like every physical read, the file is stamped before the scan and
+proven unchanged after it — the retained descriptor plus a freshly
+opened path — or the answer is `conflict`, never unverified text; a
+supplied `expected_revision` conflicts instead of serving a changed
+file. On the Server side the reply is verified before trust: the
+stamp, the nonzero `total_lines`, `text` within the byte bound whose
+`'\n'`-split reproduces exactly `shown_lines`, `end` consistent with
+the request and the page's own accounting, and every count bounded
+by the stamped source size. A malformed or untruthful `Lines` reply
+retires the stream exactly like a malformed `Range`.
+
+### Structured document pages (implemented)
+
+`ClientRequest::ReadDocument { relative_path, offset: DecimalU64,
+limit: Option<DecimalU64>, expected_revision: Option<String> }` is
+answered by `ClientReply::DocumentPage { source: FileStamp,
+logical_bytes: DecimalU64, text, total_lines: DecimalU64,
+shown_lines: u32, end: LineEnd }` or a typed `Error` — the same
+complete-line page contract as `Lines`, projected over the decoded
+Markdown of a whitelisted structured document (`.pdf`, `.docx`,
+`.xlsx`, `.pptx`). There is no caller-supplied MIME type or URI on the
+wire: the Client chooses the decoder by extension against the one
+rustX whitelist — the same `rustx-document-reader` classification,
+`MAX_DOCUMENT_SOURCE_BYTES` acquisition bound, and parser policy the
+native Read tool runs — and every other extension is the distinct
+`unsupported-document` refusal, never conflated with a missing
+capability or a parser failure.
+
+The document is opened no-follow, stamped before acquisition, and
+refused `document-too-large` when the stamped size exceeds the
+32 MiB source bound — before a single byte is read or a parser step
+runs. The bounded acquisition is capped at the stamped size (a file
+that keeps appending can never stretch the decode) and must observe
+exactly the stamped byte count; a shrink mid-read is `conflict`. The
+decoded Markdown then pages under the same `PageLimits` the plain
+text scan uses, and the retained descriptor plus a freshly opened
+path must still name the decoded source or the answer is `conflict`
+— an unstable or corrupt source never leaks a page. `source` stamps
+the physical document; `logical_bytes` reports the decoded Markdown
+length, independent of the compressed source's size. A parser
+rejection is `document-decode-failed`; a document with no
+extractable text layer is `no-text-layer` — OCR and image inference
+never substitute, and parser messages never cross the wire.
+
+The decoder's own policy constants live in `rustx-document-reader`
+(which cannot depend on the protocol crate); the wire policy —
+`MAX_DOCUMENT_SOURCE_BYTES` and `MAX_DOCUMENT_LOGICAL_BYTES` (64
+MiB) — lives in this crate, and the Client proves the identity at
+build time. On the Server side the reply is verified before trust:
+the `source` stamp, the source and logical bounds, and the shared
+complete-line accounting every `Lines` reply answers to — with
+`logical_bytes` playing the source-size role. A malformed or
+untruthful `DocumentPage` retires the stream exactly like a
+malformed `Range`; a typed semantic refusal never does.
+
+### Conditional writes (implemented)
+
+There is no raw write request. `ClientRequest::PrepareWrite {
+relative_path, expectation, data_base64 }` carries the strict
+relative path, a typed `WriteExpectation` — `Current` retains whatever
+the leaf currently is (the pre-authorization object an Agent holds
+across its permission gate, never itself a permission to publish),
+`Absent` is create-only, `Revision` requires the exact current stamp —
+and the whole payload — base64, length checked before decode, decoded
+bound `MAX_RAW_CHUNK_BYTES` — answered by `ClientReply::WritePrepared {
+ticket, original }`. A payload over `MAX_RAW_CHUNK_BYTES` transfers as
+`ClientRequest::BeginWrite { relative_path, expectation, total }`
+followed by `WriteChunk { ticket, offset, data_base64 }` records at
+deterministic absolute offsets — a foreign ticket, gap, or overrun is
+`invalid` — up to `MAX_WRITE_BYTES` total. The ticket is a
+`DecimalU64` the Client issues monotonically from `1` per admitted
+connection, never reused and never issued past `u64::MAX`; at most
+`MAX_PREPARATIONS_PER_CONNECTION` (8) preparations are live per
+connection and their planned payloads share a `8 × MAX_WRITE_BYTES`
+in-memory budget — a full map or budget is a stable `busy` reply.
+`ClientRequest::CommitWrite { ticket }` and `ClientRequest::AbortWrite
+{ ticket }` act only on the exact live ticket — a zero, foreign,
+stale, or repeated ticket is a stable `invalid` and leaves the live
+preparation untouched. A commit
+answers `ClientReply::Written { ticket, metadata }` carrying the
+published descriptor's stamp, or `ClientReply::CommitUnknown { ticket
+}` when publication may have crossed but the completion is unknowable;
+an abort answers `ClientReply::WriteAborted { ticket }`. The Server
+trusts a `Written` receipt only when its stamp is valid *and* its
+`size` equals the exact submitted byte count — a receipt describing
+different bytes cannot prove the publish, so it reports the unknown
+outcome and retires like any other post-commit violation.
+
+The Client implements the sequence on the shared
+`rustx-confined-fs` kernel: `WriteTarget::prepare` retains the exact
+target descriptor — plus, for a target below missing components, the
+deepest existing ancestor and the missing interior names — and the
+verified original stamp without mutating the named file. The planned
+payload stays in Client memory under the ticket until the commit
+grant: nothing is staged on disk before authorization, so preapproval
+bytes are never enumerable through search or metadata. `stage` writes
+the payload into a private `O_EXCL` `0600` sibling
+`.rustx-write-{uuid}` under the retained parent — or, for a missing
+subtree, builds the interior directories and leaf under a private
+owned sibling staging directory, then `renameat` publishes the whole
+subtree into the first missing name — and `StagedWrite::publish`
+re-verifies the chain and the leaf stamp at the retained descriptors
+before `linkat`/`renameat` crosses — the check and the publish are
+honest pre-commit verifications, never a claimed CAS; external
+writers can still rename between them. The private staging mode is a
+best-effort same-euid privacy measure, not a sandbox: it does not
+protect against an arbitrary malicious process running as the same
+uid. Abort and failure cleanup removes only the owned private stage —
+a foreign replacement under the staging name is never deleted. The Server side keeps
+the same `LocalConnection` locked across prepare, the caller's
+`authorize` gate run on the verified prepared `original`, and the
+commit or abort dispatch — the path is never reparsed or reopened.
+Once the first commit byte is attempted, a transport failure,
+malformed reply, or mismatched ticket retires the stream and returns
+an `io::Error` wrapping `rustx_execution_server::WriteOutcomeUnknown`
+— the published state is unknowable and the operation is never
+retried; an explicit well-formed `CommitUnknown` for the live ticket
+maps to the same error *and* retires the connection: the publish may
+have crossed, the ticket is consumed, and no later accounting from
+that peer can be trusted. The `WriteOutcomeUnknown` marker downcasts through
+`error.get_ref()`. A binding revoked after the prepare but before the
+commit is dispatched gates the commit frame out entirely — the revoke
+shuts the retained duplicate stream down, the idle Client exits on
+EOF, and its dropped write state cleans the unpublished stage.
+
+Inside the Client, the crossing itself arbitrates against the control
+lane: `StagedWrite::publish_with_gate` runs every pre-crossing
+verification first, then hands the one `linkat`/`renameat` (or subtree
+`NOREPLACE` rename) closure to the caller's gate, which runs it under
+the per-ticket arbitration lock. `Crossed` is recorded iff the syscall
+physically succeeded — a `CancelMutation` that parks on that lock mid-
+crossing receives the true post-syscall answer, a cancel that reached
+the cell first means the crossing never runs, and a failed crossing is
+never `AlreadyCrossed`. Revocation is checked under the same lock, so
+a reported `Revoked` linearizes against every in-flight gate; a commit
+parked between grant and gate is fenced, not silently crossed. On the
+Server side, `LocalExecutionEndpoint::commit_prepared` arms the
+invocation's cancellation listener the moment the commit frame hits
+the wire and forwards `CancelMutation` on the paired control lane —
+an independent physical path the data exchange cannot jam — retaining
+the watcher until physical settlement.
+
+### Conditional edits (implemented)
+
+`ClientRequest::PrepareEdit { relative_path, expectation,
+replacements }` reuses the same ticketed publish kernel as a write —
+it is a first phase only, never a second mutation path. The Client
+retains the exact named target with `WriteTarget::prepare` (the
+expectation is `Revision` or `Current`: an edit always names an
+existing original, so `Absent` is malformed), reads it back through
+`WriteTarget::read_original_bounded` — the *retained descriptor*,
+never the path reopened — capped at `MAX_EDIT_FILE_BYTES` (2 MiB) and
+at the stamped size, applies the shared `rustx-text-edit` algorithm
+(exact anchors first, then the per-edit NFKC fuzzy fallback, ranges
+resolved in the original snapshot, BOM and dominant line ending
+preserved), and holds the planned result bytes in memory under the
+ticket — staging happens only under the commit grant, exactly like a
+write.
+`ClientReply::EditPrepared { ticket, original, published_size }`
+reports the verified source stamp and the exact committed byte count;
+`ClientReply::EditRefused { reason }` carries only the stable typed
+`EditRefusal` — no path, no anchor text — and nothing is staged. The
+wire request is bounded: at most `MAX_EDIT_REPLACEMENTS` (128)
+replacements with at most `MAX_EDIT_REQUEST_BYTES` (64 KiB) aggregate
+old+new bytes, and the fuzzy provenance vectors themselves are capped
+(`MAX_FUZZY_PROJECTION_ENTRIES`), so a pathological source refuses
+`TooLarge` rather than growing the mapping without bound.
+
+`LocalConnection::edit_file(relative_path, expected_revision,
+replacements, authorize)` runs the identical shape as `write_file`
+under `Capability::ConditionalEdit`: one absolute deadline armed once
+covers the prepare exchange, the authorization window, and the commit
+or abort — it is never rearmed. The `original` stamp must echo the
+exact expected revision, `published_size` must stay within the file
+cap, and a typed `EditRefused` projects to a `RefusedEdit`-downcastable
+error while the connection stays live; a refusal whose indices or
+shape contradict the request retires it. Commit and abort are the
+shared `CommitWrite`/`AbortWrite` frames, and a correctly-ticketed
+`CommitUnknown` or any malformed postcommit reply retires the
+connection with `WriteOutcomeUnknown` — a possibly-crossed publish is
+never an ordinary retryable denial.
+
+The native Write and Edit tools route their physical operations
+through this path: the Agent binds a `BoundMutationTarget` during
+preflight — the logical interpreted path plus the ticketed
+`PreparedMutation` — classifies permission against the *logical*
+workspace path the Client proved, and the executor commits or aborts
+the exact ticket. A denied or cancelled preflight aborts the ticket
+explicitly; a dropped owner arranges bounded cleanup without blocking
+async code. No Server-local physical mutation remains for these
+tools.
+
+`rustx-execution-client --binding-file PATH --workspace PATH` is the
+physical Client:
+
+- Argv carries only paths; the environment is unused; the credential
+  never appears in argv or env.
+- The bootstrap record's `version` must equal `PROTOCOL_VERSION` before
+  the workspace is opened or the socket touched; a foreign version is
+  refused before any connection work.
+- The bootstrap file is opened `O_NOFOLLOW | O_NONBLOCK`, then proven to
+  be a regular file, singly linked, euid-owned, and exactly `0600`.
+  The direct parents of both the binding file and the socket path must
+  be non-symlink owner-only `0700` directories owned by this euid — a
+  spoofed endpoint cannot be reached. The socket path itself must exist
+  as a real socket, not a symlink.
+- The file must contain exactly one framed record — trailing bytes are
+  corruption — and all errors are static redacted messages.
+- The workspace is local policy, never a server request: `--workspace`
+  must equal the bootstrap workspace byte for byte (`OsStr` equality on
+  a normalized absolute path) or the client refuses to connect at all —
+  it never silently follows a path the server named.
+- The workspace root is opened with `PackageDirectory::open` before
+  connecting and its descriptor is held for the whole session; every
+  read re-verifies the retained ancestor identities.
+- Before the Hello — and therefore before the credential — is sent, the
+  connected peer's euid must equal this process's euid (`SO_PEERCRED`
+  on Linux, `getpeereid` on macOS): a socket planted by another user
+  never sees the credential.
+- The credential exchange runs under the same `transport::DeadlineStream`
+  budget the Server enforces: one absolute deadline armed once on the
+  established socket (`Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`),
+  covering the Hello write, the `HelloReply` read, admission
+  verification, and `finish()` restoring blocking mode before the client
+  enters its serving loop — never re-armed on a partial record.
+- The Hello advertises `version: PROTOCOL_VERSION` and the fixed
+  capability set `{Connection, ReadRange, DirectoryMetadata, TreeMutations,
+  ConditionalWrite, ConditionalEdit, ReadLines, DocumentPages,
+  BoundedSearch}` — the
+  operations this build physically implements — constructed by the
+  client, never read from the mutable bundle.
+- After sending the Hello it reads one `HelloReply`; a reject is
+  reported by its stable code, and a matching `Admission` must echo
+  exactly this binding's fields — protocol version included — before
+  the client proceeds.
+- The client then serves only typed requests until a clean EOF before a
+  record ends it: `Ping` → `Pong`, `ReadRange` answered through the
+  retained `PackageDirectory` via `rustx_confined_fs::read_range`,
+  `GetMetadata`/`ReadDirectory` answered through its
+  `entry_metadata`/`directory_page`, `ReadLines` answered through the
+  retained `PackageDirectory` and the shared `scan_text` scanner,
+  `ReadDocument` answered through `rustx-document-reader` — the same
+  whitelist, bounded acquisition, and parser policy as the native
+  Read tool — `Search` answered through its bounded shared-universe
+  traversal and streaming matcher (see *Bounded workspace search*) — and
+  `PrepareWrite`/`CommitWrite`/`AbortWrite` answered through the
+  `WriteTarget`/`StagedWrite` kernel by the per-connection `Writes`
+  owner. EOF
+  after a successful handshake never permits the credential file to be
+  replayed: the binding is `Detached` and the Server answers
+  `RecoveryRequired`.
+
+### Bounded workspace search (implemented)
+
+`ClientRequest::Search { relative_root, spec }` carries one typed
+`SearchSpec` — `Glob { pattern, limit }` or `Grep { pattern, glob,
+literal, ignore_case, context, limit }` — over `relative_root`, the
+strict workspace-relative path the Server already confined. It is
+answered by `ClientReply::SearchPage { body, matches, hit_limit,
+byte_limit, short_lines }`: `body` is only the selected records (the
+sorted root-relative paths for Glob, the `path:line:`/`path-line-`
+rows for Grep) — the Server alone projects the model-facing notices
+and the exact no-results text, and never parses display text back
+into authority because Unix names can carry literal controls.
+
+The Client's `search` module enumerates one shared file universe
+descriptor-relative below the retained `PackageDirectory`: `names`
+capped per directory before allocation, `entry_metadata` without
+following, `descend` for real directories, hidden and ignored files
+included, symlink and special entries skipped, a symlinked root
+refused, a file root a whole universe for Grep only. The universe is
+a point-in-time enumeration, not an atomic snapshot: paths sort
+globally bytewise lexical; every retained file pins its enumeration
+stamp and reopens only through `root.file` on the single shared
+root-relative prefix joined to its own suffix — a path whose target
+changed since enumeration is a conflict, and a searched file is
+re-verified descriptor-wise and name-wise before its records
+publish. Glob matches `globset` compiled
+with `literal_separator`; Grep streams the verified descriptor
+through `grep_searcher::Searcher` under an 8 MiB working buffer after
+a whole-file `validate_utf8` pass — a file whose bytes break anywhere
+contributes nothing. Both physical passes read through a
+deadline-bounded reader so a single slow source cannot outrun the
+operation deadline by more than one in-flight kernel call, which maps
+to `Unavailable`. `hit_limit` is a proof: it is set only when a
+further match was observed and excluded, and a line that cannot fit
+the working buffer is the stable `SearchBudgetExceeded`, never an
+allocation explosion. Every traversal budget — depth 64, 4096 names
+per directory, 8 MiB retained path bytes charged on both owned forms
+of each path, and 65,536 visited entries —
+fails closed on the same typed code rather than returning a silent
+partial universe.
+
+The wire bounds are `MAX_SEARCH_PATTERN_BYTES` = 8 KiB per pattern or
+file-filter glob, `MAX_SEARCH_CONTEXT_LINES` = 20, a `body` bounded by
+`MAX_TEXT_BYTES` = 50 KiB, and the Grep line preview at 500 Unicode
+scalars — all enforced on encode before the frame can grow. The
+Server verifies the reply the same way it verifies a page: `body`
+inside the text bound, `matches` within the requested limit, a zero
+count pairing only with an empty body, `hit_limit` only at a proven
+full limit, `short_lines` impossible on Glob — any deviation retires
+the connection. The operation rides the same absolute exchange
+deadline, data budget, and single writer permit as the page reads
+through `SessionExecutionScope::search`; the native `glob`/`grep`
+executors interpret the root lexically, compile patterns Server-side
+for their own diagnostics, dispatch the typed spec, and project the
+exact pre-migration truncation notices. There is no Server-local
+traversal and no unbound fallback — an unadmitted Session answers
+`Session execution unavailable`.
+
+### Session-bound tree mutations
+
+`TreeMutations` negotiates one `MutateTree` exchange for directory creation,
+removal, and copy. The Server admits the caller and translates both copy
+paths against the same exact Session Workspace. The Client refuses an
+empty mutation target, interior dot components and no-follow traversal
+violations. Recursive operations have a depth bound of 32 and a total
+visit bound of 4,096 entries. Copies stream at most 256 MiB through the
+confined-fs file publication kernel.
+
+Every successful `mkdirat`, `unlinkat` and file publication crosses under
+the Client's generation grant. Revocation fences later changes. Success
+answers `TreeMutated`. An ordinary error means no named change crossed.
+Partial changes or a failed post-publication check answer
+`TreeOutcomeUnknown`. A lost or invalid receipt after admission also
+returns `OutcomeUnknown` to the App Server caller and retires the pair.
+
+### Session-bound file observers
+
+With `FileWatches`, `Watch::Register` retains a file or directory descriptor
+under the authenticated Session's confined Workspace. Registration has a
+Server-created incarnation and checks the native source identity before
+and after attaching. `Watch::Poll` returns a coalesced, source-relative
+delta of at most 16 paths and 16 KiB of escaped path bytes. Each Client
+binding holds at most 32 observers. An unavailable or changed identity
+retires the observer with an empty resync hint.
+
+`StopWatch` uses the independent control lane. Its exact keyed receipt
+distinguishes physical cleanup from an unknown result. A detached or
+revoked Client stops its native observers before reporting clean exit.
+The App Server retains connection-local notification ownership and fences
+stale hints from a prior incarnation when a UI ID is reused.
+
+### Authenticated connection is not readiness (frozen)
+
+`Admission` proves authenticated connection ownership only. It does not
+report workspace, configuration, MCP, Python, or resource-discovery
+readiness, and it does not grant dispatch. Those are separate facts with
+separate later reports; nothing may collapse them into one `Ready`.
+Connected means connected — never "environment ready".
+
+### Credential delivery (frozen contract)
+
+Credentials are server-issued high-entropy secrets, distinct from ordinary
+App Server management tokens. The local channel is the owner-only
+bootstrap file above (0600 inside a 0700 owner-only directory). Remote
+deployment wires equivalent secrecy and the Client verifies the Server's
+TLS identity. Credential revocation and replacement retire the old
+binding's dispatch rights — authentication is not a one-time handshake
+grant, and the binding verifies on every connect rather than trusting a
+past handshake. The launcher arguments and identity persistence fields
+are fixed by the layer that ships the launcher; the owner-only
+requirement is fixed now.
+
+## Frozen resource bounds (PR1)
+
+These values are the registered bounded-resource constants
+(`rustx_execution_protocol::*`); implementations may not exceed them and
+no second set may exist.
+
+| Bound | Value |
+| --- | --- |
+| Encoded transport frame (envelope included) | `MAX_ENCODED_FRAME_BYTES` = 1 MiB |
+| Raw content chunk before encoding | `MAX_RAW_CHUNK_BYTES` = 64 KiB |
+| Data records per connection | `MAX_DATA_RECORDS_PER_CONNECTION` = 8 |
+| Control records per connection | `MAX_CONTROL_RECORDS_PER_CONNECTION` = 4 |
+| Optional Server → Client save absolute deadline | `OPTIONAL_SAVE_DEADLINE` = 5 s |
+| Search pattern or file-filter glob | `MAX_SEARCH_PATTERN_BYTES` = 8 KiB |
+| Grep context lines | `MAX_SEARCH_CONTEXT_LINES` = 20 |
+| Search traversal depth / visited entries | `MAX_SEARCH_DEPTH` = 64 / `MAX_SEARCH_ENTRIES` = 65,536 |
+| Retained search path bytes | `MAX_SEARCH_PATH_BYTES` = 8 MiB |
+| Grep searcher working buffer | `MAX_SEARCH_BUFFER_BYTES` = 8 MiB |
+| Edit source and result bytes | `MAX_EDIT_FILE_BYTES` = 2 MiB |
+| Edit request: replacements / aggregate bytes | `MAX_EDIT_REPLACEMENTS` = 128 / `MAX_EDIT_REQUEST_BYTES` = 64 KiB |
+
+The encoded-frame bound is enforced on the final serialized bytes —
+envelope, metadata, and escape expansion included — at the read/parse
+boundary before allocation; raw chunk size never relaxes it. Data and
+control records travel on separate bounded queues so cancellation, health,
+and control progress are guaranteed even when data records saturate the
+connection. The 5-second save deadline is an independent finite budget for
+one optional save; it never extends the calling operation's remaining
+deadline and never re-arms on slow writes.
+
+## Frozen pending contracts
+
+These are normative shapes frozen by this ADR. They are not implemented in
+this layer, and code must not fake them.
+
+### START: pre-execution atomic registration
+
+The Server assigns `OperationId`s — foreground and background alike —
+fixed before first dispatch under the same Server incarnation, Session,
+Client instance, and generation. The Client atomically registers the
+identity, normalized parameter fingerprint, and cancel/start state before
+any business spawn; only the first-creation owner reaches the local START
+gate. Concurrent or late same-identity same-parameter requests attach to
+the original record (`Starting`, running, cancelled, failed, settled);
+same-identity different-parameter requests are explicitly rejected, never
+overwrite. A query is observation, not a launch permit: a miss proves
+nothing about an in-flight START. Retried identities keep minimal
+tombstones until the generation stops accepting their retries; capacity
+refuses new STARTs, never LRU-forgets live tombstones. A new instance
+answers `Unknown` to old identities — no cross-instance exactly-once.
+Background Bash additionally keeps prepare-then-accept: `Prepare`
+registers the owner and allocates the unique managed file without
+starting the process; `START` verifies acceptance evidence at the same
+registration.
+
+### Server → Client optional save
+
+Complete HTTP MCP and winning Host results may be saved into a
+Client-owned unpublished staging object under the owning namespace —
+never a Server/Host-chosen path. Chunks carry deterministic offsets;
+identical re-delivered chunks dedupe by object/offset/content, and
+conflicts, gaps, or reordering reject. Sealing verifies accumulated
+length, continuity, and the end digest. Only the winning, domain-valid
+result with real save evidence may be published. `Complete` means fully
+sealed with a confirmed published locator — allocation receipts, sent
+bytes, a received `End`, or a won claim are not enough. `Partial`
+publishes only evidenced contiguous prefix and says so; `Unavailable`
+says the full text was not saved or cannot be retrieved. Business
+completeness and save completeness settle separately: a save failure
+after a complete result keeps the business verdict with a bounded
+preview and diagnosis — the business is never redone and arbitration
+never reopens.
+
+### Host chunked results
+
+Four message semantics — `Begin`, `Chunk`, `End`, `Abort` — share the
+existing response arbitration with ordinary single-message results and
+errors. A candidate identity binds the Server incarnation, the original
+callback request/invocation, the Host connection/subscription
+incarnation, and an `UploadId`. `Begin` registers a bounded receiving
+state and never claims the response, never blocks other eligible Hosts.
+`Chunk` carries candidate identity, content item/order, exact offset, and
+bytes; it updates incremental length/digest/bounded preview and may flow
+into unpublished Client staging — it never aggregates the full text on
+the Server, never writes a Server file, never commits per-chunk
+canonical facts. `End` verifies envelope completeness, contiguous range,
+declared length, and the incremental digest, then performs exactly one
+claim attempt in the original lifecycle/correlation gate; the first
+complete valid result (or a contract-conformant complete JSON-RPC error)
+wins. `Abort` retires the candidate without a result. Winner-only
+publication; losers' uploads and staging are cancelled and cleaned by
+ownership, and losing paths are never published. Transport/integrity
+verification precedes claim; business-domain validation keeps its
+original post-claim order.
+
+### Canonical byte layout and metadata
+
+Chunk offsets are absolute byte offsets within the serialized content
+stream of their item; the declared total is the sum of item bytes. The
+result digest covers a canonical little-endian layout so escaping or
+message splitting can never change content identity:
+
+```text
+content_item  := type_tag u16le | byte_length u64le | content bytes
+digest_input  := item_count u32le | content_item* | declared_total u64le
+result_digest := SHA-256(digest_input)    (32 bytes; lowercase hex on the wire)
+```
+
+`type_tag` assigns one code point per result content kind at schema
+freeze. Implemented contract values: `0x0001` is `inputText` (UTF-8
+text, the only defined tag); `0x0000` is reserved and refused; every other
+tag is refused as unknown. Item order is significant and preserved; a
+zero-length item carries a header and no bytes. Independent upload-record
+budgets (not the transport frame limit, not the management limit): at most
+1024 items per result, 64 KiB raw per chunk, 1 MiB total per result. Immutable result
+metadata — content-item count, per-item type and declared length — is
+fixed at `Begin`, verified again at `End`, and bounded. Chunk bytes
+append to the incremental digest; re-derived metadata never mutates the
+envelope.
+
+## Explicitly not claimed
+
+- Host upload (EXEC-01, `item/tool/result/{begin,chunk,end,abort}`) is a
+  generated contract and fixtures only. `src/app_server/host_upload.rs`
+  defines the closed envelopes and a pure verifier; they are registered in
+  the public schema as unreachable definitions and the protocol parser does
+  not accept them. There is no receiver, no callback claim wiring, no
+  winner/loser arbitration, and no Host content storage (#578).
+
+- The remote transport is a real authenticated WebSocket channel with
+  identical record/Session semantics as the Unix socket, bound to
+  a loopback `wss` listener with a per-reservation pinned certificate or
+  an operator-provisioned `wss` ingress with a trusted local forwarding
+  hop. Recovery stays #577. The paired control lane —
+  health, `CancelMutation`, `Revoke` on an independent channel — is
+  implemented and exercised at member and endpoint level including
+  real physical congestion proofs; what remains open under T11 is
+  end-to-end proof at the product Agent-flow level (a real mid-commit
+  cancel raced against a live composed Client), not the mechanism.
+- Optional save (EXEC-01) is contract and fixtures only: `protocol::save`
+  defines `SaveRequest`/`SaveReply` on `ClientRequest::Save`/`ClientReply::Save`,
+  with a pure reference state machine and checked-in envelope fixtures
+  (`crates/execution-protocol/fixtures/save-envelopes.json`). The real Client
+  does not advertise managed output and answers every save message with
+  `Unavailable { code: capability-unavailable }`, touching no path,
+  allocation, or queue. No Host path or optional-save storage is
+  implemented here.
+- No MCP session, Python, managed output, or any file
+  operation beyond the range read, the two query operations, the
+  two-phase conditional write, the conditional edit, the two
+  logical-text page
+  operations, the bounded search, and the typed process-operation
+  family (`Register`/`Start`/`Query`/`OutputPage`/`WriteStdin`/
+  `CloseStdin`/`Resize`/`InputReceipt`/`ReleaseOutput` on
+  `ClientRequest::Process`, with `ControlRequest::CancelProcess` on
+  the control lane) exists
+  behind `Admission`;
+  `Binding::status()` is observation only, and a `Live` phase is a
+  connection fact, not an integration claim. `Capability::Files` and
+  everything it implies stay unadvertised until that capability lands.
+  The process family is consumed by exactly one product path —
+  the App Server's `command/exec` group — which registers one
+  operation per UI `processId` on the Session's admitted endpoint,
+  drives it through the typed exchanges on the data lane, and cancels
+  it on the control lane; there is no Server-local spawn, PTY, or
+  drain path behind it. Process identity is the full
+  `ProcessOperationKey` — server incarnation, Session, Client
+  instance, generation, and operation — echoed on every reply
+  including `Unknown`; `Running` is published only after the
+  physical START witness inside the Client (the outer supervisor
+  helper's own spawn is not business START), exit only after the
+  real `ShellExited` event, and settlement — `Known`, `TimedOut`,
+  `Cancelled`, `Failed`, or `Unknown` — only after actual reap and
+  drain, with per-stream byte totals and truncation flags the Server
+  projects into the exact `ExecResult`. Output is an ordered
+  interleaved journal addressed by a global byte-boundary cursor with
+  validated per-stream offsets and capped retained prefixes;
+  `ReleaseOutput` at the exact final cursor frees the bulky buffers
+  while a minimal tombstone keeps replay honest. Input controls are
+  admitted as `InputAccepted` and their physical outcome — `Pending`,
+  `Applied`, `Failed`, `Rejected`, or `Unknown` — is correlated by
+  `InputReceipt`. A pending poll keeps the receipt and a terminal poll
+  takes it. The Server can explicitly abandon a pending receipt without
+  withdrawing its already-admitted physical input. At most eight receipts
+  may be outstanding per operation. The Client refuses admission before
+  assigning the next sequence when that capacity is full. `ReleaseOutput`
+  frees the journal while any unclaimed input receipts remain with the
+  same operation. The Server owns each accepted receipt through a terminal
+  claim, acknowledged abandonment, or binding teardown. If the final
+  exchange fails, the receipt owner fences an Open binding. An existing
+  terminal owner keeps the control lane to receive `Revoked`.
+  A stale sequence is never reapplied and an ambiguous
+  write is never retried. The Client holds at most four
+  concurrent operations per Session plus a bounded tombstone budget.
+  Native Agent Bash uses a separate `RegisterAgentBash` message and
+  negotiates `AgentBash` on the same authenticated binding. Ordinary
+  `Register` refuses a shell spec. The shell spec freezes the command,
+  cwd, configured environment, timeout, Conversation owner, live
+  capture choice, and raw stdout budget as one fingerprint. Timeout zero
+  permits an adopted Bash job to keep its lifecycle; argv commands
+  still require a physical timeout.
+- Agent Bash registers its Client-owned capture before accepting a
+  background job. A promoted invocation keeps the same operation and
+  locator. Direct foreground capture allocates on the first combined
+  preview overflow. Capture produces separate 16 KiB stdout, stderr
+  and combined previews. Each stream is decoded incrementally before
+  multiplexing. Complete native captures have a 64 MiB file bound
+  and at most 32 live/published files occupy a binding at once, so the
+  per-binding disk data ceiling is 2 GiB. Storage failures distinguish
+  a readable prefix from unavailable output. Releasing the process
+  journal retains published capture until disposal or binding shutdown.
+- The absolute Bash continuation identifier is scoped to the owning
+  Conversation and Client binding. Native Read and Grep send a typed
+  query to that Client, and the Client opens its own retained capture.
+  The locator does not authorize a workspace write or disclose the
+  Client's physical scratch path. UI job-output tails are bounded by the
+  same preview limit. This capture capability is independent of the
+  optional `Save` contract.
+- An authenticated connection has no implied configuration, MCP, or
+  interpreter readiness. `WorkspacePythonStatus` reports only the Client's
+  interpreter readiness under the separate `WorkspacePython` capability.
+- No Client instance replacement, generation increment, or death-cleanup
+  evidence path exists; a detached binding rejects every Hello with
+  `RecoveryRequired` until #577 lands.
+- The App Server reserves one endpoint from the Session catalog under the
+  residency owner. The explicitly local Agent entry and the App Server's
+  local execution option launch the trusted sibling over that same paired
+  Unix protocol. They pass an empty environment and seal standard I/O.
+  Normal shutdown confirms Client-side revocation, closes the data transport
+  and reaps an owned sibling. A busy data exchange is interrupted by the
+  binding fence.
+- The trusted App Server owner can enroll a minimal Session and reserve its
+  execution binding independently of Workspace configuration and runtime
+  initialization. Use `--local-execution-workspace` without an existing
+  Session ID to enroll and launch locally. Use `--execution-workspace`
+  with `--execution-ws-listen` and `--execution-bootstrap-out` to enroll a
+  remote Session. The enrolled Workspace must be a normalized absolute path
+  under a configured environment root. The new Session is durable and
+  listable if a later Client startup fails. When resuming that setup, use
+  the existing Session ID. The credential stays in the private bootstrap.
+- App Server file operations look up the exact `sessionId` without
+  allocating a binding. Authorized browsing works after Client admission
+  even when Workspace configuration is invalid and Agent runtime attach
+  fails. A missing current binding reports `ExecutionUnavailable`.
+- Fresh App Server configuration capture for a reserved Session reads
+  `rustx.toml` through the authenticated Client. The Server uses the proven
+  root identity, a one-MiB whole-document limit, a five-second wire budget
+  per capture, and the same stamped `ReadRange` chunks as other files. It
+  verifies the document again before admission. The initial read alone
+  can report absence. A disappearance mid-read is a conflict. Binding
+  authority supplies the Workspace path without a Server-side Workspace
+  probe for that document. Capture waits for data admission within the
+  same wire budget and runs outside the configuration publication lock.
+  Publication rechecks the current binding and source generations.
+  The Server parses and authorizes the document, combines it with User
+  policy, and applies native units. The path-keyed Session-creation
+  catalog, authored resource discovery, and automatic source watching
+  still use Server-authored inputs. Cold loading and explicit Workspace
+  reconciliation can use an authenticated binding when its logical path
+  is absent on the Server. Workspace-authored resources remain a separate
+  discovery source. Once admitted, its directory identity stays part of
+  the Session's authority. Loss or replacement fails resource adoption
+  while independent policy can still apply. Explicit unavailable resource
+  selections have their own diagnostics, and reconciliation tracks each Client capture in its
+  own Session scope. Host resource snapshots and remote
+  resource discovery are tracked in [#578](https://github.com/Caismis/rustX/issues/578).
+- Agent tools resolve the binding through a non-owning
+  `SessionExecutionScope`. The physical side performs bounded line,
+  search and document work and returns the verified projection. Artifact
+  validation, commit and model-facing references remain on the Server.
+  Data exchanges share the endpoint's finite permits and absolute deadline.
+  Malformed or lost replies retire the pair when framing or ownership
+  becomes uncertain.
+
+### Root, Subagent and Workflow dispatch
+
+The Root carries a non-owning `SessionExecutionScope` for the exact
+Session. Native Workflow calls reuse the Root's scope. A separately staged
+Subagent receives data and control Unix descriptors over its private startup
+IPC, along with the exact Client admission and connection identity. The
+parent retains the authenticated Client lanes and never provisions a second
+binding or sends a binding credential to the child.
+
+The parent checks the child's frozen native capabilities, Conversation and
+operation identities and prepared mutation tickets before forwarding. Data
+shares the Session's existing bounded admission and writer. The independent
+control lane carries keyed cancellation even when data stalls. The
+physical binding owner validates the mutation ticket, stamp and committed
+byte count before relaying a successful write. Retirement waits within
+one deadline for shared data capacity, then aborts child preparations and
+settles or releases child process records before reporting cleanup. A lost physical commit or cleanup receipt retains
+its unknown disposition and fences the binding. The Server still owns
+canonical results and the order in which calls commit.
+
+### Completion and drain
+
+Discarded mutation preparations retain their ticket until a bounded
+Abort can wait for the same data and writer admission as other Agent
+requests. Abort is idempotent for an issued ticket whose preparation
+has already settled. A mutation cancel waits for queue capacity in
+the same absolute deadline as its keyed control receipt. If the
+receipt is unknown and commit is still unresolved, the Server fences
+the pair and preserves the authoritative data outcome. Neither path
+reissues the commit. A pending data lane must pass an immediate socket
+readiness check during pair commit, independently of the watchdog.
+
+Application Server drain closes Host and Session dispatch admission in a
+synchronous step that stores the settlement plan. Async drain takes that
+plan. One absolute shutdown deadline starts before admission closes.
+Independent Client pairs revoke concurrently outside the Host lock. At
+pair commit the binding starts tracking physical settlement. A valid
+Revoke receipt resolves it even if the transport subsequently detaches.
+A reservation that never paired has no Client work to settle. Detachment
+without a receipt leaves settlement unconfirmed. After sending Revoke,
+the control worker waits for its receipt until the original command
+deadline. Session deletion closes admission under the registry lock and
+settles the binding outside that lock. It shares the outcome with Host
+drain. An unconfirmed result prevents durable deletion and stays in the
+process inventory. Streamed pipe stdin reports a close as applied
+only once the physical input connection has been shut down. The argv
+contract accepts empty positional arguments and rejects empty program
+names and embedded NULs. An authoritative Register refusal ends cleanup
+ownership. A terminal START receipt drives the output and release state,
+including a cancelled operation with an empty journal. A failed cancel
+checks the most recent terminal evidence before fencing. When terminal
+settlement already owns a binding, a failed mutation cancel leaves the
+control lane available for Revoke. The original commit receipt still
+determines the mutation outcome. Private Bash
+capture discard waits for bounded data admission and either confirms
+release or retires its owning binding. Once terminal settlement closes
+ordinary data admission, queued capture discard and prepared-ticket
+cleanup transfer to it. A child relay with unfinished cleanup waits for
+the same physical settlement result. The Client counts capture owners
+from START admission through worker exit, and from Discard admission
+through file release. It removes the retained capture files before sending
+Revoke confirmation. Non-EOF PTY read errors preserve output loss in the
+terminal disposition.
+
+### Workspace Python readiness
+
+`PrepareWorkspacePython` schedules one Client-owned preparation. The
+independent `WorkspacePythonStatus` reports `Unscheduled`, `Preparing`,
+`Ready`, or `Unavailable`. Configuration and management do not wait for
+preparation. The Client verifies the opened Workspace identity, resolves
+`.python-version`, `pyproject.toml` and `.venv` in its own view, and runs uv
+and interpreter probes with its process supervisor. Agent Shell START
+applies the verified interpreter or the guarded unready environment. An
+authorized Shell START may schedule preparation when the runtime loaded
+before admission. Session revocation drains the physical worker. The
+process-private uv discovery and fallback guard directories are created
+with mode 0700. The Client removes them during orderly exit. The
+local composer waits for and reaps that Client. UI argv commands have
+an independent environment contract. Managed Python remains
+under [#577](https://github.com/Caismis/rustX/issues/577).
+
+### WorkspaceChanges observation
+
+The Server associates a Workspace observation with one canonical Attempt. It
+uses an independent operation ID with the same authenticated Session,
+incarnation, instance and generation as the other Agent tool exchanges. The
+Client advertises `WorkspaceChanges` and owns the physical observation.
+`Begin` schedules the baseline while the model is running. The Server waits
+for `BaselineReady` before dispatching tools and sends `Capture` with a
+Workspace-relative file path before an approved native Write/Edit commit.
+
+Git runs under the same process supervisor on the Client. It uses a private
+index and object directory, literal path scopes for nested workspaces and a
+restricted copy of the repository configuration. Each candidate stages
+its Git objects and index privately. The binding retains up to 512 MiB
+and 65,536 unique loose objects. Exceeding either limit discards the
+candidate and preserves the previous index and existing observations.
+A completed Finish owns its first Summary delivery. A completed Compare
+owns its indexed Comparison delivery. The pending delivery protects the
+record until a matching poll claims it or 60 seconds pass after completion.
+A duplicate Compare for the same index joins its pending or ready result
+within this window. It does not start another worker or renew the deadline.
+A new Begin at capacity may reclaim delivered or expired history.
+The quota covers retained data. A single serialized Git attempt may
+temporarily use additional scratch before the quota check. A rename that crosses the
+Workspace edge is observed only through its in-scope endpoint. Files outside
+Git coverage use private, descriptor-relative captures. Summary and indexed
+comparison requests are bounded by 500 returned paths and 896 KiB of encoded
+reply content. There is one in-flight comparison per record and at most 32
+records per Client binding. Completed or failed records can be retired to
+make room for new observations. A retired record with an outstanding
+physical worker keeps its slot until that worker settles.
+
+`Finish` initiates the final physical snapshot. The Server checks the reply
+and publishes the normalized summary under the active Attempt's cancellation
+gate. The card is independent of canonical ToolResults and is excluded from
+model input. A dropped or evicted Server record sends `Release` to cancel
+remaining observation work and drop its comparison captures. If the
+Server cannot confirm that Release on the same binding, it fences the
+pair. Revocation waits for in-progress physical captures before it can
+acknowledge settlement. Connection shutdown cancels the workers and
+disposes of the binding's private Git index and objects.
+
+## Test ownership (T01–T73) and optional O-SUM
+
+Each contract below maps to its primary owning PR(s) per the plan's
+deterministic test matrix. The evidence already landed is marked in
+§ Verification; everything else is pending evidence in its owning layer,
+not skipped.
+
+| Test | Contract | PR |
+| --- | --- | --- |
+| T01 | Client-less model loop, internal tools, HTTP MCP, eligible Host callbacks work | 1/3 |
+| T02 | Read/write/bash with a truly separate filesystem view | 1 |
+| T03 | Two Clients/connections on one Session: one dispatchable | 1/2 |
+| T04 | Session/Root/Subagent/Workflow routing correctness | 1/3 |
+| T05 | Cancellation before dispatch or model request: zero execution | 1/2 |
+| T06 | Parallel results in call order; terminal state unique and last | 1/3 |
+| T07 | Same-instance recovery reruns nothing, no duplicate output | 2 |
+| T08 | Stdin safe retransmission without duplicate input | 2 |
+| T09 | One Client failure kills no other Session or Server-only work | 2 |
+| T10 | Stale results/watch/cleanup never pollute a new instance | 2 |
+| T11 | Output/spill backpressure never starves control/cancel/health | 1/2 |
+| T12 | UI detach vs Host disconnect vs Execution disconnect distinguished | 2/4 |
+| T13 | Three-layer config, default/explicit paths, missing vs empty | 3 |
+| T14 | Explicit config path does not move the `.agents` resource root | 3 |
+| T15 | Workflow permission independent of YAML definition | 3 |
+| T16 | Model/Profile selection consistent across entries | 3 |
+| T17 | Session inject/restore, candidate failure, safe activation | 3 |
+| T18 | Bootstrap has no circular dependency; unknown config never fakes empty | 1/3 |
+| T19 | MCP declaration cache isolated by identity and invalidated | 3 |
+| T20 | Optional MCP init never blocks the first inference round | 3 |
+| T21 | MCP versions, MRTR/Tasks, resources, interaction, cancel intact | 2/3 |
+| T22 | Skills stay plain read/bash with real reachable assets | 3 |
+| T23 | Committed history/previews/artifacts readable without Client | 4 |
+| T24 | Server/Client independent builds and permission boundary | 1/4 |
+| T25 | Three artifacts' Linux/macOS entry, install, exit | 4 |
+| T26 | Revocation before local file-commit/START: zero side effects | 1 |
+| T27 | After Server restart, unfinished old resources bar new env work | 2 |
+| T28 | Binding auth never reusable across Sessions or old instances | 1/2 |
+| T29 | UI-direct commands are not Agent attempts; disconnect cleans up | 1/2 |
+| T30 | MCP/Host/Python foreground; Bash background contract kept | 2/3 |
+| T31 | No Client: oversized Server results honestly truncated | 1/3 |
+| T32 | Oversized Server results imported whole to Client, readable | 1/3 |
+| T33 | Save interruption/disk-full/timeout never redoes won business | 2/3 |
+| T34 | Save selection point vs late/replaced Client correct | 1/2 |
+| T35 | Write-ack vs canonical commit race: exactly one result | 2 |
+| T36 | Host broadcast/first-complete/domain-validation order kept | 1/3 |
+| T37 | Frame/result/concurrency/memory/model/save budgets enforced separately | 1/3 |
+| T38 | HTTP fixed on Server; no Client-side localhost proxying | 3 |
+| T39 | Spill ownership stable across fork/clone/restart/delete | 2 |
+| T40 | Watch overflow/reconnect repairs instead of faking history | 2/3 |
+| T41 | Local two-process and remote protocol env semantics identical | 1/4 |
+| T42 | Large file/spill read/grep never full-loads or full-pulls | 1/4 |
+| T43 | One-way faults and detection skew meet recovery budgets | 2 |
+| T44 | Minimal Session binding before directory browse; no pool | 1/4 |
+| T45 | Delivered artifacts vs temporary Spill stay separate | 3/4 |
+| T46 | Host streaming receive never aggregates full text on Server | 3/4 |
+| T47 | Skill narrow discovery and resource-snapshot invalidation | 3 |
+| T48 | Foreground/background share idempotent START; unique accept | 2 |
+| T49 | Session delete offline cleanup neither over-claims nor revives | 2/4 |
+| T50 | Host Begin never preempts; first complete valid result claims | 3 |
+| T51 | Host complete upload vs Client save failure settle separately | 2/3 |
+| T52 | Over-1-MiB bounded complete results received without a Client | 3/4 |
+| T53 | Incomplete/corrupt uploads never take business response rights | 3 |
+| T54 | Duplicate/late/cross-candidate chunks never splice or republish | 1/3 |
+| T55 | Message size judged on encoded bytes, not raw text | 1/3 |
+| T56 | Host candidate resources bounded; cleanup before quota release | 2/3 |
+| T57 | Client generation change mid-upload keeps business integrity | 2/3 |
+| T58 | Concurrent duplicate STARTs (fg/bg) produce one execution | 2 |
+| T59 | Query miss with in-flight START still never double-starts | 2 |
+| T60 | Terminal/cancel/failed retries never revive; tombstones kept | 2 |
+| T61 | Old Operation on a new instance reports Unknown only | 2 |
+| T62 | Client killed around spawn: cleanup/admission windows proven | 2 |
+| T63 | Death-pipe FD leak/supervisor death never cause false takeover | 2 |
+| T64 | Descendant escape and PID/PGID reuse never fake cleanup | 2 |
+| T65 | Server-control disconnect vs Client death stay distinct | 2/4 |
+| T66 | Managed Python fingerprint inputs unchanged on Client | 2 |
+| T67 | Same Store/fingerprint concurrency: one physical prepare owner | 2 |
+| T68 | Corruption never repaired in place; per-call permission bind | 2 |
+| T69 | Private env lifetime distinct from Session/Spill/process | 2/4 |
+| T70 | Store reuse domain and racing publish proven exactly | 2 |
+| T71 | Credential activation keeps legal old leases; new admission uses new generation | 3 |
+| T72 | Ordinary rotation never hides cancel/expiry/remote refusal nor replays | 3 |
+| T73 | Source save, candidate failure, activation, stale discovery distinct | 3 |
+
+Optional O-SUM (only if explicitly selected; not a release gate):
+
+| Test | Contract | Status |
+| --- | --- | --- |
+| O01 | Bounded locator reaches summary input under long-body pressure | optional |
+| O02 | No fabricated paths/integrity facts; states stay distinct | optional |
+| O03 | Summary-input quality only; no persistent Spill mechanism | optional |
+
+## Verification
+
+Commands for this layer (run from the repository root):
+
+```sh
+cargo fmt --all -- --check
+cargo clippy -p rustx-execution-client -p rustx-execution-server -p rustx-execution-protocol -p rustx-confined-fs --all-targets --locked -- -D warnings
+cargo test -p rustx-execution-client -p rustx-execution-server -p rustx-execution-protocol -p rustx-confined-fs --locked
+cargo check -p rustx --all-targets --all-features --locked
+cargo tree -p rustx-execution-client -e normal --locked
+cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
+```
+
+Distinct mount-view evidence (Linux, opt-in, requires bubblewrap — a
+read-only T02 fragment, not a CI gate). One script runs both proofs:
+the boundary-layer RPC and the product-entrance composition:
+
+```sh
+test-support/prove_execution_mount_view.sh
+```
+
+Landed evidence: canonical generation parsing; exact credential wire
+form with redaction and no echo in errors; workspace normalization; the
+credential verifier checked before any field probe; literal `OsStr`
+workspace comparison rejecting `/work//root`; wrong-field rejection
+without reservation consumption; a barrier-synchronized two-Hello race
+committing exactly one live connection; immediate terminal revocation;
+stale-EOF tolerance; `RecoveryRequired` on any re-admission after EOF —
+including replay of the same static credential — so no credential file
+grants a second session; `reserve_local` private-directory enforcement
+and leftover-free publication; `accept_local` handshake with a fresh
+server-generated `ConnectionId` and RAII disconnect; and real
+two-process tests over a Unix socket that drive the built
+`rustx-execution-client` binary through handshake, `Ping`/`Pong`, clean
+shutdown, post-EOF replay rejection, `0644` file/`0755` directory and
+hardlink denial, no retry or artifacts on reject, caller-controlled
+reaping without orphans, and — for this layer — exact bounded bytes at
+a sparse-file marker near EOF with correct offset/`next_offset` and a
+full source-descriptor stamp (size, revision, `dev:ino` identity,
+mtime) verified against independently opened metadata — plus an
+exact-EOF read returning empty bytes under the same stamp and a fully
+consumed empty file — stale-revision conflict,
+symlink/`..`/absolute-path denial,
+unbound-workspace refusal before connect, foreign bootstrap-version
+refusal before connect, revoke-before-read denial, tampered-bundle
+capability refusal, admitted-capability gating (a `Connection`-only peer
+gets `Unsupported` without a request), stream retirement on protocol
+violations, and clean-EOF versus truncated-record exit status. On Linux
+the opt-in `filesystem_operations_use_the_private_mount_view` proof reads the
+marker through a writable `bwrap` private bind mount of the reserved
+Workspace. It then creates, copies, and removes entries in that view.
+The Server's Workspace path remains empty. Its product-entrance
+counterpart, `explicit_composition_reads_from_client_mount_namespace`
+in the `process` target, composes the real App Server pair with a
+test-only sibling launcher that wraps the staged Client in the same
+`bwrap` layout (a fixture artifact only — production resolves the
+sibling executable directly and has no override): the product
+`fs/readFile`, `fs/getMetadata`, and `fs/readDirectory` calls then
+serve the marker bytes and the source stamp from the Client's mount
+view, the listing shows the marker and never the Server-side decoy,
+the decoy read is `EnvironmentResourceNotFound` with no Server-local
+fallback, and the Server's own view keeps the marker `NotFound` and
+the decoy intact before and after. The same proof also runs a bound
+foreground `command/exec` (`/bin/bash -c 'cat marker; printf client >
+process-marker'`) through the Client's view: it exits `0`, its stdout is
+the rewritten marker, the result file exists only in the physical
+directory, and the Server's view keeps it absent. An unbound Session's
+command is `ExecutionUnavailable`. The launcher gives the Client a
+private `tmpfs` TMPDIR and `--dev /dev` (a plain `--ro-bind / /` leaves
+`/dev` `nodev`, so the supervisor's `/dev/null` open fails), with the
+staged `bash-supervisor` beside it. This proves the App Server's argv
+`command/exec` path. The same script also runs the Agent tool-plane
+fixture `background_live_output_is_readable_while_running_and_reused_at_settlement`
+with an independent Linux mount view. The fixture uses the native tools
+and the real Client to prove the file write, read, running Bash
+continuation, and its complete terminal read.
+The process layer adds its own evidence inside the Client crate
+(`process::tests`, real spawns through the staged `bash-supervisor`
+sibling): foreign-key refusal before lookup, `/bin/pwd` observed in a
+non-root workspace subdirectory, authorized environment with the
+runtime baseline winning, duplicate-register attach plus a second
+`Start` producing exactly one marker, cancel-before-START writing
+nothing, the barrier-gated START-hold race where a cancel parked
+inside the runner's own transaction is classified by the real
+crossing flag, streamed stdin delivered in order with conflicting
+sequences refused, PTY write/resize/EOT, four-slot capacity refusing
+a fifth until release, forged or early `ReleaseOutput` rejected, an
+exact-cursor release answering later replays with the real settled
+snapshot, five sequential released operations never exhausting
+capacity, and generation revoke fencing a pending start. On the
+product side, the App Server environment scenarios drive the same
+operations through a real staged Client: PTY and piped commands,
+stdin bytes and close, resize, cap/timeout, output-before-final
+ordering, UI detach cancelling only the issuing connection's
+operation, host drain cancelling commands before waiting for request
+settlement, and `revocation_before_native_start` — the Server-side
+dispatch hold plus the supervisor's own diagnostics trace proving
+zero business spawn when revocation wins and exactly one when START
+does. This is a T05 fragment (cancel before dispatch → zero
+execution) and the first T29 implementation evidence (UI-direct
+commands create no Attempt; disconnect cleans only the issuing
+connection's operations); the process kernel's independent build and
+the supervisor-helper staging are a further T24 fragment, with Agent
+Server retains canonical Bash settlement and projection.
+T03/T24/T28's connection-singularity,
+dependency-boundary, and cross-instance rejection portions and T42's
+bounded-read portion have their first coverage here; the remainder of
+the matrix is pending in its owning layer. The process-owned Session
+claim adds a further limited T03/T28 fragment — registry-level proof
+that one claimant wins preparation, that a dropped waiter never strands
+the claim, that two Sessions never share binding material, and that
+delete/drain revokes — but it dispatches no work and proves no recovery,
+so the full contracts stay pending in their owning layers.

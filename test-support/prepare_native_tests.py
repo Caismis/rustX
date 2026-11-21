@@ -227,7 +227,7 @@ def load_package_metadata(
     metadata_flags: list[str],
     package_name: str | None,
     cwd: Path,
-) -> tuple[str, Path, dict[str, Path], dict[tuple[tuple[str, ...], str], Path]]:
+) -> tuple[str, str, Path, dict[str, Path], dict[tuple[tuple[str, ...], str], Path]]:
     """Query ``cargo metadata`` for exact checkout package identity and targets."""
     cmd = [cargo_exe, "metadata", "--no-deps", "--format-version", "1", *metadata_flags]
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
@@ -251,11 +251,25 @@ def load_package_metadata(
     elif len(packages) == 1:
         pkg = packages[0]
     else:
-        raise PreparationError(
-            f"expected one package in workspace metadata (pass `-p`), found {len(packages)}"
-        )
+        # The workspace carries execution-boundary member crates; without an
+        # explicit selector this harness prepares exactly the root package —
+        # the one whose manifest is the workspace root's. (`check_test_lanes`
+        # covers every workspace member; this preparer only stages the
+        # binaries the root package's real-process tests spawn.)
+        root_manifest = (Path(metadata["workspace_root"]) / "Cargo.toml").resolve()
+        roots = [
+            pkg
+            for pkg in packages
+            if Path(pkg["manifest_path"]).resolve() == root_manifest
+        ]
+        if len(roots) != 1:
+            raise PreparationError(
+                f"expected one root package in workspace metadata (pass `-p`), found {len(roots)}"
+            )
+        pkg = roots[0]
 
     pkg_id = pkg["id"]
+    pkg_name = pkg["name"]
     manifest_path = Path(pkg["manifest_path"]).resolve()
     bin_targets: dict[str, Path] = {}
     all_targets: dict[tuple[tuple[str, ...], str], Path] = {}
@@ -266,7 +280,7 @@ def load_package_metadata(
         all_targets[(kind, name)] = src_path
         if "bin" in kind:
             bin_targets[name] = src_path
-    return pkg_id, manifest_path, bin_targets, all_targets
+    return pkg_id, pkg_name, manifest_path, bin_targets, all_targets
 
 
 def _relay_diagnostic(row: dict) -> None:
@@ -476,6 +490,55 @@ def stage_binary_beside(source: Path, dest_dir: Path) -> None:
         raise PreparationError(f"checksum mismatch after staging `{dest}` from `{source}`")
 
 
+# Packages whose test harnesses compose foreign-package binaries: the root
+# package stages the Execution Client and the physical supervisor helpers;
+# the Execution Client's own tests spawn `bash-supervisor` directly, so its
+# harnesses stage the supervisor helpers too.
+COMPANION_PACKAGES = {
+    "rustx": ("rustx-execution-client", "rustx-process-supervisor"),
+    "rustx-execution-client": ("rustx-process-supervisor",),
+}
+
+
+def companion_bin_command(bin_cmd: list[str], package: str) -> list[str]:
+    """Derive a companion package's build from the root ``--bins`` command.
+
+    Package selection becomes ``-p <package>``; the root
+    crate's feature selectors are dropped so the companion builds in its own
+    ordinary default mode, while target, target-dir, profile, and
+    lock/offline flags carry over unchanged.
+    """
+    cmd: list[str] = []
+    saw_package = False
+    i = 0
+    while i < len(bin_cmd):
+        token = bin_cmd[i]
+        if token in ("-p", "--package"):
+            cmd.extend(["-p", package])
+            saw_package = True
+            i += 2
+            continue
+        if token.startswith("--package="):
+            cmd.append(f"--package={package}")
+            saw_package = True
+            i += 1
+            continue
+        if token in ("--features", "-F"):
+            i += 2
+            continue
+        if token.startswith("--features="):
+            i += 1
+            continue
+        if token in ("--all-features", "--no-default-features"):
+            i += 1
+            continue
+        cmd.append(token)
+        i += 1
+    if not saw_package:
+        cmd.extend(["-p", package])
+    return cmd
+
+
 def stage_binaries(binaries: dict[str, dict], harnesses: list[dict]) -> int:
     """Stage every package binary beside every emitted test harness executable."""
     harness_exes = {Path(row["executable"]).resolve() for row in harnesses}
@@ -500,7 +563,7 @@ def stage_binaries(binaries: dict[str, dict], harnesses: list[dict]) -> int:
 def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], list[Path]]:
     work_dir = (cwd or Path.cwd()).resolve()
     test_cmd, bin_cmd, metadata_flags, package_name = split_cargo_invocation(argv)
-    pkg_id, manifest_path, bin_targets, all_targets = load_package_metadata(
+    pkg_id, pkg_name, manifest_path, bin_targets, all_targets = load_package_metadata(
         test_cmd[0], metadata_flags, package_name, work_dir
     )
     has_lib = any(kind == ("lib",) or "rlib" in kind for kind, _ in all_targets)
@@ -528,6 +591,57 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
         libraries=libraries,
         has_lib=has_lib,
     )
+    companions = COMPANION_PACKAGES.get(pkg_name, ())
+    if companions:
+        # These harnesses compose companion-package binaries (for example
+        # the Execution Client's tests spawning `bash-supervisor`); each
+        # trusted sibling is built with the same target, target-dir,
+        # profile, and lock flags — never the testing crate's feature
+        # selectors — and staged beside every emitted harness.
+        root_dir = Path(next(iter(binaries.values()))["executable"]).resolve().parent
+        root_profile = profile_signature(next(iter(binaries.values())))
+        for companion in companions:
+            companion_id, _, companion_manifest, companion_bin_targets, companion_targets = (
+                load_package_metadata(
+                    test_cmd[0], metadata_flags, companion, work_dir
+                )
+            )
+            companion_records = run_cargo_json(
+                companion_bin_command(bin_cmd, companion), work_dir
+            )
+            _, companion_binaries, _ = collect_package_artifacts(
+                companion_records, companion_id, companion_manifest, companion_targets
+            )
+            # The companion package's own harnesses (for example the
+            # process-supervisor lib tests that exec `bash-supervisor`)
+            # resolve their helpers through the same executable-sibling
+            # contract, so they are staging destinations too.
+            _, _, companion_harnesses = collect_package_artifacts(
+                test_records, companion_id, companion_manifest, companion_targets
+            )
+            harnesses.extend(companion_harnesses)
+            missing_companion = sorted(
+                set(companion_bin_targets) - set(companion_binaries)
+            )
+            if missing_companion:
+                raise PreparationError(
+                    f"Cargo did not emit required companion binary artifacts: {', '.join(missing_companion)}"
+                )
+            if not binaries:
+                raise PreparationError(
+                    "companion staging requires the ordinary package binaries it must sit beside"
+                )
+            for name, row in companion_binaries.items():
+                if profile_signature(row) != root_profile:
+                    raise PreparationError(
+                        f"companion binary `{name}` profile differs from the root binaries'"
+                    )
+                if Path(row["executable"]).resolve().parent != root_dir:
+                    raise PreparationError(
+                        f"companion binary `{name}` targets a different directory than the root binaries"
+                    )
+            # Feature names are package-local and never compared across crates.
+            binaries.update(companion_binaries)
     staged_count = stage_binaries(binaries, harnesses)
     harness_paths = [Path(row["executable"]) for row in harnesses]
     binary_paths = {name: Path(row["executable"]) for name, row in binaries.items()}

@@ -1966,7 +1966,7 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
     runtime.activate();
     let (mut staged, mut peer) = stage_runtime_test_child(&dir.path().join("unproven-abandoned"));
     staged.retain_for_test(
-        crate::runtime::identity::ProcessUnitId::new("unprovable-unit"),
+        rustx_process_supervisor::identity::ProcessUnitId::new("unprovable-unit"),
         i32::MAX,
     );
     subagents.push_staged_override(staged);
@@ -2072,7 +2072,7 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
     runtime.activate();
     let (mut staged, mut peer) = stage_runtime_test_child(&dir.path().join("unproven-child"));
     staged.retain_for_test(
-        crate::runtime::identity::ProcessUnitId::new("unproven-unit"),
+        rustx_process_supervisor::identity::ProcessUnitId::new("unproven-unit"),
         i32::MAX,
     );
     subagents.push_staged_override(staged);
@@ -2214,11 +2214,11 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn runtime_shutdown_waits_for_foreground_process_terminality() {
-    use crate::runtime::process_runner::RunnerLifecycleHook;
     use crate::runtime::types::ConversationLifecycleState;
     use crate::tools::executor::ToolRegistry;
-    use crate::tools::native::{BashTestControl, BashTool};
+    use crate::tools::native::{BashTestControl, FixtureBashTool};
     use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
+    use rustx_process_supervisor::process_runner::RunnerLifecycleHook;
 
     let control = BashTestControl::new().hold_terminal_event();
     let process_lifecycle: RunnerLifecycleHook = control.runner_control().lifecycle.clone();
@@ -2248,7 +2248,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
     registry
         .register(
             definition.clone(),
-            Arc::new(BashTool::with_test_control(control.clone())),
+            Arc::new(FixtureBashTool::with_test_control(control.clone())),
         )
         .expect("test Bash registration");
     let call_id = crate::runtime::identity::ToolCallId::new("call-m9c-process");

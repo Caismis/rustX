@@ -6,10 +6,9 @@ import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
 import { WorkspaceTerminals, workspaceDescriptors, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, WorkspaceFolderSelection, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
@@ -514,10 +513,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private register(location: string, displayName: string, folder?: PickedFolder) {
     const existing = this.registrations.find(row => row.location === location);
     if (existing) return existing.id;
-    const directory = folder?.path ?? this.cwd(location);
+    if (!folder) this.cwd(location);
     const row = { id: randomUUID(), location, displayName, folder };
     this.commit([...this.registrations, row]);
-    if (this.config.nativeFilesystem === 'shared') queueWorkspacePythonAdmission(directory);
     return row.id;
   }
   async renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string) {
@@ -785,22 +783,4 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');
-}
-
-/** Best-effort handoff after a Workspace registration has already committed. */
-function queueWorkspacePythonAdmission(workspace: string) {
-  try {
-    const home = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir();
-    if (!home || !isAbsolute(workspace)) return;
-    const directory = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const id = randomUUID();
-    const pending = join(directory, `${id}.pending`);
-    try {
-      writeFileSync(pending, workspace, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-      renameSync(pending, join(directory, `${id}.txt`));
-    } finally { rmSync(pending, { force: true }); }
-  } catch {
-    // Registration remains successful when the native runtime is not ready to observe this file.
-  }
 }

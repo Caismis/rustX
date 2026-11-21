@@ -229,7 +229,6 @@ impl SessionRuntimeManager {
                 .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
         }
         settings.model = capture.input.model.clone();
-        let workspace = settings.cwd.clone();
         let flight = claim.map(|claim| super::Flight::with_startup(claim.into_startup()));
         let mut start = false;
         let result = self
@@ -262,7 +261,6 @@ impl SessionRuntimeManager {
         let mut application = self.applications.lock();
         application.register_session_scope(result.session.id.to_string(), &capture);
         self.applications.notify(&application);
-        crate::tools::workspace_python::schedule(&workspace);
         Ok(result)
     }
 
@@ -274,21 +272,34 @@ impl SessionRuntimeManager {
         session: &SessionId,
         revision: &str,
     ) -> Result<super::super::session::deletion::SessionDeleteResult, RuntimeManagerError> {
-        if let blocked @ super::super::session::deletion::SessionDeleteResult::Blocked { .. } =
-            self.sessions.delete_preview(session).await
-        {
-            return Ok(blocked);
+        match self.sessions.delete_preview(session).await {
+            result @ (super::super::session::deletion::SessionDeleteResult::Blocked { .. }
+            | super::super::session::deletion::SessionDeleteResult::NotFound { .. }) => {
+                return Ok(result);
+            }
+            super::super::session::deletion::SessionDeleteResult::Preview { preview }
+                if preview.target_revision != revision =>
+            {
+                return Ok(
+                    super::super::session::deletion::SessionDeleteResult::Stale {
+                        session_id: preview.session_id,
+                        actual_revision: preview.target_revision,
+                    },
+                );
+            }
+            _ => {}
         }
-        let residents = {
+        let (residents, endpoint) = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             if !registry.retiring_sessions.insert(session.clone()) {
                 return Err(error("Session retirement already owns admission"));
             }
+            let endpoint = self.execution.close_session_admission(session);
             registry.failed_submissions.retain(|_, flight| {
                 let (owner, _) = flight.target.get().expect("failed initialization target");
                 owner != session
             });
-            registry.session_entries(session)
+            (registry.session_entries(session), endpoint)
         };
         #[cfg(test)]
         if let Ok(snapshot) = self.sessions.read_session(session).await {
@@ -296,6 +307,12 @@ impl SessionRuntimeManager {
                 .after_delete_fence
                 .park()
                 .await;
+        }
+        if let Some(endpoint) = endpoint {
+            endpoint
+                .settle()
+                .await
+                .map_err(|failure| error(format!("Client revocation is unconfirmed: {failure}")))?;
         }
         for id in residents {
             match self.retire(&id).await {
@@ -326,6 +343,10 @@ impl SessionRuntimeManager {
                 .lock()
                 .expect("Session configuration bindings")
                 .remove(session);
+            // The retired claim's endpoint teardown runs here, outside the
+            // residency mutex. An uncertain durable result keeps
+            // `retiring_sessions` closed so no new claim can start.
+            self.execution.retire(session);
         }
         if !matches!(
             result,
@@ -370,6 +391,12 @@ impl SessionRuntimeManager {
                 "writer retirement must be proven before deletion recovery",
             ));
         }
+        if let Some(endpoint) = self.execution.close_session_admission(session) {
+            endpoint
+                .settle()
+                .await
+                .map_err(|failure| error(format!("Client revocation is unconfirmed: {failure}")))?;
+        }
         let result = if matches!(observed, SessionDeleteResult::NotFound { .. }) {
             self.sessions.confirm_deletion_absence(session).await
         } else {
@@ -390,6 +417,7 @@ impl SessionRuntimeManager {
                 .expect("registry mutex")
                 .retiring_sessions
                 .remove(session);
+            self.execution.retire(session);
         }
         Ok(result)
     }

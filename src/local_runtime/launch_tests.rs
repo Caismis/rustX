@@ -49,6 +49,7 @@ async fn compose_admitted_with_controller(
         super::composition::McpInitialSubmission::default(),
         &crate::runtime::cancellation::CancellationSignal::new(),
         &[],
+        None,
     )
     .await?
     .into_interactive()
@@ -1322,7 +1323,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
 
 #[tokio::test]
 async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
-    use crate::runtime::process_runner::{
+    use rustx_process_supervisor::process_runner::{
         CapturedProcessResult, RunnerTestControl, SupervisedCommandSpec, SupervisedProcessRunner,
     };
     use std::sync::{
@@ -2387,7 +2388,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     .unwrap();
     assert!(
         crate::runtime::load_project_context_files(
-            &f.host.launch_directory,
+            Some(&f.host.launch_directory),
             &f.host.home_directory.join("rustx/.agents"),
         )
         .unwrap_err()
@@ -2404,6 +2405,20 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
             .validate_resource_authority()
             .unwrap_err()
             .contains("physical binding changed")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_authored_configuration_requires_a_workspace_directory() {
+    let fixture = Fixture::new();
+    let launch = fixture.resolve();
+    let workspace = &fixture.host.launch_directory;
+    std::fs::rename(workspace, fixture.root.path().join("previous-workspace")).unwrap();
+    std::fs::write(workspace, "a file at the former Workspace path").unwrap();
+    assert_eq!(
+        launch.validate_resource_authority().unwrap_err(),
+        "Workspace physical binding changed after capture"
     );
 }
 

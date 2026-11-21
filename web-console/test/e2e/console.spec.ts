@@ -2,7 +2,7 @@ import { settledSave } from './shell-actions';
 import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
-import { openEmptySession } from './shell-actions';
+import { createBoundSession, openEmptySession, openExistingSession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import {
@@ -39,13 +39,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   let remote: AppServerHost | undefined;
   let passed = false;
   try {
+    const idA = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle('rustX');
     await expect(page.locator('[data-harness-frame]')).toBeVisible();
     await connect();
-    await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, idA);
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
-    const idA = await selectedSessionId(page);
+    expect(await selectedSessionId(page)).toBe(idA);
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     const idB = await selectedSessionId(page);

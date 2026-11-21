@@ -9,12 +9,12 @@ async fn scheduler85_review_job_wait_cannot_block_unload_or_replacement() {
     bounded(async {
         for replacement in [false, true] {
             let f = Fixture::with_session_count(None, 1).await;
+            let _execution = f.start_execution(0).await;
             let connection = crate::app_server::connection::AppServerConnection::new(f.host.clone());
             super::protocol::initialize(&connection).await;
             let target = super::protocol::attach(&connection, &f, 0).await;
             let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(crate::tools::native::BashTool::new());
             let invocation = crate::tools::types::ToolInvocation {
                 id: crate::tools::types::ToolInvocationId::Agent { call_id: ToolCallId::new("unbounded-bash") },
                 tool_id: ToolId::new("tool-bash"), tool_name: "bash".into(),
@@ -22,8 +22,14 @@ async fn scheduler85_review_job_wait_cannot_block_unload_or_replacement() {
                 arguments: serde_json::json!({"command": format!("exec 9<>/dev/tcp/127.0.0.1/{}; printf '%s\n' \"$BASHPID\" >&9; exec /bin/sleep 3600", listener.local_addr().unwrap().port())}),
             };
             let background = runtime.tool_runtime().background();
-            let prepared = background.prepare_dispatch(&invocation, &executor, crate::tools::environment::ToolEnvironment::new()).unwrap();
-            let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } = background.commit_dispatch(prepared, &crate::runtime::CancellationSignal::new()).unwrap() else { panic!("accepted") };
+            let signal = crate::runtime::CancellationSignal::new();
+            let cancellation = crate::runtime::ExecutionCancellation::detached(
+                signal.clone(), crate::runtime::types::CancellationReason::UserRequested,
+            );
+            let prepared = background.prepare_native_bash(
+                &invocation, crate::tools::environment::ToolEnvironment::new(), &cancellation,
+            ).await.unwrap();
+            let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } = background.commit_dispatch(prepared, &signal).unwrap() else { panic!("accepted") };
             let (socket, _) = listener.accept().await.unwrap();
             let mut line = String::new(); BufReader::new(socket).read_line(&mut line).await.unwrap();
             let pid = nix::unistd::Pid::from_raw(line.trim().parse().unwrap());

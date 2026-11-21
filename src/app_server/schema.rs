@@ -1659,6 +1659,9 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     };
     let path = "/workspace/file".to_owned();
     let params = super::command::ExecParams {
+        session_id: crate::local_runtime::session::SessionId::new(
+            "ses_00000000-0000-7000-8000-000000000001",
+        ),
         command: vec!["/usr/bin/printf".into(), "%s".into(), "literal".into()],
         cwd: "/workspace".into(),
         env: std::collections::BTreeMap::new(),
@@ -1685,38 +1688,64 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             process_id: "process-fixture".into(),
         },
         Method::FsReadFile {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: path.clone(),
             offset: 0,
             max_bytes: 65536,
             expected_revision: None,
         },
         Method::FsWriteFile {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: path.clone(),
             data_base64: "aGk=".into(),
             expected_revision: Some("native-revision".into()),
         },
-        Method::FsGetMetadata { path: path.clone() },
+        Method::FsGetMetadata {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
+            path: path.clone(),
+        },
         Method::FsReadDirectory {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: "/workspace".into(),
             offset: 0,
             limit: 32,
             expected_revision: None,
         },
         Method::FsCreateDirectory {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: "/workspace/new".into(),
             recursive: true,
         },
         Method::FsCopy {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             source_path: path.clone(),
             destination_path: "/workspace/copy".into(),
             recursive: false,
         },
         Method::FsRemove {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path,
             recursive: false,
             force: false,
         },
         Method::FsWatch {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             watch_id: "watch-fixture".into(),
             path: "/workspace".into(),
         },

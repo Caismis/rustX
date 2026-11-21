@@ -22,16 +22,26 @@ use crate::runtime::identity::ToolCallId;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
-// Keep the frozen spelling as authority; canonicalization only proves that
-// the binding satisfies the native Tool workspace contract right now.
 pub(super) fn validate_execution_workspace(
     workspace: &std::path::Path,
+    scope: Option<&crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
 ) -> Result<(), SubagentStartError> {
-    crate::tools::Workspace::new(workspace)
-        .map(|_| ())
-        .map_err(|error| SubagentStartError::Workspace {
+    if !rustx_execution_protocol::is_normalized_absolute_path(workspace)
+        || scope
+            .and_then(|scope| scope.endpoint().ok())
+            .is_some_and(|endpoint| endpoint.workspace() != workspace)
+    {
+        return Err(SubagentStartError::Workspace {
+            detail: "child workspace differs from the Session execution binding".to_owned(),
+        });
+    }
+    #[cfg(test)]
+    if scope.is_none() {
+        crate::tools::Workspace::new(workspace).map_err(|error| SubagentStartError::Workspace {
             detail: error.to_string(),
-        })
+        })?;
+    }
+    Ok(())
 }
 
 /// The inputs of one subagent start.
@@ -356,7 +366,7 @@ impl SubagentRegistry {
             || self.config.workspace.clone(),
             |resume| resume.workspace.clone(),
         );
-        validate_execution_workspace(&workspace)?;
+        validate_execution_workspace(&workspace, self.execution_scope.as_ref())?;
         // Physical-root allocation is staged child ownership. A pre-commit
         // crash can leave a durable store for an identity that was never
         // published; skip that identity rather than ever allowing a new child
@@ -571,6 +581,7 @@ impl SubagentRegistry {
             &child_spec,
             runtime_root,
             preparation_cancellation,
+            self.execution_scope.clone(),
         )
         .await
         {

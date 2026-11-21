@@ -138,6 +138,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_upload_framing_counts_the_encoded_envelope() {
+        use crate::app_server::host_upload::{
+            HostUploadEnvelope, HostUploadMethod, MAX_CHUNK_BYTES, fixtures,
+        };
+        use crate::app_server::protocol::RequestId;
+        use base64::Engine as _;
+        use std::fmt::Write as _;
+
+        let mut upload = fixtures()
+            .into_iter()
+            .find(|envelope| matches!(envelope.call, HostUploadMethod::Chunk(_)))
+            .expect("Chunk fixture");
+        let HostUploadMethod::Chunk(chunk) = &mut upload.call else {
+            unreachable!();
+        };
+        // Include multibyte text, quotes, slash, newline and an ASCII control.
+        // Raw bytes are bounded independently of their JSON representation.
+        let raw = "🍀\"\\\n\u{0001}".repeat(MAX_CHUNK_BYTES / 8);
+        assert_eq!(raw.len(), MAX_CHUNK_BYTES);
+        chunk.data_base64 = base64::engine::general_purpose::STANDARD.encode(raw);
+        let encoded_chunk = chunk.data_base64.clone();
+        upload.id = RequestId::String("🍀\"\\\n\u{0001}".into());
+        let canonical = serde_json::to_string(&upload).unwrap();
+        let mut escaped_chunk = String::new();
+        for byte in encoded_chunk.bytes() {
+            write!(&mut escaped_chunk, "\\u{byte:04x}").unwrap();
+        }
+        let mut encoded = canonical
+            .replacen(&encoded_chunk, &escaped_chunk, 1)
+            .into_bytes();
+        assert!(encoded.len() > MAX_CHUNK_BYTES * 6);
+        assert!(encoded.len() < MAX_MESSAGE_BYTES);
+        encoded.resize(MAX_MESSAGE_BYTES, b' ');
+        encoded.push(b'\n');
+        let framed = record(&mut encoded.as_slice()).await.unwrap().unwrap();
+        assert_eq!(framed.len(), MAX_MESSAGE_BYTES);
+        assert_eq!(
+            serde_json::from_str::<HostUploadEnvelope>(&framed).unwrap(),
+            upload
+        );
+        assert!(framed.capacity() <= MAX_MESSAGE_BYTES);
+
+        // The same JSON with one additional whitespace byte parses, but
+        // the real record reader must refuse it before JSON decoding.
+        *encoded.last_mut().unwrap() = b' ';
+        encoded.push(b'\n');
+        assert_eq!(
+            serde_json::from_slice::<HostUploadEnvelope>(&encoded).unwrap(),
+            upload
+        );
+        let error = record(&mut encoded.as_slice()).await.unwrap_err();
+        assert!(error.to_string().contains("exceeds limit"));
+    }
+
+    #[tokio::test]
     async fn exact_framing_boundaries() {
         for size in [0, MAX_MESSAGE_BYTES - 1, MAX_MESSAGE_BYTES] {
             let mut input = vec![b' '; size];

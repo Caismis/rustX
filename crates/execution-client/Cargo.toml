@@ -1,0 +1,59 @@
+[package]
+name = "rustx-execution-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness, bounded revision-checked range reads, logical-text pages, whitelisted document pages, ticketed conditional writes, bounded workspace search, and managed process operations of its workspace, and the bound Workspace Python environment."
+publish = false
+
+[[bin]]
+name = "rustx-execution-client"
+path = "src/main.rs"
+
+[features]
+test-support = []
+
+[dependencies]
+futures-util = "0.3"
+pep440_rs = "0.7.3"
+toml_edit = "0.22"
+similar = "3.2.0"
+tracing = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
+sha2 = "0.10"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+rustx-execution-protocol = { path = "../execution-protocol" }
+rustx-execution-transport = { path = "../execution-transport" }
+rustx-confined-fs = { path = "../confined-fs" }
+rustx-process-supervisor = { path = "../process-supervisor" }
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "process", "fs"] }
+rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
+libc = "0.2"
+tempfile = "3.27.0"
+rustx-text-edit = { path = "../text-edit" }
+rustx-document-reader = { path = "../document-reader" }
+base64 = "0.22"
+getrandom = { version = "0.3.4", features = ["std"] }
+nix = { version = "0.31.3", default-features = false, features = ["fs", "user", "socket", "term", "event"] }
+# The bounded glob/grep engines of the Search exchange — the same crates
+# the Agent Server's pre-migration search used, never a spawned `rg`.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+globset = "0.4.19"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+
+[dev-dependencies]
+rustx-execution-server = { path = "../execution-server" }
+# The physical-START hold seam for in-crate race tests — enabled for
+# this package's own test binary only; no production graph enables it.
+rustx-process-supervisor = { path = "../process-supervisor", features = ["test-support"] }
+rustx-execution-transport = { path = "../execution-transport" }
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

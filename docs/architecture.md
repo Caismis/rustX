@@ -6,7 +6,11 @@ Rust 1.100 is the sole compiler baseline. Native companions follow one
 executable-sibling deployment contract; Cargo test preparation binds and stages
 actual emitted artifacts instead of inferring intermediate directory layouts.
 Workspace Python keeps guard, interpreter and preparation ownership in private
-modules. Session Controller operations and Workflow compilation/catalog modules
+Execution Client modules. Agent Bash applies this Client's verified Python
+selection at launch. Root and native Workflow tools dispatch through one
+Session execution scope. A separate Subagent process receives two scoped IPC
+descriptors from its parent and relays admitted operations through that same
+binding. Session Controller operations and Workflow compilation/catalog modules
 retain their original native authorities and public paths. See the
 [engineering report](evidence/issue-560-final-report.md) and its disposition maps.
 
@@ -1896,8 +1900,10 @@ tools/locator.rs           runtime-owned read locator authority for advertised
 tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
                            tool-output store: lazy foreground result spills
                            (`r-<16 hex>.txt`, random short names,
-                           `create_new`) and the dispatch-allocated
-                           background live-output channel
+                           `create_new`) for the native Bash path —
+                           foreground MCP results stay preview-only until an
+                           Execution Client save binding exists — and the
+                           dispatch-allocated background live-output channel
                            (`e-<16 hex>.output`); owns model-mutation
                            rejection for its runtime-owned namespace
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
@@ -1917,6 +1923,9 @@ tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
                            In child processes, this drain precedes control
                            dispatcher shutdown so settled probe anchors can
                            still release through the reliable parent channel.
+                           UI Workspace registration persists metadata only
+                           and never schedules Python through `HOME`; the
+                           Server consumes no `HOME` preparation handoffs.
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete
@@ -1951,13 +1960,10 @@ tools/native/             the native tool plane: one module per native
                            input boundary, support.rs the shared failed/
                            success results and the one atomic file commit,
                            and mod.rs only composes the known native tools
-tools/native/search/      the private native-search substrate shared by
-                           Glob and Grep: the one workspace file-universe
-                           policy (cwd-oriented root resolution, traversal, hidden-file
-                           visibility, ignore-file behavior, symlink
-                           policy, normalized relative paths, deterministic
-                           enumeration) — not a tool, never registered,
-                           never a generic search-provider framework
+tools/native/search_failure.rs
+                           the shared Server-side projection of the
+                           Client's stable physical-search error codes —
+                           never a traversal, and never a second universe
 tools/native/bash/        the Bash subsystem: registration (mod.rs), the
                            invocation lifecycle executor (executor.rs), the
                            output capture half (capture.rs), and the
@@ -2731,9 +2737,10 @@ Permission admission also owns execution evidence. Git argv alone cannot
 exclude repository-configured clean, diff, textconv, signing or other helpers,
 so Git calls are `Unproven` and follow the permission matrix. Child environment
 defaults preserve ordinary patch output and reject attempts to overwrite
-runtime-owned Git environment keys. Native Write/Edit hold the authorized
-directory handle through reads, temporary-file creation and rename; changing
-an ancestor's pathname after the last check cannot redirect the commit.
+runtime-owned Git environment keys. Native Write/Edit hold the ticketed
+Client-side `WriteTarget` — retained parent, leaf, and original descriptors —
+through authorization and commit; changing an ancestor's pathname after the
+last check cannot redirect the publish.
 
 Automatic review receives bounded native facts: canonical task provenance or
 an admitted scheduled Claim, prepared invocation details, the effective matrix
@@ -2761,14 +2768,19 @@ monotonic `artifact_N` ids, streaming spooling of genuine semantic
 artifacts), and the `ManagedToolOutput` store (auxiliary runtime-owned
 textual output storage addressed by absolute path, never a semantic
 artifact: `<temp>/rx-<16 hex>/r-<16 hex>.txt` lazy spill files of oversized
-foreground textual tool output, and `<temp>/rx-<16 hex>/e-<16 hex>.output`
+foreground textual tool output on the native Bash path — foreground MCP
+results stay preview-only with a typed `Unavailable` continuation until an
+Execution Client save binding exists — and
+`<temp>/rx-<16 hex>/e-<16 hex>.output`
 live-output files allocated at the background dispatch commit point and
 reused by the terminal settlement message). The
 artifact root and the workspace root must be disjoint filesystem regions:
 equal roots, nested roots, and symlink-resolved overlap are rejected at
 construction, so runtime-private output files are not included in the default
-cwd-based Glob/Grep traversal. An explicit absolute host path remains subject
-to the ordinary native file-tool contract.
+cwd-based Glob/Grep traversal. An explicit absolute path still resolves
+under the ordinary native file-tool contract: Write/Edit treat it as a
+host path, while Read, Glob, and Grep refuse one outside the Session's
+admitted Client workspace.
 The explicit `ToolEnvironment` and the authoritative
 `ConversationBackgroundRegistry` complete the bundle. Background
 executions own a deterministic `exec_N` `ToolExecutionId`, a lifecycle
@@ -2936,17 +2948,25 @@ read_image { path }                          static PNG, effective Image input r
 
 For Read, Write, Edit, Grep, and Glob, a relative model path is interpreted
 against and lexically normalized from the authoritative execution cwd
-(`Workspace::root()` in the current runtime); an absolute path is likewise
-lexically normalized as an ordinary host filesystem path. `.` and `..` are
+(`Workspace::root()` in the current runtime). `.` and `..` are
 resolved before filesystem existence or symlink behavior, so missing
-intermediate components cannot change path meaning. These five tools do not
-impose the locator workspace-containment policy. `Workspace` remains the
+intermediate components cannot change path meaning. Read — like `read_image` —
+then requires the interpreted path to stay inside the Session's admitted
+Client workspace, since its physical read crosses the Execution Client
+boundary; Glob and Grep require the interpreted search root to stay inside
+the same admitted Client workspace because their physical traversal crosses
+the Execution Client boundary too. Write and Edit cross the same
+boundary: the interpreted path must resolve inside the Session's admitted
+Client workspace, the preflight binds a ticketed Client-side mutation
+claim — the logical path plus the `PreparedMutation` owner — *before*
+permission classification, and the executor consumes exactly one commit
+or abort decision on that ticket. `Workspace` remains the
 runtime/Bash cwd authority. `tools/locator.rs` resolves runtime-advertised
 managed-output paths for reads, while `ManagedToolOutput` owns the narrow
 model-mutation rejection; neither is a hidden second policy for ordinary
-native file paths. Final-component symlinks
-are followed for atomic Write/Edit commits so the link itself is not
-replaced.
+native file paths. The Client's no-follow descriptor-relative kernel
+refuses a symlinked final component or ancestor — a link is never
+followed into a mutation target, and a path crossing it is denied.
 
 Adopting those conventions is a *schema* decision only. It does not import
 Pi's runtime, subprocess model, permission system, ignore behavior, result
@@ -2965,16 +2985,20 @@ Three consequences are load-bearing:
   counting; intersecting, nested, and coinciding ranges are rejected before
   one atomic commit. BOM and the original LF/CRLF/CR line-ending style are
   restored, and any validation failure leaves the file unchanged.
-- **Glob and Grep share one search substrate.** `tools/native/search/` owns
-  the single file-universe policy both observe: search roots are resolved
-  against cwd or used as absolute host paths, a single file is a legal Grep
+- **Glob and Grep share one search substrate on the Execution Client.**
+  `crates/execution-client/src/search.rs` owns
+  the single file-universe policy both observe, enumerated
+  descriptor-relative below the binding's retained `PackageDirectory`:
+  the root is confined to the Session's admitted Client workspace, a
+  single file is a legal Grep
   root, hidden files are visible,
   ignore files (`.gitignore`, `.ignore`, git global excludes,
   `.git/info/exclude`) deliberately *not* applied, symlinks never followed
   (so neither a directory symlink recursion nor a file symlink target can
-  enter the universe), normalized root-relative paths, and deterministic
+  enter the universe, and a symlinked root is refused), normalized
+  root-relative paths, and deterministic
   lexical enumeration. A caller filter — Glob's `pattern`, Grep's optional
-  `glob` — only ever narrows that shared set. The `ignore`, `globset`,
+  `glob` — only ever narrows that shared set. The `globset`,
   `grep-regex`, and `grep-searcher` crates are implementation dependencies
   of that substrate and of the Grep engine; no `rg` executable is ever
   spawned, none of those crates' defaults are part of the tool contract, and
@@ -3127,15 +3151,27 @@ The limits have deliberately different meanings:
   and not a semantic artifact/File result.
 
 In foreground mode, a complete deterministic representation at or below the
-shared preview threshold remains a direct result and creates no result spill.
-Crossing the threshold lazily allocates exactly one
-`r-<16 hex>.txt`, streams the complete representation there, and
-publishes a bounded deterministic preview plus typed `Complete` continuation.
-An allocation failure publishes `Unavailable`; a write/read failure retains
-the locator as `Partial`. Result size alone never changes semantic success to
-failure; an output-storage failure is a separate explicit failure fact.
+shared preview threshold remains a direct result and creates no file. The
+overflow contract is adapter-specific today because no remote save binding
+exists yet:
+
+- **Native Bash foreground** retains its standalone lazy spill: crossing the
+  threshold allocates exactly one `r-<16 hex>.txt`, streams the complete
+  representation there, and publishes a bounded preview plus typed `Complete`
+  continuation. An allocation failure publishes `Unavailable`; a write/read
+  failure retains the locator as `Partial`.
+- **Foreground MCP results** are preview-only: there is no eligible
+  Execution Client save binding, so crossing the threshold keeps only the
+  bounded preview and publishes a typed `Unavailable` continuation with an
+  explicit "not saved" diagnostic — no spill is allocated, no locator is
+  invented, and no Read/Grep promise is made. The remote `is_error`
+  success/failure verdict is never rewritten by the absent optional save.
+
+In both cases result size alone never changes semantic success to failure.
 MCP content blocks are budgeted collectively, so the canonical preview is
-always valid UTF-8 rather than malformed truncated JSON.
+always valid UTF-8 rather than malformed truncated JSON. The upstream `rmcp`
+`CallToolResult` is already fully materialized when it reaches the adapter;
+bounding the HTTP receive itself remains issue #578.
 
 In background mode, `prepare_dispatch` allocates exactly one
 `e-<16 hex>.output` before the accepted result advertises it. Bash streams
@@ -3243,7 +3279,7 @@ Control-channel EOF is never a post-ownership process-terminal event. Normal
 terminality linearizes at the outer's group-scoped `ECHILD` and its
 `AllChildrenReaped` frame. On Linux, catastrophic loss of both supervisors
 uses the runtime's **process-level kernel coordination primitive** — the
-child-subreaper capability owned by `src/runtime/process_supervision.rs`,
+child-subreaper capability owned by `crates/process-supervisor/src/process_supervision.rs`,
 with lazy one-time, idempotent, sticky activation — to retain the adopted
 inner anchor, contain its group, and reach a second group-scoped `ECHILD`.
 Kernel adoption does not assign arbitrary children to Bash lifecycle
@@ -4291,7 +4327,7 @@ MCP stdio uses the runtime-owned interactive supervisor unit, whose control
 sockets are separate from the server's stdin/stdout protocol pair. The unit
 is the M5 Bash supervisor shape applied to a long-lived server, composed
 from the same shared structural ownership core
-(`src/runtime/supervised_unit`): an inner supervisor calls `setsid()`,
+(`crates/process-supervisor/src/supervised_unit.rs`): an inner supervisor calls `setsid()`,
 applies the fixed-membership restriction on Linux (macOS has no seccomp
 equivalent), and issues `TERM -> grace -> KILL` with `killpg` against its
 own process group; an outer supervisor is the reaper of last resort with the
@@ -7765,3 +7801,127 @@ existing node header; original values stay in the existing field/content paths.
 Typed Workflow detail retains run and workflow identity even before the first
 node starts, so graph resolution does not depend on display labels or a first
 loaded visit.
+
+## Execution Client boundary (Issue #576)
+
+The Server owns authorization, the Agent Loop, Session identity and canonical
+results. The Execution Client owns the migrated physical operations in its
+Workspace view. Server admission, Client START or file publication, and
+canonical ToolResult commit are separate events. A missing Client receipt
+leaves the physical outcome unknown. See the [execution-protocol ADR](execution-protocol.md)
+and [EXEC-01 evidence ledger](exec-01-evidence.md).
+
+- `rustx-execution-protocol` owns the typed records, bounded length-prefixed
+  framing, the `DeadlineStream` absolute-deadline wrapper shared by the
+  handshake and the page exchanges, `LOCAL_HANDSHAKE_TIMEOUT`, and
+  `PAGE_REQUEST_TIMEOUT`. It
+  depends on no other workspace crate; both boundary crates depend on it.
+- `rustx-execution-server` is a library owned by the Agent. It owns binding
+  reservation, credential authentication, arbitration, connection lifecycle,
+  and typed request dispatch (`Ping`, `ReadRange`, `GetMetadata`,
+  `ReadDirectory`, `ReadLines`, `ReadDocument`, `MutateTree`, supervised process
+  commands and the
+  `PrepareWrite`/`CommitWrite`/`AbortWrite`
+  conditional-write sequence). Binding uniqueness is per
+  `Binding`, not per `Session`: each binding admits at most one live
+  connection, and a `Detached` binding is closed to every new Hello until the
+  live-instance recovery work in #577.
+- `SessionRuntimeManager` claims one local endpoint per Session through
+  `session_runtime_manager/execution.rs`: a trusted-composer-only
+  `LocalExecutionEndpoint` (binding, listener, an owner-only bootstrap in a
+  private directory, and the one admitted connection it may ever hold)
+  admitted under the catalog visibility cut and the residency mutex
+  together, prepared exactly once on a blocking task, and fenced on
+  Session delete and process drain. The endpoint's typed surface —
+  `admit_local_stream` and serialized `read_range`, `entry_metadata`,
+  `directory_page`, `read_lines`, `read_document`, `write_file`,
+  `edit_file`, `mutate_tree` and process exchanges (busy
+  refusal, lexical workspace
+  gate, binding live-check at send time) — is the Session's live
+  dispatch owner. The claim is not reachable through
+  the App Server protocol. The paired `--local-execution-session` /
+  `--local-execution-workspace` flags make the App Server itself the
+  explicit composer: it claims the endpoint, launches the trusted sibling
+  Client (empty environment, sealed stdio, killed-and-reaped on failure
+  and at drain) and admits it before transport readiness. Bare mode
+  launches no Client. Trusted owners can enroll an empty Session from
+  an authorized Workspace path and reserve its Client before Workspace
+  configuration or Agent runtime initialization. The local Agent entry
+  also launches the sibling through the same paired protocol and retains
+  that binding for the lifetime of its selected Session. `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`,
+  `fs/writeFile`, `fs/createDirectory`, `fs/remove`, `fs/copy` and
+  `fs/watch` require `sessionId` and route through the endpoint. A Session
+  without an admitted Client returns `ExecutionUnavailable`. The Client
+  retains native watcher descriptors. The Server retains UI subscriptions,
+  normalized change hints and connection-local publication fencing.
+- `rustx-execution-client` is a standalone binary performing physical
+  workspace/environment I/O inside the workspace view it was launched under.
+  It uses the protocol, transport, confined filesystem, document decoder,
+  text editor and process supervisor crates. Server appears only as a test
+  dependency. Its `--workspace` is local launch policy checked byte for
+  byte against the bootstrap record; the server cannot redirect it.
+- WorkspaceChanges leaves the canonical Attempt association and change card
+  publication with the Server. The bound Client observes the Git baseline,
+  captures pre-mutation files, takes the final snapshot, and projects bounded
+  physical comparison material. Private Git and captured files never enter
+  model input. Client revocation stops its physical observation workers and
+  releases their storage when the binding ends.
+- `rustx-confined-fs` holds the proven descriptor-relative primitives factored
+  out of the root package I/O — `PackageDirectory`, `FileMetadata`,
+  `FileChunk`, `DirectoryEntry`, `DirectoryPage`, the bounded
+  revision-checked `read_range`, the `entry_metadata` /
+  `directory_page` queries, the streaming `scan_text` logical-page
+  scanner, and the `WriteTarget`/`StagedWrite` commit kernel —
+  including `read_original_bounded`, the retained-descriptor source
+  read the conditional edit runs on. Root
+  `rustx`
+  and the client both depend on it; the server does not.
+- `rustx-text-edit` is the pure multi-edit algorithm — BOM and line-
+  ending preservation, exact-then-NFKC-fuzzy anchors resolved in the
+  original snapshot, disjoint/overlap/no-change semantics, and the
+  typed `EditFailure` bounds (2 MiB source and result, 128
+  replacements, 64 KiB request, capped fuzzy provenance). The root
+  Edit tool and the client's `PrepareEdit` both run it; it depends on
+  neither side.
+- `rustx-document-reader` is the physical structured-document decoder —
+  the rustX-owned format whitelist, classification, bounded source
+  acquisition, and parser-only xberg decode factored out of the native
+  Read tool. The root tool and the client both depend on it for exactly
+  one parser policy; it depends on neither side.
+- The boundary serves bounded,
+  revision-checked range reads, entry metadata, bounded directory
+  pages, the two-phase conditional write, the conditional edit
+  (`PrepareEdit` — a retained-descriptor source read plus the shared
+  text-edit algorithm staged through the same ticketed publish
+  kernel, with the Server's authorize gate between prepare and
+  commit), the bounded
+  logical-text page, and the whitelisted structured-document page
+  over the isolated Unix socket — `fs/readFile`,
+  `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` are served
+  by the admitted Client; the native Agent Read tool's physical reads
+  route through the same boundary —
+  `SessionRuntimeManager::load` composes each Session's conversation
+  with a non-owning `SessionExecutionScope` (a `SessionId` plus a
+  `Weak<SessionExecutionRegistry>` resolved at dispatch, never a claim)
+  carried on `ConversationRuntimeConfig` into the `Workspace` the
+  `ToolExecutionContext` reaches. The tool classifies the interpreted
+  path through the shared protocol classifier and issues its
+  `ReadLines`/`ReadDocument` exchange through the endpoint's bounded
+  admission — one shared `MAX_DATA_RECORDS_PER_CONNECTION` budget with
+  management queries, a single writer permit awaited on the async side
+  under `PAGE_REQUEST_TIMEOUT` with biased cancellation, and the
+  synchronous exchange run to settlement on a blocking worker. The
+  native `read_image` tool routes through the same scope and admission:
+  its bytes are assembled from at most four pinned-stamp `ReadRange`
+  exchanges under the 256 KiB artifact transfer bound, with the PNG
+  constraint and the `with_active`-gated artifact commit kept on the
+  Agent side — there is no whole-image wire operation. A
+  Session without an admitted Client —
+  standalone or launch-test composition binds none — is an honest
+  `Session execution unavailable`, never a Server-local filesystem
+  fallback. The model-facing paging, continuation, and diagnostics stay
+  on the Agent side, mapped from the stable `ReadError` codes. The
+  product's copy, remove, create-directory, and watch paths still use
+  the local path
+  through `rustx`'s delegating `PackageDirectory` wrapper, and no
+  second Agent, in-process fallback, or speculative launcher exists.

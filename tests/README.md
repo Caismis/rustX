@@ -118,7 +118,15 @@ built as a separate test binary.
 conformance drivers, settlement assertions); `tests/common/` is shared with
 the external integration targets. Boundary suites use the same fixtures —
 a boundary test may legitimately drive a scripted model adapter while its
-invariant is a real process boundary.
+invariant is a real process boundary. `tests/support/session_execution.rs`
+is the real Session-execution rig: it reserves a `SessionRuntimeManager`
+execution endpoint for a real catalog Session, launches the staged
+`rustx-execution-client` sibling, admits it, and kills/reaps the child on
+drop — compiled once for lib unit tests and once per integration target
+via `tests/common`, so any fixture that dispatches the native `read`,
+`read_image`, `glob`, or `grep` tool needs a bound route
+(`native_fixture_with_execution`);
+an unbound fixture honestly answers `Session execution unavailable`.
 
 ## In-crate deterministic contract suites
 
@@ -286,12 +294,28 @@ meaningful domain/boundary/dependency topology:
 | `provider` | one adapter over the in-process `FixtureServer` | request serialization, protocol translation, stream parsing, normalized error mapping, ToolCall acceptance and malformed-tool-proposal classification, capability/context translation at the adapter, opaque request params, opt-in live smoke |
 | `conformance` | the external provider-emulator process | composed Agent Loop / lifecycle / Workflow conformance through the real runtime and a real provider boundary |
 | `durable` | file-backed SQLite | recovery classification, pending-inbound inbox, publication store contract, interaction audit store, transcript history |
-| `process` | the real `rustx` binary / local composition | the public CLI contract (bare help, retired launch grammar rejected without effects), App Server over real stdio and WebSocket processes, composition identity, capability startup isolation, runtime config, committed-example resource composition |
+| `process` | the real `rustx` binary / local composition | the public CLI contract (bare help, retired launch grammar rejected without effects), App Server over real stdio and WebSocket processes, composition identity, capability startup isolation, runtime config, committed-example resource composition, the explicit local-execution composition (Session Client launch/admission/drain and `sessionId`-routed file queries — plus the ignored, Linux-only `explicit_composition_reads_from_client_mount_namespace` opt-in proof, run only via `test-support/prove_execution_mount_view.sh` alongside the boundary-layer `filesystem_operations_use_the_private_mount_view`; the process proof runs a bound `command/exec`, and the script separately runs the native Agent Write/Read/Bash/Grep continuation test through an isolated Client mount) |
 | `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition under a real App Server parent, the running child's internal read-only inspection socket |
 | `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend, managed `FastMCP` materialization |
 | `cfg3_catalog` | real configuration source files | CFG3 source resolution, shadowing and replacement, native writers' commit races and stale-write refusal, frozen model/provider invocation identity |
 | `cfg3_managed_output` | durable identity domains | typed Session/Node/Conversation/execution identity validation and serialization; output locators are independent of execution IDs |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
+
+For the Linux Execution Client mount proof, run
+`test-support/prove_execution_mount_view.sh`. It stages the Server and Client
+test artifacts, runs the separate mount cases for App Server commands and
+Client filesystem operations, and exercises live Agent Bash Read/Grep,
+Workspace Python, and delegated Subagent Write/Edit/Read/Bash. The
+Subagent case keeps the authored role fixture available to the Server and
+overlays the execution directory only on the Client. It verifies that the
+physical output appears exclusively in that overlay and that Session drain
+reaps the supervision probe. The Client-only configuration case covers cold
+Session load and explicit Workspace reconciliation. The Server has no
+directory at the reserved path during either operation.
+
+Browser scenarios driving native tools create and enroll the exact testing
+Session before connecting the browser. The ordinary browser connection and
+history-only fixtures still use the same bare server startup.
 
 The stdio MCP canonical-executor test holds the fixture's `mutate` response
 behind a parent-created marker until the real `ProgressReporter` has observed
@@ -440,6 +464,9 @@ summarizes them and the lane check below verifies them against Cargo:
 | bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts |
 | `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts |
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries |
+| `rustx-execution-client:test bootstrap` | execution-boundary integration | rust-fast and rust-boundaries |
+| `rustx-execution-client:test websocket` | execution-boundary WebSocket transport | rust-fast and rust-boundaries |
+| `rustx-execution-client:bins` | execution-boundary unit | rust-fast |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries |
 
 - **quality** (ubuntu) — `cargo fmt --all -- --check`, both default-feature and
@@ -459,7 +486,7 @@ summarizes them and the lane check below verifies them against Cargo:
   every emitted test harness executable so unit tests of `bash-supervisor`,
   `interactive-supervisor`, and `workflow-renderer` use the same
   executable-sibling contract as production without a duplicate default-feature
-  `cargo build --bins`. The four binary targets define no unit test today, and
+  `cargo build --bins`. The binary targets define no unit test today, and
   of the example harnesses only `session_list_benchmark` (workload checker)
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future
@@ -537,6 +564,18 @@ summarizes them and the lane check below verifies them against Cargo:
   Vite configuration are its whole build configuration. Locally,
   `pnpm test:e2e` stays self-contained: `pnpm build && bash
   scripts/browser-tests.sh`, which runs `cargo build` itself.
+  Session-bound filesystem coverage also exercises a Client-mounted
+  directory watcher, exact descriptor authority across rename and restore,
+  and control-lane unwatch while the data lane is held. The explicit Linux
+  mount proof is `test-support/prove_execution_mount_view.sh`.
+
+The Client member tests in `crates/execution-client/src/changes` cover
+WorkspaceChanges baselines, Git metadata isolation, physical file captures,
+scoped rename endpoints and on-demand comparisons. The opt-in
+`filesystem_operations_use_the_private_mount_view` test exercises both the
+Git and fallback capture paths against the real Client. The Server's
+scripted and conversation-runtime suites exercise normalized publication
+and cancellation through an admitted Client.
 
 ### Browser presentation matrices
 
@@ -572,7 +611,17 @@ fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 ### The lane check
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
-second copy of it. Each Rust test lane ends with
+second copy of it. The workspace carries the `rustx` root package plus the
+execution-boundary member crates (`rustx-confined-fs`,
+`rustx-execution-protocol`, `rustx-execution-server`,
+`rustx-execution-client`); every member's targets are inventoried, member
+targets are displayed package-qualified (for example
+`rustx-execution-client:test bootstrap`) so identically named targets never
+conflate, and their `cargo test -p <pkg> ...` subprocesses scope Cargo to the
+owning package. Bare `--lib`/`--bins`/`--examples`/`--all-targets`/`--doc`
+steps expand over `workspace_default_members` — all members today — while a
+`-p`/`--package` flag restricts a step's named and kind selectors to that
+package. Each Rust test lane ends with
 `cargo run --profile test --all-features --locked --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps, acquires the validated libtest harness
 executable once per `(features, target)` via Cargo `--no-run --message-format=json`,
@@ -881,6 +930,10 @@ cargo test --test durable --all-features
 
 # The in-crate scripted contract suites only:
 cargo test --lib --all-features scripted_suites::
+
+# UI detach while the real Execution Client has blocked data and full control:
+python3 test-support/prepare_native_tests.py -- cargo test --lib --all-features --locked --no-run
+cargo test --lib --all-features --locked detach_during_data_and_control_backpressure
 
 # The App Server contracts under the manager's private test module:
 cargo test --lib --all-features local_runtime::session_runtime_manager::tests::

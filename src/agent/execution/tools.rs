@@ -69,7 +69,6 @@ struct CallSlot {
     /// The canonical registry-resolved typed origin of the tool.
     origin: ToolOrigin,
     prepared: Option<PreparedInvocation>,
-    command_environment: Option<ToolEnvironment>,
     result: Option<ToolExecutionResult>,
     /// The authoritative per-call executor-start frontier. Once true, this
     /// call can never receive a `BeforeStart` cancellation result.
@@ -146,7 +145,6 @@ fn explicit_bash_timeout(arguments: &serde_json::Value) -> Option<u64> {
 /// One foreground operation that can hand its process to the Job registry.
 /// The normal foreground driver still owns its cancellation and settlement.
 struct BashHandoff<'a> {
-    executor: &'a Arc<dyn ToolExecutor>,
     registry: &'a crate::tools::background::ConversationBackgroundRegistry,
     capability: &'a crate::capabilities::AttemptCapabilityLease,
     handoff: crate::tools::invocation::ForegroundHandoff,
@@ -154,13 +152,13 @@ struct BashHandoff<'a> {
 
 impl ToolExecutor for BashHandoff<'_> {
     fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
-        self.executor.progress_capability()
+        crate::tools::deadline::ToolProgressCapability::None
     }
 
     fn start<'a>(
         &'a self,
-        mut invocation: ToolInvocation,
-        context: ToolExecutionContext<'a>,
+        invocation: ToolInvocation,
+        mut context: ToolExecutionContext<'a>,
     ) -> ToolExecutionHandle<'a> {
         let cancellation = context.cancellation.clone();
         let operation = async move {
@@ -169,12 +167,30 @@ impl ToolExecutor for BashHandoff<'_> {
             };
             let mut job = invocation.clone();
             job.mode = ToolInvocationMode::Background;
-            match self.registry.stage_private(
+            let prepared = match crate::tools::native::PreparedBash::register(
                 &job,
-                self.executor,
+                context.workspace,
+                context.conversation_id,
+                context.environment,
+                &context.cancellation,
+            )
+            .await
+            {
+                Ok(prepared) => prepared,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    return cancelled_result(context.cancellation.reason());
+                }
+                Err(error) => return failed_result(&error.to_string()),
+            };
+            let prepared = Arc::new(prepared);
+            let executor: Arc<dyn ToolExecutor> = prepared.clone();
+            match self.registry.stage_private_with_output(
+                &job,
+                &executor,
                 context.environment.clone(),
                 leases,
                 context.cancellation.clone(),
+                Some(&prepared),
             ) {
                 Ok(stage) => {
                     crate::tools::native::drive_private_bash(
@@ -186,15 +202,23 @@ impl ToolExecutor for BashHandoff<'_> {
                     .await
                 }
                 Err(crate::tools::background::BackgroundDispatchError::GoalAdmissionInProgress) => {
-                    if let Some(object) = invocation.arguments.as_object_mut() {
-                        object.insert(
-                            "timeout".to_owned(),
-                            serde_json::json!(self.handoff.budget.as_secs().max(1)),
-                        );
-                    }
-                    start_tool_execution(&**self.executor, invocation, context)
-                        .completion
-                        .await
+                    // Continue the same registration under foreground ownership.
+                    let (trigger, cancellation) = context.cancellation.child_execution();
+                    context.cancellation = cancellation;
+                    let completion =
+                        start_tool_execution(&*prepared, invocation, context).completion;
+                    tokio::pin!(completion);
+                    let result = tokio::select! {
+                        biased;
+                        result = &mut completion => result,
+                        () = tokio::time::sleep(self.handoff.budget) => {
+                            trigger.cancel(crate::tools::deadline::ToolCancellationCause::Deadline(
+                                crate::tools::deadline::ToolDeadlineKind::Hard,
+                            ));
+                            completion.await
+                        }
+                    };
+                    self.registry.finish_unpromoted_bash(result)
                 }
                 Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
                     ..
@@ -515,7 +539,6 @@ impl AgentExecution<'_> {
                     tool_id: prepared.invocation.tool_id.clone(),
                     origin: prepared.origin.clone(),
                     prepared: Some(prepared),
-                    command_environment: None,
                     result: None,
                     executor_started: false,
                     execution_facts: Vec::new(),
@@ -529,7 +552,6 @@ impl AgentExecution<'_> {
                     tool_id,
                     origin,
                     prepared: None,
-                    command_environment: None,
                     result: Some(failed_result(&error)),
                     executor_started: false,
                     execution_facts: Vec::new(),
@@ -537,7 +559,6 @@ impl AgentExecution<'_> {
             })
             .collect();
         // Freeze each native Bash slot before any sibling authorization starts.
-        self.freeze_bash_environments(&mut slots);
         // Issue #544: authorize each prepared invocation independently.
         // Allowed work may start without waiting for unrelated Ask/Review
         // siblings. Denied/cancelled slots settle their own result only.
@@ -576,24 +597,53 @@ impl AgentExecution<'_> {
                             slot.result = Some(cancelled_result(self.cancellation.reason()));
                             continue;
                         }
-                        if let Some(prepared) = slot.prepared.as_mut()
-                            && let Err(error) = Self::bind_prepared_mutation_target(
-                                prepared,
-                                self.tool_runtime.workspace().root(),
-                                self.tool_runtime.tool_output(),
-                            )
-                        {
-                            slot.result = Some(failed_result(&error));
-                            continue;
-                        }
-                        let facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
+                        let mut facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
+                        // The prepared invocation moves into the slot's
+                        // own future: its remote mutation prepare runs
+                        // concurrently with every sibling's bind and
+                        // authorization rather than serially gating the
+                        // whole group on one wire round-trip each.
+                        let mut prepared_opt = slot.prepared.take();
                         let lifecycle = self.lifecycle.clone();
                         let (auth_trigger, cancellation) =
                             self.cancellation.execution_cancellation().child_execution();
                         auth_cancels.insert(slot_index, auth_trigger);
+                        let workspace = self.tool_runtime.workspace();
+                        let tool_output = self.tool_runtime.tool_output();
                         auth_futures.push(Box::pin(async move {
-                            let outcome = authorize_owned(&lifecycle, &cancellation, &facts).await;
-                            (facts.slot_index, outcome)
+                            if let Some(prepared) = prepared_opt.as_mut() {
+                                match crate::tools::native::support::bind_invocation_mutation_target(
+                                    &prepared.origin,
+                                    &prepared.invocation.tool_name,
+                                    &prepared.invocation.arguments,
+                                    workspace,
+                                    tool_output,
+                                    &cancellation,
+                                )
+                                .await
+                                {
+                                    Ok(bound) => {
+                                        facts.mutation_target = bound.as_ref().map(|target| {
+                                            target.path().to_path_buf()
+                                        });
+                                        prepared.mutation_target = bound;
+                                    }
+                                    // A bind failure short-circuits
+                                    // before permission classification —
+                                    // the slot settles failed and is
+                                    // never authorized.
+                                    Err(error) => {
+                                        return (
+                                            facts.slot_index,
+                                            prepared_opt,
+                                            Ok(Some(failed_result(&error))),
+                                        );
+                                    }
+                                }
+                            }
+                            let outcome =
+                                authorize_owned(&lifecycle, &cancellation, &facts).await;
+                            (facts.slot_index, prepared_opt, outcome)
                         }));
                     }
                     let mut futures = futures_util::stream::FuturesUnordered::new();
@@ -606,9 +656,12 @@ impl AgentExecution<'_> {
                         tokio::select! {
                             biased;
                             () = self.cancellation.cancelled() => break,
-                            Some((slot_index, outcome)) = auth_futures.next() => {
+                            Some((slot_index, prepared_back, outcome)) = auth_futures.next() => {
                                 remaining_auth -= 1;
                                 auth_cancels.remove(&slot_index);
+                                if slots[slot_index].prepared.is_none() {
+                                    slots[slot_index].prepared = prepared_back;
+                                }
                                 match outcome {
                                     Ok(Some(result)) => {
                                         slots[slot_index].result = Some(result);
@@ -651,7 +704,7 @@ impl AgentExecution<'_> {
                                             .prepared
                                             .as_ref()
                                             .expect("unsettled slots are preflighted");
-                                        let environment = self.invocation_environment(&slots[slot_index]);
+                                        let environment = self.capability.snapshot().effective_environment().clone();
                                         futures.push(Box::pin(self.run_single_call(
                                             slot_index,
                                             prepared.clone(),
@@ -682,9 +735,14 @@ impl AgentExecution<'_> {
                         for trigger in auth_cancels.values() {
                             trigger.cancel(cause);
                         }
-                        while let Some((slot_index, outcome)) = auth_futures.next().await {
+                        while let Some((slot_index, prepared_back, outcome)) =
+                            auth_futures.next().await
+                        {
                             remaining_auth = remaining_auth.saturating_sub(1);
                             auth_cancels.remove(&slot_index);
+                            if slots[slot_index].prepared.is_none() {
+                                slots[slot_index].prepared = prepared_back;
+                            }
                             if slots[slot_index].result.is_some() {
                                 continue;
                             }
@@ -820,6 +878,19 @@ impl AgentExecution<'_> {
                         "tool authorization aborted after sibling execution started",
                     ));
                 }
+            }
+        }
+        // Denied, cancelled, and pre-commit-failed invocations must not
+        // leave a live ticketed preparation: actively await each bound
+        // target's abort rather than relying on the owner's drop alone.
+        // A committed owner is already consumed and aborts nothing.
+        for slot in &mut slots {
+            if let Some(bound) = slot
+                .prepared
+                .as_mut()
+                .and_then(|prepared| prepared.mutation_target.take())
+            {
+                bound.abort().await;
             }
         }
         // Completion facts and the canonical batch retain the same immutable
@@ -1068,31 +1139,6 @@ impl AgentExecution<'_> {
         Ok(staged)
     }
 
-    fn freeze_bash_environments(&self, slots: &mut [CallSlot]) {
-        for slot in slots {
-            if slot.result.is_some() {
-                continue;
-            }
-            let Some(prepared) = slot.prepared.as_ref() else {
-                continue;
-            };
-            if prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
-                && matches!(slot.origin, ToolOrigin::Builtin)
-            {
-                slot.command_environment = Some(crate::tools::execution_environment::freeze_bash(
-                    self.capability.snapshot().effective_environment(),
-                    self.tool_runtime.workspace(),
-                ));
-            }
-        }
-    }
-
-    fn invocation_environment(&self, slot: &CallSlot) -> ToolEnvironment {
-        slot.command_environment
-            .clone()
-            .unwrap_or_else(|| self.capability.snapshot().effective_environment().clone())
-    }
-
     /// Runs one logical tool call of the batch.
     ///
     /// Foreground invocations race against attempt cancellation (biased):
@@ -1128,26 +1174,6 @@ impl AgentExecution<'_> {
             ),
         };
         (call_index, result, facts)
-    }
-
-    /// Native mutation owner: prepare and hold the Write/Edit target before
-    /// authorization so classify/execute/commit share one bound path.
-    fn bind_prepared_mutation_target(
-        prepared: &mut PreparedInvocation,
-        workspace_root: &std::path::Path,
-        tool_output: &crate::tools::managed_output::ManagedToolOutput,
-    ) -> Result<(), String> {
-        if prepared.mutation_target.is_some() {
-            return Ok(());
-        }
-        prepared.mutation_target = crate::tools::native::support::bind_invocation_mutation_target(
-            &prepared.origin,
-            &prepared.invocation.tool_name,
-            &prepared.invocation.arguments,
-            workspace_root,
-            tool_output,
-        )?;
-        Ok(())
     }
 
     #[cfg(test)]
@@ -1247,7 +1273,15 @@ impl AgentExecution<'_> {
                 )
             },
         }));
-        context.workspace_changes = self.workspace_changes.clone();
+        if let Some(changes) = &self.workspace_changes
+            && let Some(target) = prepared.mutation_target.as_ref()
+        {
+            changes.capture(target.path()).await;
+        }
+        #[cfg(test)]
+        {
+            context.workspace_changes = self.workspace_changes.clone();
+        }
         context.model_invocation = Some(self.request.model.primary());
         context.attempt_id = Some(&self.request.attempt_id);
         if let Some(goal) = self.tool_runtime.goal() {
@@ -1320,7 +1354,6 @@ impl AgentExecution<'_> {
                 .resolve(self.tool_deadline_policy)
                 .hard_deadline;
             (budget <= hard_deadline).then_some(BashHandoff {
-                executor: &executor,
                 registry: self.tool_runtime.background(),
                 capability: &self.capability,
                 handoff: crate::tools::invocation::ForegroundHandoff::new(budget),
@@ -1403,11 +1436,20 @@ impl AgentExecution<'_> {
         let Some(mcp_leases) = self.capability.mcp_leases() else {
             return failed_result("the admitted MCP generation is already physically retired");
         };
-        match self
-            .tool_runtime
-            .background()
-            .prepare_dispatch_with_mcp_leases(invocation, &executor, environment, mcp_leases)
-        {
+        let registry = self.tool_runtime.background();
+        let prepared = if invocation.tool_id.as_str() == "tool-bash" {
+            registry
+                .prepare_native_bash_with_leases(
+                    invocation,
+                    environment,
+                    mcp_leases,
+                    &self.cancellation.execution_cancellation(),
+                )
+                .await
+        } else {
+            registry.prepare_with_output(invocation, &executor, environment, mcp_leases, None)
+        };
+        match prepared {
             Ok(prepared) => {
                 match self
                     .tool_runtime
@@ -1432,6 +1474,9 @@ impl AgentExecution<'_> {
                     ) => cancelled_result(self.cancellation.reason()),
                     Err(error) => failed_result(&error.to_string()),
                 }
+            }
+            Err(_) if self.cancellation.is_cancelled() => {
+                cancelled_result(self.cancellation.reason())
             }
             Err(error) => failed_result(&error.to_string()),
         }

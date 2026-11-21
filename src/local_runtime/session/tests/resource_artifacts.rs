@@ -122,6 +122,25 @@ fn assert_resource_descriptors(result: &ToolExecutionResult) {
         result.managed_output.as_deref()
     {
         serde_json::from_str(&fs::read_to_string(locator).unwrap()).unwrap()
+    } else if let Some(crate::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
+        result.managed_output.as_deref()
+    {
+        // Foreground results are preview-only — no save binding exists
+        // anywhere in the product — so the spilled variant honestly
+        // carries only the bounded preview. Prove the diagnostic says
+        // exactly that and the preview still shows descriptor JSON.
+        assert_eq!(
+            diagnostic.as_str(),
+            "Full output was not saved: no eligible Execution Client save binding at the preview threshold."
+        );
+        let ToolResultContent::Text(preview) = &result.content[0] else {
+            panic!("the spilled descriptor JSON must surface as the bounded preview")
+        };
+        assert!(
+            preview.text.contains("\"artifactId\"") && preview.text.contains("remote-artifact-0"),
+            "descriptor _meta is absent from the bounded preview"
+        );
+        return;
     } else if let ToolResultContent::Json { value } = &result.content[0] {
         value.clone()
     } else {

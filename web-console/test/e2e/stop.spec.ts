@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { choose, connectRemote, openEmptySession } from './shell-actions';
+import { choose, connectRemote, createBoundSession, openExistingSession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 for (const [width, locale, theme] of [[1440, 'en', 'light'], [390, 'zh', 'dark']] as const) {
@@ -32,13 +32,14 @@ for (const [width, locale, theme] of [[1440, 'en', 'light'], [390, 'zh', 'dark']
     };
     const send = async (text: string) => { await message.fill(text); await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click(); };
     try {
+      const session = await createBoundSession(fixture);
       await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.addInitScript(theme => localStorage.setItem('rustx-appearance-v1', theme), theme);
       await routeWorkspaceHost(page, fixture); await page.goto('/');
       await expect(page).toHaveTitle(/rustX/);
       await connectRemote(page, fixture.endpoint, fixture.token);
-      await openEmptySession(page, fixture, 'Workspace A'); await localize();
+      await openExistingSession(page, session); await localize();
       await send('Stop before output'); await fixture.gate('stop-empty'); await stop(1);
       await fixture.release('stop-empty');
       await expect(markers).toHaveCount(0);

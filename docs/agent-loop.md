@@ -482,7 +482,9 @@ canonical boundary in `src/tools/executor.rs`:
   `ToolExecutionContext` that carries conversation identity, an
   `ExecutionCancellation` view, the workspace boundary, the progress
   reporter, the artifact store (genuine semantic artifacts), the managed
-  tool-output store (lazy foreground textual spill files plus the
+  tool-output store (lazy foreground textual spill files for the native
+  Bash path — foreground MCP results stay preview-only until an Execution
+  Client save binding exists — plus the
   dispatch-allocated background live-output channel), and the explicit
   authorized environment.
 - `ExecutionCancellation` observes the runtime `CancellationSignal` and

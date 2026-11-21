@@ -77,14 +77,14 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::runtime::identity::McpServerId;
-use crate::runtime::process_runner::{
-    ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec, SupervisedProcessRunner,
-};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
 use crate::tools::types::ToolInvocationPolicy;
 #[cfg(test)]
 use crate::tools::workspace::Workspace;
+use rustx_process_supervisor::process_runner::{
+    ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec, SupervisedProcessRunner,
+};
 
 mod requirements;
 
@@ -1426,7 +1426,7 @@ async fn probe_runtime_identity(
                         // detached signal: a settled preparation physically
                         // cancels the probe, and the result resolves only
                         // after the unit's settlement.
-                        cancellation,
+                        cancellation: cancellation.physical(),
                     },
                     None,
                 )
@@ -1690,7 +1690,7 @@ async fn stage_and_build(
                     // The build-owner domain's lifecycle authority: its
                     // cancellation physically cancels this uv unit, and the
                     // result resolves only after the unit settled.
-                    cancellation: cancellation.clone(),
+                    cancellation: cancellation.physical(),
                 },
                 None,
             )
@@ -1745,7 +1745,7 @@ async fn stage_and_build(
 mod tests {
     use super::*;
     use crate::runtime::CancellationSignal;
-    use crate::runtime::process_runner::CapturedProcessResult;
+    use rustx_process_supervisor::process_runner::CapturedProcessResult;
 
     fn discover_python_packages(
         workspace: &Workspace,
@@ -2840,7 +2840,7 @@ full_access = "ask"
         fn run(
             &self,
             spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+            _control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
         ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
             self.commands
                 .lock()
@@ -3138,7 +3138,7 @@ full_access = "ask"
         fn run(
             &self,
             spec: SupervisedCommandSpec,
-            control: Option<crate::runtime::process_runner::RunnerTestControl>,
+            control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
         ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
             if spec.command.contains("sync") {
                 spec.cancellation.cancel();

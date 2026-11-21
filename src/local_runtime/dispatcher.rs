@@ -70,17 +70,17 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 
-use crate::runtime::identity::ProcessUnitId;
 use crate::runtime::interaction::{
     InteractionAdmissionError, InteractionPublicationPermit, InteractionRef,
 };
-use crate::runtime::nested_containment::{AnchorError, NestedAnchorAuthority};
 use crate::runtime::subagent::activity::SubagentObservation;
 use crate::runtime::subagent::ipc::{
     ActivityFrame, ChildFrame, DelegationFrame, ParentFrame, ProcessUnitAnchorFrame,
     read_parent_frame, write_activity_frame, write_child_frame,
 };
 use crate::runtime::types::CancellationReason;
+use rustx_process_supervisor::identity::ProcessUnitId;
+use rustx_process_supervisor::nested_containment::{AnchorError, NestedAnchorAuthority};
 
 /// The bound of the dispatcher's outbound queue.
 ///

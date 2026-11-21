@@ -9,7 +9,9 @@ use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
-use crate::scripted_suites::common::{capability_lease, tool_runtime_with_store};
+use crate::scripted_suites::common::{
+    capability_lease, tool_runtime_with_store, tool_runtime_with_store_and_execution,
+};
 use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
 use crate::tools::limits::{MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL, MAX_PROGRESS_MESSAGE_BYTES};
 use crate::tools::types::{
@@ -38,17 +40,20 @@ async fn assert_bash_shutdown_reason(start_before_cancel: bool) {
     use crate::agent::execution::test_sync::ToolStartPause;
     use crate::message::types::MessageBlock;
 
-    let fixture = crate::scripted_suites::common::native_fixture_with_extensions(
+    let fixture = crate::scripted_suites::common::native_fixture_inner(
         Vec::new(),
         crate::tools::NativeToolPolicies::default(),
         &crate::extensions::NativeAgentExtensions::none(),
+        true,
     );
+    let started = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = started.local_addr().unwrap().port();
     let call = ToolCall {
         id: ToolCallId::new("call-bash-before-physical-start"),
         tool_id: ToolId::new("tool-bash"),
         name: "bash".to_owned(),
         arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({
-            "command": "printf started > bash-physical-start-marker; sleep 30",
+            "command": format!("printf started > bash-physical-start-marker; exec 3<>/dev/tcp/127.0.0.1/{port}; read -r -u 3"),
             "execution_mode": "foreground"
         })),
     };
@@ -78,26 +83,37 @@ async fn assert_bash_shutdown_reason(start_before_cancel: bool) {
         .join("bash-physical-start-marker");
     let controller = tokio::spawn({
         let cancellation = cancellation.clone();
-        let marker = marker.clone();
         async move {
             reached
                 .wait_for(|started| *started)
                 .await
                 .expect("tool start fact committed");
-            if start_before_cancel {
+            let running = if start_before_cancel {
                 release
                     .send(())
                     .expect("start the shell before cancellation");
-                tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    while !marker.exists() {
-                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    }
-                })
-                .await
-                .expect("the shell crossed its physical effect frontier");
-            }
+                Some(
+                    tokio::time::timeout(std::time::Duration::from_secs(5), started.accept())
+                        .await
+                        .expect("the shell crossed its physical effect frontier")
+                        .unwrap()
+                        .0,
+                )
+            } else {
+                None
+            };
             assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
             assert!(!cancellation.request_cancel(CancellationReason::UserRequested));
+            if let Some(mut running) = running {
+                use tokio::io::AsyncReadExt as _;
+                assert_eq!(
+                    tokio::time::timeout(std::time::Duration::from_secs(5), running.read(&mut [0]))
+                        .await
+                        .expect("cancellation closes the business process descriptor")
+                        .unwrap(),
+                    0
+                );
+            }
             if !start_before_cancel {
                 release
                     .send(())
@@ -576,7 +592,7 @@ async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execu
         ))
         .expect("in-memory store"),
     );
-    let tool_runtime = tool_runtime_with_store(
+    let tool_runtime = tool_runtime_with_store_and_execution(
         "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
         Some(store.clone()),
     );
@@ -660,8 +676,8 @@ async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execu
     match status {
         ToolExecutionStatus::Failed { error } => {
             assert!(
-                error.contains("mutation target changed since authorization"),
-                "expected bind-contract failure, got {error}"
+                error.contains("physical revision conflict"),
+                "expected the retained-target commit refusal, got {error}"
             );
         }
         other => panic!("expected Failed status, got {other:?}"),

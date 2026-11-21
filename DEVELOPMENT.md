@@ -22,9 +22,21 @@ Configure rustX through its native configuration commands and
 configuration or provider/MCP credentials, or merges configuration.
 Build explicitly after native changes; the launcher never builds implicitly.
 `--binary /absolute/path/rustx` selects another executable. Missing binaries produce
-an actionable error before any process starts. `bash-supervisor`,
+an actionable error before any process starts. For the combined Web and TUI
+compositions, `bash-supervisor`,
 `interactive-supervisor` and `workflow-renderer` must be executable beside the resolved `rustx` binary;
-`cargo build --bin rustx` alone does not build these required helpers. Native paths/values pass through unchanged; native parsers own validation.
+`cargo build --bins` builds them together. The supervisor helpers are the
+independently buildable `rustx-process-supervisor` package
+(`cargo build -p rustx-process-supervisor --bins --locked`): it owns the
+physical process-supervision halves (dedicated `bash-supervisor` and
+`interactive-supervisor` binaries plus their shared supervised-unit core,
+the `waitid` adapter, and the child-subreaper prerequisite) without a
+dependency on the Agent runtime. The Execution Client runs the physical
+driver for Agent Bash and App Server `command/exec`. The Server owns
+Agent admission and canonical settlement. A standalone Server needs no
+siblings to start. `cargo build -p rustx --bin rustx --locked` is sufficient
+to run `rustx app-server` and list cold Sessions without mounting their
+Workspaces. Native paths/values pass through unchanged; native parsers own validation.
 User configuration and runtime-root bindings require absolute paths. Use an
 absolute Workspace path too (pnpm runs scripts in `dev/`).
 `--config` rebinds only the User document; User resources stay at `~/rustx/.agents`.
@@ -49,6 +61,59 @@ to native help without adding transport arguments. The native parser validates
 these arguments and the native exit status propagates.
 For headless/integration use without pnpm, use `target/debug/rustx app-server`
 with an explicit native transport; see [App Server](docs/app-server-protocol.md).
+
+**Local Execution Client composition** — explicit opt-in, never a default:
+
+```sh
+cargo build --locked -p rustx --bin rustx
+cargo build --locked -p rustx-execution-client --bin rustx-execution-client
+target/debug/rustx app-server \
+  --runtime-root /absolute/path/runtime \
+  --listen stdio \
+  --local-execution-session ses_01900000-0000-7000-8000-000000000001 \
+  --local-execution-workspace /authorized/workspace
+```
+
+These flags launch exactly one Client for the named Session. Supplying only
+`--local-execution-workspace` first enrolls a minimal Session under a
+configured environment root. Bare `app-server` discovers and spawns
+nothing. The authorized Workspace path is validated lexically and must match
+the Session's reserved binding byte for byte. The Client executable is the
+`rustx-execution-client` built beside the `rustx` binary; it is never
+resolved from PATH or HOME. The child runs with an empty environment,
+`/` as its working directory, and sealed stdio — it receives only the
+binding file and workspace on its command line, and the Server owns and
+reaps it through drain.
+
+**Remote WebSocket composition** — explicit opt-in, operator-provisioned
+Client:
+
+```sh
+rustx app-server \
+  --runtime-root /absolute/path/runtime \
+  --listen stdio \
+  --execution-session ses_01900000-0000-7000-8000-000000000001 \
+  --execution-ws-listen 127.0.0.1:0 \
+  --execution-bootstrap-out /private/dir/bootstrap
+# Optionally add --execution-public-url wss://IP:PORT/execution/v1 when a
+# trusted ingress terminates TLS and forwards to the loopback listener.
+
+# On the Client host, out of band:
+rustx-execution-client --binding-file /private/dir/bootstrap \
+  --workspace /independently/trusted/workspace \
+  [--tls-ca-file /private/dir/ca.pem]
+```
+
+The three `--execution-*` flags conflict with `--local-execution-*` and
+never launch a Client; the workspace is resolved only from the Session's
+trusted catalog. `--execution-ws-listen` must be a numeric loopback
+address. A direct binding publishes a `wss` URL and its own certificate
+in the `0600` bundle. The Client uses that certificate as its only trust
+anchor. With `--execution-public-url`, the operator provides and secures
+the ingress and its cleartext loopback hop. The Client may use
+`--tls-ca-file` for that ingress. It validates the numeric IP and the
+exact `/execution/v1` path and completes TLS before sending a credential.
+
 
 **TUI** — existing TUI composition root and `AppServerHost.spawnLocal`:
 

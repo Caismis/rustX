@@ -548,7 +548,22 @@ impl ProspectiveSessionConfig {
     /// Recheck physical targets immediately before resource preparation. This
     /// never rereads launch documents and is not an execution filesystem sandbox.
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
-        if std::fs::canonicalize(&self.workspace).as_ref().ok() != Some(&self.workspace) {
+        let workspace_valid = match self.workspace_resources {
+            super::WorkspaceResourceAuthority::Authored(_) => {
+                super::capture::canonical_directory(&self.workspace)
+                    .as_ref()
+                    .ok()
+                    == Some(&self.workspace)
+            }
+            super::WorkspaceResourceAuthority::Bound(identity) => {
+                // A Client document and its Server resource root are separate
+                // authorities. Keep the resource snapshot's adopted identity.
+                super::capture::authored_workspace_identity(&self.workspace, identity.is_none())
+                    .ok()
+                    == Some(identity)
+            }
+        };
+        if !workspace_valid {
             return Err("Workspace physical binding changed after capture".into());
         }
         let agents = self.admitted_agent_dependencies();

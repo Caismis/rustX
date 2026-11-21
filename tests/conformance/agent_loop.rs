@@ -122,6 +122,11 @@ const COMPACTION_RESERVE_TOKENS: u64 = 1_536;
 
 /// One composed runtime plus the attachment and subscription a driver needs.
 struct Driver {
+    /// The admitted Execution Client child, when `setup.execution` bound a
+    /// real Session execution route. `kill_on_drop` applies; declared
+    /// first so the child is reaped before the temporary root is removed.
+    #[allow(dead_code)]
+    execution_client: Option<tokio::process::Child>,
     /// The temporary root, kept alive for the fixture lifetime.
     #[allow(dead_code)]
     root: tempfile::TempDir,
@@ -170,6 +175,10 @@ struct Setup {
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
     responses_stateless: bool,
+    /// Whether the Session binds a real admitted Execution Client — the
+    /// production route native `read` requires. Off by default so drivers
+    /// whose scenarios never dispatch `read` spawn no Client.
+    execution: bool,
 }
 
 impl Setup {
@@ -183,6 +192,7 @@ impl Setup {
             auxiliary: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
+            execution: false,
         }
     }
 }
@@ -297,6 +307,76 @@ impl Driver {
             },
         )
         .expect("Session runtime owner");
+        // The same composition the App Server performs for a Session's
+        // Execution Client: the reserved endpoint admits exactly one staged
+        // trusted child, bound to the Session's workspace.
+        let execution_client = if setup.execution {
+            let endpoint = manager
+                .reserve_local_execution(&session.id)
+                .await
+                .expect("reserved local execution");
+            let binary = std::env::current_exe()
+                .expect("test binary")
+                .with_file_name("rustx-execution-client");
+            assert!(
+                binary.is_file(),
+                "staged Execution Client is absent: {binary:?}"
+            );
+            let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(
+                std_listener,
+            ) = endpoint.listener()
+            else {
+                panic!("the reserved local endpoint is a Unix listener");
+            };
+            let std_listener = std_listener.try_clone().unwrap();
+            std_listener.set_nonblocking(true).unwrap();
+            let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
+            let child = tokio::process::Command::new(&binary)
+                .arg("--binding-file")
+                .arg(endpoint.bootstrap_path())
+                .arg("--workspace")
+                .arg(endpoint.workspace())
+                .current_dir("/")
+                .env_clear()
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("staged Execution Client spawns");
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                let deadline = std::time::Instant::now()
+                    + rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+                loop {
+                    let (stream, _) = listener.accept().await.expect("accept");
+                    let endpoint = endpoint.clone();
+                    let admission = tokio::task::spawn_blocking(move || {
+                        endpoint.admit_local_stream_deadline(
+                            stream.into_std().expect("std stream"),
+                            deadline,
+                        )
+                    })
+                    .await
+                    .expect("admit task")
+                    .expect("admit io");
+                    match admission {
+                        rustx::local_runtime::session_runtime_manager::EndpointAdmission::Live => {
+                            break;
+                        }
+                        rustx::local_runtime::session_runtime_manager::EndpointAdmission::Pending => {
+                        }
+                        rustx::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+                            reject,
+                        ) => panic!("execution client rejected: {reject:?}"),
+                    }
+                }
+            })
+            .await
+            .expect("execution client admission timed out");
+            Some(child)
+        } else {
+            None
+        };
         let connection = Arc::new(AppServerConnection::new(AppServerHost::new(
             manager.clone(),
             AppServerPolicy::default(),
@@ -380,6 +460,7 @@ impl Driver {
             }
         });
         Self {
+            execution_client,
             root,
             manager,
             client,
@@ -937,7 +1018,9 @@ async fn responses_chat_responses_switch_preserves_history_and_tool_results() {
         return;
     };
     let responses = format!("emulator/{RESPONSES_MODEL}");
-    let driver = Driver::start_in(root, &emulator, &Setup::new(&responses)).await;
+    let mut setup = Setup::new(&responses);
+    setup.execution = true;
+    let driver = Driver::start_in(root, &emulator, &setup).await;
 
     for (model, prompt) in [
         (responses.as_str(), TURN_ONE),
@@ -1052,6 +1135,7 @@ async fn every_protocol_switch_keeps_native_owners_history_and_tools() {
         ];
         let mut setup = Setup::new(models[0].0);
         setup.responses_stateless = stateless;
+        setup.execution = true;
         let driver = Driver::start_in(root, &emulator, &setup).await;
         for (index, (model, protocol)) in models.into_iter().enumerate() {
             let before = driver.canonical_history();
@@ -1382,12 +1466,9 @@ async fn a_tool_call_runs_the_real_tool_and_continues() {
     else {
         return;
     };
-    let driver = Driver::start_in(
-        root,
-        &emulator,
-        &Setup::new(&format!("emulator/{CHAT_MODEL}")),
-    )
-    .await;
+    let mut setup = Setup::new(&format!("emulator/{CHAT_MODEL}"));
+    setup.execution = true;
+    let driver = Driver::start_in(root, &emulator, &setup).await;
 
     driver.submit(READ_PROMPT);
     let (events, outcome) = driver.settle().await;
@@ -1449,6 +1530,7 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     };
     let mut setup = Setup::new(&format!("emulator/{CHAT_MODEL}"));
     setup.skill_paths = vec![package];
+    setup.execution = true;
     let driver = Driver::start_in(root, &emulator, &setup).await;
 
     let (snapshot, _) = driver.snapshot().expect("snapshot");
@@ -2379,6 +2461,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     };
     let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
     setup.images = true;
+    setup.execution = true;
     setup.keep_recent_tokens = 0;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("read the image");
@@ -2704,6 +2787,7 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     let emulator = ProviderEmulator::start_with_workspace(scenario, Some(&workspace)).await?;
     let mut setup = Setup::new(model);
     setup.images = true;
+    setup.execution = true;
     if scenario == "image_coverage_overflow_retry" {
         setup.keep_recent_tokens = setup.context_window;
         setup.auxiliary = Some("emulator/summary-model".into());
@@ -2929,6 +3013,7 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     };
     let mut setup = Setup::new(image_model);
     setup.images = true;
+    setup.execution = true;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("Read the same PNG seventeen times in parallel.");
     emulator.await_gate("image-budget-admitted").await;
@@ -2945,7 +3030,15 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     let (_, outcome) = driver.settle().await;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-        "{outcome:?}"
+        "{outcome:?}; canonical tool outcomes: {:?}",
+        driver
+            .canonical_history()
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::Tool(tool) => Some((&tool.tool_call_id, &tool.result.status)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
     );
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 2);

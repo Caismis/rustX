@@ -358,8 +358,9 @@ fn aggregate_pages(
             })
         })
         .collect();
-    // The ordinary MCP result capture spills oversized aggregate text and
-    // preserves a bounded model projection with its continuation locator.
+    // The ordinary MCP result capture bounds oversized aggregate text to a
+    // preview and reports the absence of an eligible save binding as a typed
+    // `Unavailable` continuation on the model projection.
     let mut call = rmcp::model::CallToolResult::success(Vec::new());
     call.structured_content = Some(serde_json::json!({"servers": pages}));
     let mut result = translate_result(call, context, started);

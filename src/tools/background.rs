@@ -871,6 +871,7 @@ enum NotificationState {
 struct BackgroundRecord {
     observation_layout: crate::runtime::read_layout::ObservationLayoutCache,
     bash: Option<Arc<crate::tools::types::BashPresentation>>,
+    client_output: Option<std::path::PathBuf>,
     /// Absorbing logical start frontier, owned by `mark_running`.
     executor_started: bool,
     execution_id: ToolExecutionId,
@@ -1233,6 +1234,46 @@ impl ConversationBackgroundRegistry {
         &self.conversation_id
     }
 
+    pub(crate) fn live_output_tail(&self, id: &ToolExecutionId) -> std::io::Result<(String, bool)> {
+        let client_output = {
+            let state = self.state();
+            state
+                .index
+                .get(id)
+                .and_then(|index| state.records.get(*index))
+                .and_then(|record| {
+                    record
+                        .client_output
+                        .clone()
+                        .map(|path| (path, record.lifecycle.is_active()))
+                })
+        };
+        if let Some((path, active)) = client_output {
+            use rustx_execution_protocol::process::{ProcessReply, ProcessRequest};
+            let Some((scope, operation)) = self
+                .resources
+                .workspace
+                .execution_scope()
+                .zip(crate::tools::native::bash_operation_at(&path))
+                .filter(|_| active)
+            else {
+                return Err(std::io::Error::other("live output is no longer available"));
+            };
+            let endpoint = scope.endpoint()?;
+            let key = operation.key_for(&endpoint)?;
+            return match endpoint.process(&ProcessRequest::BashOutputTail {
+                key,
+                conversation: self.conversation_id.as_str().to_owned(),
+            })? {
+                ProcessReply::BashOutputTail {
+                    text, truncated, ..
+                } => Ok((text, truncated)),
+                _ => Err(std::io::Error::other("live Bash output is unavailable")),
+            };
+        }
+        self.resources.tool_output.live_tail(id)
+    }
+
     /// The conversation resources shared with detached runners.
     #[must_use]
     pub fn resources(&self) -> &BackgroundResources {
@@ -1279,6 +1320,69 @@ impl ConversationBackgroundRegistry {
         environment: ToolEnvironment,
         mcp_leases: McpRuntimeLeaseSet,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
+        self.prepare_with_output(invocation, executor, environment, mcp_leases, None)
+    }
+
+    /// Prepares a native Bash job on the Session's bound Execution Client.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal if the Client cannot register the operation and
+    /// reserve its live output, or the Conversation cannot stage a runner.
+    pub async fn prepare_native_bash(
+        &self,
+        invocation: &ToolInvocation,
+        environment: ToolEnvironment,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
+        self.prepare_native_bash_with_leases(
+            invocation,
+            environment,
+            McpRuntimeLeaseSet::default(),
+            cancellation,
+        )
+        .await
+    }
+
+    pub(crate) async fn prepare_native_bash_with_leases(
+        &self,
+        invocation: &ToolInvocation,
+        environment: ToolEnvironment,
+        leases: McpRuntimeLeaseSet,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
+        if invocation.mode != ToolInvocationMode::Background {
+            return Err(BackgroundDispatchError::NotBackgroundInvocation);
+        }
+        if invocation.tool_id.as_str() != "tool-bash" {
+            return Err(BackgroundDispatchError::Output {
+                detail: "native Bash is required".into(),
+            });
+        }
+        let prepared = crate::tools::native::PreparedBash::register(
+            invocation,
+            &self.resources.workspace,
+            &self.conversation_id,
+            &environment,
+            cancellation,
+        )
+        .await
+        .map_err(|error| BackgroundDispatchError::Output {
+            detail: error.to_string(),
+        })?;
+        let path = prepared.output().to_path_buf();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(prepared);
+        self.prepare_with_output(invocation, &executor, environment, leases, Some(path))
+    }
+
+    pub(crate) fn prepare_with_output(
+        &self,
+        invocation: &ToolInvocation,
+        executor: &Arc<dyn ToolExecutor>,
+        environment: ToolEnvironment,
+        mcp_leases: McpRuntimeLeaseSet,
+        client_output: Option<std::path::PathBuf>,
+    ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
         }
@@ -1315,12 +1419,14 @@ impl ConversationBackgroundRegistry {
         }
         // create_new reserves the locator before acceptance. Any collision
         // refuses admission and leaves the existing execution/output untouched.
-        self.resources
-            .tool_output
-            .allocate_background_output(&execution_id)
-            .map_err(|error| BackgroundDispatchError::Output {
-                detail: error.to_string(),
-            })?;
+        if client_output.is_none() {
+            self.resources
+                .tool_output
+                .allocate_background_output(&execution_id)
+                .map_err(|error| BackgroundDispatchError::Output {
+                    detail: error.to_string(),
+                })?;
+        }
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
         // The effective attempt environment is captured here, at prepare
@@ -1345,6 +1451,7 @@ impl ConversationBackgroundRegistry {
                     &invocation.arguments,
                 )
                 .map(Arc::new),
+                client_output,
                 executor_started: false,
                 execution_id: execution_id.clone(),
                 tool_call_id: invocation
@@ -1648,14 +1755,16 @@ impl ConversationBackgroundRegistry {
             if let Some(hook) = state.publication_hook.take() {
                 hook.enter();
             }
-            let result = accepted_result(
-                execution_id,
-                &prepared_record.record.tool_name,
-                &self
-                    .resources
-                    .tool_output
-                    .background_output_path(execution_id),
-            );
+            let output = prepared_record
+                .record
+                .client_output
+                .clone()
+                .unwrap_or_else(|| {
+                    self.resources
+                        .tool_output
+                        .background_output_path(execution_id)
+                });
+            let result = accepted_result(execution_id, &prepared_record.record.tool_name, &output);
             let execution_id = execution_id.clone();
             let gate = prepared_record.gate.clone();
             if prepared_record.private_owner.is_some() {
@@ -1717,6 +1826,7 @@ impl ConversationBackgroundRegistry {
     /// The record stays out of [`Self::listing`] and commits no ownership fact
     /// and no terminal inbound. [`PrivateBashStage::adopt`] is the only path
     /// that publishes the job, and only while the process is still running.
+    #[cfg(test)]
     pub(crate) fn stage_private(
         &self,
         invocation: &ToolInvocation,
@@ -1725,8 +1835,21 @@ impl ConversationBackgroundRegistry {
         mcp_leases: McpRuntimeLeaseSet,
         owner: ExecutionCancellation,
     ) -> Result<PrivateBashStage, BackgroundDispatchError> {
+        self.stage_private_with_output(invocation, executor, environment, mcp_leases, owner, None)
+    }
+
+    pub(crate) fn stage_private_with_output(
+        &self,
+        invocation: &ToolInvocation,
+        executor: &Arc<dyn ToolExecutor>,
+        environment: ToolEnvironment,
+        mcp_leases: McpRuntimeLeaseSet,
+        owner: ExecutionCancellation,
+        bash: Option<&crate::tools::native::PreparedBash>,
+    ) -> Result<PrivateBashStage, BackgroundDispatchError> {
+        let output = bash.map(|bash| bash.output().to_path_buf());
         let dispatch =
-            self.prepare_dispatch_with_mcp_leases(invocation, executor, environment, mcp_leases)?;
+            self.prepare_with_output(invocation, executor, environment, mcp_leases, output)?;
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(32);
         let settled = {
             let mut state = self.state();
@@ -1736,6 +1859,15 @@ impl ConversationBackgroundRegistry {
                 .ok_or_else(|| BackgroundDispatchError::ConversationInactive {
                     conversation_id: self.conversation_id.clone(),
                 })?;
+            if let Some(bash) = bash {
+                let registry = self.clone();
+                let execution_id = dispatch.execution_id.clone();
+                let owner = owner.clone();
+                bash.set_start_gate(Arc::new(move || {
+                    let state = registry.state();
+                    state.index.contains_key(&execution_id) || owner.with_active(|| ()).is_some()
+                }));
+            }
             prepared.private_owner = Some(owner);
             prepared.progress_tx = Some(progress_tx);
             let settled = prepared.settled.clone();
@@ -1754,7 +1886,7 @@ impl ConversationBackgroundRegistry {
     fn finish_private_output(
         &self,
         id: &ToolExecutionId,
-        mut result: ToolExecutionResult,
+        result: ToolExecutionResult,
     ) -> ToolExecutionResult {
         let storage = &self.resources.tool_output;
         if result
@@ -1772,6 +1904,22 @@ impl ConversationBackgroundRegistry {
             storage.settle_background_output(id);
         } else {
             storage.discard_background_output(id);
+        }
+        self.finish_unpromoted_bash(result)
+    }
+
+    pub(crate) fn finish_unpromoted_bash(
+        &self,
+        mut result: ToolExecutionResult,
+    ) -> ToolExecutionResult {
+        if !result
+            .truncation
+            .as_ref()
+            .is_some_and(|state| state.truncated)
+            && let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+                result.managed_output.as_deref()
+        {
+            crate::tools::native::discard_private_bash_output(&self.resources.workspace, locator);
             result.managed_output = None;
         }
         result
@@ -2828,6 +2976,7 @@ impl ConversationBackgroundRegistry {
             });
             let context = ToolExecutionContext {
                 stdout_capture: None,
+                #[cfg(test)]
                 workspace_changes: None,
                 model_invocation: None,
                 attempt_id: None,
@@ -3961,6 +4110,7 @@ mod tests {
         let mut state = registry.state();
         let index = state.records.len();
         state.records.push(BackgroundRecord {
+            client_output: None,
             observation_layout: Arc::default(),
             bash: None,
             executor_started: lifecycle != BackgroundLifecycle::Starting,
@@ -5969,25 +6119,105 @@ mod tests {
     async fn background_live_output_is_readable_while_running_and_reused_at_settlement() {
         use crate::tools::types::ToolResultContent;
 
-        let fixture = registry("conv_0907d190-8db0-7774-9bd6-d370a8da311c");
+        let mut fixture = registry("conv_0907d190-8db0-7774-9bd6-d370a8da311c");
+        let logical = fixture.registry.resources().workspace.root().to_path_buf();
+        let private = (cfg!(target_os = "linux")
+            && std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some())
+        .then(|| tempfile::tempdir().expect("Client mount source"));
+        let physical = private
+            .as_ref()
+            .map_or(logical.as_path(), tempfile::TempDir::path);
+        let execution = crate::session_execution_support::ExecutionFixture::with_mount_view(
+            &logical,
+            private.as_ref().map(tempfile::TempDir::path),
+        );
+        fixture
+            .registry
+            .resources
+            .workspace
+            .bind_execution_scope(Some(execution.scope.clone()));
         let workspace = fixture.registry.resources().workspace.clone();
         let tool_output = fixture.registry.resources().tool_output.clone();
-        // The deterministic barrier: the command prints line A, then blocks
-        // on a FIFO read until the test releases it, then prints line B.
-        let fifo = workspace.root().join("control.fifo");
+        let fifo = physical.join("control.fifo");
         nix::unistd::mkfifo(
             &fifo,
             nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
         )
         .expect("mkfifo");
-        let command = format!(
-            "printf 'line-A\\n'; read -r _ < '{}'; printf 'line-B\\n'",
-            fifo.display()
+        let signal = crate::runtime::CancellationSignal::new();
+        let cancellation = crate::runtime::ExecutionCancellation::detached(
+            signal.clone(),
+            CancellationReason::UserRequested,
         );
-        let control = crate::tools::native::BashTestControl::new();
-        let mut appends = control.background_append_watcher();
-        let executor: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::native::BashTool::with_test_control(control));
+        let environment = ToolEnvironment::new();
+        let tool_context = || {
+            ToolExecutionContext::new(
+                fixture.registry.conversation_id(),
+                None,
+                cancellation.clone(),
+                &workspace,
+                &NoopProgress,
+                &fixture.registry.resources().artifacts,
+                &tool_output,
+                &environment,
+            )
+        };
+        let mut write = tool_context();
+        let args = serde_json::json!({"path": "input.txt", "content": "line-A\n"});
+        write.bound_mutation = crate::tools::native::support::bind_invocation_mutation_target(
+            &crate::tools::types::ToolOrigin::Builtin,
+            "write",
+            &args,
+            &workspace,
+            &tool_output,
+            &cancellation,
+        )
+        .await
+        .expect("Client write preflight");
+        let result = crate::tools::native::WriteTool
+            .start(
+                ToolInvocation {
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-write"),
+                    },
+                    tool_id: ToolId::new("tool-write"),
+                    tool_name: "write".into(),
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: args,
+                },
+                write,
+            )
+            .completion
+            .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(
+            std::fs::read(physical.join("input.txt")).unwrap(),
+            b"line-A\n"
+        );
+        let read = crate::tools::native::ReadTool
+            .start(
+                ToolInvocation {
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-input-read"),
+                    },
+                    tool_id: ToolId::new("tool-read"),
+                    tool_name: "read".into(),
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({"path": "input.txt", "offset": 1, "limit": 2}),
+                },
+                tool_context(),
+            )
+            .completion
+            .await;
+        assert_eq!(read.status, ToolExecutionStatus::Success);
+        assert!(
+            matches!(&read.content[..], [ToolResultContent::Text(text)] if text.text == "line-A\n")
+        );
+        if private.is_some() {
+            assert!(!logical.join("input.txt").exists());
+        }
+        let command =
+            "cat input.txt; read -r _ < control.fifo; printf 'line-B\n'; printf done > bash-marker";
         let invocation = ToolInvocation {
             id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new("call-live"),
@@ -5999,8 +6229,9 @@ mod tests {
         };
         let prepared = fixture
             .registry
-            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
-            .expect("prepare");
+            .prepare_native_bash(&invocation, ToolEnvironment::new(), &cancellation)
+            .await
+            .expect("Client registers the command and creates its live output");
         let outcome = fixture
             .registry
             .commit_dispatch(
@@ -6024,24 +6255,54 @@ mod tests {
             .expect("the advertised live-output locator")
             .to_owned();
 
-        // The append linearization point: once the sink committed
-        // "line-A\n" (7 bytes), the fragment is observable through the
-        // advertised path — while the process is still blocked on the FIFO.
-        tokio::time::timeout(
-            TEST_LIVENESS_GUARD,
-            appends.wait_for(|appended| *appended >= 7),
-        )
+        // Observe the committed first fragment. The FIFO prevents settlement at
+        // every iteration, regardless of how long the first append takes.
+        let output = crate::tools::native::bash_operation_at(std::path::Path::new(&output_path))
+            .expect("Client output identity");
+        tokio::time::timeout(TEST_LIVENESS_GUARD, async {
+            loop {
+                let page = execution
+                    .scope
+                    .read_bash_output(
+                        output.clone(),
+                        fixture.registry.conversation_id().as_str().to_owned(),
+                        1,
+                        None,
+                        &cancellation,
+                    )
+                    .await
+                    .expect("allocated live output remains readable");
+                if page.text == "line-A\n" {
+                    break;
+                }
+                assert!(page.text.is_empty(), "unexpected prefix {:?}", page.text);
+                tokio::task::yield_now().await;
+            }
+        })
         .await
-        .expect("the first fragment commits (liveness guard)")
-        .expect("append watch stays open");
-        let snapshot = fixture.registry.snapshot(&execution_id).expect("snapshot");
+        .expect("the first fragment commits");
         assert!(
-            snapshot.state.is_active(),
-            "the execution is still running behind the FIFO barrier"
+            fixture
+                .registry
+                .snapshot(&execution_id)
+                .expect("snapshot")
+                .state
+                .is_active()
         );
+        let foreign = execution
+            .scope
+            .read_bash_output(
+                output.clone(),
+                "other-conversation".into(),
+                1,
+                None,
+                &cancellation,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(foreign.kind(), std::io::ErrorKind::NotFound);
 
         // The ordinary native Read tool inspects the live output.
-        let reporter = NoopProgress;
         let read_invocation = ToolInvocation {
             id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: ToolCallId::new("call-read"),
@@ -6052,32 +6313,7 @@ mod tests {
             arguments: serde_json::json!({"path": output_path}),
         };
         let read = crate::tools::native::ReadTool
-            .start(
-                read_invocation,
-                ToolExecutionContext {
-                    stdout_capture: None,
-                    workspace_changes: None,
-                    model_invocation: None,
-                    attempt_id: None,
-                    goal: None,
-                    schedule: None,
-                    conversation_id: fixture.registry.conversation_id(),
-                    execution_id: None,
-                    cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
-                        crate::runtime::cancellation::CancellationSignal::new(),
-                        CancellationReason::UserRequested,
-                    ),
-                    workspace: &workspace,
-                    progress: &reporter,
-                    artifacts: &fixture.registry.resources().artifacts,
-                    tool_output: &tool_output,
-                    environment: &ToolEnvironment::new(),
-                    questionnaire_requester: None,
-                    todos: None,
-                    subagent: None,
-                    bound_mutation: None,
-                },
-            )
+            .start(read_invocation, tool_context())
             .completion
             .await;
         assert_eq!(read.status, ToolExecutionStatus::Success);
@@ -6105,32 +6341,7 @@ mod tests {
             }),
         };
         let grep = crate::tools::native::GrepTool
-            .start(
-                grep_invocation,
-                ToolExecutionContext {
-                    stdout_capture: None,
-                    workspace_changes: None,
-                    model_invocation: None,
-                    attempt_id: None,
-                    goal: None,
-                    schedule: None,
-                    conversation_id: fixture.registry.conversation_id(),
-                    execution_id: None,
-                    cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
-                        crate::runtime::cancellation::CancellationSignal::new(),
-                        CancellationReason::UserRequested,
-                    ),
-                    workspace: &workspace,
-                    progress: &reporter,
-                    artifacts: &fixture.registry.resources().artifacts,
-                    tool_output: &tool_output,
-                    environment: &ToolEnvironment::new(),
-                    questionnaire_requester: None,
-                    todos: None,
-                    subagent: None,
-                    bound_mutation: None,
-                },
-            )
+            .start(grep_invocation, tool_context())
             .completion
             .await;
         assert_eq!(grep.status, ToolExecutionStatus::Success);
@@ -6174,10 +6385,26 @@ mod tests {
             }),
             "settlement reuses the dispatch-time live-output locator"
         );
-        assert!(
-            std::fs::read_to_string(&output_path).expect("final output") == "line-A\nline-B\n",
-            "the settled file holds the complete output"
+        let page = execution
+            .scope
+            .read_bash_output(
+                output,
+                fixture.registry.conversation_id().as_str().to_owned(),
+                1,
+                None,
+                &cancellation,
+            )
+            .await
+            .expect("completed Client output remains readable after journal release");
+        assert_eq!(page.text, "line-A\nline-B\n");
+        assert!(!std::path::Path::new(&output_path).exists());
+        assert_eq!(
+            std::fs::read(physical.join("bash-marker")).unwrap(),
+            b"done"
         );
+        if private.is_some() {
+            assert!(!logical.join("bash-marker").exists());
+        }
         // No foreground-style result spill was created for the same payload.
         assert!(
             std::fs::read_dir(tool_output.root().unwrap())
@@ -6219,7 +6446,7 @@ mod tests {
 
         let fixture = registry("conv_e7ec41bc-3788-7c33-8aae-3434a8061b4a");
         let executor: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::native::BashTool::with_test_control(
+            Arc::new(crate::tools::native::FixtureBashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
@@ -6296,7 +6523,7 @@ mod tests {
         // Every append to the live-output file fails.
         tool_output.fail_writes_after(0);
         let executor: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::native::BashTool::with_test_control(
+            Arc::new(crate::tools::native::FixtureBashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
@@ -6398,7 +6625,7 @@ mod tests {
     async fn a_background_sink_open_failure_retains_the_advertised_locator_as_partial() {
         let fixture = registry("conv_f1048835-d941-7b66-9ca2-d9571392b3d1");
         let executor: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::native::BashTool::with_test_control(
+            Arc::new(crate::tools::native::FixtureBashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
@@ -6518,7 +6745,7 @@ mod tests {
     async fn a_background_spawn_failure_settles_failed_with_complete_empty_output() {
         let fixture = registry("conv_b5ff86eb-e225-7696-b2d4-ec5c80cb094a");
         let executor: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::native::BashTool::with_test_control(
+            Arc::new(crate::tools::native::FixtureBashTool::with_test_control(
                 crate::tools::native::BashTestControl::new().fail_supervisor_spawn(),
             ));
         let invocation = ToolInvocation {
@@ -6616,7 +6843,7 @@ mod tests {
     async fn a_background_input_parse_failure_retains_the_advertised_locator() {
         let fixture = registry("conv_33e74e7d-4e40-7170-bd4a-d375953c6cc9");
         let executor: Arc<dyn ToolExecutor> =
-            Arc::new(crate::tools::native::BashTool::with_test_control(
+            Arc::new(crate::tools::native::FixtureBashTool::with_test_control(
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
