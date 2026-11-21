@@ -21,7 +21,7 @@
 .group .list { display: block; border-block: .5px solid var(--dsw-alias-border-l2); }
 .group .list > .resourceCard {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr);
+  grid-template-columns: minmax(240px, 3fr) minmax(0, 2fr);
   column-gap: 16px;
   align-items: center;
   min-height: 0;
@@ -31,7 +31,7 @@
   background: transparent;
 }
 .group .list > .resourceCard + .resourceCard { border-top: .5px solid var(--dsw-alias-border-l2); }
-.group .list > .resourceCard:has(.cardActions) { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }
+.group .list > .resourceCard:has(.cardActions) { grid-template-columns: minmax(240px, 3fr) minmax(0, 2fr) auto; }
 .list .cardActions { margin: 0; }
 
 
