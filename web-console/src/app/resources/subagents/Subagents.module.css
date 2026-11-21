@@ -212,3 +212,4 @@
   .table .enabledColumn { width: 72px; }
   .narrowDescription { display: block; margin-top: 4px; }
 }
+.notice { display:flex; flex-direction:column; gap:8px; }

@@ -656,10 +656,10 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, allowUnchangedDraft = true, saveLabel, children, presentation, onCancel, onSubmit }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, allowUnchangedDraft = true, saveLabel, children, presentation, legendHidden = false, onCancel, onSubmit }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
   removalNotice?: ReactNode; allowUnchangedDraft?: boolean; saveLabel?: string | undefined; children: ReactNode;
-  presentation?: 'resource' | 'dialog'; onCancel?: () => void;
+  presentation?: 'resource' | 'dialog'; legendHidden?: boolean; onCancel?: () => void;
   onSubmit?: () => void;
 }) {
   const tx = useTranslation();
@@ -703,7 +703,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
     // Only a dialog keeps its own submit affordance; on a page the footer
     // is the single commit and Enter inside a field must not bypass staging.
     onSubmit={event => { event.preventDefault(); if (presentation === 'dialog') { if (onSubmit) onSubmit(); else unit.submit(); } }}>
-    <fieldset disabled={unit.busy || unavailable}><legend>{title}</legend>
+    <fieldset disabled={unit.busy || unavailable}><legend className={legendHidden ? css.visuallyHidden : undefined}>{title}</legend>
       <div className={presentation === 'dialog' ? css.unitBody : undefined}>
       {presentation === 'dialog' && availability && <SettingsNotice text={tx(`settings:models.authority-${availability}`)}/>}
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
@@ -776,12 +776,15 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
  *
  * Used where the unit is a single scalar or a small closed choice, so a typed
  * form layer would add mechanics without removing any. */
-export function UnitForm<T>({ title, children, removable = true, removalNotice, allowUnchangedDraft = true, saveLabel, ...options }: UnitOptions<T> & {
+export function UnitForm<T>({ title, children, removable = true, removalNotice, allowUnchangedDraft = true, saveLabel, legendHidden, ...options }: UnitOptions<T> & {
   title: string; children: (value: T, change: (value: T) => void) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode; allowUnchangedDraft?: boolean; saveLabel?: string;
+  /** Inside a `SettingsGroup` the group's own title is the visible heading;
+   * the legend stays as the fieldset's accessible name only. */
+  legendHidden?: boolean;
 }) {
   const unit = useUnitEditing(options);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} allowUnchangedDraft={allowUnchangedDraft} saveLabel={saveLabel}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} allowUnchangedDraft={allowUnchangedDraft} saveLabel={saveLabel} legendHidden={legendHidden}>
     {children(unit.displayed, unit.edit)}
   </UnitShell>;
 }
@@ -807,10 +810,10 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
  *    the transaction owns; this component never calls a native operation.
  *
  * There is therefore exactly one value called the draft, and the actor owns it. */
-export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, onCancel, onSaved, ...options }: UnitOptions<T> & {
+export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, legendHidden, onCancel, onSaved, ...options }: UnitOptions<T> & {
   title: string; children: (form: TypedUnitForm<T>) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode;
-  presentation?: 'resource' | 'dialog'; onCancel?: () => void;
+  presentation?: 'resource' | 'dialog'; legendHidden?: boolean; onCancel?: () => void;
 }) {
   const unit = useUnitEditing({ ...options, onSaved });
   // The value this form last pushed into the transaction actor. Comparing the
@@ -849,7 +852,7 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     reflected.current = unit.displayed;
     form.reset(unit.displayed);
   }, [form, unit.displayed]);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} presentation={presentation} onCancel={onCancel}
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} presentation={presentation} legendHidden={legendHidden} onCancel={onCancel}
     onSubmit={() => { void form.handleSubmit(); }}>
     {children(form)}
   </UnitShell>;

@@ -43,15 +43,15 @@ export function ToolsPage({ source, document, scope, revision }: {
   return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:tools-page.tools-amp-permissions')}
     toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={<PageTransactionFooter />}>
     <SettingsGroup title={tx('settings:tools-page.approval-mode')}>
-      <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="plan" revision={revision}
+      <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} legendHidden authored={document.approval_mode ?? undefined} blank="plan" revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'approval', authored } })}>
-        {(value, change) => <Choice label={tx('settings:tools-page.approval-mode')} value={value}
+        {(value, change) => <Choice hideLabel label={tx('settings:tools-page.approval-mode')} value={value}
           options={[['plan', tx('settings:copy.plan')], ['automatic', tx('settings:copy.automatic')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
       </UnitForm>
     </SettingsGroup>
 
     <SettingsGroup title={tx('settings:extension-detail.native-tools')}>
-      <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
+      <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} legendHidden authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}>
         {(value, change) => <div className={css.page}>
           {nativeTools.map(tool => <SettingsRow key={tool} label={<code>{tool}</code>}

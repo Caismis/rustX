@@ -173,6 +173,7 @@ export const en = {
   "mcp.remove": "Delete server",
   "mcp.remove-confirm": "Delete this MCP server?",
   "mcp.remove-help": "Remove the definition from the current scope.",
+  "mcp.remove-staged": "“{p0}” is staged for removal. Save applies the deletion; undo keeps the server.",
 
   "catalog.enable": "Allow {name} for the agent",
   "catalog.review-selection": "Manage selection",
@@ -845,6 +846,7 @@ export const zh = {
   "mcp.remove": "删除服务器",
   "mcp.remove-confirm": "删除此 MCP 服务器？",
   "mcp.remove-help": "从当前作用域移除服务器定义。",
+  "mcp.remove-staged": "“{p0}”已标记删除，点击“保存”后生效；撤销则保留。",
 
   "catalog.enable": "允许智能体使用 {name}",
   "catalog.review-selection": "管理可用范围",

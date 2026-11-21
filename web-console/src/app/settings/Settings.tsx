@@ -238,7 +238,7 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
                 {connectionReachable && <SettingsGroup title={tx('settings:connection-settings.connection')}>
                   <div><Button variant="outline" size="sm" onClick={() => onFocus(connectionFocus)}>{tx('settings:connection-settings.connection')}</Button></div>
                 </SettingsGroup>}
-                <SourcePending lifecycle={lifecycle} /></SettingsPageShell>
+                <SourcePending lifecycle={lifecycle} retry={lifecycle === 'failed' ? () => actor.send({ type: 'REFRESH' }) : undefined} /></SettingsPageShell>
             : <div key={editorKey} className={css.editorFrame}><PageTransactionProvider>{body}</PageTransactionProvider>
             </div>}
         <div className={css.surfaceNotices}>
@@ -254,12 +254,15 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
 /** The page body before this target has any projection to present — not even
  * a stale one. Loading, connecting and unavailable are different states, and
  * none of them is shown as an empty configuration. */
-function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLifecycle> }) {
+function SourcePending({ lifecycle, retry }: { lifecycle: ReturnType<typeof settingsLifecycle>; retry?: () => void }) {
   const tx = useTranslation();
   const text = lifecycle === 'failed' ? tx('settings:copy.no-configuration-can-be-shown-until-the-source-is-read-reload-configuration-to-try-again')
     : lifecycle === 'connecting' ? tx('settings:copy.configuration-is-shown-once-the-app-server-connection-is-established')
       : tx('settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers');
-  return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}><p>{text}</p></div>;
+  return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}>
+    <p>{text}</p>
+    {retry && <Button variant="outline" size="sm" onClick={retry}>{tx('common:session-configuration.retry')}</Button>}
+  </div>;
 }
 
 /** The malformed-`rustx.toml` page: the diagnostic plus the single

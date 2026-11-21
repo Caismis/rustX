@@ -676,7 +676,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c34856fbc9712c370ff1732ea4535e611e3d12d374b9c2580efbd14debbbef2a"
+      "local_sha256": "3723a9e4e8e23042b224daa524492a9a8a4f01b3dc60ba9119108f0aea131fa2"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -788,7 +788,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "99b87265d3c7eef90c3bdfa2dc9f216f7ad8aebfd3b43a4f8aa4ecadc5e3e7e7"
+      "local_sha256": "ad38ca5d009339482cfec1f712f058b0ea36fc36d529aa1d4656aa249fb37cb2"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2192,7 +2192,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9c783903f8dbd7527ff19dc9f2a99d9d857f61ed6f851c56be0032d324ac5e27",
+      "local_sha256": "97e3e8698bb55c17fb14ba0e8a7972e984c7bebb213df7034d585c8d67f7636d",
       "classification": "A"
     },
     {
@@ -2843,7 +2843,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "77b95bacfcda797f96ba7eb599bec75005928e7a7a21fbbea4514eb8b6a2842b",
+      "local_sha256": "7b5853f2c19f69cb88f55b782b0d4fad1599cb90edcab0a37c7c1731be89c402",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2885,7 +2885,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "a05ec6d53c1e78e52b29ef20cb191271f66ac8a9cfe68787b795e526d87175df",
+      "local_sha256": "fea9c7c9c15a90d42c586e7a181a80a02e429acd4774137952f8c9d4576dc288",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -4176,7 +4176,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "74cabcabbd2a9e75c865fc1dad8656b6e35e601082df87cb14737b3ab5c13f56"
+      "local_sha256": "435dc9b62c9ed70b6bceb4a696aada297d4ea56986770cbb7fa4081e5648b24b"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -8454,7 +8454,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "8b3bdf2f84f5b8a0ee39a604807b8e8e94affa8d72165695075ff63b2af0fe93"
+      "local_sha256": "80ba13fd8e6119da091e82fd279a0b68ead7693505e85c23bb0b705b745f95ba"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

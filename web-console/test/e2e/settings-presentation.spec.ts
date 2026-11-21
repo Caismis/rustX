@@ -98,7 +98,8 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
   await expect(rail.getByRole('tab')).toHaveText(pages);
   await expect(settingsSectionMenu(page)).toBeHidden();
   const navigation = await page.getByRole('navigation', { name: 'Settings navigation' }).evaluate(nav => nav.getBoundingClientRect().width);
-  expect(navigation).toBeGreaterThanOrEqual(180); expect(navigation).toBeLessThanOrEqual(196);
+  // Wide enough that "Tools & Permissions" renders without truncation.
+  expect(navigation).toBeGreaterThanOrEqual(208); expect(navigation).toBeLessThanOrEqual(224);
   const cell = await rail.getByRole('tab', { name: 'Models' }).evaluate(el => ({ height: el.getBoundingClientRect().height, radius: getComputedStyle(el).borderTopLeftRadius, font: getComputedStyle(el).fontSize }));
   expect(cell).toEqual({ height: 40, radius: '12px', font: '14px' });
   // Six distinct glyphs; the label, not the glyph, names each page.

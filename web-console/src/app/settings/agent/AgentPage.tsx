@@ -37,7 +37,7 @@ export function AgentPage({ config, globalGuidance, closed }: {
     {!config && closed}
 
     {config && <SettingsGroup title={tx('settings:agent-page.project-guidance')} description={tx('settings:agent-page.automatic-guidance-description')}>
-      <UnitForm<AgentProjectInstructionsDocument> title={tx('settings:agent-page.project-guidance')} authored={config.document.agent?.agents_md ?? undefined}
+      <UnitForm<AgentProjectInstructionsDocument> title={tx('settings:agent-page.project-guidance')} legendHidden authored={config.document.agent?.agents_md ?? undefined}
         blank={{}} revision={config.revision} allowUnchangedDraft={false} mutation={authored => ({ kind: 'config', mutation: { unit: 'project_guidance', authored } })}>
         {(value, change) => <Switch label={tx('settings:agent-page.automatic-guidance')} checked={value.inherit ?? true}
           onChange={inherit => change({ inherit })} />}

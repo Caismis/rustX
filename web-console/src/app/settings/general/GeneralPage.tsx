@@ -67,7 +67,7 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
 
   return <SettingsPageShell title={tx('settings:general-page.general')} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={<PageTransactionFooter />}>
     <SettingsGroup title={tx('settings:general-page.appearance')}>
-      <SettingsRow label={tx('settings:general-page.appearance')}
+      <SettingsRow
         control={<div className={shellCss.scopeSegment} role="group" aria-label={tx('settings:general-page.appearance')}>
           {(['light', 'dark', 'system'] as const).map(id => <button key={id} type="button" aria-pressed={draft.theme === id}
             onClick={() => stage({ theme: id })}>

@@ -15,7 +15,6 @@ import type { McpFocus } from '../types';
 import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
-import { PageTransactionFooter } from '../../settings/forms/bridge';
 import { useNavigationGuard } from '../../settings/forms/guard';
 import { SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
 import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
@@ -45,7 +44,7 @@ export function McpDetail({ source, scope, revision, focus, scopeControl, onClos
   const title = focus.name ?? tx('settings:mcp.new');
   return <SettingsPageShell title={title} className={`${settingsCss.settings} ${settingsCss.page}`} data-mcp-page=""
     breadcrumb={<Button variant="ghost" size="sm" onClick={() => guard.guard(onClose)}>{tx('settings:mcp.back')}</Button>}
-    toolbar={scopeControl} footer={<PageTransactionFooter/>}>
+    toolbar={scopeControl} footer={null}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
     <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
       scopeControl={scopeControl} close={onClose} />
@@ -71,25 +70,34 @@ export function McpPage({ source, scope, revision, onFocus, query, group, probeS
     const description = config ? config.url ? `http · ${config.url}` : `stdio · ${[config.command, ...(config.args ?? [])].join(' ')}` : '';
     return {...entry, description};
   }).filter(entry => `${entry.name} ${entry.description} ${entry.path}`.toLocaleLowerCase().includes(needle));
-  const renderCard = (entry: typeof matches[number]) => <ResourceCard key={entry.name}
+  const renderCard = (entry: typeof matches[number]) => {
+    const editLabel = tx('resources:card.edit');
+    const cardActions = [
+      ...(canOverride?.(entry.name) ? [{ id: 'override', label: tx('resources:card.override'), icon: <IconEditOutline16 /> }] : []),
+      ...(onTransfer ? transferActions(tx, scope, !!transferDisabled || document.state !== 'structured' || !Object.hasOwn(document.document, entry.name)) : [])];
+    return <ResourceCard key={entry.name}
     name={entry.name} label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} icon={<McpStatusIcon entry={entry} probe={probeStates[entry.name]} />}
     description={entry.description} diagnostic={entry.diagnostics[0]} onOpen={() => onFocus({kind:'mcp', name:entry.name})}
     availability={workspaceAvailability?.(entry.name, entry.valid) ?? (revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} />)}
-    menu={<CardMenu label={tx('resources:card.actions', { p0: entry.name })}
-      items={[{ id: 'edit', label: tx('resources:card.edit'), icon: <IconEditOutline16 /> },
-        ...(canOverride?.(entry.name) ? [{ id: 'override', label: tx('resources:card.override'), icon: <IconEditOutline16 /> }] : []),
-        ...(onTransfer ? transferActions(tx, scope, !!transferDisabled || document.state !== 'structured' || !Object.hasOwn(document.document, entry.name)) : [])]}
-      onSelect={action => {
-        if (action === 'edit') onFocus({ kind: 'mcp', name: entry.name });
-        else if (action === 'override') onOverride?.(entry.name);
-        else if (document.state === 'structured') onTransfer?.(scope, entry.name, document.revision, action === 'copy-scope' ? 'copy' : 'move');
-      }} />}
+    // A lone Edit action is the icon button itself; a menu only earns its
+    // ellipsis once it holds more than one action.
+    menu={cardActions.length
+      ? <CardMenu label={tx('resources:card.actions', { p0: entry.name })}
+        items={[{ id: 'edit', label: editLabel, icon: <IconEditOutline16 /> }, ...cardActions]}
+        onSelect={action => {
+          if (action === 'edit') onFocus({ kind: 'mcp', name: entry.name });
+          else if (action === 'override') onOverride?.(entry.name);
+          else if (document.state === 'structured') onTransfer?.(scope, entry.name, document.revision, action === 'copy-scope' ? 'copy' : 'move');
+        }} />
+      : <Button size="sm" variant="ghost" aria-label={`${editLabel} ${entry.name}`}
+        onClick={() => onFocus({ kind: 'mcp', name: entry.name })}><IconEditOutline16 /></Button>}
     actions={<>
       <Button size="sm" variant="outline" disabled={!probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'}
         aria-label={`${tx('settings:mcp.test-connection')} ${entry.name}`} onClick={() => testConnection?.(entry.name)}>{tx('settings:mcp.test-connection')}</Button>
       <Button size="sm" variant="ghost" aria-label={`${tx('resources:mcp.permissions')} ${entry.name}`}
         onClick={() => onFocus({kind:'mcp', name:entry.name, mode:'permissions'})}><IconShieldOutline16 /></Button>
     </>} />;
+  };
 
   if (group && needle && !matches.length) return null;
   return <div data-mcp-page="">

@@ -173,8 +173,10 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
         </fieldset>
         <UnitOutcomeNotice title={formName} outcome={unit.outcome} />
         <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}/>
+        {page?.stagedRemovals.has(unit.identity) && <div className={css.notice}><p role="status">{tx('resources:subagents.remove-staged', { p0: formName })}</p>
+          <Button type="button" onClick={() => page.unstageRemoval(unit.identity)}>{tx('settings:unsaved.undo-removal')}</Button></div>}
         <PageTransactionFooter leading={<>
-          {unit.authoredPresent && <span data-removal={restoring ? 'override-removal' : 'authored-removal'}><ConfirmAction
+          {unit.authoredPresent && !page?.stagedRemovals.has(unit.identity) && <span data-removal={restoring ? 'override-removal' : 'authored-removal'}><ConfirmAction
             label={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}
             title={tx(restoring ? 'settings:bridge.use-the-global-default-for-value' : 'settings:bridge.remove-value-from-value-configuration', {
               p0: formName, p1: tx(scope === 'workspace' ? 'settings:extension-detail.workspace' : 'settings:extension-detail.user'),

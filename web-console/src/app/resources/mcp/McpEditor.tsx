@@ -4,7 +4,7 @@ import type { McpWrite, SourceScope, SourceSettings } from '../../../../../proto
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
-import { DefinitionNotice, UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
+import { DefinitionNotice, PageTransactionFooter, UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
 import type { McpFieldBuffers, McpFocus } from '../types';
 import { McpPermissionDetail } from '../shared/McpPermissionDetail';
@@ -21,7 +21,7 @@ interface EditorProps {
 export function McpEditor(props: EditorProps) {
   const { source, scope, revision, focus, close } = props;
   const tx = useTranslation();
-  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></>;
+  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/><PageTransactionFooter/></>;
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
   if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
   return <Editor {...props} document={document}/>;
@@ -146,6 +146,9 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
   }
   const blocked = unit.busy || unit.awaitingObservation;
   const canWrite = !blocked && unit.admitted && !reviewNeeded;
+  // A staged removal replaces the editable surface with its pending state:
+  // the footer Save applies it and the banner's undo takes it back.
+  const removalStaged = !!page?.stagedRemovals.has(unit.identity);
   const resetBuffers = () => {
     setJsonEdit(undefined); setPendingImport(undefined); setImports({}); setError('');
     setInvalidFields({});
@@ -189,7 +192,10 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
       <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
     <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => event.preventDefault()}>
-      <fieldset disabled={blocked} className={css.formBody}>
+      {removalStaged
+        ? <div className={css.notice}><p role="status">{tx('settings:mcp.remove-staged',{p0:identityTitle})}</p>
+          <Button type="button" onClick={() => page?.unstageRemoval(unit.identity)}>{tx('settings:unsaved.undo-removal')}</Button></div>
+        : <fieldset disabled={blocked} className={css.formBody}>
         <DefinitionNotice unit={unit}/>
         <div className={css.sectionHead}><h4>{tx('settings:mcp.connection')}</h4><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
         {duplicate && <p role="alert" className={css.error}>{tx('settings:mcp.duplicate')}</p>}
@@ -207,13 +213,13 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
         {reviewNeeded && <div className={css.notice}><p role="status">{tx(unit.committed && !unit.draft && !pendingImport && !jsonEdit ? 'settings:forms.committed-changed-elsewhere' : 'settings:mcp.review')}</p><Button onClick={review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
         <UnitOutcomeNotice title={identityTitle} outcome={unit.outcome}/>
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
-      </fieldset>
-      {focus.name && unit.authoredPresent && <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite} onConfirm={() => {
-          if (!canWrite) return;
-          // Deletion stages into the page transaction; the footer commits it.
-          page?.stageRemoval(unit.identity);
-        }}/></span>}
+      </fieldset>}
     </form>
     {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
+    <PageTransactionFooter leading={focus.name && unit.authoredPresent && !removalStaged ? <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite} onConfirm={() => {
+        if (!canWrite) return;
+        // Deletion stages into the page transaction; the footer commits it.
+        page?.stageRemoval(unit.identity);
+      }}/></span> : undefined}/>
   </>;
 }

@@ -41,4 +41,21 @@ test('MCP module shares compact typography and fits a narrow page',async({page})
  await captureEvidence(mcp,'mcp-editor-narrow');
  const bounds=await mcp.evaluate(el=>({client:el.clientWidth,scroll:el.scrollWidth}));
  expect(bounds.scroll).toBeLessThanOrEqual(bounds.client);
+ // scrollWidth stays quiet when a clipped ancestor hides overflow, so also
+ // walk every rendered element: none may escape the page's box sideways
+ // (e.g. slide under the primary nav rail).
+ const escaped=await mcp.evaluate(root=>{
+  const box=root.getBoundingClientRect();
+  return [...root.querySelectorAll('*')].filter(el=>{
+   const rect=el.getBoundingClientRect();
+   if(rect.width===0)return false;
+   for(let at:Element|null=el;at&&at!==root;at=at.parentElement){
+    const style=getComputedStyle(at);
+    if(at!==el&&/auto|scroll/.test(style.overflowX))return false;
+    if(style.clipPath!=='none'||(style.clip!=='auto'&&style.clip!==''))return false;
+   }
+   return rect.left<box.left-1||rect.right>box.right+1;
+  }).map(el=>`${el.tagName.toLowerCase()} ${el.getAttribute('aria-label')??el.textContent?.slice(0,40)}`);
+ });
+ expect(escaped).toEqual([]);
 });
