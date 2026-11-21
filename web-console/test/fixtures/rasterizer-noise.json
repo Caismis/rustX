@@ -59660,7 +59660,7 @@
   {
     "reference": "model-advanced-dark-390-linux.png",
     "evidence": "Pinned Playwright 1.63.0 Linux captures under the restyled Settings baseline alternate which corner pixel of the context input's rounded border rasterizes darker by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
-    "referenceSha256": "f92549bb225a33365fb469ee6a8feef4df74a9220455e64cc7eebf04ae719d6c",
+    "referenceSha256": "2843b88c8a05c7a321e186a977f74cb7bd663713499aec52fb9c87977bce4eb7",
     "captureSha256": "027b4e2362fa0e7850238318d68d0ac2897e31d8aeafc1df4d55e21e59afd54b",
     "regions": [
       {
@@ -59687,15 +59687,15 @@
         33,
         236,
         [
-          77,
-          77,
-          79,
-          255
-        ],
-        [
           78,
           78,
           80,
+          255
+        ],
+        [
+          77,
+          77,
+          79,
           255
         ]
       ]
