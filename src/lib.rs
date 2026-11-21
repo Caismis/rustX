@@ -85,3 +85,5 @@ pub mod credentials;
 /// embeds rustx metadata; a small miss count again would show dependents got
 /// stale hits instead.
 pub const CACHE_CANDIDATES_MARKER_3: u32 = 3;
+
+// cache-candidates warm repeat marker: comment-only commit for median sampling.
