@@ -41,6 +41,7 @@ struct Record {
     scope: Arc<ChangesStore>,
     comparison: Mutex<Option<(usize, ChangeReply)>>,
     signal: rustx_process_supervisor::signal::ProcessSignal,
+    created: std::time::Instant,
     _slot: OwnedSemaphorePermit,
 }
 
@@ -77,8 +78,7 @@ impl Changes {
         let id = key.operation;
         if let ChangeRequest::Release { .. } = request {
             if let Some(record) = self.records.lock().expect("Workspace records").remove(&id) {
-                record.cancel();
-                self.scope.release(&format!("{:032x}", id.as_u128()));
+                self.retire(id, &record);
             }
             return ChangeReply::Accepted;
         }
@@ -99,7 +99,12 @@ impl Changes {
                     _ => ChangeReply::Unavailable,
                 }
             }
-            ChangeRequest::Capture { path, .. } => Self::capture(workspace, &record, &path),
+            ChangeRequest::Capture { path, .. } => {
+                let Some(_active) = operations.admit_auxiliary() else {
+                    return ChangeReply::Unavailable;
+                };
+                Self::capture(workspace, &record, &path)
+            }
             ChangeRequest::Finish { .. } => Self::finish(operations, &record),
             ChangeRequest::Summary { .. } => {
                 match *record.phase.lock().expect("Workspace observation") {
@@ -137,6 +142,9 @@ impl Changes {
         if records.contains_key(&key.operation) {
             return ChangeReply::Unavailable;
         }
+        if self.slots.available_permits() == 0 {
+            self.evict_completed(&mut records);
+        }
         // Released records keep their slot while a physical worker holds them.
         let Ok(slot) = Arc::clone(&self.slots).try_acquire_owned() else {
             return ChangeReply::Unavailable;
@@ -149,6 +157,7 @@ impl Changes {
             scope: Arc::clone(&self.scope),
             comparison: Mutex::new(None),
             signal: operations.auxiliary_signal(),
+            created: std::time::Instant::now(),
             _slot: slot,
         });
         let id = key.operation;
@@ -175,6 +184,30 @@ impl Changes {
         }
         records.insert(id, record);
         ChangeReply::Accepted
+    }
+
+    fn evict_completed(&self, records: &mut BTreeMap<OperationId, Arc<Record>>) {
+        let oldest = records
+            .iter()
+            .filter(|(_, record)| {
+                Arc::strong_count(record) == 1
+                    && matches!(
+                        *record.phase.lock().expect("Workspace observation"),
+                        Phase::Complete | Phase::Failed
+                    )
+            })
+            .min_by_key(|(_, record)| record.created)
+            .map(|(id, _)| *id);
+        if let Some(id) = oldest
+            && let Some(record) = records.remove(&id)
+        {
+            self.retire(id, &record);
+        }
+    }
+
+    fn retire(&self, id: OperationId, record: &Record) {
+        record.cancel();
+        self.scope.release(&format!("{:032x}", id.as_u128()));
     }
 
     fn capture(workspace: &Path, record: &Record, path: &Path) -> ChangeReply {
@@ -255,5 +288,48 @@ impl Changes {
             *record.comparison.lock().expect("Workspace comparison") = None;
             ChangeReply::Unavailable
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_history_releases_capacity_without_evicting_live_observers() {
+        let changes = Changes {
+            slots: Arc::new(Semaphore::new(3)),
+            ..Changes::default()
+        };
+        let now = std::time::Instant::now();
+        let make = |phase, elapsed| {
+            Arc::new(Record {
+                phase: Mutex::new(phase),
+                scope: Arc::clone(&changes.scope),
+                comparison: Mutex::new(None),
+                signal: rustx_process_supervisor::signal::ProcessSignal::new(),
+                created: now + std::time::Duration::from_millis(elapsed),
+                _slot: Arc::clone(&changes.slots).try_acquire_owned().unwrap(),
+            })
+        };
+        let live = OperationId::new();
+        let compared = OperationId::new();
+        let complete = OperationId::new();
+        let comparison_holds_slot = make(Phase::Complete, 1);
+        let mut records = BTreeMap::from([
+            (live, make(Phase::Preparing, 0)),
+            (compared, Arc::clone(&comparison_holds_slot)),
+            (complete, make(Phase::Complete, 2)),
+        ]);
+        assert_eq!(changes.slots.available_permits(), 0);
+        changes.evict_completed(&mut records);
+        assert!(!records.contains_key(&complete));
+        assert!(records.contains_key(&live));
+        assert!(records.contains_key(&compared));
+        assert_eq!(changes.slots.available_permits(), 1);
+        drop(comparison_holds_slot);
+        changes.evict_completed(&mut records);
+        assert_eq!(records.keys().copied().collect::<Vec<_>>(), [live]);
+        assert_eq!(changes.slots.available_permits(), 2);
     }
 }

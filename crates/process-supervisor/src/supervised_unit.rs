@@ -824,23 +824,11 @@ pub enum EmergencyContainment {
 /// pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists here, so
 /// unrelated adopted children are never consumed.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn emergency_contain_group(
-    pgid: i32,
-    anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
+pub fn emergency_contain_group(pgid: i32) -> Result<EmergencyContainment, String> {
     use crate::process_wait::{Id, waitid};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
     use nix::sys::wait::{WaitPidFlag, WaitStatus};
-    if anchor_unavailable {
-        // The trusted regression seam: the caller's fixture control declares
-        // the anchor reads as not waitable without a prior authoritative
-        // terminal event. The semantic state is what matters — never an
-        // actual pid reuse. Production always passes `false`; the flag is a
-        // parameter, not a build-cfg, so root test fixtures keep working
-        // across the package boundary.
-        return Ok(EmergencyContainment::AnchorUnavailable);
-    }
     let anchor = Pid::from_raw(pgid);
     loop {
         // Anchor retention: observe the adopted inner leader's terminal
@@ -889,10 +877,7 @@ pub fn emergency_contain_group(
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn emergency_contain_group(
-    _pgid: i32,
-    _anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
+pub fn emergency_contain_group(_pgid: i32) -> Result<EmergencyContainment, String> {
     Err("fallback containment requires Linux or macOS process supervision".to_owned())
 }
 

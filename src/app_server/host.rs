@@ -55,6 +55,7 @@ struct HostInner {
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
     environment_stop: crate::runtime::CancellationSignal,
+    execution_drain: watch::Sender<Option<Vec<String>>>,
     /// A finite chain of admitted intent jobs. The host request limit bounds
     /// these owners; completion order, rather than reply polling, orders clocks.
     submission_intent_tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -64,6 +65,7 @@ struct HostInner {
     uploads: super::upload_transfer::UploadTransfers,
     file_reads: Arc<tokio::sync::Semaphore>,
     file_observers: Arc<tokio::sync::Semaphore>,
+    unconfirmed_file_observer: AtomicBool,
     file_routes: Mutex<
         std::collections::HashMap<
             super::protocol::AttachmentTarget,
@@ -239,6 +241,11 @@ impl AppServerHost {
     pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_observers.clone()
     }
+    pub(crate) fn record_unconfirmed_file_observer(&self) {
+        self.0
+            .unconfirmed_file_observer
+            .store(true, Ordering::Release);
+    }
     pub(crate) fn environment_stop(&self) -> crate::runtime::CancellationSignal {
         self.0.environment_stop.child()
     }
@@ -271,6 +278,7 @@ impl AppServerHost {
             state: Mutex::default(),
             requests: watch::channel(0).0,
             environment_stop: crate::runtime::CancellationSignal::new(),
+            execution_drain: watch::channel(None).0,
             submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
             transport: Arc::default(),
@@ -281,6 +289,7 @@ impl AppServerHost {
             )),
             file_routes: Mutex::default(),
             file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
+            unconfirmed_file_observer: AtomicBool::new(false),
         }))
     }
     #[must_use]
@@ -387,28 +396,48 @@ impl AppServerHost {
     /// # Panics
     /// Panics if the host mutex is poisoned.
     pub fn begin_drain(&self) {
-        let initializations = {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(self.policy().shutdown_deadline_ms);
+        self.begin_drain_by(deadline);
+    }
+
+    pub(crate) fn begin_drain_by(&self, deadline: std::time::Instant) {
+        let (initializations, endpoints) = {
             let mut state = self.0.state.lock().expect("host mutex");
-            let initializations = self.manager().begin_draining();
-            self.0.manager.close_schedule_admission();
-            if state.lifecycle == ServerLifecycle::Accepting {
-                state.lifecycle = ServerLifecycle::Draining;
+            if state.lifecycle != ServerLifecycle::Accepting {
+                return;
             }
-            // START grants and observable Host admission closure share the
-            // same cancellation boundary. No process I/O holds this mutex.
+            let retirement = self.manager().begin_draining();
+            self.0.manager.close_schedule_admission();
+            state.lifecycle = ServerLifecycle::Draining;
+            // START grants and Host admission close together.
             self.0.environment_stop.cancel();
-            initializations
+            retirement
         };
-        // Independent commands retain request admission through physical
-        // settlement. Cancel them before drain waits for those same owners.
-        // Native cancellation arbitrates with recovery under its own
-        // coordinator. Neither host nor registry locks cover durable work.
+        let settled = self.0.execution_drain.clone();
+        tokio::spawn(async move {
+            let failures =
+                SessionRuntimeManager::settle_execution_bindings(endpoints, deadline).await;
+            settled.send_replace(Some(failures));
+        });
         for initialization in initializations {
             initialization.retire();
         }
         self.manager().mcp_drafts.begin_drain();
         self.uploads().revoke_prepared();
     }
+
+    pub(crate) async fn settle_execution(&self) -> Vec<String> {
+        self.0
+            .execution_drain
+            .subscribe()
+            .wait_for(Option::is_some)
+            .await
+            .expect("Client drain owner")
+            .clone()
+            .expect("Client drain results")
+    }
+
     /// Supervise existing runtimes immediately, including when an accepted
     /// request is still pending. A final pass after request settlement covers
     /// every late load claimed by a pre-drain request. Neither pass fails fast.
@@ -430,7 +459,12 @@ impl AppServerHost {
                 .await
                 .expect("host request owner");
         };
-        let (mut failures, ()) = tokio::join!(self.manager().drain_all_runtimes(), requests);
+        let (mut failures, (), execution_failures) = tokio::join!(
+            self.manager().drain_all_runtimes(),
+            requests,
+            self.settle_execution()
+        );
+        failures.extend(execution_failures);
         self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
         failures.extend(self.manager().mcp_drafts.settle().await);
@@ -454,6 +488,10 @@ impl AppServerHost {
     }
     pub(crate) fn finish_drain(&self) -> Result<(), String> {
         let mut state = self.0.state.lock().expect("host mutex");
+        if self.0.unconfirmed_file_observer.load(Ordering::Acquire) {
+            state.shutdown_failures += 1;
+            return Err("Client file observer settlement is unconfirmed".into());
+        }
         if state.lifecycle != ServerLifecycle::Draining
             || !self.manager().is_empty()
             || !self.manager().mcp_drafts.is_settled()

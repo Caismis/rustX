@@ -277,7 +277,7 @@ mod macos {
         drop(handler);
     }
     impl Watcher {
-        pub(in crate::app_server::filesystem) fn new(
+        pub(in crate::watch) fn new(
             source: File,
             authorized: PathBuf,
             handler: impl FnMut(notify::Result<notify::Event>) + Send + 'static,

@@ -444,7 +444,9 @@ impl ProcessSpec {
         }
         match &self.program {
             ProcessProgram::Argv(argv) => {
-                if argv.is_empty() || argv.iter().any(|a| a.is_empty() || a.contains('\0')) {
+                if argv.first().is_none_or(String::is_empty)
+                    || argv.iter().any(|arg| arg.contains('\0'))
+                {
                     return Err(SpecRefusal::InvalidArgv);
                 }
             }
@@ -972,6 +974,21 @@ mod tests {
         let mut s = spec();
         s.env = BTreeMap::from([("A=B".into(), None)]);
         assert_eq!(s.validate(), Err(SpecRefusal::InvalidEnvName));
+    }
+
+    #[test]
+    fn argv_allows_empty_arguments_but_rejects_an_empty_program_or_a_nul() {
+        let mut input = spec();
+        input.program =
+            ProcessProgram::Argv(vec!["/usr/bin/printf".into(), "<%s>".into(), String::new()]);
+        assert_eq!(input.validate(), Ok(()));
+        let with_placeholder = input.fingerprint();
+        input.program = ProcessProgram::Argv(vec!["/usr/bin/printf".into(), "<%s>".into()]);
+        assert_ne!(input.fingerprint(), with_placeholder);
+        input.program = ProcessProgram::Argv(vec![String::new(), "arg".into()]);
+        assert_eq!(input.validate(), Err(SpecRefusal::InvalidArgv));
+        input.program = ProcessProgram::Argv(vec!["printf".into(), "a\0b".into()]);
+        assert_eq!(input.validate(), Err(SpecRefusal::InvalidArgv));
     }
 
     #[test]

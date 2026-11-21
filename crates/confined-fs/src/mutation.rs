@@ -91,6 +91,7 @@ impl SubtreeStage {
         missing_tail: &[OsString],
         leaf: &OsStr,
         writer: impl FnOnce(&mut File) -> io::Result<()>,
+        mut sync: impl FnMut(&File) -> io::Result<()>,
     ) -> io::Result<File> {
         let mut level = self.root.try_clone()?;
         for component in missing_tail {
@@ -137,7 +138,11 @@ impl SubtreeStage {
         });
         writer(&mut output)?;
         output.sync_all()?;
-        level.sync_all()?;
+        // The leaf entry, then every directory entry above it, must be
+        // durable before the staging root becomes visible.
+        for entry in self.owned.iter().rev() {
+            sync(&entry.parent)?;
+        }
         Ok(output)
     }
 
@@ -396,8 +401,8 @@ impl WriteTarget {
         writer: impl FnOnce(&mut File) -> io::Result<()>,
     ) -> io::Result<StagedWrite> {
         self.parent.verify()?;
-        recheck(&self.parent, &self.leaf, self.original())?;
         if self.missing.is_empty() {
+            recheck(&self.parent, &self.leaf, self.original())?;
             return self.stage_file(writer);
         }
         self.stage_subtree(writer)
@@ -491,7 +496,7 @@ impl WriteTarget {
                 return Err(error.into());
             }
         };
-        match stage.create_interior(&self.missing[1..], &self.leaf, writer) {
+        match stage.create_interior(&self.missing[1..], &self.leaf, writer, File::sync_all) {
             Ok(output) => Ok(StagedWrite {
                 parent: self.parent,
                 missing: self.missing,
@@ -616,14 +621,14 @@ impl StagedWrite {
         G: FnOnce(&mut dyn FnMut() -> io::Result<()>) -> io::Result<()>,
     {
         self.parent.verify()?;
+        if self.staging.is_some() {
+            return self.publish_subtree_with_gate(gate);
+        }
         recheck(
             &self.parent,
             &self.leaf,
             self.original.as_ref().map(|(_, metadata)| metadata),
         )?;
-        if self.staging.is_some() {
-            return self.publish_subtree_with_gate(gate);
-        }
         let staging = nix::sys::stat::fstatat(
             self.parent.descriptor(),
             self.name.as_os_str(),
@@ -1173,6 +1178,59 @@ mod tests {
         );
         assert_eq!(published.size, 7);
         assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+    }
+
+    #[test]
+    fn a_missing_subtree_ignores_a_same_named_leaf_in_its_ancestor() {
+        let (temporary, directory) = root();
+        let root_leaf = temporary.path().join("leaf.txt");
+        std::fs::write(&root_leaf, b"ancestor").unwrap();
+        WriteTarget::prepare(
+            directory,
+            OsStr::new("leaf.txt"),
+            vec!["deep".into(), "deeper".into()],
+            Expectation::Absent,
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"nested"))
+        .unwrap()
+        .publish()
+        .unwrap()
+        .finish()
+        .unwrap();
+        assert_eq!(std::fs::read(root_leaf).unwrap(), b"ancestor");
+        assert_eq!(
+            std::fs::read(temporary.path().join("deep/deeper/leaf.txt")).unwrap(),
+            b"nested"
+        );
+        assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+    }
+
+    #[test]
+    fn a_nested_stage_syncs_every_parent_bottom_up() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut stage = SubtreeStage {
+            root: File::open(temporary.path()).unwrap(),
+            owned: Vec::new(),
+        };
+        let mut synced = Vec::new();
+        stage
+            .create_interior(
+                &["a".into(), "b".into()],
+                OsStr::new("leaf"),
+                |output| output.write_all(b"x"),
+                |directory| {
+                    synced.push(nix::sys::stat::fstat(directory)?.st_ino);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let inode = |relative| {
+            nix::sys::stat::fstat(File::open(temporary.path().join(relative)).unwrap())
+                .unwrap()
+                .st_ino
+        };
+        assert_eq!(synced, [inode("a/b"), inode("a"), inode("")]);
     }
 
     #[test]

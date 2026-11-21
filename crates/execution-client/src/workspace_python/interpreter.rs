@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use pep440_rs::{Version, VersionSpecifier, VersionSpecifiers};
 
-use super::guard::{create_private_directory, monotonic_nanos};
+use super::guard::monotonic_nanos;
 use super::host::ExecutionHost;
 use super::owner::{PROBE_TIMEOUT, stamp};
 use super::{Generation, Owner, PathStamp};
@@ -390,17 +390,25 @@ pub(super) fn isolated_discovery_args() -> [String; 3] {
     ]
 }
 
+static DISCOVERY: Mutex<Option<tempfile::TempDir>> = Mutex::new(None);
+
 pub(super) fn discovery_directory() -> PathBuf {
-    static DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
-    let mut cached = DIRECTORY.lock().expect("workspace python discovery");
-    if let Some(directory) = fresh_discovery(&mut cached, &discovery_parents()) {
-        return directory;
-    }
-    std::env::temp_dir().join(format!(
-        "rustx-uv-discovery-{}-{}",
-        std::process::id(),
-        monotonic_nanos()
-    ))
+    let mut cached = DISCOVERY.lock().expect("workspace python discovery");
+    fresh_discovery(&mut cached, &discovery_parents()).unwrap_or_else(|| {
+        std::env::temp_dir().join(format!(
+            "rustx-uv-discovery-{}-{}",
+            std::process::id(),
+            monotonic_nanos()
+        ))
+    })
+}
+
+pub(super) fn cleanup_discovery() -> std::io::Result<()> {
+    DISCOVERY
+        .lock()
+        .expect("workspace python discovery")
+        .take()
+        .map_or(Ok(()), tempfile::TempDir::close)
 }
 
 fn discovery_parents() -> Vec<PathBuf> {
@@ -421,15 +429,21 @@ fn discovery_parents() -> Vec<PathBuf> {
 /// Keeps a discovery directory only after it exists. A failed create is not
 /// remembered, and a deleted directory is replaced on the next use.
 pub(super) fn fresh_discovery(
-    cached: &mut Option<PathBuf>,
+    cached: &mut Option<tempfile::TempDir>,
     parents: &[PathBuf],
 ) -> Option<PathBuf> {
-    if let Some(directory) = cached.as_ref().filter(|directory| directory.is_dir()) {
-        return Some(directory.clone());
+    if cached
+        .as_ref()
+        .is_none_or(|directory| !directory.path().is_dir())
+    {
+        *cached = parents.iter().find_map(|parent| {
+            tempfile::Builder::new()
+                .prefix("rustx-uv-discovery-")
+                .tempdir_in(parent)
+                .ok()
+        });
     }
-    let created = create_private_directory(parents, "rustx-uv-discovery")?;
-    *cached = Some(created.clone());
-    Some(created)
+    cached.as_ref().map(|directory| directory.path().to_owned())
 }
 
 pub(super) fn uv_can_create(text: &str) -> bool {

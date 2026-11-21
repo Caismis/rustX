@@ -114,43 +114,21 @@ impl ChannelShutdown {
         }
     }
 
-    /// Whether the duplicated handle became poll-readable before
-    /// `deadline` — buffered peer bytes and a peer close both wake the
-    /// poll. EINTR retries against the same absolute deadline so a
-    /// signal can never stretch or reset the wait.
+    /// Polls the duplicated handle once without waiting. Readable bytes,
+    /// peer shutdown and descriptor errors can all invalidate a pending lane.
     ///
     /// # Errors
     ///
-    /// Returns the `poll(2)` error other than `EINTR`.
-    pub fn readable(&self, deadline: Instant) -> io::Result<bool> {
-        use std::os::fd::AsFd;
-
+    /// Returns the poll error if readiness cannot be checked.
+    pub fn readable_now(&self) -> io::Result<bool> {
         let fd = self
-            .unix
-            .as_ref()
-            .map(AsFd::as_fd)
-            .or_else(|| self.tcp.as_ref().map(AsFd::as_fd))
+            .as_fd()
             .ok_or_else(|| io::Error::other("shutdown handle holds no stream"))?;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            let timeout: nix::poll::PollTimeout = match remaining.try_into() {
-                Ok(timeout) => timeout,
-                Err(_) => nix::poll::PollTimeout::MAX,
-            };
-            let mut fds = [nix::poll::PollFd::new(fd, nix::poll::PollFlags::POLLIN)];
-            match nix::poll::poll(&mut fds, timeout) {
-                Ok(0) => return Ok(false),
-                Ok(_) => {
-                    return Ok(fds[0].revents().is_some_and(|events| !events.is_empty()));
-                }
-                Err(nix::errno::Errno::EINTR) => {}
-                Err(error) => return Err(io::Error::from(error)),
-            }
-        }
+        let mut fds = [nix::poll::PollFd::new(fd, nix::poll::PollFlags::POLLIN)];
+        nix::poll::poll(&mut fds, nix::poll::PollTimeout::ZERO)?;
+        Ok(fds[0].revents().is_some_and(|events| !events.is_empty()))
     }
+
     /// The raw transport descriptor behind the handle — read-only
     /// access for socket options and peeks (`MSG_PEEK`,
     /// `setsockopt(2)`): a duplicated descriptor configures and
@@ -416,13 +394,41 @@ pub fn connect(
     deadline: Instant,
     ca_file: Option<&Path>,
 ) -> io::Result<RecordChannel> {
+    connect_with_trust(endpoint, deadline, ca_file, None)
+}
+
+/// Connects with only the certificate supplied by the owner-only bootstrap.
+///
+/// # Errors
+///
+/// Returns a certificate, TCP, TLS, or upgrade error before sending any record.
+pub fn connect_provisioned(
+    endpoint: &ExecutionUrl,
+    deadline: Instant,
+    certificate_der: &[u8],
+) -> io::Result<RecordChannel> {
+    if !endpoint.secure || !endpoint.address.ip().is_loopback() {
+        return Err(invalid("provisioned TLS requires a loopback wss endpoint"));
+    }
+    connect_with_trust(endpoint, deadline, None, Some(certificate_der))
+}
+
+fn connect_with_trust(
+    endpoint: &ExecutionUrl,
+    deadline: Instant,
+    ca_file: Option<&Path>,
+    certificate_der: Option<&[u8]>,
+) -> io::Result<RecordChannel> {
     let budget = deadline.saturating_duration_since(Instant::now());
     if budget.is_zero() {
         return Err(timed_out());
     }
     // The operator CA bundle is validated and loaded before any socket
     // is opened: a bad bundle fails without touching the network.
-    let config = endpoint.secure.then(|| endpoint::client_config(ca_file));
+    let config = endpoint
+        .secure
+        .then(|| endpoint::client_config(ca_file, certificate_der))
+        .transpose()?;
     let stream = TcpStream::connect_timeout(&endpoint.address, budget)?;
     if Instant::now() >= deadline {
         return Err(timed_out());
@@ -433,7 +439,7 @@ pub fn connect(
     let deadline_tcp = DeadlineTcp::new(stream, armed.clone())?;
     let socket = if endpoint.secure {
         // `secure` endpoints always build a config at URL validation.
-        let Some(config) = config.transpose()? else {
+        let Some(config) = config else {
             return Err(invalid("wss endpoint requires a TLS config"));
         };
         let mut connection =
@@ -482,16 +488,84 @@ fn upgrade<S: IoStream + Send + 'static>(
 ///
 /// Returns the handshake failure when the upgrade is rejected or the
 /// deadline expires; the binding reservation is untouched.
-// `ErrorResponse` carries an `http::Response`; tungstenite's callback
-// contract fixes that variant's size.
-#[allow(clippy::result_large_err)]
 pub fn accept(stream: TcpStream, deadline: Instant) -> io::Result<RecordChannel> {
+    accept_with_tls(stream, deadline, None)
+}
+
+/// The ephemeral TLS identity of a directly connected loopback binding.
+pub struct LoopbackTls {
+    server: Arc<rustls::ServerConfig>,
+    certificate: Vec<u8>,
+}
+
+impl LoopbackTls {
+    /// Creates a fresh key and a certificate for this listener's literal IP.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for non-loopback addresses or a certificate setup failure.
+    pub fn new(ip: std::net::IpAddr) -> io::Result<Self> {
+        if !ip.is_loopback() {
+            return Err(invalid("provisioned TLS requires a loopback address"));
+        }
+        let rcgen::CertifiedKey { cert, key_pair } =
+            rcgen::generate_simple_self_signed(vec![ip.to_string()]).map_err(io::Error::other)?;
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(io::Error::other)?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            rustls_pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()).into(),
+        )
+        .map_err(io::Error::other)?;
+        Ok(Self {
+            server: Arc::new(server),
+            certificate: cert.der().to_vec(),
+        })
+    }
+
+    /// Returns the public certificate for the owner-only bootstrap file.
+    #[must_use]
+    pub fn certificate(&self) -> &[u8] {
+        &self.certificate
+    }
+
+    /// Completes TLS and the WebSocket upgrade under the caller's deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the TLS or upgrade failure without entering protocol admission.
+    pub fn accept(&self, stream: TcpStream, deadline: Instant) -> io::Result<RecordChannel> {
+        accept_with_tls(stream, deadline, Some(Arc::clone(&self.server)))
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn accept_with_tls(
+    stream: TcpStream,
+    deadline: Instant,
+    tls: Option<Arc<rustls::ServerConfig>>,
+) -> io::Result<RecordChannel> {
     let tcp = stream.try_clone()?;
     let armed = armed_deadline();
     arm(&armed, Some(deadline));
-    let deadline_tcp = DeadlineTcp::new(stream, armed.clone())?;
+    let mut deadline_tcp = DeadlineTcp::new(stream, armed.clone())?;
+    let transport: Box<dyn IoStream + Send> = if let Some(tls) = tls {
+        let mut connection = rustls::ServerConnection::new(tls).map_err(io::Error::other)?;
+        while connection.is_handshaking() {
+            connection
+                .complete_io(&mut deadline_tcp)
+                .map_err(io::Error::other)?;
+        }
+        Box::new(rustls::StreamOwned::new(connection, deadline_tcp))
+    } else {
+        Box::new(deadline_tcp)
+    };
     let socket = tungstenite::accept_hdr_with_config(
-        Box::new(deadline_tcp) as Box<dyn IoStream + Send>,
+        transport,
         |request: &Request, response: Response| {
             let rejected = |status| {
                 let mut reply = tungstenite::http::Response::<Option<String>>::new(None);

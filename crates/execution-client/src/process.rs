@@ -180,6 +180,8 @@ struct Operation {
     /// oldest receipt is evicted past `INPUT_QUEUE_DEPTH`, and an
     /// evicted sequence queries `Unknown` — never a guess.
     receipts: BTreeMap<u64, InputOutcome>,
+    #[cfg(test)]
+    pipe_close_received: Option<std::sync::mpsc::Sender<()>>,
     cancel: ProcessSignal,
     witness: Option<ProcessWitness>,
     bash_file: Option<Arc<CaptureFile>>,
@@ -309,17 +311,23 @@ impl Operations {
         let Some(runtime) = runtime.as_ref() else {
             return false;
         };
-        let mut workers = self.workers.live.lock().expect("worker count");
-        if self.revoke.is_cancelled() {
+        let Some(guard) = self.admit_auxiliary() else {
             return false;
-        }
-        *workers += 1;
-        let guard = WorkerGuard(self.workers.clone());
+        };
         runtime.spawn(async move {
             let _guard = guard;
             future.await;
         });
         true
+    }
+
+    pub(crate) fn admit_auxiliary(&self) -> Option<WorkerGuard> {
+        let mut workers = self.workers.live.lock().expect("worker count");
+        if self.revoke.is_cancelled() {
+            return None;
+        }
+        *workers += 1;
+        Some(WorkerGuard(self.workers.clone()))
     }
 
     pub(crate) fn workspace_python_status(
@@ -606,6 +614,8 @@ impl Operations {
                 input: input_tx,
                 input_rx,
                 receipts: BTreeMap::new(),
+                #[cfg(test)]
+                pipe_close_received: None,
                 cancel: ProcessSignal::new(),
                 witness: None,
                 bash_file,
@@ -1127,7 +1137,7 @@ impl Drop for Operations {
     }
 }
 
-struct WorkerGuard(Arc<WorkerCount>);
+pub(crate) struct WorkerGuard(Arc<WorkerCount>);
 
 impl Drop for WorkerGuard {
     fn drop(&mut self) {
@@ -1445,12 +1455,17 @@ async fn run_operation(
                 if let Some(term) = &terminal {
                     term.write(bytes).await
                 } else {
-                    input_stream.as_mut().expect("stdin").write(bytes).await
+                    let stream = input_stream.as_mut().expect("stdin");
+                    if bytes.is_empty() {
+                        stream.shutdown().await.map(|()| 0)
+                    } else {
+                        stream.write(bytes).await
+                    }
                 }
             }, if pending_input.is_some() && termination.is_none() && (terminal.is_some() || input_stream.is_some()) => {
                 let pending = pending_input.as_mut().expect("pending input");
                 match written {
-                    Ok(count) if count > 0 => {
+                    Ok(count) if count > 0 || pending.bytes.is_empty() => {
                         pending.offset += count;
                         if pending.offset == pending.bytes.len() {
                             let pending = pending_input.take().expect("finished input");
@@ -1505,9 +1520,17 @@ async fn run_operation(
                                 }
                             }
                         } else {
-                            input_closed = true;
-                            input_stream.take();
-                            record_input(&inner, &key, sequence, InputOutcome::Applied);
+                            // Keep accepting until the supervisor connects its real
+                            // stdin. An accepted close is not yet a physical EOF.
+                            pending_input = Some(PendingInput {
+                                bytes: Vec::new(), offset: 0, close: true, sequence
+                            });
+                            #[cfg(test)]
+                            if let Some(Record::Full(op)) = inner.lock().unwrap().records.get_mut(&key.operation)
+                                && let Some(received) = op.pipe_close_received.take()
+                            {
+                                let _ = received.send(());
+                            }
                         }
                     }
                     Some(InputEvent { kind: InputKind::Resize(size), sequence }) => {
@@ -2110,6 +2133,101 @@ mod tests {
         assert_eq!(held_snapshot.disposition, SettledDisposition::Cancelled);
         assert!(!dir.path().join("held-marker").exists());
         ops.shutdown().ok();
+    }
+
+    #[test]
+    fn empty_positional_argument_reaches_real_argv_unchanged() {
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        // Different output for empty versus absent: printf would
+        // default a missing %s argument, so the shell checks argc first.
+        let spec = spec(&[
+            "/bin/bash",
+            "-c",
+            "test \"$#\" = 1 && printf '<%s>' \"$1\"",
+            "bash",
+            "",
+        ]);
+        register(&ops, &key, &spec);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.exit_code, Some(0));
+        let (stdout, _) = drain(&ops, &key);
+        assert_eq!(stdout, b"<>");
+        assert_eq!(snapshot.stderr_total.get(), 0);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn pipe_close_receipt_stays_pending_until_the_real_stdin_connects() {
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut spec = spec(&[
+            "/bin/bash",
+            "-c",
+            "if ! IFS= read -r line; then printf eof; fi",
+        ]);
+        spec.stdin = ProcessStdin::Streamed;
+        register(&ops, &key, &spec);
+        let (seen_tx, seen) = std::sync::mpsc::channel();
+        {
+            let mut inner = ops.inner.lock().unwrap();
+            let Some(Record::Full(record)) = inner.records.get_mut(&key.operation) else {
+                panic!("registered input owner");
+            };
+            record.pipe_close_received = Some(seen_tx);
+        }
+        let hold = arm_start_hold(&ops, &key);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(hold.await_entered());
+        let sequence = DecimalU64::new(1);
+        assert!(
+            matches!(ops.dispatch(ProcessRequest::CloseStdin { key: key.clone(), sequence }),
+            ProcessReply::InputAccepted { sequence: accepted, .. } if accepted == sequence)
+        );
+        seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        let receipt = || {
+            ops.dispatch(ProcessRequest::InputReceipt {
+                key: key.clone(),
+                sequence,
+            })
+        };
+        assert!(matches!(
+            receipt(),
+            ProcessReply::InputReceipt {
+                status: InputOutcome::Pending,
+                ..
+            }
+        ));
+        hold.release();
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.exit_code, Some(0));
+        assert!(matches!(
+            receipt(),
+            ProcessReply::InputReceipt {
+                status: InputOutcome::Applied,
+                ..
+            }
+        ));
+        let (stdout, _) = drain(&ops, &key);
+        assert_eq!(stdout, b"eof");
+        ops.shutdown().unwrap();
     }
 
     #[test]

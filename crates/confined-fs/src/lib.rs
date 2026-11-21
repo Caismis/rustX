@@ -560,7 +560,17 @@ pub fn read_range(
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();
     (&mut file).take(max_bytes as u64).read_to_end(&mut bytes)?;
-    if before != FileMetadata::of(&file)? || before != FileMetadata::of(&open(relative)?)? {
+    if before != FileMetadata::of(&file)? {
+        return Err(conflict());
+    }
+    let current = open(relative).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            conflict()
+        } else {
+            error
+        }
+    })?;
+    if before != FileMetadata::of(&current)? {
         return Err(conflict());
     }
     let end = offset

@@ -384,31 +384,24 @@ protocol meaning and are not a substitute for the independent
 control/backpressure work still tracked under T11 — RFC ping/pong does
 not discharge it.
 
-Endpoint policy (`ExecutionUrl::validate`, enforced before any connect
-or credential transmission): the path is exactly `/execution/v1`; the
-authority must be a literal numeric IP (`SocketAddr` or bare IP with the
-scheme default port); `ws://` is permitted only for a literal loopback
-IP while any other destination requires `wss://`; userinfo, queries,
-fragments, hostnames (which would need blocking DNS inside the bounded
-budget), and non-ASCII or overlong URLs are all refused. On `wss` the
-rustls handshake — WebPKI roots plus an optional operator-provisioned
-`--tls-ca-file` PEM bundle for a private CA, IP SAN verified — completes
-before the HTTP upgrade, so no credential bytes ever flow before
-certificate and address validation; there is no flag to disable
-verification. The server side of the upgrade refuses a wrong path and
-any browser `Origin` header.
+The Execution Client validates the bootstrap URL before any connect. It
+requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
+exact `/execution/v1` path. A port may be omitted to use 443. Userinfo,
+queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
+TLS verifies the certificate and IP SAN before the HTTP upgrade on both
+lanes. The upgrade rejects a wrong path and browser `Origin` headers.
 
 `Binding::reserve_websocket(reservation, listen, bootstrap_path,
-public_url)` reserves the same binding for a TCP listener: the listen
-address must be a numeric loopback `SocketAddr` (port `0` is allowed
-for local tests), and the published `Bootstrap.endpoint` is
-`WebSocket { url }` — the bound `ws://127.0.0.1:PORT/execution/v1`
-address, or the operator's `--execution-public-url`
-`wss://…/execution/v1` ingress endpoint when one is given. Remote TLS is
-terminated by that operator-provisioned ingress, which must forward to
-the loopback listener only; the Server never trusts proxy headers and
-never publishes anything else. The bundle is published by the same
-`create_new` + `0600` private-directory discipline as the Unix path.
+public_url)` reserves a numeric loopback listener. Port `0` selects an
+ephemeral port. A direct reservation generates a fresh TLS identity and
+publishes its `wss://` URL and base64 DER certificate in the owner-only
+bootstrap. That certificate is the Client's only trust anchor for the
+reservation. With `--execution-public-url`, the Client validates the
+operator's public ingress using WebPKI and, optionally, `--tls-ca-file`.
+The operator must secure the trusted cleartext hop from that ingress to
+the loopback listener. The Server authenticates the Client Hello and
+ignores proxy headers. Both modes publish the bundle through the same
+`create_new`, `0600` discipline as Unix.
 One Session holds exactly one endpoint mode — a `Unix` listener or a
 `WebSocket` listener, chosen at reservation — and a colliding Session
 claim reuses the existing reservation or is refused, never allocates a
@@ -1165,12 +1158,17 @@ envelope.
   `rustx.toml` through the authenticated Client. The Server uses the proven
   root identity, a one-MiB whole-document limit, a five-second wire budget
   per capture, and the same stamped `ReadRange` chunks as other files. It
-  verifies the document again before admission. Client-proven absence is
-  distinct from a refused or incomplete read. The Server still parses and
-  authorizes the document, combines it with Server-owned User policy, and
-  applies native configuration units. Explicit reconciliation of a bound
-  Session uses the same source and never populates the path-keyed
-  Session-creation catalog with the Client's configuration.
+  verifies the document again before admission. The initial read alone
+  can report absence. A disappearance mid-read is a conflict. Binding
+  authority supplies the Workspace path without a Server-side Workspace
+  probe for that document. Capture waits for data admission within the
+  same wire budget and runs outside the configuration publication lock.
+  Publication rechecks the current binding and source generations.
+  The Server parses and authorizes the document, combines it with User
+  policy, and applies native units. The path-keyed Session-creation
+  catalog, authored resource discovery, and automatic source watching
+  still use Server-authored inputs. Host resource snapshots and remote
+  resource discovery are tracked in [#578](https://github.com/Caismis/rustX/issues/578).
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
   search and document work and returns the verified projection. Artifact
@@ -1191,11 +1189,34 @@ binding or sends a binding credential to the child.
 The parent checks the child's frozen native capabilities, Conversation and
 operation identities and prepared mutation tickets before forwarding. Data
 shares the Session's existing bounded admission and writer. The independent
-control lane carries keyed cancellation even when data stalls. Retirement
-aborts child preparations and settles or releases child process records
-before reporting cleanup. A lost physical commit or cleanup receipt retains
+control lane carries keyed cancellation even when data stalls. The
+physical binding owner validates the mutation ticket, stamp and committed
+byte count before relaying a successful write. Retirement waits within
+one deadline for shared data capacity, then aborts child preparations and
+settles or releases child process records before reporting cleanup. A lost physical commit or cleanup receipt retains
 its unknown disposition and fences the binding. The Server still owns
 canonical results and the order in which calls commit.
+
+### Completion and drain
+
+Discarded mutation preparations retain their ticket until a bounded
+Abort can wait for the same data and writer admission as other Agent
+requests. Abort is idempotent for an issued ticket whose preparation
+has already settled. A mutation cancel waits for queue capacity in
+the same absolute deadline as its keyed control receipt. If the
+receipt is unknown and commit is still unresolved, the Server fences
+the pair and preserves the authoritative data outcome. Neither path
+reissues the commit. A pending data lane must pass an immediate socket
+readiness check during pair commit, independently of the watchdog.
+
+Application Server drain closes Host and Session dispatch admission
+before waiting for Client revocation. One absolute shutdown deadline
+starts before admission closes. Independent Client pairs revoke
+concurrently outside the Host lock. A missing physical receipt remains
+an explicit failure. Streamed pipe stdin reports a close as applied
+only once the physical input connection has been shut down. The argv
+contract accepts empty positional arguments and rejects empty program
+names and embedded NULs.
 
 ### Workspace Python readiness
 
@@ -1207,8 +1228,10 @@ preparation. The Client verifies the opened Workspace identity, resolves
 and interpreter probes with its process supervisor. Agent Shell START
 applies the verified interpreter or the guarded unready environment. An
 authorized Shell START may schedule preparation when the runtime loaded
-before admission. Session revocation drains the physical worker. UI argv
-commands have an independent environment contract. Managed Python remains
+before admission. Session revocation drains the physical worker. During orderly exit the Client removes
+its process-private uv discovery and fallback guard directories. The
+local composer waits for and reaps that Client. UI argv commands have
+an independent environment contract. Managed Python remains
 under [#577](https://github.com/Caismis/rustX/issues/577).
 
 ### WorkspaceChanges observation
@@ -1223,20 +1246,29 @@ Workspace-relative file path before an approved native Write/Edit commit.
 
 Git runs under the same process supervisor on the Client. It uses a private
 index and object directory, literal path scopes for nested workspaces and a
-restricted copy of the repository configuration. A rename that crosses the
+restricted copy of the repository configuration. Each candidate stages
+its Git objects and index privately. The binding retains up to 512 MiB
+and 65,536 unique loose objects. Exceeding either limit discards the
+candidate and preserves the previous index and existing observations.
+The quota covers retained data. A single serialized Git attempt may
+temporarily use additional scratch before the quota check. A rename that crosses the
 Workspace edge is observed only through its in-scope endpoint. Files outside
 Git coverage use private, descriptor-relative captures. Summary and indexed
 comparison requests are bounded by 500 returned paths and 896 KiB of encoded
 reply content. There is one in-flight comparison per record and at most 32
-records per Client binding.
+records per Client binding. Completed or failed records can be retired to
+make room for new observations. A retired record with an outstanding
+physical worker keeps its slot until that worker settles.
 
 `Finish` initiates the final physical snapshot. The Server checks the reply
 and publishes the normalized summary under the active Attempt's cancellation
 gate. The card is independent of canonical ToolResults and is excluded from
 model input. A dropped or evicted Server record sends `Release` to cancel
-remaining observation work and drop its comparison captures. Connection
-shutdown cancels the Client workers and disposes of the binding's private Git
-index and objects.
+remaining observation work and drop its comparison captures. If the
+Server cannot confirm that Release on the same binding, it fences the
+pair. Revocation waits for in-progress physical captures before it can
+acknowledge settlement. Connection shutdown cancels the workers and
+disposes of the binding's private Git index and objects.
 
 ## Test ownership (T01–T73) and optional O-SUM
 

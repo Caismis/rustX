@@ -1636,7 +1636,7 @@ fn failed_guard_directories_reject_python_and_run_other_commands() {
         super::guard::install_process_guard(&[file, good.path().to_path_buf()], "disk full")
             .expect("a later private directory holds the guard");
     let selection = PythonSelection {
-        path_prefix: vec![guard],
+        path_prefix: vec![guard.path().to_owned()],
         virtual_env: None,
         diagnostic: "disk full".to_owned(),
         guard_unavailable: false,

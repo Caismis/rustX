@@ -138,13 +138,33 @@ impl LocalConnection {
         &mut self,
         request: &ClientRequest,
         deadline: Instant,
-        permit: impl FnOnce() -> io::Result<()>,
+        expected_commit_size: Option<u64>,
+        permit: impl Fn() -> io::Result<()>,
     ) -> io::Result<ClientReply> {
-        let reply = self.exchange_admitted(request, Some(deadline), permit, || ())?;
-        if matches!(reply, ClientReply::CommitUnknown { .. }) {
-            self.disconnect();
+        if let ClientRequest::CommitWrite { ticket } = request {
+            let size = expected_commit_size.ok_or(io::ErrorKind::InvalidInput)?;
+            return match self.commit_write(*ticket, size, Some(deadline), &permit, &|| ()) {
+                Ok(metadata) => Ok(ClientReply::Written {
+                    ticket: *ticket,
+                    metadata,
+                }),
+                Err(error) => match error.get_ref() {
+                    Some(cause) if cause.is::<super::WriteOutcomeUnknown>() => {
+                        Ok(ClientReply::CommitUnknown { ticket: *ticket })
+                    }
+                    Some(cause) if cause.is::<super::CommitCancelled>() => {
+                        Ok(ClientReply::WriteCancelled { ticket: *ticket })
+                    }
+                    Some(cause)
+                        if let Some(physical) = cause.downcast_ref::<super::PhysicalError>() =>
+                    {
+                        Ok(ClientReply::Error { kind: physical.0 })
+                    }
+                    _ => Err(error),
+                },
+            };
         }
-        Ok(reply)
+        self.exchange_admitted(request, Some(deadline), permit, || ())
     }
 }
 

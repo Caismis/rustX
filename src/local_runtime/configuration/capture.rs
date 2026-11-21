@@ -337,19 +337,33 @@ impl UserConfigManager {
         endpoint: Option<&'a LocalExecutionEndpoint>,
     ) -> Result<(LayerCapture, ConfigurationDocuments<'a>), LaunchFailure> {
         let host = &self.sources;
-        let (locations, identity) = self.resolve_locations(request)?;
+        let (locations, identity) = if let Some(endpoint) = endpoint {
+            if request.cwd.as_os_str() != endpoint.workspace().as_os_str() {
+                return Err(unavailable(
+                    &request.cwd.join("rustx.toml"),
+                    "Session configuration path differs from its execution binding".into(),
+                ));
+            }
+            if normalize_missing(&host.runtime_root)? != host.runtime_root {
+                return Err("bound runtime_root physical authority changed".into());
+            }
+            storage_disjoint(&host.runtime_root, endpoint.workspace())?;
+            (
+                SessionLocations {
+                    workspace: endpoint.workspace().to_path_buf(),
+                    runtime_root: host.runtime_root.clone(),
+                },
+                workspace_identity(endpoint.workspace()),
+            )
+        } else {
+            self.resolve_locations(request)?
+        };
         let user_path = host.config_path.clone();
         let project_path = locations.workspace.join("rustx.toml");
         let user_document = admit_source(&user_path)?;
         let workspace_document = match endpoint {
             None => WorkspaceDocument::Authored(admit_source(&project_path)?),
             Some(endpoint) => {
-                if endpoint.workspace() != locations.workspace {
-                    return Err(unavailable(
-                        &project_path,
-                        "Session configuration path differs from its execution binding".into(),
-                    ));
-                }
                 let captured = read_bound_workspace(endpoint, &project_path)?;
                 WorkspaceDocument::Bound {
                     endpoint,
@@ -456,7 +470,6 @@ impl UserConfigManager {
             }
             Ok::<(), LaunchFailure>(())
         };
-        verify(&documents.user)?;
         match &documents.workspace {
             WorkspaceDocument::Authored(source) => verify(source),
             WorkspaceDocument::Bound {
@@ -470,7 +483,8 @@ impl UserConfigManager {
                     Err("Workspace configuration changed during capture; rescan to retry".into())
                 }
             }
-        }
+        }?;
+        verify(&documents.user)
     }
 
     fn resolve_captured_layers(

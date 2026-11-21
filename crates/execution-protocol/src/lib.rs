@@ -1148,13 +1148,13 @@ pub enum ClientRequest {
     },
     /// Second phase: publish the staged payload of the one live
     /// `WritePrepared` ticket on this connection. The publish crossing is
-    /// irreversible; a consumed ticket can never commit or abort again.
+    /// irreversible; a consumed ticket can never commit again.
     CommitWrite {
         /// The exact ticket returned by the live `WritePrepared` reply.
         ticket: DecimalU64,
     },
-    /// Abandons the one live `WritePrepared` ticket on this connection,
-    /// removing its private stage. The ticket is consumed.
+    /// Releases an issued ticket on this connection. An acknowledged
+    /// repeat proves that its preparation is absent.
     AbortWrite {
         /// The exact ticket returned by the live `WritePrepared` reply.
         ticket: DecimalU64,
@@ -1401,7 +1401,7 @@ pub enum ClientReply {
         ticket: DecimalU64,
         metadata: FileStamp,
     },
-    /// An `AbortWrite` consumed its ticket and removed the private stage.
+    /// An `AbortWrite` confirmed the issued ticket has no preparation.
     WriteAborted { ticket: DecimalU64 },
     /// A `WriteChunk` landed at the ticket's next absolute offset.
     WriteChunkReceived {
@@ -1624,11 +1624,14 @@ pub enum BootstrapEndpoint {
         /// Absolute path of the Server's listening socket.
         socket_path: PathBuf,
     },
-    /// The WebSocket execution URL: `ws://IP:PORT/execution/v1` on literal
-    /// loopback, or `wss://IP:PORT/execution/v1` elsewhere.
+    /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact URL the Client validates and connects to.
+        /// The exact `wss://IP:PORT/execution/v1` URL the Client connects to.
         url: String,
+        /// Base64 DER of the binding-specific loopback TLS certificate.
+        /// An operator-managed public endpoint instead uses its own CA.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        certificate_der: Option<String>,
     },
 }
 

@@ -387,20 +387,7 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
         let _mcp_server = tokio_util::task::AbortOnDropHandle::new(mcp_server);
         let provider = crate::common::FixtureServer::start(|attempt, _| {
             if attempt == 0 {
-                let arguments = crate::common::tool_call_envelope(serde_json::json!({})).to_string();
-                let chunk = serde_json::json!({
-                    "id": "mcp-overflow", "object": "chat.completion.chunk", "created": 1, "model": "test",
-                    "choices": [{"index": 0, "delta": {"tool_calls": [{
-                        "index": 0, "id": "overflow-call", "type": "function",
-                        "function": {"name": "echo", "arguments": arguments}
-                    }]}, "finish_reason": "tool_calls"}]
-                });
-                crate::common::FixtureReply::body(
-                    200,
-                    "OK",
-                    "text/event-stream",
-                    format!("data: {chunk}\n\ndata: [DONE]\n\n"),
-                )
+                crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse")
             } else {
                 crate::common::sse_fixture("openai_chat", "plain_text.sse")
             }
@@ -455,6 +442,15 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
         start_turn(&client, &target, "overflow without execution binding").await;
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        assert_eq!(
+            std::fs::read_dir(&scratch).unwrap().count(),
+            0,
+            "no Spill before detach or shutdown"
+        );
+        assert!(
+            !bin.path().join("client-launches").exists(),
+            "zero Client starts before teardown"
+        );
         result(&client, Method::SessionDetach { target }).await;
         client.close().await;
         detach_then_shutdown(&mut child).await;
@@ -521,10 +517,18 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
             panic!("canonical tool result");
         };
         let preview = tool.result.model_facing_projection();
-        assert_eq!(tool.result.status, ToolExecutionStatus::Success, "{}", preview.as_text());
+        assert_eq!(
+            tool.result.status,
+            ToolExecutionStatus::Success,
+            "{}",
+            preview.as_text()
+        );
         assert_eq!(std::fs::read_to_string(mcp_calls).unwrap(), "echo\n");
         assert_eq!(
-            tool.result.truncation.as_ref().and_then(|cut| cut.original_bytes),
+            tool.result
+                .truncation
+                .as_ref()
+                .and_then(|cut| cut.original_bytes),
             Some(original_bytes as u64)
         );
         assert!(matches!(
@@ -1027,6 +1031,32 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
     .await;
 }
 
+#[tokio::test]
+async fn remote_execution_shuts_down_cleanly_without_an_admitted_client() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (_bin, rustx) = isolated_server_bin();
+        let bundle = fixture.root.path().join("private").join("bootstrap");
+        let mut server = remote_exec_command(
+            &rustx,
+            &fixture,
+            Some(fixture.sessions[0].as_str()),
+            &bundle,
+        )
+        .spawn()
+        .unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        assert!(bundle.is_file());
+        terminate(&server);
+        let status = server.wait().await.unwrap();
+        assert!(status.success(), "{status}");
+        assert!(!bundle.exists());
+        client.close().await;
+    })
+    .await;
+}
+
 /// Remote-mode product proof: `rustx app-server --execution-*` publishes a
 /// `0600` WebSocket bootstrap, an operator-spawned staged Client connects
 /// through a genuine RFC 6455 upgrade — never a UDS stand-in — and
@@ -1125,6 +1155,45 @@ async fn remote_execution_serves_session_reads_over_websocket() {
             b"ws written"
         );
 
+        let mut argv = rustx::app_server::command::ExecParams {
+            session_id: f.sessions[0].clone(),
+            command: vec!["/usr/bin/printf".into(), "<%s>".into(), String::new()],
+            cwd: workspace.display().to_string(),
+            env: std::collections::BTreeMap::new(),
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            size: None,
+        };
+        let MethodResult::CommandExec { result: command } =
+            result(&client, Method::CommandExec(argv.clone())).await
+        else {
+            panic!("empty argument must reach the real Client");
+        };
+        assert_eq!(command.exit_code, Some(0));
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(command.stdout_base64)
+                .unwrap(),
+            b"<>"
+        );
+        assert_eq!(command.stderr_base64, "");
+        for invalid in [
+            vec![String::new()],
+            vec!["/usr/bin/printf".into(), "x\0y".into()],
+        ] {
+            argv.command = invalid;
+            let Response::Failure(failure) =
+                rpc(&client, 52, Method::CommandExec(argv.clone())).await
+            else {
+                panic!("invalid argv must be refused");
+            };
+            assert_eq!(failure.error.data, Some(ErrorData::InvalidParams));
+        }
+
         // Session B holds no endpoint — its routed read is refused
         // exactly as on the Unix transport.
         let Response::Failure(failure) = rpc(
@@ -1220,6 +1289,65 @@ async fn assert_seeded_environment_tree(
     assert_eq!(page.entries[0].file_name, "文本");
     assert_eq!(page.entries[0].metadata.size, CONTENT.len() as u64);
     assert_eq!(page.next_offset, None);
+    let control_name = "reports\t2026";
+    let parent = format!("tree-copy/{control_name}");
+    result(
+        client,
+        Method::FsCreateDirectory {
+            session_id: session.clone(),
+            path: path(&parent),
+            recursive: false,
+        },
+    )
+    .await;
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session.clone(),
+            path: path("tree-copy"),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("list names with literal controls");
+    };
+    assert_eq!(
+        page.entries
+            .iter()
+            .map(|entry| entry.file_name.as_str())
+            .collect::<Vec<_>>(),
+        ["nested", control_name]
+    );
+    let MethodResult::FileMetadata { metadata } = result(
+        client,
+        Method::FsGetMetadata {
+            session_id: session.clone(),
+            path: path(&parent),
+        },
+    )
+    .await
+    else {
+        panic!("stat the directory with a tab");
+    };
+    assert!(metadata.is_directory);
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session.clone(),
+            path: path(&parent),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("open the directory with a tab");
+    };
+    assert_eq!(page.entries, []);
     let Response::Failure(error) = rpc(client, 48, copy("../escape")).await else {
         panic!("copy must refuse a non-normal Workspace path")
     };
@@ -4634,7 +4762,7 @@ if sys.argv[1] == '--version':
     print('uv 0.10.2')
 else:
     subprocess.run(['/usr/bin/python3', '-m', 'venv', '--without-pip', sys.argv[-1]], check=True)
-    s.sendall((json.dumps(['created', os.getcwd(), os.getpid()]) + '\n').encode())
+    s.sendall((json.dumps(['created', os.getcwd(), sys.argv[sys.argv.index('--directory') + 1]]) + '\n').encode())
 ",
         )
         .unwrap();
@@ -4645,12 +4773,17 @@ else:
             format!("'{}'", value.display().to_string().replace('\'', "'\\''"))
         };
         let wrapper = bin.path().join("rustx-execution-client");
+        let scratch = gate_dir.path().join("scratch");
+        let client_pids = gate_dir.path().join("client-pids");
+        std::fs::create_dir(&scratch).unwrap();
         std::fs::write(
             &wrapper,
             format!(
-                "#!/bin/sh\nexport PATH={}:\"/usr/bin:/bin\" UV_TEST_GATE={}\nexec {} \"$@\"\n",
+                "#!/bin/sh\nexport PATH={}:\"/usr/bin:/bin\" UV_TEST_GATE={} TMPDIR={}\nprintf '%s\\n' \"$$\" >> {}\nexec {} \"$@\"\n",
                 quote(bin.path()),
                 quote(&socket),
+                quote(&scratch),
+                quote(&client_pids),
                 quote(&staged_client),
             ),
         )
@@ -4713,6 +4846,12 @@ else:
         let (_stream, event) = python_preparation_event(&listener).await;
         assert_eq!(event[0], "created");
         assert_eq!(event[1], a);
+        let discovery = PathBuf::from(event[2].as_str().unwrap());
+        assert!(discovery.starts_with(&scratch) && discovery.is_dir());
+        let client_pids = std::fs::read_to_string(client_pids).unwrap();
+        let client_pids = client_pids.lines().map(|line| Pid::from_raw(line.parse().unwrap())).collect::<Vec<_>>();
+        assert_eq!(client_pids.len(), 2);
+        for pid in &client_pids { assert_eq!(kill(*pid, None), Ok(())); }
         assert!(workspaces[0].join(".venv/pyvenv.cfg").is_file());
         assert!(!workspaces[1].join(".venv").exists());
         for (child, _) in &mut running {
@@ -4733,6 +4872,10 @@ else:
             Err(nix::errno::Errno::ESRCH),
             "shutdown joined the uv process"
         );
+        for pid in client_pids {
+            assert_eq!(kill(pid, None), Err(nix::errno::Errno::ESRCH), "Server reaped owned Client {pid}");
+        }
+        assert!(!discovery.exists(), "orderly Client exit removed its discovery directory");
         drop(diagnostic_pipes);
     })
     .await;

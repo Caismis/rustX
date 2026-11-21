@@ -107,12 +107,12 @@ rustx-execution-client --binding-file /private/dir/bootstrap \
 The three `--execution-*` flags conflict with `--local-execution-*` and
 never launch a Client; the workspace is resolved only from the Session's
 trusted catalog. `--execution-ws-listen` must be a numeric loopback
-address; plaintext `ws` is bound there while `--execution-public-url`
-publishes an operator `wss` endpoint to the `0600` `create_new` bundle.
-The Client validates the endpoint before connecting — literal numeric IP,
-path exactly `/execution/v1`, `ws` only for loopback — and `wss`
-certificate/IP-SAN verification completes before any credential flows;
-`--tls-ca-file` adds a private CA, never disables verification.
+address. A direct binding publishes a `wss` URL and its own certificate
+in the `0600` bundle. The Client uses that certificate as its only trust
+anchor. With `--execution-public-url`, the operator provides and secures
+the ingress and its cleartext loopback hop. The Client may use
+`--tls-ca-file` for that ingress. It validates the numeric IP and the
+exact `/execution/v1` path and completes TLS before sending a credential.
 
 
 **TUI** — existing TUI composition root and `AppServerHost.spawnLocal`:

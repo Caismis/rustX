@@ -6,7 +6,15 @@ use super::super::session::SessionId;
 use super::Entry;
 use super::SessionRuntimeManager;
 use crate::runtime::conversation_runtime::ConversationRuntime;
+use std::sync::Arc;
 use tokio::sync::watch;
+
+pub(super) struct BoundCapture {
+    session: SessionId,
+    input: super::super::configuration::SessionConfigInput,
+    endpoint: Arc<super::LocalExecutionEndpoint>,
+    ticket: Arc<()>,
+}
 
 impl SessionRuntimeManager {
     /// Register the inert observer before activation; its first poll belongs
@@ -447,10 +455,11 @@ impl SessionRuntimeManager {
             }
             owner.repair_sources(&target);
             let mut application = owner.applications.lock();
-            owner.capture_source_consumers(&mut application, &target);
+            let bound = owner.capture_source_consumers(&mut application, &target);
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
+            owner.capture_bound_consumers(bound);
         })
         .await;
     }
@@ -467,7 +476,7 @@ impl SessionRuntimeManager {
             // composes every target, the Workspace only its own.
             owner.repair_sources(&target);
             let mut application = owner.applications.lock();
-            owner.capture_source_consumers(&mut application, &target);
+            let bound = owner.capture_source_consumers(&mut application, &target);
             // Reconciliation is an explicit recovery boundary. Ordinary
             // source capture deduplicates unchanged files, but invalidated or
             // unavailable MCP catalogs still require fresh discovery. Completed
@@ -496,6 +505,7 @@ impl SessionRuntimeManager {
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
+            owner.capture_bound_consumers(bound);
             for runtime in recoveries {
                 tokio::runtime::Handle::current().spawn(async move {
                     let _ = runtime.refresh_runtime_catalogs().await;
@@ -538,12 +548,11 @@ impl SessionRuntimeManager {
             let mut application = self.applications.lock();
             let outcome = self.configuration.repair_source(&target, &scope);
             if outcome == RepairOutcome::Committed {
-                self.capture_source_consumers(&mut application, &target);
+                let bound = self.capture_source_consumers(&mut application, &target);
                 self.applications.notify(&application);
-            }
-            drop(application);
-            if outcome == RepairOutcome::Committed {
+                drop(application);
                 self.applications.run(self.clone());
+                self.capture_bound_consumers(bound);
             }
         }
     }
@@ -571,7 +580,7 @@ impl SessionRuntimeManager {
         &self,
         application: &mut super::super::configuration::application::ApplicationState,
         target: &super::super::configuration::settings::SourceTarget,
-    ) {
+    ) -> Vec<BoundCapture> {
         use super::super::configuration::settings::SourceTarget;
         let captured = self.configuration.capture_source_settings(target);
         let revision = captured.as_ref().ok().map(|(_, revision)| revision.clone());
@@ -620,28 +629,90 @@ impl SessionRuntimeManager {
             })
             .map(|(session, binding)| (session.clone(), binding.input.clone()))
             .collect();
+        let mut bound = Vec::new();
         for (session, input) in inputs {
+            application.cancel_bound_capture(&session);
             match self.execution.configuration_endpoint(&session) {
-                Ok(None) => application.capture(
-                    session.to_string(),
-                    &input.cwd,
-                    self.configuration
-                        .capture_session_application(&input, &self.credentials, None),
-                ),
-                endpoint => {
-                    let captured =
-                        endpoint
-                            .map_err(|error| error.to_string())
-                            .and_then(|endpoint| {
-                                self.configuration.capture_session_application(
-                                    &input,
-                                    &self.credentials,
-                                    endpoint.as_deref(),
-                                )
-                            });
-                    application.capture_bound_source(session.to_string(), &input.cwd, captured)
+                Ok(None) => {
+                    application.capture(
+                        session.to_string(),
+                        &input.cwd,
+                        self.configuration.capture_session_application(
+                            &input,
+                            &self.credentials,
+                            None,
+                        ),
+                    );
                 }
+                Ok(Some(endpoint)) => {
+                    let ticket = application.begin_bound_capture(session.clone());
+                    bound.push(BoundCapture {
+                        session,
+                        input,
+                        endpoint,
+                        ticket,
+                    });
+                }
+                Err(error) => {
+                    application.capture_bound_source(
+                        session.to_string(),
+                        &input.cwd,
+                        Err(error.to_string()),
+                    );
+                }
+            }
+        }
+        bound
+    }
+
+    fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) {
+        for BoundCapture {
+            session,
+            input,
+            endpoint,
+            ticket,
+        } in bound
+        {
+            #[cfg(test)]
+            self.configuration
+                .test_hooks
+                .reach("before_bound_source_read");
+            let mut capture = self.configuration.capture_session_application(
+                &input,
+                &self.credentials,
+                Some(&endpoint),
+            );
+            let mut application = self.applications.lock();
+            if !application.finish_bound_capture(&session, &ticket) {
+                continue;
+            }
+            let binding = self
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings");
+            let Some(retained) = binding.get(&session) else {
+                continue;
             };
+            if !self
+                .execution
+                .configuration_endpoint(&session)
+                .ok()
+                .flatten()
+                .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
+            {
+                continue;
+            }
+            if let Ok(capture) = &mut capture
+                && let Ok(context) = &mut capture.context
+            {
+                context.input.model.clone_from(&retained.input.model);
+            }
+            drop(binding);
+            application.capture_bound_source(session.to_string(), &input.cwd, capture);
+            self.applications.notify(&application);
+            drop(application);
+            self.applications.run(self.clone());
         }
     }
 
@@ -797,22 +868,24 @@ impl SessionRuntimeManager {
             super::super::configuration::settings::TransferOperation,
         )>,
         publish_catalog: Option<bool>,
-    ) {
+    ) -> Vec<BoundCapture> {
         use super::super::configuration::settings::{SourceTarget, TransferOperation};
         use crate::runtime::resources::SourceScope;
+        let mut bound = Vec::new();
         if let Some((from, operation)) = transfer {
             if from == SourceScope::User || operation == TransferOperation::Move {
-                self.capture_source_consumers(application, target);
+                bound.extend(self.capture_source_consumers(application, target));
             }
             if from == SourceScope::Workspace || operation == TransferOperation::Move {
-                self.capture_source_consumers(application, &SourceTarget::User);
+                bound.extend(self.capture_source_consumers(application, &SourceTarget::User));
             }
         } else {
-            self.capture_source_consumers(application, target);
+            bound.extend(self.capture_source_consumers(application, target));
         }
         if let Some(removing) = publish_catalog {
             application.publish_creation_catalog(target.workspace(), &self.credentials, removing);
         }
+        bound
     }
 
     /// Commit one source edit and transfer its application responsibility.
@@ -870,26 +943,29 @@ impl SessionRuntimeManager {
                     .configuration
                     .write_source_settings(&target, &expected, mutation)
             };
-            if !display_only
+            let bound = if !display_only
                 && (result.is_ok()
                     || matches!(
                         &result,
                         Err(super::super::configuration::settings::SettingsError::Committed)
-                    ))
-            {
-                owner.capture_committed_source(
+                    )) {
+                let bound = owner.capture_committed_source(
                     &mut application,
                     &target,
                     transfer,
                     publish_catalog,
                 );
                 owner.applications.notify(&application);
-            }
+                bound
+            } else {
+                Vec::new()
+            };
             let configuration_revision = application
                 .view(&target.application_scope())
                 .map(|application| application.version);
             drop(application);
             owner.applications.run(owner.clone());
+            owner.capture_bound_consumers(bound);
             #[cfg(test)]
             owner
                 .configuration

@@ -60,6 +60,9 @@ pub struct LocalExecutionEndpoint {
     /// There is no recovery path (#577), so the first `Live` peer owns the
     /// slot for the binding's whole life.
     connection: Mutex<Option<LocalConnection>>,
+    connection_released: tokio::sync::Notify,
+    dispatch_closed: std::sync::atomic::AtomicBool,
+    revocation_confirmed: std::sync::atomic::AtomicBool,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -189,6 +192,9 @@ impl LocalExecutionEndpoint {
                 _private: Some(private),
             })),
             connection: Mutex::new(None),
+            connection_released: tokio::sync::Notify::new(),
+            dispatch_closed: std::sync::atomic::AtomicBool::new(false),
+            revocation_confirmed: std::sync::atomic::AtomicBool::new(false),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -203,8 +209,8 @@ impl LocalExecutionEndpoint {
     /// user file is refused by `create_new` and left untouched.
     ///
     /// `public_url`, when given, is the operator's `wss://…/execution/v1`
-    /// ingress endpoint published in the bundle instead of the loopback
-    /// `ws://` address.
+    /// ingress endpoint published in the bundle instead of the binding's
+    /// dedicated loopback TLS address.
     fn new_websocket(
         session: &SessionId,
         workspace: PathBuf,
@@ -237,6 +243,9 @@ impl LocalExecutionEndpoint {
                 _private: None,
             })),
             connection: Mutex::new(None),
+            connection_released: tokio::sync::Notify::new(),
+            dispatch_closed: std::sync::atomic::AtomicBool::new(false),
+            revocation_confirmed: std::sync::atomic::AtomicBool::new(false),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -348,11 +357,10 @@ impl LocalExecutionEndpoint {
         stream: std::net::TcpStream,
         deadline: std::time::Instant,
     ) -> io::Result<EndpointAdmission> {
-        let channel = rustx_execution_transport::accept(stream, deadline)?;
         let admitted = self
             .reservation()
             .binding
-            .accept_channel_deadline(channel, deadline)?;
+            .accept_websocket_deadline(stream, deadline)?;
         Ok(self.store(admitted))
     }
 
@@ -371,6 +379,8 @@ impl LocalExecutionEndpoint {
                     slot.replace(connection).is_none(),
                     "a binding admits at most one live connection"
                 );
+                drop(slot);
+                self.connection_released.notify_waiters();
                 EndpointAdmission::Live
             }
             rustx_execution_server::ChannelAccept::Rejected(reject) => {
@@ -503,11 +513,9 @@ impl LocalExecutionEndpoint {
     /// other authorized reads. A missing leaf is meaningful only after the
     /// live Client has proved the Workspace directory.
     pub(crate) fn workspace_configuration(&self) -> io::Result<WorkspaceConfiguration> {
-        // Configuration capture may sit inside a source publication. Give
-        // the root probe and every chunk one small absolute wire budget.
         const CAPTURE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
         let deadline = Instant::now() + CAPTURE_BUDGET;
-        self.with_connection(None, false, |connection| {
+        self.with_bounded_data_connection(deadline, |connection| {
             let root = connection.entry_metadata_until(Path::new(""), deadline)?;
             if root.kind != EntryKind::Directory {
                 return Err(io::Error::other("Client Workspace root is not a directory"));
@@ -528,6 +536,41 @@ impl LocalExecutionEndpoint {
                 document,
             })
         })
+    }
+
+    // Callers run on a blocking thread. Capacity, connection contention and
+    // wire I/O share one deadline.
+    fn with_bounded_data_connection<T>(
+        &self,
+        deadline: Instant,
+        dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
+        tokio::runtime::Handle::current().block_on(async {
+            let _data = wait_for_execution_permit(self.data_slots.clone(), deadline).await?;
+            self.wait_for_connection(deadline, dispatch).await
+        })
+    }
+
+    async fn wait_for_connection<T>(
+        &self,
+        deadline: Instant,
+        mut dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let limit = tokio::time::Instant::from_std(deadline);
+        loop {
+            let released = self.connection_released.notified();
+            if Instant::now() >= deadline {
+                return Err(execution_wait_timeout());
+            }
+            match self.with_connection_slot(false, &mut dispatch) {
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::timeout_at(limit, released)
+                        .await
+                        .map_err(|_| execution_wait_timeout())?;
+                }
+                result => return result,
+            }
+        }
     }
 
     /// The metadata of one entry through the admitted Client — `path`
@@ -649,7 +692,7 @@ impl LocalExecutionEndpoint {
             let workspace = &connection.admission().workspace;
             match &mut mutation {
                 TreeMutation::CreateDirectory { path, .. } | TreeMutation::Remove { path, .. } => {
-                    *path = workspace_relative(workspace, path)?;
+                    *path = confined_relative(workspace, path, |byte| *byte == 0)?;
                 }
                 TreeMutation::Copy {
                     source,
@@ -657,7 +700,7 @@ impl LocalExecutionEndpoint {
                     ..
                 } => {
                     *source = workspace_entry(workspace, source)?;
-                    *destination = workspace_relative(workspace, destination)?;
+                    *destination = confined_relative(workspace, destination, |byte| *byte == 0)?;
                 }
             }
             connection.mutate_tree(mutation, authorize)
@@ -682,10 +725,23 @@ impl LocalExecutionEndpoint {
     }
 
     pub(crate) fn stop_watch(&self, id: WatchId) -> io::Result<()> {
+        if self
+            .revocation_confirmed
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(());
+        }
         let result = self
             .control()
             .ok_or(io::ErrorKind::NotConnected)
             .and_then(|control| control.stop_watch(id).map_err(|error| error.kind()));
+        if result.is_err()
+            && self
+                .revocation_confirmed
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(());
+        }
         if result.is_err() {
             self.cut_pair();
         }
@@ -957,6 +1013,14 @@ impl LocalExecutionEndpoint {
                 .try_acquire_owned()
                 .map_err(|_| busy())?,
         };
+        self.with_connection_slot(wait, dispatch)
+    }
+
+    fn with_connection_slot<T>(
+        &self,
+        wait: bool,
+        dispatch: impl FnOnce(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
         let mut guard = if wait {
             self.connection
                 .lock()
@@ -964,17 +1028,37 @@ impl LocalExecutionEndpoint {
         } else {
             match self.connection.try_lock() {
                 Ok(guard) => guard,
-                Err(TryLockError::WouldBlock) => return Err(busy()),
+                Err(TryLockError::WouldBlock) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "execution connection is busy",
+                    ));
+                }
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
             }
         };
-        let Some(connection) = guard.as_mut() else {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "no client is admitted",
-            ));
+        let result = if self
+            .dispatch_closed
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "execution dispatch admission is closed",
+            ))
+        } else {
+            guard.as_mut().map_or_else(
+                || {
+                    Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "no client is admitted",
+                    ))
+                },
+                dispatch,
+            )
         };
-        dispatch(connection)
+        drop(guard);
+        self.connection_released.notify_waiters();
+        result
     }
 
     #[cfg(test)]
@@ -1003,12 +1087,19 @@ impl LocalExecutionEndpoint {
     /// raw shutdown instead; this never waits on the connection's data
     /// lock, so a stuck peer can never stall a fence or a drain.
     fn fence_connection(&self) {
-        // The awaited revoke runs first: physical containment on the
-        // Client is proven before this fence returns. No pair live — or
-        // a lane that cannot carry the request — falls through to the
-        // local fence, which is terminal either way.
-        if let Some(control) = self.reservation().binding.control() {
-            let _ = control.request_revoke();
+        let deadline =
+            Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+        let _ = self.fence_connection_by(deadline);
+    }
+
+    pub(super) fn fence_connection_by(&self, deadline: Instant) -> io::Result<()> {
+        let control = self.reservation().binding.control();
+        let result = control
+            .as_ref()
+            .map_or(Ok(()), |control| control.request_revoke_by(deadline));
+        if control.is_some() && result.is_ok() {
+            self.revocation_confirmed
+                .store(true, std::sync::atomic::Ordering::Release);
         }
         let fenced = self.reservation().binding.fence();
         match self.connection.try_lock() {
@@ -1028,6 +1119,8 @@ impl LocalExecutionEndpoint {
             // interrupted either way.
             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => fenced.shutdown(),
         }
+        self.connection_released.notify_waiters();
+        result
     }
 
     /// Delivers one keyed cancellation on the control lane under one absolute
@@ -1080,6 +1173,8 @@ impl LocalExecutionEndpoint {
         if let Some(mut connection) = guard.take() {
             connection.disconnect();
         }
+        drop(guard);
+        self.connection_released.notify_waiters();
     }
 }
 
@@ -1113,36 +1208,59 @@ impl Drop for OwnedPrepared {
         }
         let endpoint = self.endpoint.clone();
         let prepared = self.prepared.clone();
-        std::thread::spawn(move || {
-            let cleanup = || -> io::Result<()> {
-                let data = endpoint
-                    .data_slots
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| {
-                        io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
-                    })?;
-                let writer = endpoint
-                    .agent_writer
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| {
-                        io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
-                    })?;
-                let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
-                endpoint.abort_prepared_admitted(
-                    &prepared,
-                    deadline,
-                    data,
-                    writer,
-                    || Ok(()),
-                    || (),
-                )
-            };
-            if cleanup().is_err() {
-                endpoint.retire_connection();
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            endpoint.cut_pair();
+            return;
+        };
+        runtime.spawn(async move {
+            if endpoint
+                .cleanup_prepared(&prepared, deadline)
+                .await
+                .is_err()
+            {
+                endpoint.cut_pair();
             }
         });
+    }
+}
+
+fn execution_wait_timeout() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "execution data request timed out")
+}
+
+async fn wait_for_execution_permit(
+    slots: Arc<Semaphore>,
+    deadline: Instant,
+) -> io::Result<OwnedSemaphorePermit> {
+    tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        slots.acquire_owned(),
+    )
+    .await
+    .map_err(|_| execution_wait_timeout())?
+    .map_err(|_| io::ErrorKind::NotConnected.into())
+}
+
+impl LocalExecutionEndpoint {
+    async fn cleanup_prepared(
+        self: &Arc<Self>,
+        prepared: &rustx_execution_server::PreparedMutation,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        let data = wait_for_execution_permit(self.data_slots.clone(), deadline).await?;
+        let writer = wait_for_execution_permit(self.agent_writer.clone(), deadline).await?;
+        let endpoint = self.clone();
+        let prepared = prepared.clone();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let (_data, _writer) = (data, writer);
+            runtime.block_on(endpoint.wait_for_connection(deadline, |connection| {
+                connection.abort_prepared(&prepared, Some(deadline), &|| Ok(()), &|| ())
+            }))
+        })
+        .await
+        .map_err(io::Error::other)?
     }
 }
 
@@ -1153,6 +1271,14 @@ impl Drop for OwnedPrepared {
 /// `..` or `.` anywhere (including after the prefix), the workspace
 /// root itself, an empty path, and any control or NUL byte are refused.
 fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
+    confined_relative(workspace, path, u8::is_ascii_control)
+}
+
+fn confined_relative(
+    workspace: &Path,
+    path: &Path,
+    forbidden: fn(&u8) -> bool,
+) -> io::Result<PathBuf> {
     let denied = || {
         io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -1161,10 +1287,10 @@ fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
     };
     // `components()`/`strip_prefix()` silently normalize interior `.` and
     // repeated separators, so the raw spelling is checked first: no `.`
-    // or `..` segment and no control or NUL byte anywhere in the path.
+    // or `..` segment and no byte the calling operation disallows.
     let raw = path.as_os_str().as_bytes();
     if raw.is_empty()
-        || raw.iter().any(u8::is_ascii_control)
+        || raw.iter().any(forbidden)
         || raw
             .split(|byte| *byte == b'/')
             .any(|segment| segment == b"." || segment == b"..")
@@ -1198,7 +1324,7 @@ pub(crate) fn workspace_entry(workspace: &Path, path: &Path) -> io::Result<PathB
     if path.as_os_str() == workspace.as_os_str() || path.as_os_str().as_bytes() == b"." {
         return Ok(PathBuf::new());
     }
-    workspace_relative(workspace, path)
+    confined_relative(workspace, path, |byte| *byte == 0)
 }
 
 /// Projects a verified wire `FileStamp` onto the shared product shape —
@@ -1770,7 +1896,8 @@ impl SessionExecutionScope {
         // fires the start gate), runs on the paired control lane, and is
         // awaited to physical settlement — a racing cancellation is
         // never dropped mid-command.
-        let control = self.endpoint().ok().and_then(|endpoint| endpoint.control());
+        let endpoint = self.endpoint()?;
+        let control = endpoint.control();
         let (started_send, mut started_recv) = tokio::sync::oneshot::channel::<()>();
         let (done_send, mut done_recv) = tokio::sync::oneshot::channel::<()>();
         let started_send = std::sync::Mutex::new(Some(started_send));
@@ -1781,16 +1908,25 @@ impl SessionExecutionScope {
         };
         let watcher = control.map(|control| {
             let signal = cancellation.clone();
+            let endpoint = endpoint.clone();
             tokio::spawn(async move {
                 tokio::select! {
-                    _ = &mut started_recv => {
+                    started = &mut started_recv => {
+                        if started.is_err() {
+                            return;
+                        }
                         tokio::select! {
                             biased;
                             () = signal.cancelled() => {
-                                let _ = tokio::task::spawn_blocking(move || {
-                                    control.cancel_mutation(ticket)
-                                })
-                                .await;
+                                let deadline = Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+                                let reply = tokio::task::spawn_blocking(move || {
+                                    control.cancel_mutation_by(ticket, deadline)
+                                }).await;
+                                let known = matches!(reply, Ok(Ok(disposition))
+                                    if disposition != rustx_execution_protocol::CancelDisposition::Unknown);
+                                if !known && matches!(done_recv.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)) {
+                                    endpoint.cut_pair();
+                                }
                             }
                             _ = &mut done_recv => {}
                         }
@@ -1843,7 +1979,7 @@ impl SessionExecutionScope {
         let result = self
             .dispatch_data(
                 cancellation,
-                DataCapacity::Immediate,
+                DataCapacity::WaitForSlot,
                 move |endpoint, data, writer, deadline, worker_cancellation| {
                     endpoint.abort_prepared_admitted(
                         &prepared,
@@ -2182,23 +2318,27 @@ impl Slot {
     /// any caller's registry/residency lock is ever held while a peer
     /// is closed.
     fn close(&self) {
-        let endpoint = {
-            let mut phase = self.phase.lock().expect("execution slot phase");
-            match &*phase {
-                Phase::Preparing => {
-                    *phase = Phase::Closed(None);
-                    None
-                }
-                Phase::Published(endpoint) => {
-                    let endpoint = endpoint.clone();
-                    *phase = Phase::Closed(Some(endpoint.clone()));
-                    Some(endpoint)
-                }
-                Phase::Closed(_) => None,
-            }
-        };
-        if let Some(endpoint) = endpoint {
+        if let Some(endpoint) = self.close_admission() {
             endpoint.fence_connection();
+        }
+    }
+
+    fn close_admission(&self) -> Option<Arc<LocalExecutionEndpoint>> {
+        let mut phase = self.phase.lock().expect("execution slot phase");
+        match &*phase {
+            Phase::Preparing => {
+                *phase = Phase::Closed(None);
+                None
+            }
+            Phase::Published(endpoint) => {
+                let endpoint = endpoint.clone();
+                endpoint
+                    .dispatch_closed
+                    .store(true, std::sync::atomic::Ordering::Release);
+                *phase = Phase::Closed(Some(endpoint.clone()));
+                Some(endpoint)
+            }
+            Phase::Closed(_) => None,
         }
     }
 }
@@ -2391,16 +2531,18 @@ impl SessionExecutionRegistry {
     /// Fences every existing claim. Later claims are refused by the
     /// manager's permanent `draining` admission gate.
     pub(super) fn fence_all(&self) {
-        let slots: Vec<Arc<Slot>> = self
-            .0
+        for endpoint in self.close_admission() {
+            endpoint.fence_connection();
+        }
+    }
+
+    pub(super) fn close_admission(&self) -> Vec<Arc<LocalExecutionEndpoint>> {
+        self.0
             .lock()
             .expect("execution registry mutex")
             .values()
-            .cloned()
-            .collect();
-        for slot in slots {
-            slot.close();
-        }
+            .filter_map(|slot| slot.close_admission())
+            .collect()
     }
 
     /// Removes the Session's claim so its endpoint teardown runs outside
@@ -2968,7 +3110,11 @@ mod tests {
     /// acknowledges, and `CancelMutation` answers `Unknown` — these
     /// scripted peers stage no local mutations. The loop ends with the
     /// lane.
-    fn control_peer_loop(mut peer: UnixStream) {
+    fn control_peer_loop(peer: UnixStream) {
+        control_peer_loop_with(peer, |_| ());
+    }
+
+    fn control_peer_loop_with(mut peer: UnixStream, before_reply: impl Fn(&ControlRequest)) {
         let mut sequence = 1_u64;
         let mut receipt: Option<ControlReply> = None;
         loop {
@@ -2996,6 +3142,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(20));
                 continue;
             };
+            before_reply(&request);
             let done = matches!(request, ControlRequest::Revoke);
             receipt = Some(match request {
                 ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
@@ -3371,7 +3518,16 @@ mod tests {
         let (dir, workspace) = workspace();
         let slot = create(&registry, &session, &workspace);
         let endpoint = prepare(&slot, &session, &workspace);
-        let published = bundle(&endpoint);
+        let client = admit_scripted_peer(&endpoint, capabilities, control_loop);
+        (registry, session, endpoint, client, workspace, dir)
+    }
+
+    fn admit_scripted_peer(
+        endpoint: &LocalExecutionEndpoint,
+        capabilities: BTreeSet<Capability>,
+        control_loop: impl FnOnce(UnixStream) + Send + 'static,
+    ) -> UnixStream {
+        let published = bundle(endpoint);
         let mut client = UnixStream::connect(socket_path(&published)).unwrap();
         let hello = Hello {
             version: PROTOCOL_VERSION,
@@ -3396,7 +3552,7 @@ mod tests {
         let Ok(data) = reply else {
             panic!("the scripted Hello is admitted");
         };
-        let mut control = UnixStream::connect(socket_path(&bundle(&endpoint))).unwrap();
+        let mut control = UnixStream::connect(socket_path(&bundle(endpoint))).unwrap();
         let (accepted, _) = match endpoint.listener() {
             ExecutionListener::Unix(listener) => listener.accept().unwrap(),
             ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
@@ -3409,7 +3565,63 @@ mod tests {
         let reply: ControlHelloReply = read_record(&mut control).unwrap();
         assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
         std::thread::spawn(move || control_loop(control));
-        (registry, session, endpoint, client, workspace, dir)
+        client
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drain_rejects_new_requests_while_the_client_withholds_revocation() {
+        use crate::app_server::{
+            RequestLane,
+            host::{AppServerHost, HostAdmissionError},
+        };
+        let (_root, manager, sessions) = fixture(1).await;
+        let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
+        let (seen_tx, seen) = tokio::sync::oneshot::channel();
+        let seen_tx = std::sync::Mutex::new(Some(seen_tx));
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let _client = admit_scripted_peer(
+            &endpoint,
+            BTreeSet::from([Capability::Connection]),
+            move |control| {
+                control_peer_loop_with(control, |request| {
+                    if matches!(request, ControlRequest::Revoke) {
+                        seen_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                        let _ = hold.recv();
+                    }
+                });
+            },
+        );
+        let host = AppServerHost::new(manager, Default::default());
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        host.begin_drain_by(deadline);
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), seen)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!host.admission_boundary_is_held());
+        assert!(host.server_draining());
+        assert_eq!(
+            endpoint
+                .read_range(Path::new("file"), 0, 8, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied,
+        );
+        assert!(matches!(
+            host.admit_request(RequestLane::Control, |_| panic!("draining request entered")),
+            Err(HostAdmissionError::ServerDraining)
+        ));
+        let failures =
+            tokio::time::timeout(std::time::Duration::from_secs(5), host.settle_execution())
+                .await
+                .unwrap();
+        assert!(Instant::now() >= deadline);
+        assert_eq!(
+            failures,
+            ["Client revocation is unconfirmed: control command outlived its budget"]
+        );
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
+        release.send(()).unwrap();
     }
 
     /// A control peer that reports each `CancelProcess` key on `seen` and
@@ -3965,6 +4177,118 @@ mod tests {
         drop(endpoint);
         let mut client = peer.join().unwrap();
         wire_is_closed(&mut client);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_preparation_waits_for_the_competing_writer_before_abort() {
+        let (registry, session, endpoint, mut client, _workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ConditionalWrite,
+                Capability::ReadLines,
+            ]));
+        let (arrived, prepared) = tokio::sync::oneshot::channel();
+        let (reply, prepared_reply) = std::sync::mpsc::channel::<()>();
+        let (aborted, abort_receipt) = tokio::sync::oneshot::channel();
+        let ticket = DecimalU64::new(1);
+        let next_ticket = DecimalU64::new(2);
+        let peer = std::thread::spawn(move || {
+            assert!(matches!(read_record::<ClientRequest>(&mut client).unwrap(),
+                ClientRequest::PrepareWrite { relative_path, .. } if relative_path == Path::new("cancelled")));
+            arrived.send(()).unwrap();
+            prepared_reply.recv().unwrap();
+            write_record(
+                &mut client,
+                &ClientReply::WritePrepared {
+                    ticket,
+                    original: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                read_record::<ClientRequest>(&mut client).unwrap(),
+                ClientRequest::AbortWrite { ticket }
+            );
+            write_record(&mut client, &ClientReply::WriteAborted { ticket }).unwrap();
+            aborted.send(()).unwrap();
+            let mut client = answer_lines(client, Path::new("note"));
+            assert!(matches!(read_record::<ClientRequest>(&mut client).unwrap(),
+                ClientRequest::PrepareWrite { relative_path, .. } if relative_path == Path::new("success")));
+            write_record(
+                &mut client,
+                &ClientReply::WritePrepared {
+                    ticket: next_ticket,
+                    original: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                read_record::<ClientRequest>(&mut client).unwrap(),
+                ClientRequest::CommitWrite {
+                    ticket: next_ticket
+                }
+            );
+            write_record(
+                &mut client,
+                &ClientReply::Written {
+                    ticket: next_ticket,
+                    metadata: FileStamp {
+                        revision: "a".repeat(64),
+                        identity: "1:1".into(),
+                        size: DecimalU64::new(3),
+                        modified_at_ms: None,
+                    },
+                },
+            )
+            .unwrap();
+            client
+        });
+        let scope = scope_for(&registry, &session);
+        let cancelled = crate::runtime::CancellationSignal::new();
+        let cancellation = ExecutionCancellation::detached(
+            cancelled.clone(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let owner = scope.clone();
+        let preparation = tokio::spawn(async move {
+            owner
+                .prepare_write(Path::new("cancelled"), b"one".to_vec(), &cancellation)
+                .await
+        });
+        prepared.await.unwrap();
+        let mut competing = Box::pin(endpoint.agent_writer.clone().acquire_owned());
+        assert!(futures_util::poll!(&mut competing).is_pending());
+        cancelled.cancel();
+        reply.send(()).unwrap();
+        let competing = competing.await.unwrap();
+        assert_eq!(
+            preparation.await.unwrap().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        wait_data_slots(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION - 1).await;
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
+        drop(competing);
+        abort_receipt.await.unwrap();
+        let cancellation = detached_cancellation();
+        assert_eq!(
+            scope
+                .read_page(Path::new("note"), 1, None, false, &cancellation)
+                .await
+                .unwrap()
+                .text,
+            "note\n"
+        );
+        let prepared = scope
+            .prepare_write(Path::new("success"), b"two".to_vec(), &cancellation)
+            .await
+            .unwrap();
+        let written = scope
+            .commit_prepared(&prepared, &cancellation)
+            .await
+            .unwrap();
+        assert_eq!(written.size, 3);
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
+        drop(peer.join().unwrap());
     }
 
     /// An `admit` refusal runs after encode + the binding check but

@@ -2,6 +2,8 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(test)]
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -11,25 +13,6 @@ use sha2::{Digest, Sha256};
 use super::PythonSelection;
 use super::interpreter::read_optional_file;
 use super::owner::state_dir;
-
-pub(super) fn create_private_directory(parents: &[PathBuf], prefix: &str) -> Option<PathBuf> {
-    for parent in parents {
-        if !parent.is_dir() {
-            continue;
-        }
-        for _ in 0..4 {
-            let directory = parent.join(format!(
-                "{prefix}-{}-{}",
-                std::process::id(),
-                monotonic_nanos()
-            ));
-            if claim_fresh_directory(&directory).is_some() {
-                return Some(directory);
-            }
-        }
-    }
-    None
-}
 
 pub(super) fn monotonic_nanos() -> u128 {
     std::time::SystemTime::now()
@@ -118,20 +101,35 @@ pub(super) fn validated_guard_directory(directory: &Path) -> Option<PathBuf> {
 /// The physical guard receives its one diagnostic through this environment entry.
 pub const GUARD_MESSAGE_KEY: &str = "RUSTX_PYTHON_GUARD_MESSAGE";
 
+static GUARD: Mutex<Option<tempfile::TempDir>> = Mutex::new(None);
+
 pub(super) fn fallback_guard() -> Option<PathBuf> {
-    static GUARD: Mutex<Option<PathBuf>> = Mutex::new(None);
     cached_guard(
         &mut GUARD.lock().expect("workspace python guard"),
         &fallback_parents(),
     )
 }
 
-pub(super) fn cached_guard(cached: &mut Option<PathBuf>, parents: &[PathBuf]) -> Option<PathBuf> {
-    if let Some(valid) = cached.as_deref().and_then(validated_guard_directory) {
+pub(super) fn cleanup_fallback() -> std::io::Result<()> {
+    GUARD
+        .lock()
+        .expect("workspace python guard")
+        .take()
+        .map_or(Ok(()), tempfile::TempDir::close)
+}
+
+pub(super) fn cached_guard(
+    cached: &mut Option<tempfile::TempDir>,
+    parents: &[PathBuf],
+) -> Option<PathBuf> {
+    if let Some(valid) = cached
+        .as_ref()
+        .and_then(|dir| validated_guard_directory(dir.path()))
+    {
         return Some(valid);
     }
     *cached = install_process_guard(parents, "Workspace Python is not ready");
-    cached.clone()
+    cached.as_ref().map(|directory| directory.path().to_owned())
 }
 
 fn fallback_parents() -> Vec<PathBuf> {
@@ -156,29 +154,26 @@ fn fallback_parents() -> Vec<PathBuf> {
     parents
 }
 
-pub(super) fn install_process_guard(parents: &[PathBuf], diagnostic: &str) -> Option<PathBuf> {
-    for parent in parents {
-        if !parent.is_dir() {
-            continue;
-        }
-        for _ in 0..4 {
-            let nanos = monotonic_nanos();
-            let directory =
-                parent.join(format!("rustx-python-guard-{}-{nanos}", std::process::id()));
-            if claim_fresh_directory(&directory).is_none() {
-                continue;
-            }
-            if let Some(directory) = install_guard(&directory, diagnostic) {
-                return Some(directory);
-            }
-        }
-    }
-    None
+pub(super) fn install_process_guard(
+    parents: &[PathBuf],
+    diagnostic: &str,
+) -> Option<tempfile::TempDir> {
+    parents.iter().find_map(|parent| {
+        let directory = tempfile::Builder::new()
+            .prefix("rustx-python-guard-")
+            .tempdir_in(parent)
+            .ok()?;
+        install_guard(directory.path(), diagnostic)?;
+        Some(directory)
+    })
 }
 
+#[cfg(test)]
 pub(super) fn claim_fresh_directory(directory: &Path) -> Option<PathBuf> {
-    std::fs::create_dir(directory).ok()?;
-    let _ = std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(directory)
+        .ok()?;
     Some(directory.to_path_buf())
 }
 

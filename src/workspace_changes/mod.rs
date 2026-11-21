@@ -147,12 +147,22 @@ impl Drop for ClientRecord {
         let scope = self.scope.clone();
         let key = self.key.clone();
         handle.spawn(async move {
-            let _ = scope
+            let endpoint = scope.endpoint().ok().filter(|endpoint| {
+                endpoint
+                    .process_key(key.operation)
+                    .is_ok_and(|live| live == key)
+            });
+            let reply = scope
                 .workspace_changes(
                     ChangeRequest::Release { key },
                     &cancellation(CancellationSignal::new()),
                 )
                 .await;
+            if !matches!(reply, Ok(ChangeReply::Accepted))
+                && let Some(endpoint) = endpoint
+            {
+                endpoint.cut_pair();
+            }
         });
     }
 }

@@ -36,7 +36,7 @@ pub use channel::{ChannelShutdown, RecordChannel};
 pub use endpoint::ExecutionUrl;
 pub use path::open_dir_nofollow;
 
-pub use channel::{accept, connect};
+pub use channel::{LoopbackTls, accept, connect, connect_provisioned};
 
 /// The required WebSocket protocol path, shared by client validation and
 /// server enforcement.

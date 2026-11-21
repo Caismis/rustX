@@ -2,6 +2,7 @@
 
 use super::Entry;
 use super::Flight;
+use super::LocalExecutionEndpoint;
 use super::SessionRuntimeManager;
 use super::release_allocator_pages;
 use std::sync::Arc;
@@ -9,7 +10,12 @@ use std::sync::atomic::Ordering;
 
 impl SessionRuntimeManager {
     /// Permanently close native initialization admission before host drain inventories.
-    pub(crate) fn begin_draining(&self) -> Vec<Arc<super::Initialization>> {
+    pub(crate) fn begin_draining(
+        &self,
+    ) -> (
+        Vec<Arc<super::Initialization>>,
+        Vec<Arc<LocalExecutionEndpoint>>,
+    ) {
         self.configuration.resource_io.cancel();
         let initializations = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
@@ -33,13 +39,36 @@ impl SessionRuntimeManager {
             }
             initializations
         };
-        // Endpoint fencing does bounded network I/O per connection —
-        // it must never run while the registry mutex is held.
-        self.execution.fence_all();
+        let endpoints = self.execution.close_admission();
         for initialization in &initializations {
             initialization.request_retirement();
         }
-        initializations
+        (initializations, endpoints)
+    }
+
+    pub(crate) async fn settle_execution_bindings(
+        endpoints: Vec<Arc<LocalExecutionEndpoint>>,
+        deadline: std::time::Instant,
+    ) -> Vec<String> {
+        let mut settling = tokio::task::JoinSet::new();
+        for endpoint in endpoints {
+            settling.spawn_blocking(move || {
+                let bound = std::time::Instant::now()
+                    + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+                endpoint.fence_connection_by(deadline.min(bound))
+            });
+        }
+        let mut failures = Vec::new();
+        while let Some(result) = settling.join_next().await {
+            match result {
+                Ok(Ok(())) => (),
+                Ok(Err(error)) => {
+                    failures.push(format!("Client revocation is unconfirmed: {error}"));
+                }
+                Err(error) => failures.push(format!("Client revocation worker failed: {error}")),
+            }
+        }
+        failures
     }
 
     /// Supervise the current residency set without failing fast. To prove all

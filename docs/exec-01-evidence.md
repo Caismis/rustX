@@ -12,6 +12,55 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `95b8fbbf4`
+
+- Bound configuration takes the Workspace path from the reservation. The
+  Client reports root identity and document contents. Capacity and wire
+  I/O share one deadline, and publication checks the source and binding
+  identities after the read. Only absence on the initial range can clear
+  a Workspace document. The generation and data-contention regressions
+  use explicit gates in the scripted configuration harness.
+- Physical mutation owners validate delegated commit receipts. Child
+  retirement waits for shared data capacity within its cleanup deadline.
+  Nested writes sync all containing directories before publication.
+- Workspace Changes retains at most 512 MiB or 65,536 unique loose Git
+  objects per binding, whichever limit is reached first. The private
+  index and objects are staged together. This caps retained objects.
+  One in-flight Git snapshot still has temporary scratch use. Completed
+  observations no longer deny new observation admission indefinitely.
+- Direct loopback WebSocket reservations provision a binding-specific
+  TLS certificate. The operator-ingress mode continues to require a
+  trusted local forwarding hop. Idle remote reservations shut down
+  without a Client. Native Watcher visibility and Unix peer ownership
+  have macOS code fixes. Native macOS compilation and tests were
+  intentionally deferred by the maintainer.
+- Workspace configuration documents, file watches, and execution
+  operations use the Client. The authored resource catalog and the
+  automatic config-source watcher still use Server-owned sources.
+  Host-managed workspaces, resource discovery and upload reception
+  remain [#578](https://github.com/Caismis/rustX/issues/578) work.
+- The second review adds regression coverage for cancelled prepare
+  competing for the writer, mutation cancellation waiting behind four
+  watch-stop messages, stale data-lane EOF at pair commit, and a withheld
+  Client revocation outside the Host lock. Real process cases exercise
+  empty argv values and defer pipe stdin acknowledgement until physical
+  EOF.
+- Local Linux follow-up ran the five execution-related member packages
+  with staged companions. The run passed 440 tests with 3 existing
+  ignores. The focused Server harness passed both configuration
+  cases, the cancelled-prepare writer race, and the stalled-revoke
+  drain case. Five real App Server process cases passed, including
+  the bootstrap and reap path, TLS and empty argv, and the canonical
+  MCP overflow fixture. The saturation test uses real watch-stop
+  control messages and a scripted control peer. The separate
+  two-process Client gate proves zero publication after confirmed
+  cancellation.
+- On the [reviewed Linux FULL run](https://github.com/Caismis/rustX/actions/runs/44783497166),
+  Merge verification passed. The plan intentionally skipped the FAST
+  `rust-fast` and `documentation-contracts` jobs. FULL selected the
+  corresponding `rust-contracts`, `rust-boundaries`, and legacy suites.
+  Those results apply to the reviewed revision.
+
 ## Phase-one gates
 
 `bootstrap` = `rustx-execution-client --test bootstrap`, selected by rust-fast and rust-boundaries. `member unit` = package-qualified libtest, selected by the Linux FAST unit step and FULL contracts. Listed lane ownership does not certify a green run on a new revision.

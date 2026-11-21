@@ -923,9 +923,13 @@ async fn emergency_settlement(
         .load(std::sync::atomic::Ordering::SeqCst);
     #[cfg(not(test))]
     let anchor_unavailable = false;
-    let contained =
-        tokio::task::spawn_blocking(move || emergency_contain_group(pgid, anchor_unavailable))
-            .await;
+    let contained = tokio::task::spawn_blocking(move || {
+        if anchor_unavailable {
+            return Ok(EmergencyContainment::AnchorUnavailable);
+        }
+        emergency_contain_group(pgid)
+    })
+    .await;
     match contained {
         Ok(Ok(EmergencyContainment::TerminalProven)) => {
             record_event(test_control, "emergency_terminal_proven");

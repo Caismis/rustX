@@ -27,6 +27,7 @@
 //! `--tls-ca-file`. Every error is a static message; record payloads are
 //! never echoed.
 
+use base64::Engine as _;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -134,9 +135,8 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     // The endpoint is validated before any connect or credential
     // transmission: the Unix socket gets the same owner-only path checks
     // as before, and the WebSocket URL must satisfy the strict numeric-IP
-    // `ws`(loopback)/`wss` policy — an insecure or ambiguous endpoint is
-    // rejected outright, and a `--tls-ca-file` given for a Unix or
-    // cleartext endpoint is refused rather than silently ignored.
+    // numeric-IP TLS policy. A directly provisioned identity is the
+    // only trust anchor for the loopback listener.
     let endpoint = match &bootstrap.endpoint {
         BootstrapEndpoint::Unix { socket_path } => {
             if ca_file.is_some() {
@@ -146,13 +146,30 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             require_socket(&socket_parent, file_name(socket_path)?)?;
             Endpoint::Unix(socket_path.clone())
         }
-        BootstrapEndpoint::WebSocket { url } => {
+        BootstrapEndpoint::WebSocket {
+            url,
+            certificate_der,
+        } => {
             let validated =
                 ExecutionUrl::validate(url).map_err(|_| String::from("untrusted endpoint"))?;
-            if !validated.is_secure() && ca_file.is_some() {
+            if !validated.is_secure() {
                 return Err(String::from("untrusted endpoint"));
             }
-            Endpoint::WebSocket(validated)
+            let certificate = certificate_der
+                .as_ref()
+                .map(|encoded| {
+                    if encoded.len() > 4096
+                        || ca_file.is_some()
+                        || !validated.address().ip().is_loopback()
+                    {
+                        return Err(String::from("untrusted endpoint"));
+                    }
+                    base64::engine::general_purpose::STANDARD
+                        .decode(encoded)
+                        .map_err(|_| String::from("untrusted endpoint"))
+                })
+                .transpose()?;
+            Endpoint::WebSocket(validated, certificate)
         }
     };
 
@@ -273,6 +290,8 @@ fn serve_session(
     if !watches.shutdown() {
         return Err(String::from("unresolved watch cleanup"));
     }
+    let drained =
+        drained.and_then(|()| rustx_execution_client::workspace_python::cleanup_process_scratch());
     match (result, drained) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), _) => Err(error),
@@ -285,7 +304,7 @@ enum Endpoint {
     /// Owner-only Unix socket for the local sibling composition.
     Unix(PathBuf),
     /// Strictly validated WebSocket URL for the remote composition.
-    WebSocket(ExecutionUrl),
+    WebSocket(ExecutionUrl, Option<Vec<u8>>),
 }
 
 /// Connects one lane to the validated endpoint — the same transport and
@@ -304,12 +323,13 @@ fn connect_endpoint(
             require_peer_owner(&stream)?;
             Ok(RecordChannel::unix(stream))
         }
-        Endpoint::WebSocket(endpoint) => {
-            // TLS (when `wss`) completes inside connect — before any
-            // credential is ever written — and both sides share the
-            // armed deadline.
-            rustx_execution_transport::connect(endpoint, deadline, ca_file)
-                .map_err(|_| String::from("unreachable"))
+        Endpoint::WebSocket(endpoint, certificate) => {
+            let channel = if let Some(certificate) = certificate {
+                rustx_execution_transport::connect_provisioned(endpoint, deadline, certificate)
+            } else {
+                rustx_execution_transport::connect(endpoint, deadline, ca_file)
+            };
+            channel.map_err(|_| String::from("unreachable"))
         }
     }
 }
@@ -544,11 +564,18 @@ fn require_peer_owner(stream: &UnixStream) -> Result<(), String> {
         .ok_or_else(|| String::from("untrusted peer"))
 }
 
-/// The peer-owner proof exists only where the platform exposes it.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn require_peer_owner(stream: &UnixStream) -> Result<(), String> {
+    let (uid, _) = nix::unistd::getpeereid(stream).map_err(|_| String::from("untrusted peer"))?;
+    (uid == nix::unistd::geteuid())
+        .then_some(())
+        .ok_or_else(|| String::from("untrusted peer"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn require_peer_owner(stream: &UnixStream) -> Result<(), String> {
     let _ = stream;
-    Ok(())
+    Err("peer ownership verification is unavailable".into())
 }
 
 /// The final component of a private path — the only piece the pinned

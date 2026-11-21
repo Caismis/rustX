@@ -476,6 +476,78 @@ impl SessionRuntimeManager {
         self.compose(access, startup, initialization).await
     }
 
+    fn initial_session_configuration(
+        &self,
+        access: &SessionAccess,
+    ) -> Result<super::super::configuration::AdmittedSessionConfig, RuntimeManagerError> {
+        use super::super::configuration::application::ApplicationState;
+        let session = &access.session.id;
+        let bindings = &self.sessions.configuration_bindings;
+        if let Some(paths) = bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)
+            .cloned()
+        {
+            return Ok(paths);
+        }
+        let input = access.settings.input();
+        for _ in 0..3 {
+            let endpoint = self.execution.configuration_endpoint(session)?;
+            if endpoint.is_none() {
+                self.repair_session_sources(&input);
+            }
+            let mut application = self.applications.lock();
+            let paths = if let Some(endpoint) = endpoint {
+                let source_cut = application.source_cut(&input.cwd);
+                drop(application);
+                let capture = ApplicationState::initial_bound_session(
+                    &self.configuration,
+                    &input,
+                    &self.credentials,
+                    &endpoint,
+                );
+                #[cfg(test)]
+                self.configuration
+                    .test_hooks
+                    .reach("before_bound_initial_publication");
+                application = self.applications.lock();
+                if application.source_cut(&input.cwd) != source_cut {
+                    continue;
+                }
+                if !self
+                    .execution
+                    .configuration_endpoint(session)?
+                    .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
+                {
+                    return Err(error(
+                        "Workspace configuration binding changed during capture",
+                    ));
+                }
+                capture.map_err(error)?
+            } else {
+                if self.execution.configuration_endpoint(session)?.is_some() {
+                    continue;
+                }
+                application
+                    .initial_binding(&self.configuration, &input, &self.credentials, true)
+                    .map_err(error)?
+            };
+            // Source ingestion takes the same lock before looking at retained Sessions.
+            let paths = bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .entry(session.clone())
+                .or_insert(paths)
+                .clone();
+            drop(application);
+            return Ok(paths);
+        }
+        Err(error(
+            "configuration sources changed during Session admission; retry the load",
+        ))
+    }
+
     #[allow(clippy::too_many_lines)] // one ordered ownership transaction
     async fn compose(
         &self,
@@ -509,35 +581,9 @@ impl SessionRuntimeManager {
                 "injected composition task panic"
             );
         }
-        let configuration = self.configuration.clone();
-        let credentials = self.credentials.clone();
-        let bindings = self.sessions.configuration_bindings.clone();
-        let applications = self.applications.clone();
         let owner = self.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
-            let retained = bindings
-                .lock()
-                .expect("Session configuration bindings")
-                .get(&access.session.id)
-                .cloned();
-            let paths = if let Some(paths) = retained {
-                paths
-            } else {
-                let input = access.settings.input();
-                let paths = if let Some(endpoint) = owner.execution.configuration_endpoint(&access.session.id)? {
-                    super::super::configuration::application::ApplicationState::initial_bound_session(
-                        &configuration, &input, &credentials, &endpoint,
-                    )
-                } else {
-                    owner.repair_session_sources(&input);
-                    applications.lock().initial_binding(&configuration, &input, &credentials, true)
-                }.map_err(error)?;
-                bindings
-                    .lock()
-                    .expect("Session configuration bindings")
-                    .insert(access.session.id.clone(), paths.clone());
-                paths
-            };
+            let paths = owner.initial_session_configuration(&access)?;
             Ok::<_, RuntimeManagerError>((access, paths))
         })
         .await

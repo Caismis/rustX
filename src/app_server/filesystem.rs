@@ -125,7 +125,7 @@ impl Watches {
         watch_id: String,
         source: WatchSource,
         events: Arc<super::service_events::Events>,
-        capacity: Arc<tokio::sync::Semaphore>,
+        host: super::host::AppServerHost,
         owner: super::host::ServerOperation,
     ) -> Result<(), RpcError> {
         if watch_id.is_empty()
@@ -135,7 +135,8 @@ impl Watches {
         {
             return Err(domain(ErrorData::InvalidParams));
         }
-        let capacity = capacity
+        let capacity = host
+            .file_observers()
             .try_acquire_owned()
             .map_err(|_| domain(ErrorData::EnvironmentCapacityOrConflict))?;
         let id = WATCH_SERIAL
@@ -175,6 +176,7 @@ impl Watches {
             events,
             publication,
             settled,
+            host,
         };
         tokio::spawn(async move {
             operation.run(owner, admitted, capacity).await;
@@ -193,6 +195,7 @@ struct Observation {
     events: Arc<super::service_events::Events>,
     publication: Publication,
     settled: watch::Sender<Option<Result<(), ErrorData>>>,
+    host: super::host::AppServerHost,
 }
 
 impl Observation {
@@ -208,12 +211,13 @@ impl Observation {
             Ok(relative) => relative,
             Err(error) => {
                 self.remove();
-                drop(capacity);
                 let settled = if error.data == Some(ErrorData::OutcomeUnknown) {
+                    self.host.record_unconfirmed_file_observer();
                     Err(ErrorData::OutcomeUnknown)
                 } else {
                     Ok(())
                 };
+                drop(capacity);
                 self.settled.send_replace(Some(settled));
                 let _ = admitted.send(Err(error));
                 return;
@@ -221,6 +225,12 @@ impl Observation {
         };
         let _ = admitted.send(Ok(()));
         let ended_on_client = self.observe(&relative).await;
+        if !ended_on_client && self.host.server_draining() {
+            // The drain may already be physically retiring this observer
+            // through a binding-wide revoke. Use that receipt before
+            // deciding whether the individual stop is unconfirmed.
+            let _ = self.host.settle_execution().await;
+        }
         let physically_settled = if ended_on_client {
             Ok(())
         } else {
@@ -235,6 +245,9 @@ impl Observation {
             self.retired().await;
         }
         self.remove();
+        if physically_settled.is_err() {
+            self.host.record_unconfirmed_file_observer();
+        }
         drop(capacity);
         self.settled.send_replace(Some(physically_settled));
     }

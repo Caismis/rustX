@@ -415,6 +415,7 @@ async fn run(options: Request) -> Result<(), String> {
     };
     // Remote enrollment publishes a reservation. Management remains
     // available while the operator starts the bound Client independently.
+    let remote_stop = shutdown.child_token();
     let mut remote_accept = match (
         options.execution_session.as_deref(),
         options.execution_workspace.as_deref(),
@@ -440,7 +441,7 @@ async fn run(options: Request) -> Result<(), String> {
                     listen,
                     bootstrap.clone(),
                     public_url.clone(),
-                    shutdown.clone(),
+                    remote_stop.clone(),
                 )
                 .await?,
             )
@@ -501,49 +502,58 @@ async fn run(options: Request) -> Result<(), String> {
             _ = terminate.recv() => break,
         }
     }
-    host.begin_drain();
-    let deadline = tokio::time::Instant::now()
+    let shutdown_deadline = std::time::Instant::now()
         + std::time::Duration::from_millis(host.policy().shutdown_deadline_ms);
+    let deadline = tokio::time::Instant::from_std(shutdown_deadline);
+    host.begin_drain_by(shutdown_deadline);
     reaper_stop.cancel();
+    remote_stop.cancel();
     eprintln!("rustx app-server: Draining; new semantic admission closed");
     let graceful = async {
-        // Explicit composition teardown runs first, before any work is
-        // awaited: an early drain error must never strand the child. The
-        // binding was revoked, not closed — an honest Client exits only
-        // when its stream breaks — so an observed exit is accepted
-        // (`try_wait`), an already-gone peer tolerated (ESRCH), and a
-        // live one is SIGKILLed; every child is reaped.
-        if let Some(mut child) = local_client.take() {
-            if child
-                .try_wait()
-                .map_err(|error| format!("local execution: {error}"))?
-                .is_none()
-            {
-                match child.start_kill() {
-                    Ok(()) => {}
-                    Err(error) if error.raw_os_error() == Some(nix::libc::ESRCH) => {}
-                    Err(error) => return Err(format!("local execution: {error}")),
+        let client_exit = async {
+            // The binding has been fenced. Give the owned Client time to
+            // reclaim process-private scratch before reaping it.
+            if let Some(mut child) = local_client.take() {
+                let _ = host.settle_execution().await;
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let exit = tokio::time::timeout(remaining / 2, child.wait()).await;
+                match exit {
+                    Ok(Ok(status)) if status.success() => {}
+                    Ok(Ok(status)) => {
+                        return Err(format!("local execution: Client exited {status}"));
+                    }
+                    Ok(Err(error)) => {
+                        return Err(format!("local execution: Client reap failed: {error}"));
+                    }
+                    Err(_) => {
+                        child.kill().await.map_err(|error| {
+                            format!("local execution: Client reap failed: {error}")
+                        })?;
+                        return Err("local execution: Client needed forced termination".into());
+                    }
                 }
             }
-            child
-                .wait()
-                .await
-                .map_err(|error| format!("local execution: {error}"))?;
-        }
-        // The accept loop stops on the drain token; awaiting its handle
-        // guarantees the listener clone is released before the endpoint's
-        // teardown completes.
-        if let Some(accept) = remote_accept.take() {
-            let _ = accept.await;
-        }
+            // The accept loop stops on drain even when no Client connected.
+            if let Some(accept) = remote_accept.take() {
+                accept
+                    .await
+                    .map_err(|error| format!("execution listener drain failed: {error}"))?;
+            }
+            Ok(())
+        };
         let scheduler_completion = async {
             match scheduler_early_result.take() {
                 Some(result) => result,
                 None => (&mut scheduler).await,
             }
         };
-        let (failures, reaper_result, scheduler_result, _) =
-            tokio::join!(host.drain(), reaper, scheduler_completion, source_watch);
+        let (failures, reaper_result, scheduler_result, _, client_result) = tokio::join!(
+            host.drain(),
+            reaper,
+            scheduler_completion,
+            source_watch,
+            client_exit
+        );
         shutdown.cancel();
         if !transport_finished {
             match (&mut serving).await {
@@ -553,6 +563,7 @@ async fn run(options: Request) -> Result<(), String> {
             }
         }
         host.settle_file_observers().await;
+        client_result?;
         if !failures.is_empty() {
             return Err(format!(
                 "runtime settlement failed: {}",

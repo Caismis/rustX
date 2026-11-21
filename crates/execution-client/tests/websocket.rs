@@ -64,15 +64,14 @@ fn ws_rig() -> Rig {
         None,
     )
     .unwrap();
-    let url = format!("ws://{}/execution/v1", listener.local_addr().unwrap());
-    // The published bundle really is the ws:// endpoint the client will
-    // validate and connect to.
+    let url = format!("wss://{}/execution/v1", listener.local_addr().unwrap());
     let mut file = fs::File::open(&bundle).unwrap();
     let published: Bootstrap = read_record(&mut file).unwrap();
-    assert_eq!(
+    assert!(matches!(
         published.endpoint,
-        BootstrapEndpoint::WebSocket { url: url.clone() }
-    );
+        BootstrapEndpoint::WebSocket { url: published_url, certificate_der: Some(certificate) }
+            if published_url == url && !certificate.is_empty()
+    ));
     Rig {
         _private: private,
         _workspace: workspace,
@@ -138,10 +137,7 @@ fn admit_stream(
     deadline: Instant,
 ) -> Result<rustx_execution_server::ChannelAccept, String> {
     rig.binding
-        .accept_channel_deadline(
-            rustx_execution_transport::accept(stream, deadline).unwrap(),
-            deadline,
-        )
+        .accept_websocket_deadline(stream, deadline)
         .map_err(|error| format!("handshake failed: {error}"))
 }
 
@@ -366,23 +362,19 @@ fn websocket_plaintext_nonloopback_and_wrong_path_never_connect() {
     let rig = ws_rig();
     // A bundle that violates endpoint policy is rejected client-side
     // before a byte leaves the process — the listener never accepts.
+    let address = rig.listener.local_addr().unwrap();
     for url in [
-        format!(
-            "ws://192.0.2.10:{}/execution/v1",
-            rig.listener.local_addr().unwrap().port()
-        ),
-        format!("ws://{}/other", rig.listener.local_addr().unwrap()),
-        format!(
-            "ws://user@{}/execution/v1",
-            rig.listener.local_addr().unwrap()
-        ),
-        format!(
-            "ws://{}/execution/v1?token=1",
-            rig.listener.local_addr().unwrap()
-        ),
+        format!("ws://192.0.2.10:{}/execution/v1", address.port()),
+        format!("ws://{address}/execution/v1"),
+        format!("wss://{address}/other"),
+        format!("wss://user@{address}/execution/v1"),
+        format!("wss://{address}/execution/v1?token=1"),
     ] {
         tamper_bundle(&rig, |bootstrap| {
-            bootstrap.endpoint = BootstrapEndpoint::WebSocket { url: url.clone() };
+            bootstrap.endpoint = BootstrapEndpoint::WebSocket {
+                url: url.clone(),
+                certificate_der: None,
+            };
         });
         let mut child = client(&rig.bundle, &rig.workspace_path)
             .stderr(Stdio::piped())
@@ -403,6 +395,26 @@ fn websocket_plaintext_nonloopback_and_wrong_path_never_connect() {
 }
 
 #[test]
+fn websocket_refuses_a_different_loopback_tls_identity_before_admission() {
+    let rig = ws_rig();
+    let unrelated =
+        rustx_execution_transport::LoopbackTls::new(rig.listener.local_addr().unwrap().ip())
+            .unwrap();
+    let mut child = spawn_client(&rig);
+    let stream = accept_stream(&rig, &mut child).unwrap();
+    assert!(
+        unrelated
+            .accept(stream, Instant::now() + ACCEPT_DEADLINE)
+            .is_err()
+    );
+    assert!(!wait_bounded(&mut child).success());
+    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
+    let mut authorized = spawn_client(&rig);
+    assert_eq!(accept(&rig, &mut authorized), Ok(Ok(())));
+    let _ = authorized.wait().unwrap();
+}
+
+#[test]
 fn websocket_malformed_upgrade_never_consumes_the_reservation() {
     let rig = ws_rig();
     // A garbage HTTP upgrade fails inside transport accept; the binding
@@ -413,7 +425,9 @@ fn websocket_malformed_upgrade_never_consumes_the_reservation() {
     raw.flush().unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
     assert!(
-        rustx_execution_transport::accept(stream, Instant::now() + Duration::from_secs(5)).is_err()
+        rig.binding
+            .accept_websocket_deadline(stream, Instant::now() + Duration::from_secs(5))
+            .is_err()
     );
     drop(raw);
     assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);

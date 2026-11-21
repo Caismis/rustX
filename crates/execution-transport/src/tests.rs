@@ -471,3 +471,12 @@ fn wss_without_a_matching_ca_file_fails() {
     assert!(connect(&endpoint, Instant::now() + Duration::from_secs(10), None).is_err());
     assert!(server.join().unwrap().is_err());
 }
+
+#[test]
+fn bracketed_ipv6_urls_use_the_scheme_default_port() {
+    let secure = ExecutionUrl::validate("wss://[::1]/execution/v1").unwrap();
+    assert_eq!(secure.address(), "[::1]:443".parse().unwrap());
+    let clear = ExecutionUrl::validate("ws://[::1]/execution/v1").unwrap();
+    assert_eq!(clear.address(), "[::1]:80".parse().unwrap());
+    assert!(ExecutionUrl::validate("wss://::1/execution/v1").is_err());
+}

@@ -140,7 +140,7 @@ impl AppServerConnection {
                             path: path.into(),
                         },
                         self.service_events.clone(),
-                        self.host.file_observers(),
+                        self.host.clone(),
                         owner,
                     )
                     .await?;

@@ -3,6 +3,7 @@
 use super::{
     EndpointAuthority, ExecutionRoute, LocalExecutionEndpoint, SessionExecutionScope, SessionId,
 };
+use base64::Engine as _;
 use rustx_execution_protocol::process::{
     BashCaptureState, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION, OperationId,
     OperationState, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
@@ -61,6 +62,9 @@ impl ChildExecutionGrant {
             authority: EndpointAuthority::Delegated { control, shutdown },
             connection: Mutex::new(Some(connection)),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
+            connection_released: tokio::sync::Notify::new(),
+            dispatch_closed: std::sync::atomic::AtomicBool::new(false),
+            revocation_confirmed: std::sync::atomic::AtomicBool::new(false),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             workspace: workspace.to_path_buf(),
@@ -109,7 +113,7 @@ struct Authority {
     conversation: String,
     tools: BTreeSet<String>,
     operations: Mutex<BTreeMap<OperationId, ChildOperation>>,
-    tickets: Mutex<BTreeSet<DecimalU64>>,
+    tickets: Mutex<BTreeMap<DecimalU64, u64>>,
     stop: rustx_process_supervisor::signal::ProcessSignal,
 }
 
@@ -201,9 +205,11 @@ impl ChildExecutionRelay {
                 );
             })?;
         let (finished, settlement) = tokio::sync::oneshot::channel();
+        let runtime = tokio::runtime::Handle::current();
         std::thread::Builder::new()
             .name("child-execution-data-relay".into())
             .spawn(move || {
+                let _runtime = runtime.enter();
                 run_data(parent_data, &owner, &authority);
                 authority.stop.cancel();
                 data_to_control.shutdown();
@@ -277,7 +283,18 @@ impl Authority {
         self.tickets
             .lock()
             .expect("child mutation tickets")
-            .contains(&ticket)
+            .contains_key(&ticket)
+    }
+
+    fn commit_size(&self, request: &ClientRequest) -> Option<u64> {
+        let ClientRequest::CommitWrite { ticket } = request else {
+            return None;
+        };
+        self.tickets
+            .lock()
+            .expect("child mutation tickets")
+            .get(ticket)
+            .copied()
     }
 
     fn retain_reply(&self, request: &ClientRequest, reply: &ClientReply) {
@@ -332,16 +349,43 @@ impl Authority {
                 }
             }
             (
-                ClientRequest::PrepareWrite { .. } | ClientRequest::BeginWrite { .. },
+                ClientRequest::PrepareWrite { data_base64, .. },
+                ClientReply::WritePrepared { ticket, .. },
+            ) => {
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_base64) {
+                    self.tickets
+                        .lock()
+                        .expect("child mutation tickets")
+                        .insert(*ticket, bytes.len() as u64);
+                }
+            }
+            (
+                ClientRequest::BeginWrite { total: size, .. },
                 ClientReply::WritePrepared { ticket, .. },
             )
-            | (ClientRequest::PrepareEdit { .. }, ClientReply::EditPrepared { ticket, .. }) => {
+            | (
+                ClientRequest::PrepareEdit { .. },
+                ClientReply::EditPrepared {
+                    ticket,
+                    published_size: size,
+                    ..
+                },
+            ) => {
                 self.tickets
                     .lock()
                     .expect("child mutation tickets")
-                    .insert(*ticket);
+                    .insert(*ticket, size.get());
             }
-            (ClientRequest::CommitWrite { ticket } | ClientRequest::AbortWrite { ticket }, _) => {
+            (
+                ClientRequest::CommitWrite { ticket },
+                ClientReply::Written { ticket: echoed, .. }
+                | ClientReply::WriteCancelled { ticket: echoed }
+                | ClientReply::CommitUnknown { ticket: echoed },
+            )
+            | (
+                ClientRequest::AbortWrite { ticket },
+                ClientReply::WriteAborted { ticket: echoed },
+            ) if ticket == echoed => {
                 self.tickets
                     .lock()
                     .expect("child mutation tickets")
@@ -356,11 +400,12 @@ impl Authority {
         let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
         let deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
-        for ticket in tickets {
-            let reply = owner.with_connection(None, true, |connection| {
+        for ticket in tickets.into_keys() {
+            let reply = owner.with_bounded_data_connection(deadline, |connection| {
                 connection.forward_delegated(
                     &ClientRequest::AbortWrite { ticket },
                     deadline,
+                    None,
                     || Ok(()),
                 )
             });
@@ -393,7 +438,7 @@ impl Authority {
         }
         if !operation.capture_disposed {
             let key = &operation.key;
-            let discarded = owner.with_connection(None, true, |connection| {
+            let discarded = owner.with_bounded_data_connection(deadline, |connection| {
                 connection.process_until(
                     &ProcessRequest::DiscardBashOutput { key: key.clone() },
                     deadline,
@@ -413,7 +458,7 @@ impl Authority {
         deadline: Instant,
     ) -> io::Result<()> {
         let exchange = |request| {
-            owner.with_connection(None, true, |connection| {
+            owner.with_bounded_data_connection(deadline, |connection| {
                 connection.process_until(&request, deadline)
             })
         };
@@ -473,16 +518,21 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
         let budget = Duration::from_millis(u64::from(remaining_ms)).min(PAGE_REQUEST_TIMEOUT);
         let deadline = Instant::now() + budget;
         let reply = if authority.permits(owner, &request) {
-            let result = owner.with_connection(None, true, |connection| {
-                connection.forward_delegated(&request, deadline, || {
-                    if Instant::now() >= deadline {
-                        return Err(io::ErrorKind::TimedOut.into());
-                    }
-                    authority
-                        .stop
-                        .with_active(|| ())
-                        .ok_or(io::ErrorKind::Interrupted.into())
-                })
+            let result = owner.with_bounded_data_connection(deadline, |connection| {
+                connection.forward_delegated(
+                    &request,
+                    deadline,
+                    authority.commit_size(&request),
+                    || {
+                        if Instant::now() >= deadline {
+                            return Err(io::ErrorKind::TimedOut.into());
+                        }
+                        authority
+                            .stop
+                            .with_active(|| ())
+                            .ok_or(io::ErrorKind::Interrupted.into())
+                    },
+                )
             });
             match result {
                 Ok(reply) => {

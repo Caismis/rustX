@@ -624,15 +624,16 @@ impl Writes {
         }
     }
 
-    /// Handles an `AbortWrite` for the exact live ticket: the retained
-    /// target and its in-memory payload drop — nothing physical was ever
-    /// staged, so nothing needs cleaning.
+    /// Releases an issued ticket. An already settled ticket also proves
+    /// absence. A zero or future ticket has no such proof.
     pub(super) fn abort(&mut self, ticket: DecimalU64) -> ClientReply {
-        self.arbitration.remove(ticket);
-        let Some(preparation) = self.prepared.remove(&ticket.get()) else {
+        if ticket.get() == 0 || ticket.get() >= self.next {
             return error(ReadError::Invalid);
-        };
-        self.payload_bytes = self.payload_bytes.saturating_sub(preparation.expected);
+        }
+        self.arbitration.remove(ticket);
+        if let Some(preparation) = self.prepared.remove(&ticket.get()) {
+            self.payload_bytes = self.payload_bytes.saturating_sub(preparation.expected);
+        }
         ClientReply::WriteAborted { ticket }
     }
 
@@ -731,6 +732,57 @@ mod tests {
             }
         );
         assert_eq!(fs::read(dir.path().join("file")).unwrap(), b"after");
+    }
+
+    #[test]
+    fn abort_after_clean_commit_refusal_settles_only_the_consumed_ticket() {
+        let (dir, root) = fixture();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let prepare = |writes: &mut Writes, leaf| {
+            let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
+                &root,
+                Path::new(leaf),
+                &WriteExpectation::Absent,
+                &encode(b"new"),
+            ) else {
+                panic!("prepared write");
+            };
+            ticket
+        };
+        let consumed = prepare(&mut writes, "original");
+        let separate = prepare(&mut writes, "separate");
+        fs::write(dir.path().join("original"), b"competing").unwrap();
+        assert_eq!(
+            writes.commit(consumed),
+            ClientReply::Error {
+                kind: ReadError::Conflict
+            }
+        );
+        assert_eq!(
+            writes.abort(consumed),
+            ClientReply::WriteAborted { ticket: consumed }
+        );
+        assert_eq!(
+            writes.abort(consumed),
+            ClientReply::WriteAborted { ticket: consumed }
+        );
+        assert_eq!(
+            writes.abort(DecimalU64::new(separate.get() + 1)),
+            ClientReply::Error {
+                kind: ReadError::Invalid
+            }
+        );
+        assert_eq!(
+            writes.abort(DecimalU64::new(0)),
+            ClientReply::Error {
+                kind: ReadError::Invalid
+            }
+        );
+        assert!(
+            matches!(writes.commit(separate), ClientReply::Written { ticket, .. } if ticket == separate)
+        );
+        assert_eq!(fs::read(dir.path().join("original")).unwrap(), b"competing");
+        assert_eq!(fs::read(dir.path().join("separate")).unwrap(), b"new");
     }
 
     #[test]

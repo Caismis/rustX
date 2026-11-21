@@ -29,6 +29,17 @@ mod tests;
 
 pub use guard::GUARD_MESSAGE_KEY;
 
+/// Removes this Client process's Python scratch after all physical workers settle.
+///
+/// # Errors
+///
+/// Returns a cleanup error if a private directory could not be removed.
+pub fn cleanup_process_scratch() -> std::io::Result<()> {
+    let discovery = interpreter::cleanup_discovery();
+    let fallback = guard::cleanup_fallback();
+    discovery.and(fallback)
+}
+
 /// The Workspace Python choice frozen into one command environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PythonSelection {

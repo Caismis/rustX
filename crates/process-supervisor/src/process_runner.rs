@@ -1503,8 +1503,13 @@ impl SupervisedCommandRunner {
         });
         #[cfg(not(any(test, feature = "test-support")))]
         let anchor_unavailable = false;
-        match tokio::task::spawn_blocking(move || emergency_contain_group(pgid, anchor_unavailable))
-            .await
+        match tokio::task::spawn_blocking(move || {
+            if anchor_unavailable {
+                return Ok(EmergencyContainment::AnchorUnavailable);
+            }
+            emergency_contain_group(pgid)
+        })
+        .await
         {
             Ok(Ok(EmergencyContainment::TerminalProven)) => {
                 self.lifecycle = ProcessLifecycle::Terminal;

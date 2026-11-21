@@ -3,6 +3,119 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cold_bound_load_rechecks_user_revision_at_retained_publication() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let mut client = fixture.start_execution(0).await;
+        let (entered, capture_ready) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "before_bound_initial_publication",
+            move || {
+                entered.send(()).unwrap();
+                released.recv().unwrap();
+            },
+        );
+        let loading = fixture.load(0);
+        capture_ready.await.unwrap();
+        let path = &fixture.manager.configuration.source_bindings().config_path;
+        let mut document: toml::Table =
+            toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        document.insert(
+            "tool_deadline_policy".into(),
+            toml::Value::Table(toml::from_str("hard_deadline_ms = 23456").unwrap()),
+        );
+        std::fs::write(path, toml::to_string(&document).unwrap()).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&SourceTarget::User)
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        loading.await.unwrap().unwrap();
+        {
+            let bindings = fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap();
+            let binding = &bindings[&fixture.sessions[0].id];
+            assert_eq!(binding.config.tool_deadline_policy.hard_deadline_ms, 23_456);
+        }
+        client.kill().await.unwrap();
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn blocked_bound_capture_leaves_other_source_transactions_available() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 2).await;
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let (parked, parked_receipt) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let exchange = tokio::task::spawn_blocking(move || {
+            endpoint.hold_data_exchange_for_test(|| {
+                parked.send(()).unwrap();
+                released.recv().unwrap();
+            })
+        });
+        parked_receipt.await.unwrap();
+        let (entered, reading) = tokio::sync::oneshot::channel();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("before_bound_source_read", move || {
+                entered.send(()).unwrap();
+            });
+        let manager = fixture.manager.clone();
+        let workspace = fixture.workspaces[0].clone();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[tool_deadline_policy]\nhard_deadline_ms = 34567\n",
+        )
+        .unwrap();
+        let reconciliation = tokio::spawn(async move {
+            manager
+                .reconcile_configuration(&SourceTarget::Workspace {
+                    directory: workspace,
+                })
+                .await
+        });
+        reading.await.unwrap();
+        let unrelated = SourceTarget::Workspace {
+            directory: fixture.workspaces[1].clone(),
+        };
+        fixture.manager.source_settings(&unrelated).await.unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(&unrelated)
+            .await
+            .unwrap();
+        assert!(!reconciliation.is_finished());
+        release.send(()).unwrap();
+        exchange.await.unwrap().unwrap();
+        reconciliation.await.unwrap().unwrap();
+        {
+            let state = fixture.manager.applications.lock();
+            let applied = state.view(fixture.sessions[0].id.as_ref()).unwrap();
+            assert!(applied.desired.input_revision.is_some(), "{applied:?}");
+        }
+        client.kill().await.unwrap();
+    }))
+    .await;
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn native_source_application_identity_uses_exact_facts_not_projection() {
@@ -32,7 +145,11 @@ async fn native_source_application_identity_uses_exact_facts_not_projection() {
     assert!(serde_json::to_vec(&projection).is_err());
     let capture = |manager: &SessionRuntimeManager| {
         let mut state = manager.applications.lock();
-        manager.capture_source_consumers(&mut state, &target);
+        assert!(
+            manager
+                .capture_source_consumers(&mut state, &target)
+                .is_empty()
+        );
         state
             .view(&target.application_scope())
             .unwrap()

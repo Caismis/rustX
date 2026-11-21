@@ -118,6 +118,7 @@ pub(crate) struct ApplicationState {
     version: u64,
     scopes: BTreeMap<String, ConfigurationApplication>,
     pending: BTreeMap<String, ApplicationIdentity>,
+    bound_captures: BTreeMap<crate::runtime::identity::SessionId, Arc<()>>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
@@ -270,6 +271,9 @@ impl ConfigurationApplications {
         state.scope_targets.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
+        state
+            .bound_captures
+            .retain(|session, _| session.as_ref() != scope);
         state.deferred.remove(scope);
         state.reasons.remove(scope);
         state.staged_in.remove(scope);
@@ -294,6 +298,50 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    pub(crate) fn source_cut(&self, workspace: &std::path::Path) -> [u64; 2] {
+        use super::settings::SourceTarget;
+        [
+            SourceTarget::User,
+            SourceTarget::Workspace {
+                directory: workspace.to_path_buf(),
+            },
+        ]
+        .map(|target| {
+            self.scopes
+                .get(&target.application_scope())
+                .map_or(0, |view| view.desired.attempt)
+        })
+    }
+
+    pub(crate) fn begin_bound_capture(
+        &mut self,
+        session: crate::runtime::identity::SessionId,
+    ) -> Arc<()> {
+        let ticket = Arc::new(());
+        self.bound_captures.insert(session, ticket.clone());
+        ticket
+    }
+
+    pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {
+        self.bound_captures.remove(session);
+    }
+
+    pub(crate) fn finish_bound_capture(
+        &mut self,
+        session: &crate::runtime::identity::SessionId,
+        ticket: &Arc<()>,
+    ) -> bool {
+        if self
+            .bound_captures
+            .get(session)
+            .is_some_and(|current| Arc::ptr_eq(current, ticket))
+        {
+            self.bound_captures.remove(session);
+            return true;
+        }
+        false
+    }
+
     /// Runtime catalog publication changes the native baseline, not authored
     /// intent. Reprepare the latest captured input, including its model choice.
     pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str) -> bool {

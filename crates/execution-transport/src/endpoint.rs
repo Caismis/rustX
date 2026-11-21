@@ -94,7 +94,12 @@ impl ExecutionUrl {
             .parse::<SocketAddr>()
             .or_else(|_| {
                 authority
-                    .parse::<IpAddr>()
+                    .strip_prefix('[')
+                    .and_then(|host| host.strip_suffix(']'))
+                    .map_or_else(
+                        || authority.parse::<std::net::Ipv4Addr>().map(IpAddr::V4),
+                        |host| host.parse::<std::net::Ipv6Addr>().map(IpAddr::V6),
+                    )
                     .map(|ip| SocketAddr::new(ip, if secure { 443 } else { 80 }))
             })
             .map_err(|_| invalid("the host must be a numeric IP address"))?;
@@ -118,10 +123,19 @@ impl ExecutionUrl {
 /// plus any operator-provisioned private anchors from `ca_file` (PEM).
 /// There is deliberately no way to disable certificate or hostname
 /// verification — a private deployment adds trust, never removes it.
-pub(crate) fn client_config(ca_file: Option<&Path>) -> io::Result<rustls::ClientConfig> {
+pub(crate) fn client_config(
+    ca_file: Option<&Path>,
+    provisioned_cert: Option<&[u8]>,
+) -> io::Result<rustls::ClientConfig> {
     const MAX_CA_BUNDLE_BYTES: u64 = 8 * 1024 * 1024;
     let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Some(cert) = provisioned_cert {
+        roots
+            .add(rustls_pki_types::CertificateDer::from(cert))
+            .map_err(io::Error::other)?;
+    } else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
     if let Some(path) = ca_file {
         // The operator bundle must be a finite regular file before we
         // open it: a FIFO would block the read and a symlink is refused

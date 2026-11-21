@@ -13,6 +13,9 @@ use std::{
     time::Duration,
 };
 
+const MAX_RETAINED_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_RETAINED_OBJECTS: usize = 65_536;
+
 #[derive(Clone)]
 pub(super) struct Repository {
     pub root: PathBuf,
@@ -21,26 +24,103 @@ pub(super) struct Repository {
     scratch: Arc<SnapshotDirectory>,
     objects: PathBuf,
     exclusion: PathBuf,
-    gate: Arc<tokio::sync::Mutex<()>>,
+    gate: Arc<tokio::sync::Mutex<ObjectUsage>>,
     index_ready: Arc<AtomicBool>,
     pub cancellation: ProcessSignal,
     #[cfg(test)]
     pub commands: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-// A killed add can leave its private index lock. Cleanup belongs to the physical
-// driver, after reaping and before the next snapshot acquires the same gate.
+// The physical driver retains the attempt until Git has reaped. Dropping
+// the attempt rolls back Git's index and temporary objects together.
 struct SnapshotLease {
-    _guard: tokio::sync::OwnedMutexGuard<()>,
-    scratch: Arc<SnapshotDirectory>,
+    stage: tempfile::TempDir,
+    usage: tokio::sync::OwnedMutexGuard<ObjectUsage>,
 }
-impl Drop for SnapshotLease {
-    fn drop(&mut self) {
-        let lock = self.scratch.path().join("git/index.lock");
-        if lock.exists() {
-            let _ = std::fs::remove_file(lock);
+
+#[derive(Default)]
+struct ObjectUsage {
+    bytes: u64,
+    count: usize,
+}
+
+impl ObjectUsage {
+    fn admit(
+        &mut self,
+        bytes: u64,
+        count: usize,
+        byte_limit: u64,
+        count_limit: usize,
+    ) -> Result<(), String> {
+        let total_bytes = self.bytes.saturating_add(bytes);
+        let total_count = self.count.saturating_add(count);
+        if total_bytes > byte_limit || total_count > count_limit {
+            return Err("Workspace Changes reached its binding's private Git object limit".into());
         }
+        self.bytes = total_bytes;
+        self.count = total_count;
+        Ok(())
     }
+}
+
+fn publish_objects(
+    stage: &Path,
+    retained: &Path,
+    usage: &mut ObjectUsage,
+    byte_limit: u64,
+    count_limit: usize,
+) -> Result<(), String> {
+    use std::fs;
+
+    let publish = || -> std::io::Result<Vec<(PathBuf, u64)>> {
+        let mut new = Vec::new();
+        let mut candidate = ObjectUsage {
+            bytes: usage.bytes,
+            count: usage.count,
+        };
+        for entry in fs::read_dir(stage)? {
+            let entry = entry?;
+            let prefix = entry.file_name();
+            if !hex_name(&prefix, &[2]) || !entry.file_type()?.is_dir() {
+                return Err(std::io::Error::other("invalid staged Git object directory"));
+            }
+            for file in fs::read_dir(entry.path())? {
+                let file = file?;
+                let name = file.file_name();
+                let metadata = fs::symlink_metadata(file.path())?;
+                if !hex_name(&name, &[38, 62]) || !metadata.is_file() {
+                    return Err(std::io::Error::other("invalid staged Git object"));
+                }
+                let relative = PathBuf::from(&prefix).join(name);
+                if retained.join(&relative).try_exists()? {
+                    continue;
+                }
+                candidate
+                    .admit(metadata.len(), 1, byte_limit, count_limit)
+                    .map_err(std::io::Error::other)?;
+                new.push((relative, metadata.len()));
+            }
+        }
+        Ok(new)
+    };
+    // Budget the whole attempt before publishing any object or replacing the
+    // private index. Existing observations keep all objects they refer to.
+    let new = publish().map_err(|error| error.to_string())?;
+    for (relative, bytes) in new {
+        let destination = retained.join(&relative);
+        fs::create_dir_all(destination.parent().ok_or("invalid Git object path")?)
+            .and_then(|()| fs::hard_link(stage.join(&relative), &destination))
+            .map_err(|error| error.to_string())?;
+        // Hard links count once. An I/O error on a later object can leave
+        // earlier links installed; those remain counted under the same gate.
+        usage.admit(bytes, 1, byte_limit, count_limit)?;
+    }
+    Ok(())
+}
+
+fn hex_name(name: &std::ffi::OsStr, lengths: &[usize]) -> bool {
+    let bytes = name.as_encoded_bytes();
+    lengths.contains(&bytes.len()) && bytes.iter().all(u8::is_ascii_hexdigit)
 }
 
 pub(super) struct Change {
@@ -239,7 +319,8 @@ impl Repository {
             ),
             1024,
             &self.cancellation,
-            (Arc::clone(&inventory), Arc::clone(&lease)),
+            Some(&lease),
+            Arc::clone(&inventory),
         )
         .await?;
         let entries =
@@ -282,7 +363,7 @@ impl Repository {
                     "--pathspec-file-nul",
                 ])
             );
-            self.run(command, 1024, &self.cancellation, (paths, lease))
+            self.run(command, 1024, &self.cancellation, Some(&lease), paths)
                 .await?;
         }
         Ok(())
@@ -293,46 +374,39 @@ impl Repository {
         command: String,
         limit: usize,
         cancellation: &ProcessSignal,
+        attempt: Option<&Arc<SnapshotLease>>,
         keepalive: impl Send + 'static,
     ) -> Result<Vec<u8>, String> {
         if cancellation.is_cancelled() {
             return Err("Git snapshot was cancelled".into());
         }
         let mut environment = environment();
+        let git = self.scratch.path().join("git");
+        let retained = git.join("objects");
+        let working = attempt.map_or(git.as_path(), |attempt| attempt.stage.path());
+        // Git accepts C-quoted alternates, including colons/newlines.
+        let source = serde_json::to_string(&self.objects).map_err(|error| error.to_string())?;
+        let alternates = if attempt.is_some() {
+            let retained = serde_json::to_string(&retained).map_err(|error| error.to_string())?;
+            format!("{retained}:{source}")
+        } else {
+            source
+        };
         environment.extend([
-            (
-                "GIT_DIR".into(),
-                self.scratch
-                    .path()
-                    .join("git")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
+            ("GIT_DIR".into(), git.to_string_lossy().into_owned()),
             (
                 "GIT_WORK_TREE".into(),
                 self.root.to_string_lossy().into_owned(),
             ),
             (
                 "GIT_INDEX_FILE".into(),
-                self.scratch
-                    .path()
-                    .join("git/index")
-                    .to_string_lossy()
-                    .into_owned(),
+                working.join("index").to_string_lossy().into_owned(),
             ),
             (
                 "GIT_OBJECT_DIRECTORY".into(),
-                self.scratch
-                    .path()
-                    .join("git/objects")
-                    .to_string_lossy()
-                    .into_owned(),
+                working.join("objects").to_string_lossy().into_owned(),
             ),
-            // Git accepts a C-quoted alternate, including colons/newlines in its path.
-            (
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES".into(),
-                serde_json::to_string(&self.objects).map_err(|error| error.to_string())?,
-            ),
+            ("GIT_ALTERNATE_OBJECT_DIRECTORIES".into(), alternates),
         ]);
         #[cfg(test)]
         self.commands
@@ -346,7 +420,7 @@ impl Repository {
                 cancellation: cancellation.child(),
             },
             limit,
-            (Arc::clone(&self.scratch), keepalive),
+            (Arc::clone(&self.scratch), attempt.cloned(), keepalive),
         )
         .await?;
         if code != 0 {
@@ -376,28 +450,44 @@ impl Repository {
     pub async fn snapshot(&self) -> Result<String, String> {
         // The physical command driver owns the lock until it has reaped Git,
         // even when an attempt abandons its waiter during cancellation.
-        let guard = Arc::new(SnapshotLease {
-            _guard: Arc::clone(&self.gate).lock_owned().await,
-            scratch: Arc::clone(&self.scratch),
-        });
+        let usage = Arc::clone(&self.gate).lock_owned().await;
+        let git = self.scratch.path().join("git");
+        let stage = tempfile::tempdir_in(self.scratch.path()).map_err(|error| error.to_string())?;
+        std::fs::create_dir(stage.path().join("objects")).map_err(|error| error.to_string())?;
+        stage_index(&git.join("index"), &stage.path().join("index"))
+            .map_err(|error| error.to_string())?;
+        let mut attempt = Arc::new(SnapshotLease { stage, usage });
         if !self.index_ready.load(Ordering::Acquire) {
-            self.normalize_imported_index(Arc::clone(&guard)).await?;
-            // Publish only a completed normalization. Cancellation leaves it
-            // retryable under the same lock after the physical child is reaped.
-            self.index_ready.store(true, Ordering::Release);
+            self.normalize_imported_index(Arc::clone(&attempt)).await?;
         }
         let add = self.add_command();
         let command = format!(
             "{add}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi; exec {}",
             invocation(&["write-tree"])
         );
-        let output = self.run(command, 1024, &self.cancellation, guard).await?;
+        let output = self
+            .run(command, 1024, &self.cancellation, Some(&attempt), ())
+            .await?;
         let tree = std::str::from_utf8(&output)
             .map_err(|error| error.to_string())?
             .trim();
         if ![40, 64].contains(&tree.len()) || !tree.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("invalid Git snapshot tree".into());
         }
+        if self.cancellation.is_cancelled() {
+            return Err("Git snapshot was cancelled".into());
+        }
+        let attempt = Arc::get_mut(&mut attempt).ok_or("Git snapshot process is unresolved")?;
+        publish_objects(
+            &attempt.stage.path().join("objects"),
+            &git.join("objects"),
+            &mut attempt.usage,
+            MAX_RETAINED_OBJECT_BYTES,
+            MAX_RETAINED_OBJECTS,
+        )?;
+        std::fs::rename(attempt.stage.path().join("index"), git.join("index"))
+            .map_err(|error| error.to_string())?;
+        self.index_ready.store(true, Ordering::Release);
         Ok(tree.to_owned())
     }
 
@@ -429,6 +519,7 @@ impl Repository {
                 ),
                 8 * 1024 * 1024,
                 &self.cancellation,
+                None,
                 (),
             )
             .await?;
@@ -458,6 +549,7 @@ impl Repository {
                 ),
                 8 * 1024 * 1024,
                 cancellation,
+                None,
                 (),
             )
             .await?;
@@ -482,6 +574,7 @@ impl Repository {
             format!("exec {}", invocation(&["cat-file", "blob", fields[2]])),
             MAX_FILE_BYTES,
             cancellation,
+            None,
             (),
         )
         .await
@@ -508,6 +601,7 @@ impl Repository {
                 format!("exec {}", invocation(&["ls-files", "-z", "--stage"])),
                 8 * 1024 * 1024,
                 &self.cancellation,
+                None,
                 (),
             )
             .await?;
@@ -546,7 +640,7 @@ impl Repository {
             quote(&input.path().to_string_lossy())
         );
         let output = self
-            .run(command, 8 * 1024 * 1024, &self.cancellation, input)
+            .run(command, 8 * 1024 * 1024, &self.cancellation, None, input)
             .await?;
         for path in output
             .split(|byte| *byte == 0)
@@ -629,6 +723,20 @@ fn seed(
     setup().map_err(|error| error.to_string())
 }
 
+// Git uses the index modification time to decide whether a cached entry
+// may have changed within the same filesystem clock tick. A fresh mtime
+// would incorrectly certify entries that Git previously considered racy.
+fn stage_index(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let metadata = match std::fs::metadata(source) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    std::fs::copy(source, destination)?;
+    std::fs::File::open(destination)?
+        .set_times(std::fs::FileTimes::new().set_modified(metadata.modified()?))
+}
+
 fn copy_if_present(source: &Path, destination: &Path) -> std::io::Result<()> {
     match std::fs::copy(source, destination) {
         Ok(_) => Ok(()),
@@ -683,4 +791,63 @@ fn parse_numstat(output: &[u8]) -> Result<BTreeMap<String, Change>, String> {
         );
     }
     Ok(changes)
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+
+    #[test]
+    fn staging_the_index_preserves_gits_racy_stat_timestamp() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("source");
+        let staged = scratch.path().join("staged");
+        std::fs::write(&source, b"index").unwrap();
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(123_456);
+        std::fs::File::open(&source)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        stage_index(&source, &staged).unwrap();
+        assert_eq!(std::fs::read(&staged).unwrap(), b"index");
+        assert_eq!(std::fs::metadata(staged).unwrap().modified().unwrap(), old);
+    }
+
+    #[test]
+    fn retained_git_object_quota_checks_whole_attempt_and_deduplicates() {
+        let scratch = tempfile::tempdir().unwrap();
+        let stage = scratch.path().join("attempt");
+        let retained = scratch.path().join("objects");
+        let first = PathBuf::from("12").join("a".repeat(38));
+        let second = PathBuf::from("34").join("b".repeat(38));
+        let third = PathBuf::from("56").join("c".repeat(38));
+        for relative in [&first, &second, &third] {
+            std::fs::create_dir_all(stage.join(relative.parent().unwrap())).unwrap();
+        }
+        let mut usage = ObjectUsage::default();
+        std::fs::write(stage.join(&first), b"1234").unwrap();
+        publish_objects(&stage, &retained, &mut usage, 8, 2).unwrap();
+        assert_eq!((usage.bytes, usage.count), (4, 1));
+
+        std::fs::write(stage.join(&second), b"ab").unwrap();
+        std::fs::write(stage.join(&third), b"XYZ").unwrap();
+        assert!(
+            publish_objects(&stage, &retained, &mut usage, 8, 3)
+                .unwrap_err()
+                .contains("object limit")
+        );
+        assert!(
+            publish_objects(&stage, &retained, &mut usage, 9, 2)
+                .unwrap_err()
+                .contains("object limit")
+        );
+        assert_eq!((usage.bytes, usage.count), (4, 1));
+        assert!(!retained.join(&second).exists());
+        assert!(!retained.join(&third).exists());
+        std::fs::remove_file(stage.join(&third)).unwrap();
+        publish_objects(&stage, &retained, &mut usage, 8, 2).unwrap();
+        assert_eq!((usage.bytes, usage.count), (6, 2));
+        assert_eq!(std::fs::read(retained.join(first)).unwrap(), b"1234");
+        assert_eq!(std::fs::read(retained.join(second)).unwrap(), b"ab");
+    }
 }
