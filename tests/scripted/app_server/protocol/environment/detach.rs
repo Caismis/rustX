@@ -586,19 +586,16 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
     let (fail, release) = oneshot::channel();
     let control = tokio::spawn(async move {
         while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
-            send(&mut control_server, &poll).await.unwrap();
-            let turn = receive::<ControlTurn>(&mut control_server).await.unwrap();
-            if matches!(
-                turn.request,
-                Some(rustx_execution_protocol::ControlRequest::Revoke)
-            ) {
+            if matches!(poll.receipt, Some(ControlReply::Revoked)) {
                 seen.send(()).unwrap();
                 release.await.unwrap();
                 return;
             }
+            send(&mut control_server, &poll).await.unwrap();
+            let turn = receive::<ControlTurn>(&mut control_server).await.unwrap();
             send(&mut control_peer, &turn).await.unwrap();
         }
-        panic!("the live Session must receive Revoke");
+        panic!("the live Client must acknowledge Revoke");
     });
     let session = fixture.sessions[0].id.clone();
     let SessionDeleteResult::Preview { preview } =
@@ -617,8 +614,8 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
     });
     bounded(pending).await.unwrap();
     let admitted = tokio::task::spawn_blocking(move || sibling.admit_operation().map(|_| ()));
-    // The peer remains parked while a different Session takes the same
-    // global registry mutex to admit a native operation.
+    // Hold the actual Client receipt while another Session takes the
+    // same global registry mutex to admit a native operation.
     tokio::time::timeout(std::time::Duration::from_secs(2), admitted)
         .await
         .unwrap()
@@ -653,7 +650,6 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
 
 #[allow(clippy::too_many_lines)] // Keep the capture and Revoke barriers in one scenario.
 pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
-    use rustx_execution_protocol::ControlRequest;
     use rustx_execution_protocol::process::{
         OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
     };
@@ -730,18 +726,18 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
     });
     let (seen, pending) = oneshot::channel();
     let (resume, held) = oneshot::channel();
-    let (ack, acknowledged) = oneshot::channel();
     let capture_path = capture.clone();
     let control = tokio::spawn(async move {
         let mut gate = Some((seen, held));
-        let mut ack = Some(ack);
         while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
             if matches!(poll.receipt, Some(ControlReply::Revoked)) {
                 assert!(
                     !capture.exists(),
                     "physical capture must be gone before Revoke is acknowledged"
                 );
-                ack.take().unwrap().send(()).unwrap();
+                let (seen, held) = gate.take().expect("a single Revoke owns settlement");
+                seen.send(()).unwrap();
+                held.await.unwrap();
             }
             if send(&mut control_server, &poll).await.is_err() {
                 return;
@@ -749,15 +745,6 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
             let Ok(turn) = receive::<ControlTurn>(&mut control_server).await else {
                 return;
             };
-            if matches!(turn.request, Some(ControlRequest::Revoke)) {
-                let (seen, held) = gate.take().expect("a single Revoke owns settlement");
-                seen.send(()).unwrap();
-                held.await.unwrap();
-                assert!(
-                    capture.is_file(),
-                    "the held Revoke has not reached the Client"
-                );
-            }
             send(&mut control_peer, &turn).await.unwrap();
         }
     });
@@ -806,8 +793,8 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
     bounded(pending).await.unwrap();
     resume_discard.send(()).unwrap();
     bounded(discard).await.unwrap();
+    assert!(!drain.is_finished(), "the Client receipt is still parked");
     resume.send(()).unwrap();
-    bounded(acknowledged).await.unwrap();
     assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
     assert!(bounded(child.wait()).await.unwrap().success());
     bounded(data).await.unwrap();

@@ -15,13 +15,13 @@ Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79
 ## Review follow-up on `e162692ff`
 
 - Session deletion fences admission locally, then waits outside the
-  residency mutex. A paused Client proves a different Session can still
-  admit operations. If revocation is unconfirmed, durable deletion stops
-  and Host drain reports the retained failure.
-- The Bash discard race parks Revoke on a paired Client's control lane.
-  The queued discard joins terminal settlement, sends no Discard frame,
-  and leaves the control lane open. The real Client removes the capture
-  before its Revoke acknowledgement.
+  residency mutex. While the proxy holds the Client's actual `Revoked`
+  receipt, another Session still admits operations. Dropping the receipt
+  stops durable deletion and Host drain reports the retained failure.
+- The Bash discard race holds a real Client's `Revoked` receipt after
+  verifying that the Client already removed the capture. The queued
+  discard hands off to terminal settlement, sends no Discard frame,
+  and leaves the control lane open for the receipt to reach the Server.
 - The Client-only configuration case continues to cover a Workspace
   absent at initial admission. A separate overlay regression removes
   then replaces a previously admitted Server resource root. Independent
