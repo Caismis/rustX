@@ -60,6 +60,10 @@ export interface PageTransaction {
   /** Stages or clears a batch of module-level reset mutations (for the
    * Workspace "Follow global" switch) inside the enclosing page transaction. */
   readonly setModuleReset: (mutations: readonly SourceMutation[] | undefined, onCancel?: () => void) => void;
+  /** The module-level reset mutations still staged for this page's Save.
+   * Read-only page intent: it survives an unmount/remount of the switch that
+   * staged it exactly like a detached unit draft. */
+  readonly moduleReset: readonly SourceMutation[] | undefined;
   /** Discards all unit drafts and page-local drafts without invoking
    * `setModuleReset`'s cancellation callback. */
   readonly discardDrafts: () => void;
@@ -75,8 +79,12 @@ export interface PageTransaction {
    * an unsaved import). `save`/`cancel` run inside the page batch.
    * `beforeSave` runs synchronously at save start — a local buffer that
    * becomes a unit draft (a JSON editor applying its text) commits through
-   * the same queue; returning `false` vetoes the save. */
-  readonly setLocal: (dirty: boolean, save?: () => void, cancel?: () => void, beforeSave?: () => boolean | void) => void;
+   * the same queue; returning `false` vetoes the save.
+   * Returns the entry's unregistration: an editor's cleanup MUST release its
+   * slot, or an unmounted editor's veto keeps blocking the page's Save with no
+   * visible error. Only the latest registrant owns the slot — a superseded
+   * entry's unregistration is a no-op. */
+  readonly setLocal: (dirty: boolean, save?: () => void, cancel?: () => void, beforeSave?: () => boolean | void) => () => void;
   /** Danger actions an editor publishes into the page footer's left slot.
    * The footer is owned by whoever mounts it — a page shell or a test
    * harness — so the editor never renders a second one. */
@@ -115,6 +123,10 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const detachedSubs = useRef(new Map<string, { unsubscribe(): void }>());
   const [moduleReset, setModuleResetState] = useState<readonly SourceMutation[]>();
   const moduleResetCancelRef = useRef<(() => void) | undefined>(undefined);
+  // Module-reset mutations refused during the current save run. They are
+  // re-staged when the queue drains: a refused removal is still the user's
+  // intent, so the switch stays pending and Save can retry it.
+  const resetFailuresRef = useRef<SourceMutation[]>([]);
   const [queue, setQueue] = useState<
     ({ kind: 'unit'; id: string } | { kind: 'mutation'; id: string; mutation: SourceMutation; selector: RevisionSelector })[]
   >([]);
@@ -125,6 +137,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   // dirty flag in state; the save/cancel gestures live in refs so reporting
   // the same dirty state twice never triggers a render.
   const [localDirty, setLocalDirty] = useState(false);
+  const localEntryRef = useRef<{ save?: () => void; cancel?: () => void; beforeSave?: () => boolean | void } | undefined>(undefined);
   const localSaveRef = useRef<(() => void) | undefined>(undefined);
   const localCancelRef = useRef<(() => void) | undefined>(undefined);
   const localBeforeSaveRef = useRef<(() => boolean | void) | undefined>(undefined);
@@ -162,7 +175,10 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   }, [actor]);
 
   const finishSave = useCallback(() => {
-    moduleResetCancelRef.current = undefined;
+    const refused = resetFailuresRef.current;
+    resetFailuresRef.current = [];
+    if (refused.length) setModuleResetState(refused);
+    else moduleResetCancelRef.current = undefined;
     dispatchedRef.current.clear();
     localSaveRef.current?.();
     onAllSavedRef.current?.();
@@ -211,6 +227,9 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       submitItem(item);
     } else if (headStatus === 'conflict' || headStatus === 'rejected' || headStatus === 'uncertain') {
       dispatchedRef.current.delete(item.id);
+      // A refused module reset has no unit draft to keep: it is re-staged
+      // when the queue drains (see finishSave) so the gesture is not lost.
+      if (item.kind === 'mutation' && headStatus !== 'conflict') resetFailuresRef.current.push(item.mutation);
       // One unit's failure is its own: the remaining independent units still
       // submit, and the failed one keeps its draft for the footer gesture.
       if (headStatus === 'conflict') {
@@ -243,6 +262,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     // seed a unit draft synchronously — read the actors, not the React
     // snapshots captured before it ran.
     if (localBeforeSaveRef.current?.() === false) return;
+    resetFailuresRef.current = [];
     const units = actor.getSnapshot().context.units;
     const items: (typeof queue)[number][] = [];
     for (const identity of new Set([...registered.current, ...detached.current.keys()])) {
@@ -272,6 +292,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const cancelPage = useCallback(() => {
     discardDrafts();
     dispatchedRef.current.clear();
+    resetFailuresRef.current = [];
     setQueue([]);
     setConflict(undefined);
     const onCancel = moduleResetCancelRef.current;
@@ -355,15 +376,26 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     setModuleResetState(mutations && mutations.length > 0 ? mutations : undefined);
   }, []);
   const setLocalEntry = useCallback((nextDirty: boolean, save?: () => void, cancel?: () => void, beforeSave?: () => boolean | void) => {
+    const entry = { save, cancel, beforeSave };
+    localEntryRef.current = entry;
     localSaveRef.current = save;
     localCancelRef.current = cancel;
     localBeforeSaveRef.current = beforeSave;
     setLocalDirty(current => current === nextDirty ? current : nextDirty);
+    return () => {
+      // A superseded entry's cleanup must not erase a newer registration.
+      if (localEntryRef.current !== entry) return;
+      localEntryRef.current = undefined;
+      localSaveRef.current = undefined;
+      localCancelRef.current = undefined;
+      localBeforeSaveRef.current = undefined;
+      setLocalDirty(false);
+    };
   }, []);
   const [footerLeading, setFooterLeading] = useState<ReactNode>();
 
   const transaction: PageTransaction = {
-    dirty, saving, generation, setModuleReset, discardDrafts,
+    dirty, saving, generation, setModuleReset, moduleReset, discardDrafts,
     savePage, cancelPage, conflict, register, reportDraft, setLocal: setLocalEntry,
     footerLeading, setFooterLeading,
   };
