@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
-import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import catalog from '../../../presentation/catalog/Catalog.module.css';
 import { CardMenu } from '../../../presentation/catalog/CardMenu';
 import { transferActions } from '../shared/ResourceTransfer';
@@ -12,10 +11,14 @@ import { documentAuthoring } from '../../settings/projection';
 import { extensionEntries } from '../shared/inventory';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
 import { ResourceCard, ResourceGroup } from '../shared/ResourceCards';
-import type { McpEditorDraft, McpFocus } from '../types';
+import type { McpFocus } from '../types';
 import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
+import { PageTransactionFooter } from '../../settings/forms/bridge';
+import { useNavigationGuard } from '../../settings/forms/guard';
+import { SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
+import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
 import css from './McpPage.module.css';
 
 export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: (focus: McpFocus) => void }) {
@@ -32,25 +35,28 @@ export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: 
   </div>;
 }
 
-export function McpDetail({ source, scope, revision, focus, editorDraft, onEditorDraftChange, scopeControl, onClose }: {
+export function McpDetail({ source, scope, revision, focus, scopeControl, onClose }: {
   source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus;
-  editorDraft?: McpEditorDraft; onEditorDraftChange: (draft?: McpEditorDraft) => void;
   scopeControl: ReactNode; onClose: () => void;
 }) {
   const tx = useTranslation();
+  const guard = useNavigationGuard();
   const entry = extensionEntries(source, scope, 'mcp', 'owned').find(entry => entry.name === focus.name);
-  return <section className={css.page} data-mcp-page="" aria-label={focus.name ? tx('settings:extension-detail.mcp-value',{p0:focus.name}) : tx('settings:mcp.new')}>
+  const title = focus.name ?? tx('settings:mcp.new');
+  return <SettingsPageShell title={title} className={`${settingsCss.settings} ${settingsCss.page}`} data-mcp-page=""
+    breadcrumb={<Button variant="ghost" size="sm" onClick={() => guard.guard(onClose)}>{tx('settings:mcp.back')}</Button>}
+    toolbar={scopeControl} footer={<PageTransactionFooter/>}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
     <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
-      editorDraft={editorDraft} onEditorDraftChange={onEditorDraftChange} scopeControl={scopeControl} close={onClose} />
-  </section>;
+      scopeControl={scopeControl} close={onClose} />
+  </SettingsPageShell>;
 }
 
-export function McpPage({ source, scope, revision, onFocus, query, view, group, probeStates = {}, testConnection, probeAvailable = false, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
+export function McpPage({ source, scope, revision, onFocus, query, group, probeStates = {}, testConnection, probeAvailable = false, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
   probeStates?: Record<string, ProbeState>;
   testConnection?: (id: string) => void; probeAvailable?: boolean;
   source: SourceSettings; scope: SourceScope; revision?: string;
-  onFocus: (focus: McpFocus) => void; query: string; view: CatalogView; group?: string;
+  onFocus: (focus: McpFocus) => void; query: string; group?: string;
   onTransfer?: (scope: SourceScope, name: string, revision: string, operation: TransferOperation) => void;
   canOverride?: (name: string) => boolean; onOverride?: (name: string) => void;
   workspaceAvailability?: (name: string, valid?: boolean) => ReactNode;
@@ -88,7 +94,7 @@ export function McpPage({ source, scope, revision, onFocus, query, view, group, 
   if (group && needle && !matches.length) return null;
   return <div data-mcp-page="">
     {document.state !== 'structured' && <p className={catalog.banner} role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
-    <ResourceGroup label={group ?? tx('settings:mcp.installed')} count={matches.length} view={view}
+    <ResourceGroup label={group ?? tx('settings:mcp.installed')} count={matches.length}
       empty={<><p>{tx(needle ? 'settings:catalog.no-results' : 'settings:mcp.empty')}</p><p>{tx(needle ? 'settings:catalog.no-results-description' : 'settings:mcp.empty-help')}</p></>}>
       {matches.map(renderCard)}
     </ResourceGroup>

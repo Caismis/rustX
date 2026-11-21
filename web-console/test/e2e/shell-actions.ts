@@ -2,10 +2,17 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import type { AttachmentTarget } from '../../../protocol/app-server/v80';
 import type { wireProbe } from './wire-probe';
 
-/** A dirty editor's save has settled when its button is idle and disabled. */
-export function settledSave(scope: Page | Locator, title: string) {
-  return scope.getByRole('button', { name: `Save ${title}`, exact: true })
+/** A dirty page's save has settled when its footer button is idle and disabled.
+ * A dialog-owned save passes its exact title (`Save Model {id}`). */
+export function settledSave(scope: Page | Locator, title?: string) {
+  return scope.getByRole('button', { name: title ? `Save ${title}` : 'Save', exact: true })
     .and(scope.locator('button[aria-busy="false"]:disabled'));
+}
+/** A settings/resource page can greet a retained detail instead of its list.
+ * Wait for either surface to mount, then step back when the detail greeted. */
+export async function leaveRetainedDetail(back: Locator, landing: Locator) {
+  await expect(landing.or(back).first()).toBeVisible();
+  if (await back.isVisible()) { await back.click(); await expect(back).toHaveCount(0); }
 }
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
@@ -46,7 +53,7 @@ export async function connectionAction(page: Page, action: 'Disconnect' | 'Recon
   await page.getByRole('region', { name: 'Connection Settings', exact: true }).getByRole('button', { name: action, exact: true }).click();
   if (action === 'Reconnect') await expect(page.locator('.connection-status')).toHaveText('Connected');
   if (previous) {
-    await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
+    await settings.getByRole('button', { name: '← Back to Advanced', exact: true }).click();
     await openSettingsPage(page, previous);
   } else await returnHome(page);
 }
@@ -55,8 +62,8 @@ export async function openConnectionSettings(page: Page) {
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
   if (!await settings.isVisible()) await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(settings).toBeVisible();
-  const user = settings.getByRole('button', { name: 'Open User Settings', exact: true });
-  if (await user.isVisible()) await user.click();
+  const user = settings.getByRole('button', { name: 'User (global)', exact: true });
+  if (await user.isVisible() && await user.getAttribute('aria-pressed') !== 'true') await user.click();
   if (!await settings.getByRole('region', { name: 'Connection Settings', exact: true }).isVisible()) {
     await openSettingsPage(page, 'Advanced');
     // Section selection resumes its retained detail. A prior Connection visit
@@ -131,8 +138,8 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   // Fixture setup leaves both the section and its retained detail at known
   // roots. Later primary-page navigation is free to resume its exact detail.
-  const back = page.getByRole('button', { name: 'Back to Advanced', exact: true });
-  if (await back.isVisible()) await back.click();
+  const back = page.getByRole('button', { name: '← Back to Advanced', exact: true });
+  await leaveRetainedDetail(back, page.getByRole('tablist', { name: 'Settings pages', exact: true }));
   await openSettingsPage(page, 'General');
   await returnHome(page);
 }

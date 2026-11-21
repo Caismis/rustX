@@ -33,24 +33,25 @@
 .availability { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .skillPolicy { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 20px; }
 .group .list { display: block; border-block: .5px solid var(--dsw-alias-border-l2); }
-.group .list > .resourceCard {
+.group .list > .card {
   display: grid;
   grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr);
   column-gap: 16px;
   align-items: center;
+  min-height: 0;
   padding: 8px 10px;
   border: 0;
   border-radius: 0;
   background: transparent;
 }
-.group .list > .resourceCard + .resourceCard { border-top: .5px solid var(--dsw-alias-border-l2); }
-.group .list > .resourceCard:has(.cardActions) { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }
+.group .list > .card + .card { border-top: .5px solid var(--dsw-alias-border-l2); }
+.group .list > .card:has(.cardActions) { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }
 .list .cardActions { margin: 0; }
 
 
 @media (max-width: 760px) {
-  .group .list > .resourceCard,
-  .group .list > .resourceCard:has(.cardActions) { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .group .list > .card,
+  .group .list > .card:has(.cardActions) { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 }
 
 

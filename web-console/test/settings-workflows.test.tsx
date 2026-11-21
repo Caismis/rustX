@@ -60,10 +60,9 @@ it('S2-02 an edit reached through Provider → Model drill-down replaces the com
   s.source.user.authored!.models = { main: fullModel() };
   await user(s, 'Models');
   await openResourceRow('transport');
-  expect(screen.getByRole('heading', { name: 'Provider transport' })).toBeTruthy();
-  const served = within(screen.getByRole('grid', { name: 'Models of Provider transport' }));
-  fireEvent.click(served.getByRole('row', { name: 'main' }));
-  expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'transport' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
+  expect(screen.getByRole('dialog', { name: 'Model main' })).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Context window'), { target: { value: '256000' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
@@ -91,11 +90,12 @@ it('S2-02 deleting a Model removes exactly that authored unit after confirmation
   const s = cfg3Client();
   s.source.user.authored!.models = { main: fullModel() };
   await user(s, 'Models');
-  await openResourceRow('main');
+  await openResourceRow('transport');
+  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
   const editor = within(screen.getByRole('dialog', { name: 'Model main' }));
   expect(editor.queryByRole('button', { name: 'Remove Model main' })).toBeNull();
   fireEvent.click(editor.getByRole('button', { name: 'Close' }));
-  const row = within(screen.getByRole('row', { name: 'main' }));
+  const row = within(screen.getByRole('listitem', { name: 'main' }));
   fireEvent.click(row.getByRole('button', { name: 'Remove Model main' }));
   fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
   expect(writes(s)).toHaveLength(0);
@@ -113,7 +113,7 @@ it('S2-03 saving the default model writes the root_model source unit and sends n
   const before = methods(s).length;
   const form = screen.getByRole('form', { name: 'Default model' });
   await chooseOption('Model', 'main', within(form));
-  fireEvent.click(within(form).getByRole('button', { name: 'Save Default model' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ target: { kind: 'user' }, mutation: { kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main' } } } });
   await waitForSettingsSave();
@@ -191,7 +191,7 @@ it('S2-05 resource details show actual errors without healthy inspection metadat
     else {await openSettingsPage('Extensions');fireEvent.click(screen.getByRole('tab',{name:'Python'}));}
     await openResourceRow(name);
     const values = screen.getAllByText(/./).map(node => node.textContent);
-    fireEvent.click(screen.getByRole('button', {name:name==='docs'?'Close':/^(← (Extensions|MCP servers)|Back to list)$/}));
+    fireEvent.click(screen.getByRole('button', {name:name==='docs'?'← Skills':/^(← (Extensions|MCP servers)|Back to list)$/}));
     return values;
   };
   expect(await facts('search')).toContain('Edit MCP server');
@@ -238,13 +238,13 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   expect(screen.queryByText(/MCP catalog exceeds/)).toBeNull();
   // The detail of each identity agrees with its row.
   await openResourceRow('search');
-  const search = within(screen.getByRole('region', { name: 'MCP search' }));
-  expect(search.queryByText(/missing command|MCP catalog exceeds/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /^(← (Extensions|MCP servers)|Back to list)$/ }));
+  expect(screen.getByRole('heading', { name: 'search' })).toBeTruthy();
+  expect(screen.queryByText(/missing command|MCP catalog exceeds/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '← MCP servers' }));
   await openResourceRow('broken');
-  const broken = within(screen.getByRole('region', { name: 'MCP broken' }));
-  expect(broken.getByText('broken: missing command')).toBeTruthy();
-  expect(broken.queryByText(/MCP catalog exceeds/)).toBeNull();
+  expect(screen.getByRole('heading', { name: 'broken' })).toBeTruthy();
+  expect(screen.getByText('broken: missing command')).toBeTruthy();
+  expect(screen.queryByText(/MCP catalog exceeds/)).toBeNull();
 });
 
 /** Every native preparation and admission status, next to one identity of each
@@ -279,7 +279,7 @@ it('S2-05 an identity native published no preparation or admission for is unobse
     else {await openSettingsPage('Extensions');fireEvent.click(screen.getByRole('tab',{name:'Python'}));}
     await openResourceRow(name);
     const values = screen.getAllByText(/./).map(node => node.textContent);
-    fireEvent.click(screen.getByRole('button', {name:name==='docs'?'Close':/^(← (Extensions|MCP servers)|Back to list)$/}));
+    fireEvent.click(screen.getByRole('button', {name:name==='docs'?'← Skills':/^(← (Extensions|MCP servers)|Back to list)$/}));
     return values;
   };
   const negative = ['Not prepared', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
@@ -310,7 +310,7 @@ it('S2-05 collection and Skill discovery diagnostics stay out of resource pages'
   s.source.prospective_resources = resources;
   await user(s, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Python' }));
-  expect(screen.getByRole('listitem', { name: 'analysis' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'analysis →' })).toBeTruthy();
   expect(screen.queryByText(/Python source collection diagnostic/)).toBeNull();
   await openResourceModule('subagents');
   expect(screen.getByRole('region', { name: 'Subagents' })).toBeTruthy();
@@ -343,17 +343,14 @@ it('S2-06 an uncertain definition save never submits the root selection on its b
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   await act(async () => { held.reject(new OutcomeUncertain()); await held.promise.catch(() => {}); });
   await screen.findByText(/The save result is unknown/);
-  // The selection is still only a draft of its own: no automatic follow-up
-  // write, no aggregate success and no replay of the uncertain definition.
-  const selection = within(screen.getByRole('form', { name: 'Tools: search' }));
-  await waitFor(() => expect((selection.getByRole('button', { name: 'Save Tools: search' }) as HTMLButtonElement).disabled).toBe(false));
-  expect(writes(s)).toHaveLength(1);
-  expect(screen.queryByText(/Tools: search saved/)).toBeNull();
-  // Granting access is its own explicit mutation with its own outcome.
-  fireEvent.click(selection.getByRole('button', { name: 'Save Tools: search' }));
+  // The selection is an independent unit of the same page save: it commits as
+  // its own write — never folded into the definition's mutation — and the
+  // uncertain definition is neither replayed nor reported as an aggregate.
   await waitFor(() => expect(writes(s)).toHaveLength(2));
-  expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
+  expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
   expect(writes(s).filter(op => op.params.mutation.kind === 'mcp')).toHaveLength(1);
+  expect(screen.queryByText(/Tools: search saved/)).toBeNull();
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
 });
 
 it('S2-06 a rejected definition and a saved selection are reported as two outcomes, never one', async () => {
@@ -362,18 +359,20 @@ it('S2-06 a rejected definition and a saved selection are reported as two outcom
   });
   await mcpDetail(s);
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(writes(s)).toHaveLength(1));
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
   await screen.findByText(/native rejected the MCP definition/);
-  // The rejected definition keeps its draft.
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  // The rejected definition keeps its draft; the selection's success is not
+  // the definition's — it committed as its own independent unit anyway.
   expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
-  fireEvent.click(screen.getByRole('button', { name: 'Save Tools: search' }));
-  await waitForSettingsSave();
-  // The selection's success is not the definition's: the definition is still
-  // unsaved, still holds its draft and can still be submitted on its own.
   expect(screen.queryByText(/MCP search saved/)).toBeNull();
-  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
+  expect(writes(s).map(op => op.params.mutation.kind)).toEqual(['config', 'mcp']);
+  expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
+  // The page still reports dirty and the definition can still be submitted.
   expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
-  expect(writes(s).map(op => op.params.mutation.kind)).toEqual(['mcp', 'config']);
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(3));
+  expect(writes(s)[2].params.mutation.kind).toBe('mcp');
 });
 
 // ── S2-07 Workspace constrained surface ─────────────────────────────────────
@@ -392,6 +391,7 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   const restore = await screen.findByRole('dialog', { name: 'Use the global default for Provider transport?' });
   expect(screen.queryByRole('alertdialog')).toBeNull();
   fireEvent.click(within(restore).getByRole('button', { name: 'Use global default Provider transport' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'restore_provider', id: 'transport' } } });
   // User-only process policy and the client-owned Connection are not here.
@@ -448,7 +448,12 @@ const field = (label: string) => screen.getByLabelText(label) as HTMLInputElemen
 const disabled = (element: HTMLElement) => element.matches(':disabled');
 
 async function openWorkspaceDefinition(name: string, module: 'mcp' | 'subagents') {
-  await screen.findByRole('heading', { name: module === 'mcp' ? 'MCP servers' : 'Subagents' });
+  const listHeading = module === 'mcp' ? 'MCP servers' : 'Subagents';
+  if (!screen.queryByRole('heading', { name: listHeading })) {
+    // An open detail goes back through its breadcrumb first.
+    fireEvent.click(screen.getByRole('button', { name: module === 'mcp' ? '← MCP servers' : 'Subagents' }));
+  }
+  await screen.findByRole('heading', { name: listHeading });
   const ownGroup = screen.queryByRole('group', { name: module === 'mcp' ? 'Installed' : 'Custom subagents' });
   const owned = ownGroup && within(ownGroup).queryByRole('listitem', { name });
   if (owned) {
@@ -494,18 +499,23 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   expect(retained(s)).not.toContain('LITERAL_TOKEN');
   expect(writes(s)).toHaveLength(0);
 
-  // Edit, leave the page and come back: the transaction owner kept the draft.
+  // Edit, try to leave the page: the guard asks, and keeping editing keeps
+  // the transaction-owned draft.
   fireEvent.change(field('Command'), { target: { value: 'search-workspace' } });
-  await openSettingsPage('Models');
-  await openResourceModule('mcp');
+  fireEvent.click(screen.getByRole('button', { name: '← MCP servers' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   expect(field('Command').value).toBe('search-workspace');
+  expect(retained(s)).toContain('search-workspace');
   expect(definitionState('Edit MCP server')).toBe('overriding');
   // Root availability is a second, independent draft.
   await chooseOption('Selection', 'All', within(screen.getByRole('form', { name: 'Tools: search' })));
 
+  // One page Save commits every staged unit on the detail: the Workspace
+  // definition and the independent root selection are two separate writes.
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(writes(s)).toHaveLength(1));
-  expect(writes(s)[0].params).toEqual({
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
+  expect(writes(s)[1].params).toEqual({
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'mcp-2',
     mutation: { kind: 'mcp', id: 'search', authored: {
       definition: { type: 'stdio', command: 'search-workspace', args: ['--index'], sensitive_env: { API_TOKEN: '$SEARCH_TOKEN' } },
@@ -515,18 +525,13 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   expect(JSON.stringify(writes(s))).not.toContain(INHERITED_SECRET);
   await openWorkspaceDefinition('search', 'mcp');
   expect(definitionState('Edit MCP server')).toBe('authored');
-  // The definition save did not submit the root selection on its behalf.
-  expect(writes(s)).toHaveLength(1);
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Save Tools: search' }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Tools: search' }));
-  await waitFor(() => expect(writes(s)).toHaveLength(2));
-  expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } });
 
   // Removing the Workspace override is inheritance, not deletion: exactly one
   // Workspace removal, and the User definition is inspected again.
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Use global default MCP search' }) as HTMLButtonElement).disabled).toBe(false));
   expect(screen.getByRole('button', { name: 'Use global default MCP search' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('override-removal');
   await confirmAction('Use global default MCP search');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(3));
   expect(writes(s)[2].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'mcp', id: 'search', authored: null } });
   await openWorkspaceDefinition('search', 'mcp');
@@ -543,7 +548,7 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
   await openWorkspaceDefinition('search', 'mcp');
   fireEvent.click(screen.getByRole('button', { name: 'Override' }));
   fireEvent.change(field('Command'), { target: { value: 'abandoned' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(definitionState('Edit MCP server')).toBe('inherited'));
   expect(field('Command').value).toBe('search-server');
   expect(disabled(field('Command'))).toBe(true);
@@ -581,7 +586,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   fireEvent.click(screen.getByRole('button', { name: 'Override Agent reviewer in this Workspace' }));
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
 
-  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'missing',
@@ -592,8 +597,10 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   // The root delegation allowlist is a separate unit that nothing wrote.
   expect(writes(s).some(op => op.params.mutation.kind === 'config')).toBe(false);
 
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Use global default Agent reviewer' }) as HTMLButtonElement).disabled).toBe(false));
+  await openWorkspaceDefinition('reviewer', 'subagents');
   await confirmAction('Use global default Agent reviewer');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'agent', name: 'reviewer', authored: null } });
   await reopenReviewer('workspace');
@@ -615,10 +622,12 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   expect(screen.queryByRole('button', { name: /^Override MCP fresh/ })).toBeNull();
   expect(writes(s)).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: /^(← (Extensions|MCP servers)|Back to list)$/ }));
+  const guard = screen.queryByRole('dialog');
+  if (guard) fireEvent.click(within(guard).getByRole('button', { name: 'Discard and leave' }));
   await openResourceRow('local');
   // A Workspace definition that shadows nothing is removed, not "inherited again".
   expect(definitionState('Edit MCP server')).toBe('authored');
-  expect(screen.queryByRole('button', { name: 'Use global default MCP local' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Use global default' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Remove MCP local' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
 });
 
@@ -685,11 +694,10 @@ it('S2-07 a User named-Agent file that does not parse is an existing invalid Use
   expect(screen.getAllByText(INVALID_AGENT).length).toBeGreaterThan(0);
   // Its removal is the real removal of the User file, available at once.
   expect(screen.getByRole('button', { name: 'Remove Agent reviewer' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
-  expect(enabled('Remove Agent reviewer')).toBe(true);
   // Opening it authored nothing.
   expect(field('Description').value).toBe('');
   expect(disabled(field('Description'))).toBe(false);
-  expect(enabled('Save Agent reviewer')).toBe(false);
+  expect(enabled('Save')).toBe(false);
   expect(retained(s)).not.toContain('agent-user-bad');
   expect(writes(s)).toHaveLength(0);
 
@@ -697,7 +705,7 @@ it('S2-07 a User named-Agent file that does not parse is an existing invalid Use
   // revision, never on the absent-identity token.
   fireEvent.change(field('Description'), { target: { value: 'Repaired reviewer' } });
   expect(retained(s)).toContain('"base":"agent-user-bad"');
-  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'user' }, expected_revision: 'agent-user-bad',
@@ -715,6 +723,8 @@ it('S2-07 removing a malformed User named Agent deletes exactly that file throug
   const s = agentFiles({ user: 'malformed' });
   await openReviewer(s, 'user');
   await confirmAction('Remove Agent reviewer');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'user' }, expected_revision: 'agent-user-bad',
@@ -726,6 +736,8 @@ it('S2-07 removing a malformed User named Agent deletes exactly that file throug
   expect(s.source.agents).toEqual([]);
   expect(writes(s)).toHaveLength(1);
 });
+
+
 
 it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowing the User one, replaced on its own revision', async () => {
   const s = agentFiles({ user: 'valid', workspace: 'malformed' });
@@ -751,12 +763,13 @@ it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowin
   // detail and the page, and navigation writes nothing.
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
   expect(retained(s)).toContain('"base":"agent-workspace-bad"');
-  await openSettingsPage('Models');
-  await openResourceModule('subagents');
+  // Leaving the dirty page asks; staying keeps the transaction-held draft.
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Subagent navigation' })).getByRole('button', { name: 'Subagents' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   expect(field('Description').value).toBe('Workspace reviewer');
   expect(writes(s)).toHaveLength(0);
 
-  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
@@ -773,6 +786,8 @@ it('S2-07 using the global default in place of a malformed Workspace named Agent
   const s = agentFiles({ user: 'valid', workspace: 'malformed' });
   await openReviewer(s, 'workspace');
   await confirmAction('Use global default Agent reviewer');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
@@ -795,9 +810,11 @@ it('S2-07 a malformed Workspace-only named Agent is authored by the Workspace an
   expect(definitionState('Agent reviewer')).toBe('authored');
   expect(authoredValue('Agent reviewer')).toBe('unparsed');
   expect(within(definition('Agent reviewer')).getByText(/This configuration could not be read/)).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Use global default Agent reviewer' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Use global default' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Remove Agent reviewer' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
   await confirmAction('Remove Agent reviewer');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
@@ -813,7 +830,7 @@ it('S2-07 a malformed Workspace-only named Agent is authored by the Workspace an
 it('S2-08 Skills offer read-only instructions and no definition mutation',async()=>{
   const s=cfg3Client();s.source.prospective_resources=inventory();
   await user(s);await openResourceModule('skills');await openResourceRow('docs');
-  expect(screen.getByRole('dialog',{name:'docs'})).toBeTruthy();
+  expect(screen.getByRole('heading',{name:'docs'})).toBeTruthy();
   expect(forms()).toEqual([]);
   expect(screen.queryByRole('textbox')).toBeNull();
   expect(screen.queryByRole('button',{name:/^(Edit|Remove|Delete|Save)/})).toBeNull();
@@ -844,14 +861,14 @@ it('S2-09 an incomplete Provider draft survives navigation and needs review afte
   fireEvent.change(endpoint(), { target: { value: 'incomplete' } });
   // The draft lives in the actor-owned transaction, not in the form library.
   expect(retained(s)).toContain('incomplete');
-  // Detail → list → detail.
+  // Back to the list — the draft stays in the transaction, reopening shows it.
+  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
   await openResourceRow('transport');
   expect(endpoint().value).toBe('incomplete');
-  // Another page, a filter change there, and back: Models restores its focus.
-  await openSettingsPage('Extensions');
-  await openResourceModule('mcp');
-  await openSettingsPage('Models');
-  expect(screen.getByRole('heading', { name: 'Provider transport' })).toBeTruthy();
+  // Leaving the page entirely asks; staying keeps the draft.
+  fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
+  expect(screen.getByRole('heading', { name: 'transport' })).toBeTruthy();
   expect(endpoint().value).toBe('incomplete');
   // An external revision change: the draft and its original CAS base survive,
   // and replacing against the newer revision is an explicit review gesture.
@@ -862,6 +879,8 @@ it('S2-09 an incomplete Provider draft survives navigation and needs review afte
   fireEvent.change(endpoint(), { target: { value: 'https://draft.invalid' } });
   reject = true;
   fireEvent.click(review);
+  // Reviewing only re-fences the draft; the page Save submits it.
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await screen.findByText(/native rejected the Provider/);
   expect(endpoint().value).toBe('https://draft.invalid');
   expect(writes(s)).toHaveLength(1);
@@ -888,7 +907,7 @@ it('S2-09 a Provider autosave waits for the committed Model reread and uses its 
   s.source.user.revision = 'user-1';
   await user(s, 'Models');
   await openResourceRow('transport');
-  fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
+  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
   const wire = () => screen.getByLabelText('Model ID') as HTMLInputElement;
   const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
   const save = (name: string) => screen.getByRole('button', { name: `Save ${name}` }) as HTMLButtonElement;
@@ -912,7 +931,7 @@ it('S2-09 a Provider autosave waits for the committed Model reread and uses its 
   // Another unit stays editable in the same window, but cannot submit.
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://draft.invalid' } });
-  fireEvent.keyDown(screen.getByLabelText('Base URL'), { key: 'Enter' });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   expect(retained(s)).toContain('https://draft.invalid');
   expect(writes(s)).toHaveLength(1);
   // The authoritative observation of the committed Model releases both.
@@ -924,7 +943,7 @@ it('S2-09 a Provider autosave waits for the committed Model reread and uses its 
   await act(async () => reread!.resolve());
   await waitForSettingsSave();
   expect(screen.queryByRole('button', { name: 'Apply my changes' })).toBeNull();
-  fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
+  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
   await waitFor(() => expect(wire().value).toBe('wire-new'));
   expect(contextWindow().closest('fieldset')!.disabled).toBe(false);
   // The next edit is a fresh draft of the observed Model, fenced on its
@@ -960,6 +979,8 @@ it('S2-10 cancelling a deletion writes nothing and returns focus; confirming per
   await waitFor(() => expect(document.activeElement).toBe(trigger));
   await providerAction('Delete');
   fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove Provider transport' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } });
 });

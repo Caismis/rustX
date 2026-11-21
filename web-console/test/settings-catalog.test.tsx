@@ -27,12 +27,13 @@ it('catalog search filters by command and quick availability submits only the cu
   expect(writes(s)[0]).toMatchObject({ target: { kind: 'user' }, expected_revision: 'user-1', mutation: { kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } } });
 });
 
-it('scope menu preserves the resource category and keeps definition drafts bound to their original owner', async () => {
+it('scope menu preserves the resource category, and leaving a definition draft takes an explicit discard', async () => {
   const s = cfg3Client();
   await catalog(s);
   await openResourceRow('search');
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'unsaved-server' } });
   fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard and leave' }));
   fireEvent.click(screen.getByRole('tab',{name:'Workspace'}));
   fireEvent.click(screen.getByRole('button',{name:'Choose Workspace'}));
   fireEvent.click(await screen.findByRole('menuitem',{name:'A'}));
@@ -40,7 +41,8 @@ it('scope menu preserves the resource category and keeps definition drafts bound
   fireEvent.click(screen.getByRole('tab',{name:'Global'}));
   await screen.findByRole('listitem',{name:'search'});
   await openResourceRow('search');
-  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('unsaved-server');
+  // The discarded draft is gone: the authored command is what was always there.
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server');
   expect(writes(s)).toHaveLength(0);
 });
 

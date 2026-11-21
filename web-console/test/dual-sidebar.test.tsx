@@ -224,7 +224,7 @@ it('Settings drafts and a held exact-CAS write survive primary navigation withou
   await mounted();
   await act(async () => fireEvent.click(primary('Settings')));
   await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
-  await act(async () => fireEvent.click(screen.getByRole('row', { name: 'transport' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'transport →' })));
   const field = screen.getByLabelText('Base URL') as HTMLInputElement;
   fireEvent.change(field, { target: { value: 'https://retained.example/' } });
   const reads = server.requests.filter(row => row.request.method === 'configuration/sourcesRead').length;
@@ -234,11 +234,13 @@ it('Settings drafts and a held exact-CAS write survive primary navigation withou
   expect(field.value).toBe('https://retained.example/');
   expect(server.requests.filter(row => row.request.method === 'configuration/sourcesRead')).toHaveLength(reads);
   server.held.add('configuration/sourceWrite');
-  await act(async () => fireEvent.keyDown(field, { key: 'Enter' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
   await waitForUI(() => expect(server.requests.some(row => row.request.method === 'configuration/sourceWrite')).toBe(true));
   const write = server.requests.find(row => row.request.method === 'configuration/sourceWrite')!.request;
   expect(write.params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://retained.example/' } } } });
   await act(async () => fireEvent.click(primary('Home')));
+  const guardModal = screen.queryByRole('dialog');
+  if (guardModal) await act(async () => fireEvent.click(within(guardModal).getByRole('button', { name: 'Discard and leave' })));
   await act(async () => server.reply(write));
   await act(async () => fireEvent.click(primary('Settings')));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://retained.example/');

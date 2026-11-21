@@ -18,6 +18,7 @@ it('MCP has its own navigation and saves a new HTTP server before returning to t
  await chooseOption('Type','HTTP');
  fireEvent.change(screen.getByLabelText('URL'),{target:{value:'https://mcp.example.com/mcp'}});
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
+
  await screen.findByRole('listitem',{name:'exa'});
  fireEvent.click(screen.getByRole('button',{name:'MCP exa'}));
  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://mcp.example.com/mcp');
@@ -69,9 +70,9 @@ it('invalid reference JSON cannot save an earlier valid draft or escape through 
  const refs=await screen.findByLabelText('Environment variables (JSON)');
  changeJson(refs, '{"TOKEN":"$TOKEN"}');
  changeJson(refs, '{"TOKEN":');
- expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(true);
  expect((screen.getByRole('button',{name:'JSON'}) as HTMLButtonElement).disabled).toBe(true);
- fireEvent.submit(screen.getByRole('button',{name:'Save'}).closest('form')!);
+ // The page footer saves only a complete draft: invalid buffers are vetoed.
+ fireEvent.click(screen.getByRole('button',{name:'Save'}));
  expect(writes(s)).toHaveLength(0);
  changeJson(refs, '{}');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
@@ -96,9 +97,9 @@ it('shows the complete form immediately and keeps fields entered before the name
  expect(screen.getByText('Environment references (optional)')).toBeTruthy();
  expect(save().disabled).toBe(true);
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'npx'}});
- expect(save().disabled).toBe(true);
- // Even an explicit submit event cannot write an unnamed server.
- fireEvent.submit(save().closest('form')!);expect(writes(s)).toHaveLength(0);
+ expect(save().disabled).toBe(false);
+ // An unnamed server vetoes the page save rather than disabling it.
+ fireEvent.click(save());expect(writes(s)).toHaveLength(0);
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'first'}});
  await waitFor(()=>expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('npx'));
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'renamed'}});
@@ -148,19 +149,20 @@ it('retained raw JSON cannot overwrite a newly observed MCP source revision', as
  const draft = '{"docs":{"command":"stale-draft"}}';
  changeJson(await screen.findByLabelText('Complete configuration'), draft);
  fireEvent.click(screen.getByRole('button', { name: '← MCP servers' }));
+ // Leaving with an unsaved buffer asks first; discarding drops it.
+ fireEvent.click(await screen.findByRole('button', { name: 'Discard and leave' }));
  s.source.user_mcp.revision = 'external-mcp';
  s.source.user_mcp.authored!.docs.definition.command = 'external-command';
  s.source.user_mcp.authored!.docs.retained_env = ['NEW_TOKEN'];
  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
  await screen.findByText('stdio · external-command');
  openServer();
- const json = await screen.findByLabelText('Complete configuration');
- expect(readJson(json)).toBe(draft);
- expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
- fireEvent.submit(screen.getByRole('form', { name: 'Edit MCP server' }));
+ // The discarded buffer does not survive: the reopened editor starts from
+ // the observed definition, not the abandoned raw JSON.
+ expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('external-command');
  expect(writes(s)).toHaveLength(1);
- fireEvent.click(screen.getByRole('button', { name: 'Use latest setting' }));
- expect(readJson(json)).toBe(draft);
+ fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+ changeJson(await screen.findByLabelText('Complete configuration'), draft);
  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
  await screen.findByRole('listitem', { name: 'docs' });
  expect(writes(s)).toHaveLength(2);
@@ -187,8 +189,9 @@ it('a duplicate name cannot overwrite a server and resolving it preserves the ne
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'new-command'}});
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'existing'}});
  expect(screen.getByRole('alert').textContent).toContain('already exists');
- expect((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(true);
- fireEvent.submit(screen.getByRole('button',{name:'Save'}).closest('form')!);
+ // A duplicate identity vetoes the page save.
+ fireEvent.click(screen.getByRole('button',{name:'Save'}));
+ await new Promise(done => setTimeout(done, 20));
  expect(writes(s)).toHaveLength(1);
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'different'}});
  await waitFor(()=>expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('new-command'));
@@ -219,7 +222,7 @@ it('MCP cards only list definitions belonging to their authored scope',async()=>
  const {McpPage}=await import('../src/app/resources/mcp/McpPage');
  const {vi}=await import('vitest');
  const onFocus=vi.fn();
- const props={source:s.source,scope:'workspace' as const,onFocus,query:'',view:'cards' as const};
+ const props={source:s.source,scope:'workspace' as const,onFocus,query:''};
  const ui=render(<McpPage {...props}/>);
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();
  expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();

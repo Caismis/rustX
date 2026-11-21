@@ -6,7 +6,7 @@ import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import {
-  choose, returnHome, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, returnHome, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
@@ -62,14 +62,17 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
-    await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
-    await expect(settledSave(settings, 'Default model')).toBeVisible();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(settledSave(settings)).toBeVisible();
     await openSettingsPage(page, 'Advanced');
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
-    await confirmSettingsAction(page, 'Use global default Default model');
-    await expect(settledSave(settings, 'Default model')).toBeVisible();
+    // Restoring the inherited default is staged like any edit: the footer
+    // Save is the commit.
+    await settings.getByRole('form', { name: 'Default model', exact: true }).getByRole('button', { name: 'Use global default', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(settledSave(settings)).toBeVisible();
     await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await openSession(idB); await send('Use B while A runs');
@@ -155,7 +158,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('Advanced');
-    await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
+    await settings.getByRole('button', { name: '← Back to Advanced', exact: true }).click();
     await openSettingsPage(page, 'Advanced');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();

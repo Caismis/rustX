@@ -28,7 +28,7 @@ for (const width of [1440,390]) test.describe(`classifier panel ${width}`,()=>{
       await card.focus();await card.press('Enter');
       // The same source and layout, with product-owned Chinese wording.
       await page.getByRole('button',{name:'Settings',exact:true}).click();
-      await choose(page.getByRole('region',{name:'Settings',exact:true}),'Language','中文');
+      await choose(page.getByRole('region',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('region',{name:'Settings',exact:true}).getByRole('button',{name:'Save',exact:true}).click();
       await page.getByRole('button',{name:'工作流',exact:true}).click();
       await card.focus();await card.press('Enter');
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});

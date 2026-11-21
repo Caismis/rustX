@@ -17,7 +17,7 @@ test('MCP keeps its resource scope separate from Settings and opens global defin
  await search.clear();
  await expect(inherited.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
  await openSettingsPage(page,'General');
- await expect(page.getByRole('heading',{name:'User Settings',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'User (global)',exact:true})).toHaveAttribute('aria-pressed','true');
  await openResourceModule(page,'mcp');
  await expect(mcp.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');
  await inherited.getByRole('button',{name:'MCP exa',exact:true}).click();
@@ -29,11 +29,11 @@ test('MCP keeps its resource scope separate from Settings and opens global defin
  expect(errors).toEqual([]);
 });
 test('MCP module shares compact typography and fits a narrow page',async({page})=>{
+ await page.addInitScript(() => localStorage.setItem('rustx-appearance-v1','dark'));
  await page.goto(fixture);await openSettingsPage(page,'General');
- await page.getByRole('button',{name:'Dark',exact:true}).click();
  const mcp=await openResourceModule(page,'mcp','Global');
  await mcp.getByRole('button',{name:'MCP exa',exact:true}).click();
- await expect(mcp.locator('h3')).toHaveCSS('font-size','24px');
+ await expect(mcp.locator('h3')).toHaveCSS('font-size','20px');
  await expect(mcp.getByRole('button',{name:'Form',exact:true})).toHaveAttribute('aria-pressed','true');
  await mcp.getByRole('button',{name:'JSON',exact:true}).click();
  await page.setViewportSize({width:390,height:850});

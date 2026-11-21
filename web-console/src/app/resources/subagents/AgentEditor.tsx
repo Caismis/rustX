@@ -7,7 +7,8 @@ import { Button } from '../../../presentation/primitives/Button';
 import { IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
 import { Switch } from '../../../presentation/primitives/Switch';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
-import { DefinitionNotice, UnitOutcomeNotice, UnitReset, useUnitEditing } from '../../settings/forms/bridge';
+import { DefinitionNotice, PageTransactionFooter, UnitOutcomeNotice, UnitReset, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
+import { useNavigationGuard } from '../../settings/forms/guard';
 import { Choice, ConfirmAction } from '../../settings/primitives/aria';
 import { AgentModelOptions, ModelProfileChoice, type ModelProfiles } from '../../settings/models/ModelsPage';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
@@ -51,7 +52,11 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
 
-  const close = () => { unit.discard(); onClose(); };
+  const page = usePageTransaction();
+  const guard = useNavigationGuard();
+  // No silent discard: closing through the breadcrumb asks first when the
+  // page transaction reports a draft; abandoning there discards it.
+  const close = () => guard.guard(onClose);
   const value = unit.displayed;
   const identity = name ?? value.name?.trim() ?? '';
   const validationId = useId();
@@ -69,7 +74,10 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const title = tx(creating ? 'resources:subagents.new' : 'resources:subagents.edit');
   const formName = creating ? title : tx('settings:extension-detail.agent-value', { p0: name ?? '' });
   const canSubmit = editable && unit.admitted && !busy && !unit.reviewNeeded;
-  const save = canSubmit && !invalid && !duplicate && unit.writable && (creating || unit.draft);
+  const saveable = canSubmit && !invalid && !duplicate;
+  useEffect(() => {
+    page?.setLocal(false, undefined, undefined, () => page?.stagedRemovals.has(unit.identity) || saveable);
+  }, [page, saveable]);
   const model = value.model ?? undefined;
   const modelChoices = [...new Set([...models, ...(model?.model ? [model.model] : [])])];
   const update = (changes: Partial<AgentDraft>) => unit.edit({ ...value, ...changes });
@@ -78,7 +86,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
 
   return <div className={css.editor}>
     <nav className={css.breadcrumb} aria-label={tx('resources:subagents.navigation')}>
-      <Button variant="ghost" size="sm" disabled={busy} onClick={close}>{tx('resources:subagents.title')}</Button>
+      <Button variant="ghost" size="sm" onClick={close}>{tx('resources:subagents.title')}</Button>
       <IconChevronRightOutline14 aria-hidden="true" />
       <span aria-current="page">{name ?? title}</span>
     </nav>
@@ -89,12 +97,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
     <UnitReset.Provider value={unit.resets}>
       <form ref={form} tabIndex={-1} aria-label={formName} aria-busy={busy} className={`${settings.settings} ${css.form}`}
         data-definition={unit.definition} data-authored-value={unit.authoredPresent ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
-        onSubmit={event => {
-          event.preventDefault();
-          if (!save) return;
-          if (unit.draft) unit.submit();
-          else unit.apply(value);
-        }}>
+        onSubmit={event => event.preventDefault()}>
         <fieldset className={css.body} disabled={!editable || busy}>
           {(unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit}/>}
           <SettingsNotice text={current?.source.diagnostic ?? undefined} />
@@ -170,7 +173,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
         </fieldset>
         <UnitOutcomeNotice title={formName} outcome={unit.outcome} />
         <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}/>
-        <footer className={css.actions}>
+        <PageTransactionFooter leading={<>
           {unit.authoredPresent && <span data-removal={restoring ? 'override-removal' : 'authored-removal'}><ConfirmAction
             label={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}
             title={tx(restoring ? 'settings:bridge.use-the-global-default-for-value' : 'settings:bridge.remove-value-from-value-configuration', {
@@ -180,18 +183,12 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             confirm={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}
             description={tx(restoring ? 'settings:forms.restore-help' : 'resources:subagents.delete-help')}
             settle={form} tone={restoring ? 'restore' : 'destructive'} disabled={!canSubmit}
-            onConfirm={() => { if (canSubmit) unit.submit(true); }} /></span>}
-          <div className={css.saveActions}>
-            {unit.reviewNeeded && <Button size="sm" disabled={!editable || busy} onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
-            <Button variant="outline" size="sm" disabled={busy} onClick={close}>{tx('resources:cancel')}</Button>
-            {unit.override ? <Button type="button" variant="primary" size="sm"
-              aria-label={`${tx('settings:bridge.override')} ${formName} ${tx('settings:bridge.in-this-workspace')}`}
-              disabled={!editable || busy} onClick={unit.override}>{tx('settings:forms.customize')}</Button>
-              : <Button type="submit" variant="primary" size="sm" aria-label={`${tx('settings:bridge.save')} ${formName}`} disabled={!save}>
-                {tx(busy ? 'settings:catalog.saving' : 'settings:bridge.save')}
-              </Button>}
-          </div>
-        </footer>
+            onConfirm={() => { if (canSubmit) page?.stageRemoval(unit.identity); }} /></span>}
+          {unit.reviewNeeded && <Button size="sm" disabled={!editable || busy} onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
+          {unit.override && <Button type="button" variant="primary" size="sm"
+            aria-label={`${tx('settings:bridge.override')} ${formName} ${tx('settings:bridge.in-this-workspace')}`}
+            disabled={!editable || busy} onClick={unit.override}>{tx('settings:forms.customize')}</Button>}
+        </>} />
       </form>
     </UnitReset.Provider>
   </div>;

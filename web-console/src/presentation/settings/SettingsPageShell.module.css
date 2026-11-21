@@ -1,0 +1,279 @@
+/* The shared Settings page skeleton: fixed head, one scrolling 960px canvas,
+   and a fixed footer that never scrolls away (DSH PluginManagerPage). */
+
+.shell {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.pageHead {
+  flex: none;
+  padding: 18px clamp(24px, 4vw, 48px) 0;
+}
+
+.headInner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 56px;
+}
+
+.headTitle { min-width: 0; }
+
+.title {
+  margin: 0 0 2px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.description {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.headToolbar {
+  flex: 1 1 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pageBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px clamp(24px, 4vw, 48px) 32px;
+}
+
+.canvas {
+  max-width: 960px;
+  margin: 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.pageFooter {
+  flex: none;
+  /* Inside the shell the footer is a fixed flex sibling; inside scrollable
+     detail editors (subagent, MCP) it sticks to the visible bottom edge. */
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-base);
+  padding: 12px clamp(24px, 4vw, 48px);
+}
+
+.footerInner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.footerStatus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.footerButtons {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.footerButtons button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- Groups and rows ---------------------------------------------------- */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.groupHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+}
+
+.groupDescription {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.groupRows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.row {
+  padding: 12px 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  min-width: 0;
+}
+
+.row:last-child { border-bottom: 0; }
+
+.rowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.rowVertical .rowHead { align-items: flex-start; }
+
+.rowText { min-width: 0; flex: 1; }
+
+.rowLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.rowDescription {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.rowControl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rowBody { margin-top: 10px; min-width: 0; }
+
+/* The scope segmented control: a pill pair plus the workspace chooser. */
+.scopeSegment {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.scopeSegment button {
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.scopeSegment button[aria-pressed='true'] {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+}
+
+.scopeChooser {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  max-width: 260px;
+}
+
+.scopeChooser span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (hover: hover) {
+  .scopeSegment button:hover { color: var(--dsw-alias-label-primary); }
+  .scopeChooser:hover { background: var(--dsw-alias-interactive-bg-hover); }
+}
+
+.scopeSegment button:focus-visible,
+.scopeChooser:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.scopeBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* A page shell carrying the Settings field vocabulary (.settings/.page) keeps
+   the full width of the canvas: those container defaults belong to
+   freestanding sections, not to the shared page skeleton. The double class
+   wins regardless of module load order. */
+.shell.shell {
+  gap: 0;
+  max-width: none;
+}

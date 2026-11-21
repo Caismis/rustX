@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';
-import css from './SkillDisplayDialog.module.css';
+import css from './SkillDeleteDialog.module.css';
 
 export function SkillDeleteDialog({ name, scope, path, remove, close }: {
   name: string; scope: string; path: string; remove: () => Promise<void>; close: () => void;

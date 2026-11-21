@@ -19,11 +19,19 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    expect((await sessions()).sessions).toEqual([]);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+   // Dirty staged drafts intercept the Home navigation with the unsaved-changes
+   // modal, so the gesture and the discard run as one step.
+   const discardLeave = async () => {
+     await page.getByRole('button', { name: 'Home', exact: true }).click();
+     const leave = page.getByRole('button', { name: 'Discard and leave', exact: true });
+     if (await leave.isVisible()) await leave.click();
+     await expect(page.getByRole('button', { name: 'Home', exact: true })).toHaveAttribute('aria-current', 'page');
+   };
    await openSettingsPage(page, 'Advanced');
    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
    await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
-   await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
-   await expect(settledSave(settings, 'Context')).toBeVisible();
+   await settings.getByRole('button', { name: 'Save', exact: true }).click();
+   await expect(settledSave(settings)).toBeVisible();
    const source = await readSource(remote,{kind:'user'});
    expect(source.user.authored?.context?.reserve_tokens).toBe('19');
    expect(source.workspace).toBeNull();
@@ -34,24 +42,25 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await expect(settings.getByRole('form', { name: 'Built-in tools', exact: true })).toHaveAttribute('data-authored', 'absent');
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
    // An explicit edit against that displayed value is Workspace A's own draft.
    await settings.getByLabel('read', { exact: true }).uncheck();
-   await returnHome(page);
+   await discardLeave();
    await openWorkspaceSettings(page, b.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
    // Workspace B is a different target: it still shows the inherited value and
    // never receives Workspace A's draft.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
    await settings.getByLabel('write', { exact: true }).uncheck();
-   await returnHome(page);
+   await discardLeave();
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
-   await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
+   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
-   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-   await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
+   await settings.getByLabel('read', { exact: true }).uncheck();
+   await settings.getByRole('button', { name: 'Save', exact: true }).click();
+   await expect(settledSave(settings)).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
@@ -62,24 +71,24 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await f.workspaceHost.host.removeWorkspace(await f.workspaceHost.host.listWorkspaces(), a.id);
    // A revoked target fences the next authored change and retains the draft.
    await settings.getByLabel('read', { exact: true }).check();
-   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   await settings.getByRole('button', { name: 'Save', exact: true }).click();
    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'Unknown Workspace registration' })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await returnHome(page);
+   await discardLeave();
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-   await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
+   await settings.getByRole('button', { name: 'User (global)', exact: true }).click();
    await openSettingsPage(page, 'Tools & Permissions');
    // A fresh User lifetime carries no draft, so there is nothing to save until
    // an explicit edit changes the authored value.
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
    await settings.getByLabel('read', { exact: true }).uncheck();
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
+   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
    const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
    wire.loseNext('configuration/sourceWrite');
-   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   await settings.getByRole('button', { name: 'Save', exact: true }).click();
    await expect.poll(wire.lost).toBe(1);
    await connectionAction(page, 'Reconnect');
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
+   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
    expect(wire.lost()).toBe(1);
    expect(wire.requests.filter(row => row.method === 'configuration/sourceWrite')).toHaveLength(before + 1);
    expect((await sessions()).sessions).toEqual([]);

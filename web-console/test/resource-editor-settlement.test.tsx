@@ -9,6 +9,7 @@ import { McpEditor } from '../src/app/resources/mcp/McpEditor';
 import { SettingsFeedback } from '../src/app/settings/SettingsFeedback';
 import { cfg3Client } from './cfg3-fixture';
 import { cfg3Source } from './cfg3-data';
+import { PageTransactionProvider, PageTransactionFooter } from '../src/app/settings/forms/bridge';
 import { InSettings, settingsAuthority } from './settings-harness';
 import { userSettingsTarget } from '../src/app/settings/projection';
 
@@ -29,12 +30,12 @@ function Surface({ actor, kind }: { actor: ReturnType<typeof settingsAuthority>[
   if (!source || closed) return <output>{closed ? 'Editor closed' : 'Loading'}</output>;
   let editor: ReactNode;
   if (kind === 'model') editor = <ModelsPage client={client} source={source} scope="user" revision={source.user.revision}
-    target={userSettingsTarget} models={[]} profiles={{}} onFocus={() => {}} />;
+    target={userSettingsTarget} models={[]} profiles={{}} focus={{ kind: 'provider', id: 'transport' }} onFocus={() => {}} />;
   else if (kind === 'mcp') editor = <McpEditor source={source} scope="user" focus={{ kind: 'mcp' }}
-    scopeControl={null} close={close} onEditorDraftChange={() => {}} />;
+    scopeControl={null} close={close} />;
   else editor = <AgentEditor source={source} target={userSettingsTarget} models={[]} profiles={{}}
     name={kind === 'edit-agent' ? 'helper' : undefined} discover={false} onClose={close} />;
-  return <InSettings actor={actor} source={source}><SettingsFeedback>{editor}</SettingsFeedback></InSettings>;
+  return <InSettings actor={actor} source={source}><SettingsFeedback><PageTransactionProvider>{editor}{kind === 'mcp' ? <PageTransactionFooter /> : null}</PageTransactionProvider></SettingsFeedback></InSettings>;
 }
 
 function McpCreations({ actor }: { actor: ReturnType<typeof settingsAuthority>['actor'] }) {
@@ -42,8 +43,8 @@ function McpCreations({ actor }: { actor: ReturnType<typeof settingsAuthority>['
   const [open, setOpen] = useState(false);
   if (!source) return null;
   return <InSettings actor={actor} source={source}><SettingsFeedback>
-    {open ? <McpEditor source={source} scope="user" focus={{ kind: 'mcp' }} scopeControl={null}
-      close={() => setOpen(false)} onEditorDraftChange={() => {}} />
+    {open ? <PageTransactionProvider><McpEditor source={source} scope="user" focus={{ kind: 'mcp' }} scopeControl={null}
+      close={() => setOpen(false)} /><PageTransactionFooter /></PageTransactionProvider>
       : <button onClick={() => setOpen(true)}>New MCP</button>}
   </SettingsFeedback></InSettings>;
 }
@@ -81,10 +82,11 @@ it.each(['earlier editor', 'native source'] as const)('MCP preserves a rejected 
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'server-a' } });
   expect(screen.getByRole('form')).toBeTruthy();
   expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('unsaved-command-b');
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  // A duplicate identity vetoes the page Save rather than disabling it.
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await new Promise(done => setTimeout(done, 20));
   expect((screen.getByLabelText('Name') as HTMLInputElement).disabled).toBe(false);
   expect(authority.writes).toHaveBeenCalledTimes(successful + 1);
-  expect(Object.values(authority.context().units)).toHaveLength(0);
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'server-c' } });
   await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -128,11 +130,15 @@ async function exercise(kind: Editor, exact: boolean, newerDraft = false) {
     if (kind === 'new-agent') fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'helper' } });
     fireEvent.change(await screen.findByLabelText('Description'), { target: { value: 'After' } });
   }
-  const form = screen.getByRole('form');
-  fireEvent.click(within(form).getByRole('button', { name: /^Save/ }));
+  // The page transaction footer renders outside the editor form; the Add
+  // Model dialog keeps its own submit as the one dialog affordance.
+  const form = kind === 'model' ? screen.getByRole('dialog', { name: 'Add Model' }) : screen.getByRole('form');
+  const save = kind === 'model' ? within(form).getByRole('button', { name: /^Save/ })
+    : screen.getByRole('button', { name: /^Save/ });
+  fireEvent.click(save);
   await waitFor(() => expect(authority.writes).toHaveBeenCalledTimes(1));
   await act(async () => acknowledgement.resolve());
-  expect(screen.getByRole('form')).toBe(form);
+  expect((kind === 'model' ? screen.getByRole('dialog', { name: 'Add Model' }) : screen.getByRole('form'))).toBe(form);
   if (kind === 'model') expect(screen.getByRole('dialog', { name: 'Add Model' })).toBeTruthy();
   const next = structuredClone(source);
   if (exact || newerDraft) {
@@ -150,14 +156,14 @@ async function exercise(kind: Editor, exact: boolean, newerDraft = false) {
   await act(async () => observation.resolve(exact ? next : structuredClone(source)));
   if (exact) await waitFor(() => expect(kind === 'model' ? screen.queryByRole('dialog', { name: 'Add Model' }) : screen.queryByRole('form')).toBeNull());
   else {
-    expect(screen.getByRole('form')).toBe(form);
+    expect((kind === 'model' ? screen.getByRole('dialog', { name: 'Add Model' }) : screen.getByRole('form'))).toBe(form);
     expect(screen.getByText(/saved setting changed elsewhere/)).toBeTruthy();
     const review = screen.getByRole('button', { name: 'Use latest setting' });
     expect((review as HTMLButtonElement).disabled).toBe(false);
     // Review accepts the observed base; it cannot turn a diverged commit into
     // proof that our write is still present or automatically submit it again.
     fireEvent.click(review);
-    expect(screen.getByRole('form')).toBe(form);
+    expect((kind === 'model' ? screen.getByRole('dialog', { name: 'Add Model' }) : screen.getByRole('form'))).toBe(form);
     if (kind === 'model') expect(screen.getByRole('dialog', { name: 'Add Model' })).toBeTruthy();
     if (newerDraft) {
       const label = kind === 'model' ? 'Model ID' : kind === 'mcp' ? 'Command' : 'Description';
@@ -172,7 +178,7 @@ async function exercise(kind: Editor, exact: boolean, newerDraft = false) {
       expect(unit.getSnapshot().matches({ mutation: 'settled' })).toBe(true);
       expect(unit.getSnapshot().matches({ intent: 'dirty' })).toBe(true);
       expect(unit.getSnapshot().matches({ lifetime: 'live' })).toBe(true);
-      expect(screen.getByRole('form')).toBe(form);
+      expect((kind === 'model' ? screen.getByRole('dialog', { name: 'Add Model' }) : screen.getByRole('form'))).toBe(form);
       expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe(value);
       if (kind === 'model') expect(screen.getByRole('dialog', { name: 'Add Model' })).toBeTruthy();
     }

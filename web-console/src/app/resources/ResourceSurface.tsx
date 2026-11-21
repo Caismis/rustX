@@ -10,7 +10,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { sameEndpoint } from '../../workspaces/endpoint';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import { useTranslation } from '../../locale/react';
-import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../presentation/catalog/CatalogControls';
+import { CatalogSearch } from '../../presentation/catalog/CatalogControls';
 import catalogCss from '../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../presentation/primitives/Button';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -22,15 +22,16 @@ import { catalogIdentities, catalogProfiles, configAuthoring, settingsTargetKey,
 import { SettingsFeedback, SettingsNotice } from '../settings/SettingsFeedback';
 import { createWorkflowPort, readToolCatalog, USER_SCOPE } from '../workflows/port';
 import { McpActions, McpDetail, McpPage } from './mcp/McpPage';
+import { PageTransactionProvider } from '../settings/forms/bridge';
 import { useMcpProbes } from './mcp/useMcpProbes';
 import { TransferDialog, type TransferIntent } from './shared/ResourceTransfer';
 import { ResourceAvailability } from './shared/ResourceAvailability';
 import { ResourceBrowser } from './shared/ResourceBrowser';
-import type { SkillDisplayWriter } from './skills/SkillDisplayDialog';
+import type { SkillDisplayWriter } from './skills/SkillDetail';
 import { AgentEditor, type AgentDraft } from './subagents/AgentEditor';
 import type { LoadMcpTools } from './subagents/AgentToolFields';
 import { SubagentList } from './subagents/SubagentList';
-import type { McpEditorDraft, McpFocus, ResourceModule } from './types';
+import type { McpFocus, ResourceModule } from './types';
 import css from './ResourceSurface.module.css';
 
 interface Props {
@@ -75,12 +76,10 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const busy = useSelector(actor, state => state.matches({ mutation: 'submitting' }) || state.matches({ maintenance: 'reconciling' }));
   const [workspaceMenu, setWorkspaceMenu] = useState(false);
   const [query, setQuery] = useState('');
-  const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
   const [transferIntent, setTransferIntent] = useState<TransferIntent>();
   const [skillCatalogRefresh, setSkillCatalogRefresh] = useState(0);
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
-  const mcpDrafts = useRef(new Map<string, { draft: McpEditorDraft; hostOwner?: string }>());
   const [resourceFocus, setResourceFocus] = useState<string>();
   const [newAgent, setNewAgent] = useState<AgentDraft>();
   const owner = `${transport.endpoint}|${transport.authorityRevision}`;
@@ -106,15 +105,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setQuery('');
   };
   if (owner !== presentedOwner) {
-    mcpDrafts.current.clear();
     setPresentedOwner(owner);
     resetScope();
   }
   if (hostOwner !== presentedHost) {
     setPresentedHost(hostOwner);
-    for (const [key, entry] of mcpDrafts.current) {
-      if (entry.hostOwner !== undefined) mcpDrafts.current.delete(key);
-    }
     if (showingWorkspace && presentedHost !== undefined) resetScope();
   }
   const changeCreationScope = (next: SettingsTarget, draft: AgentDraft) => {
@@ -159,7 +154,6 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setDetailScope(owner);
     setResourceFocus(name);
   };
-  const mcpDraftKey = mcpFocus ? JSON.stringify([owner, editorTarget.kind === 'workspace' ? lifetime : 'user', editorSource?.target, mcpFocus.name ?? null]) : undefined;
   const editorConfig = configAuthoring(editorSource, editorTarget.kind);
   const refresh = () => {
     actor.send({ type: 'REFRESH' });
@@ -180,14 +174,18 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       if (skill.provenance.source === 'user') {
         await client.request({ method: 'configuration/sourceWrite', params: { target: { kind: 'user' }, expected_revision, mutation } },
           'sources_written', undefined, current);
-        return;
+      } else {
+        if (!workspaceId || !endpoint || !directory || !hostAuthority?.current()
+          || !sameEndpoint(hostAuthority.scope.endpoint, endpoint) || !host?.configureWorkspace) throw unavailable();
+        const result = await host.configureWorkspace(workspaceId, endpoint, {
+          kind: 'write', expected_directory: directory, expected_revision, mutation,
+        });
+        if (result.kind !== 'write') throw unavailable();
       }
-      if (!workspaceId || !endpoint || !directory || !hostAuthority?.current()
-        || !sameEndpoint(hostAuthority.scope.endpoint, endpoint) || !host?.configureWorkspace) throw unavailable();
-      const result = await host.configureWorkspace(workspaceId, endpoint, {
-        kind: 'write', expected_directory: directory, expected_revision, mutation,
-      });
-      if (result.kind !== 'write') throw unavailable();
+      // A committed skill write re-reads the catalog immediately: display
+      // authored values (e.g. a generated asset icon path) are settled only by
+      // a fresh listing, never by the write acknowledgement alone.
+      refresh();
     };
   };
   const bindSkillDisplayWrite = (skill: SkillDescriptor): SkillDisplayWriter | undefined => {
@@ -232,11 +230,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       : undefined;
     return module === 'mcp'
       ? <McpPage source={shown} scope={owner} revision={revision} onFocus={next => focusMcp(next, owner)}
-        query={query} view={view} group={group} probeStates={inherited ? undefined : probes.states}
+        query={query} group={group} probeStates={inherited ? undefined : probes.states}
         testConnection={probes.testConnection} probeAvailable={!inherited && probes.available}
         onOverride={canOverride ? name => focusMcp({ kind: 'mcp', name }, 'workspace') : undefined} canOverride={canOverride}
         onTransfer={transfer} transferDisabled={transferDisabled} workspaceAvailability={workspaceAvailability} />
-      : <SubagentList source={shown} scope={owner} revision={revision} query={query} view={view} group={group}
+      : <SubagentList source={shown} scope={owner} revision={revision} query={query} group={group}
         onOpen={name => openAgent(name, owner)} onOverride={canOverride ? name => openAgent(name, 'workspace') : undefined}
         canOverride={canOverride} onTransfer={transfer} transferDisabled={transferDisabled} workspaceAvailability={workspaceAvailability} />;
   };
@@ -246,9 +244,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     {agentEditor ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}><SettingsFeedback active={visible}>
       {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
       {editorAvailable && editorSource ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
+        <PageTransactionProvider>
         <AgentEditor source={editorSource} target={editorTarget} host={host} name={resourceFocus} initialDraft={newAgent} editable={editorEditable}
           client={client} discover={visible && editorEditable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
           models={catalogIdentities(editorSource, editorTarget.kind, 'models')} profiles={catalogProfiles(editorSource, editorTarget.kind)} />
+        </PageTransactionProvider>
       </SourceContext></SettingsActorContext> : <>
         <Button size="sm" onClick={closeAgent}>{tx('resources:cancel')}</Button>
         <p className={catalogCss.state} role="status">{tx(editorAvailable ? 'resources:loading' : 'resources:scope.unavailable')}</p>
@@ -258,14 +258,10 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
         {editorSource && mcpFocus && <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
           <fieldset className={css.editor} disabled={!editorEditable}>
+            <PageTransactionProvider>
             <McpDetail source={editorSource} scope={editorTarget.kind} revision={editorConfig.state === 'structured' ? editorConfig.revision : undefined}
-              focus={mcpFocus} onClose={() => focusMcp(undefined)} scopeControl={<span>{editorScopeLabel}</span>}
-              editorDraft={mcpDraftKey ? mcpDrafts.current.get(mcpDraftKey)?.draft : undefined}
-              onEditorDraftChange={draft => {
-                if (!mcpDraftKey) return;
-                if (draft) mcpDrafts.current.set(mcpDraftKey, { draft, hostOwner: editorTarget.kind === 'workspace' ? hostOwner : undefined });
-                else mcpDrafts.current.delete(mcpDraftKey);
-              }} />
+              focus={mcpFocus} onClose={() => focusMcp(undefined)} scopeControl={<span>{editorScopeLabel}</span>} />
+            </PageTransactionProvider>
           </fieldset>
         </SourceContext></SettingsActorContext>}
       </div>
@@ -293,7 +289,6 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             </div> : <p className={catalogCss.context}>{scopeLabel}</p>}
             <div className={clsx(catalogCss.controlsRight, css.tools)}>
               <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
-              <CatalogViewSwitch view={view} onChange={setView} />
               <Button size="sm" variant="outline" className={css.refresh} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
                 disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></Button>
             </div>
@@ -303,7 +298,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
                 {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                  query={query} view={view} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
+                  query={query} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
                   bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}

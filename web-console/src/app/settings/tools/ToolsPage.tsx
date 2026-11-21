@@ -6,10 +6,14 @@ import type {
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
 } from '../../../../../protocol/app-server/v80';
 import { Button } from '../../../presentation/primitives/Button';
+import { Switch } from '../../../presentation/primitives/Switch';
 import { UnitForm } from '../forms/bridge';
-import { CheckboxList, Selection, TextField, nativeTools } from '../forms/controls';
+import { Selection, TextField, nativeTools } from '../forms/controls';
 import { Choice } from '../primitives/aria';
 import { reachableIdentities, sourceView } from '../projection';
+import { SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
+import { PageTransactionFooter } from '../forms/bridge';
+import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** The Tools & Permissions product page.
@@ -36,33 +40,38 @@ export function ToolsPage({ source, document, scope, revision }: {
   const [source_, setSource] = useState('');
   const [added, setAdded] = useState<string[]>([]);
   const sources = [...new Set([...reachableIdentities(scope, agent?.tools?.sources, resolved?.agent?.tools?.sources), ...added])].filter(id => id.startsWith('python:'));
-  return <section aria-label={tx('settings:tools-page.tools-permissions')}>
-    <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
+  return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:tools-page.tools-amp-permissions')}
+    toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={<PageTransactionFooter />}>
+    <SettingsGroup title={tx('settings:tools-page.approval-mode')}>
+      <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="plan" revision={revision}
+        mutation={authored => ({ kind: 'config', mutation: { unit: 'approval', authored } })}>
+        {(value, change) => <Choice label={tx('settings:tools-page.approval-mode')} value={value}
+          options={[['plan', tx('settings:copy.plan')], ['automatic', tx('settings:copy.automatic')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
+      </UnitForm>
+    </SettingsGroup>
 
-    <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="plan" revision={revision}
-      mutation={authored => ({ kind: 'config', mutation: { unit: 'approval', authored } })}>
-      {(value, change) => <Choice label={tx('settings:tools-page.approval-mode')} value={value}
-        options={[['plan', tx('settings:copy.plan')], ['automatic', tx('settings:copy.automatic')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
-    </UnitForm>
+    <SettingsGroup title={tx('settings:extension-detail.native-tools')}>
+      <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
+        mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}>
+        {(value, change) => <div className={css.page}>
+          {nativeTools.map(tool => <SettingsRow key={tool} label={<code>{tool}</code>}
+            control={<Switch label={tool} checked={value.includes(tool)}
+              onChange={on => change(on ? [...value, tool] : value.filter(entry => entry !== tool))} />} />)}
+        </div>}
+      </UnitForm>
+    </SettingsGroup>
 
-    <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
-      mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}>
-      {(value, change) => <>
-        <CheckboxList label={tx('settings:tools-page.explicit-whitelist')} values={nativeTools} selected={value} change={change} />
-      </>}
-    </UnitForm>
-
-    <h4>{tx('settings:tools-page.tool-sources')}</h4>
-    {sources.map(id => <UnitForm<SourceToolSelection> key={id} title={tx('settings:extension-detail.source-value', { p0: id })}
-      authored={agent?.tools?.sources?.[id] ?? undefined} blank={[]} revision={revision}
-      mutation={authored => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored } })}>
-      {(value, change) => <Selection label={id} value={value} change={change} />}
-    </UnitForm>)}
-    <div className={css.actions}>
-      <TextField label={tx('settings:tools-page.source-identity')} value={source_} change={setSource} />
-      <Button disabled={!source_} onClick={() => { setAdded(current => [...current, `python:${source_}`]); setSource(''); }}>{tx('settings:tools-page.add-source-selection')}</Button>
-    </div>
-
-    <SettingsNotice text={sourceView(source, scope) === undefined ? tx('settings:tools-page.this-scope-has-no-source-view') : undefined}/>
-  </section>;
+    <SettingsGroup title={tx('settings:tools-page.tool-sources')}>
+      {sources.map(id => <UnitForm<SourceToolSelection> key={id} title={tx('settings:extension-detail.source-value', { p0: id })}
+        authored={agent?.tools?.sources?.[id] ?? undefined} blank={[]} revision={revision}
+        mutation={authored => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored } })}>
+        {(value, change) => <Selection label={id} value={value} change={change} />}
+      </UnitForm>)}
+      <div className={css.actions}>
+        <TextField label={tx('settings:tools-page.source-identity')} value={source_} change={setSource} />
+        <Button disabled={!source_} onClick={() => { setAdded(current => [...current, `python:${source_}`]); setSource(''); }}>{tx('settings:tools-page.add-source-selection')}</Button>
+      </div>
+      <SettingsNotice text={sourceView(source, scope) === undefined ? tx('settings:tools-page.this-scope-has-no-source-view') : undefined} />
+    </SettingsGroup>
+  </SettingsPageShell>;
 }

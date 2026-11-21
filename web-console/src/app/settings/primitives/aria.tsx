@@ -35,12 +35,15 @@ function Popover(props: React.ComponentProps<typeof AriaPopover>) {
 
 /** A closed enum. Native remains the authority on which values are legal; this
  * control only presents the ones the call site offers. */
-export function Choice<T extends string>({ label, value, onChange, options, disabled = false, disabledKeys, description, placeholder }: {
+export function Choice<T extends string>({ label, value, onChange, options, disabled = false, disabledKeys, description, placeholder, hideLabel = false }: {
   label: string; value: T | null; onChange: (value: T) => void;
   options: readonly (readonly [T, string])[]; disabled?: boolean; disabledKeys?: readonly T[]; description?: ReactNode; placeholder?: string;
+  /** Inside a `SettingsRow` the row's own label is the visible one; the
+   * control keeps it only as its accessible name. */
+  hideLabel?: boolean;
 }) {
-  return <Select className={css.select} selectedKey={value} placeholder={placeholder} isDisabled={disabled} disabledKeys={disabledKeys} onSelectionChange={key => { if (key !== null) onChange(key as T); }}>
-    <Label>{label}</Label>
+  return <Select className={css.select} selectedKey={value} placeholder={placeholder} isDisabled={disabled} disabledKeys={disabledKeys} aria-label={hideLabel ? label : undefined} onSelectionChange={key => { if (key !== null) onChange(key as T); }}>
+    {!hideLabel && <Label>{label}</Label>}
     <AriaButton className={css.selectTrigger}><SelectValue /><span aria-hidden="true">▾</span></AriaButton>
     {description && <Text slot="description" className={contentCss.hint}>{description}</Text>}
     <Popover className={css.popover}>

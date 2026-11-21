@@ -59615,9 +59615,9 @@
   },
   {
     "reference": "model-advanced-light-390-linux.png",
-    "evidence": "Pinned Playwright 1.63.0 Linux captures under the Harness-restyled baseline alternate which corner pixel of the context input's rounded border rasterizes darker by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
-    "referenceSha256": "69af01b53408bc1f03c4c446440d93bada71b5d96bfe799209289235e97dff88",
-    "captureSha256": "bcbd796e2bab83f6dc8dc4bc7a8ee6c43a0a7d9d13ecad3baabc38f5d45941b3",
+    "evidence": "Pinned Playwright 1.63.0 Linux captures under the restyled Settings baseline alternate which corner pixel of the context input's rounded border rasterizes lighter by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
+    "referenceSha256": "aba15300565aa82114b17c6cba2abfe48a6314a0e24d384eb8f891490feca331",
+    "captureSha256": "69af01b53408bc1f03c4c446440d93bada71b5d96bfe799209289235e97dff88",
     "regions": [
       {
         "label": "Context input corner coverage",
@@ -59643,15 +59643,15 @@
         33,
         236,
         [
-          223,
-          223,
-          223,
+          222,
+          222,
+          222,
           255
         ],
         [
-          222,
-          222,
-          222,
+          223,
+          223,
+          223,
           255
         ]
       ]
@@ -59659,9 +59659,9 @@
   },
   {
     "reference": "model-advanced-dark-390-linux.png",
-    "evidence": "Pinned Playwright 1.63.0 Linux captures under the Harness-restyled baseline alternate which corner pixel of the context input's rounded border rasterizes lighter by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
-    "referenceSha256": "027b4e2362fa0e7850238318d68d0ac2897e31d8aeafc1df4d55e21e59afd54b",
-    "captureSha256": "368278e2f10912d7d147b4daa9ec645b76c277458c08b91360afa1c4ae96f8ca",
+    "evidence": "Pinned Playwright 1.63.0 Linux captures under the restyled Settings baseline alternate which corner pixel of the context input's rounded border rasterizes darker by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
+    "referenceSha256": "f92549bb225a33365fb469ee6a8feef4df74a9220455e64cc7eebf04ae719d6c",
+    "captureSha256": "027b4e2362fa0e7850238318d68d0ac2897e31d8aeafc1df4d55e21e59afd54b",
     "regions": [
       {
         "label": "Context input corner coverage",
@@ -59704,7 +59704,7 @@
   {
     "reference": "model-profiles-dark-1440-linux.png",
     "evidence": "Pinned Playwright 1.63.0 Linux branch review observed a one-level variation at (26,360). CI run 44432316970, browser-evidence-shard-1, independently measured one changed pixel at (25,360) with channel delta 1 against the same baseline. Each measured site has its own one-pixel bound.",
-    "referenceSha256": "f429519d31c61fc82b435c276fd9d0c4bf4c95a4fce9136d71fdf3717e63218e",
+    "referenceSha256": "49b0f0fbb9c5087c4b57d1709005f56382aa1fba507f2161d96f23fe8c53acbf",
     "captureSha256": "2fddb0a1853a242c9017eae9c52ca2a2bd80714a25a86c2532c64677e21ab5fa",
     "regions": [
       {
@@ -59730,15 +59730,42 @@
       {
         "run": 44432316970,
         "pngSha256": "8f377b8a6a37854d6ef9cd7d6694775a4a1adb6c4da673eae7e5e071e9e590c3",
-        "pixels": [[25, 360, [82, 83, 84, 255], [83, 84, 84, 255]]]
+        "pixels": [
+          [
+            25,
+            360,
+            [
+              82,
+              83,
+              84,
+              255
+            ],
+            [
+              83,
+              84,
+              84,
+              255
+            ]
+          ]
+        ]
       }
     ],
     "pixels": [
       [
         25,
         360,
-        [82, 83, 84, 255],
-        [83, 84, 84, 255]
+        [
+          82,
+          83,
+          84,
+          255
+        ],
+        [
+          83,
+          84,
+          84,
+          255
+        ]
       ],
       [
         26,

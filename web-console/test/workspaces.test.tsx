@@ -596,7 +596,7 @@ async function failedSessionConfiguration(sources: readonly import('../../protoc
 it('S1-10 a Workspace-owned Session failure opens the exact Workspace Settings target', async () => {
   await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' })));
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: /^Workspace A$/ })).toBeTruthy();
   // The concrete target is the registered Workspace, read through its own scope.
   await waitFor(() => expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false));
   expect(screen.queryByLabelText('Configuration owner')).toBeNull();
@@ -606,7 +606,7 @@ it('S1-10 a User-owned Session failure opens User Settings', async () => {
   await failedSessionConfiguration([{ kind: 'user' }]);
   expect(screen.queryByRole('button', { name: /Open Workspace Settings/ })).toBeNull();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open User Settings' })));
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: 'User (global)' })).toBeTruthy();
 });
 
 it('S1-10 an unregistered owning Workspace reports an explicit error and never falls back to User Settings', async () => {
@@ -616,8 +616,8 @@ it('S1-10 an unregistered owning Workspace reports an explicit error and never f
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/revoked' })));
   expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('/workspace/revoked is not registered by this Product Host'))).toBe(true);
   // The Settings page reports the exact unavailable owner without User authoring.
-  expect(screen.queryByRole('heading', { name: 'User Settings' })).toBeNull();
-  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'User (global)' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Workspace [AB]/ })).toBeNull();
   // No hidden Workspace, Session or runtime is allocated to resolve it.
   expect(host.adoptWorkspace).not.toHaveBeenCalled();
   expect(methods().slice(before)).toEqual([]);
@@ -626,11 +626,11 @@ it('S1-10 an unregistered owning Workspace reports an explicit error and never f
 it('S1-10 Session focus changes never retarget an opened owning Settings editor', async () => {
   await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' })));
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: /^Workspace A$/ })).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: /^Workspace A$/ })).toBeTruthy();
 });
 
 // Settings navigation is linearized by its dedicated actor. A delayed owning
@@ -648,10 +648,10 @@ async function pendingOwnershipLookup(sources: readonly import('../../protocol/a
 it('S1-10 a newer User Settings decision rejects a late owning Workspace lookup', async () => {
   const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   await act(async () => { gate.resolve(catalog); });
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
-  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+  expect(await screen.findByRole('button', { name: 'User (global)' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^Workspace [AB]/ })).toBeNull();
 });
 
 it('S1-10 a newer Workspace B Settings decision rejects a late owning Workspace A lookup', async () => {
@@ -659,16 +659,16 @@ it('S1-10 a newer Workspace B Settings decision rejects a late owning Workspace 
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' })));
-  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  await screen.findByRole('button', { name: /^Workspace B$/ });
   await act(async () => { gate.resolve(catalog); });
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace B' })).toBeTruthy();
-  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
+  expect(await screen.findByRole('button', { name: /^Workspace B$/ })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^Workspace A$/ })).toBeNull();
 });
 
 it('S1-10 leaving Settings rejects a late owning Workspace lookup', async () => {
   const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await act(async () => { gate.resolve(catalog); });
   expect(screen.queryByRole('region', { name: 'Settings' })).toBeNull();
@@ -679,7 +679,7 @@ it('S1-10 an authority replacement rejects a late owning Workspace lookup', asyn
   const before = server.client.getSnapshot();
   vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...before, authorityRevision: (before.authorityRevision ?? 0) + 1 });
   await act(async () => { gate.resolve(catalog); });
-  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Workspace [AB]/ })).toBeNull();
   expect(screen.queryByText(/stale owner lookup/)).toBeNull();
 });
 
@@ -1193,3 +1193,4 @@ it('rapid cold/warm session switching keeps sidebar rows quiet while preserving 
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(rowB().textContent).toContain('Observation unavailable');
 });
+

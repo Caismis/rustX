@@ -6,7 +6,7 @@ import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/
 import { useTranslation } from '../../../../locale/react';
 import { CardMenu } from '../../../../presentation/catalog/CardMenu';
 import { TransferDialog, transferActions, type TransferIntent } from '../../../resources/shared/ResourceTransfer';
-import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../../../presentation/catalog/CatalogControls';
+import { CatalogSearch } from '../../../../presentation/catalog/CatalogControls';
 import css from '../../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Switch } from '../../../../presentation/primitives/Switch';
@@ -19,11 +19,6 @@ import { IconFile, IconFolder } from '../icons';
 import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText } from '../notices';
 import { LibraryDialog } from './dialogs';
-
-const VIEW = 'rustx-workflows-library-view';
-function readView(): 'cards' | 'list' {
-  try { return localStorage.getItem(VIEW) === 'list' ? 'list' : 'cards'; } catch { return 'cards'; }
-}
 
 function useModified() {
   const tx = useTranslation();
@@ -71,8 +66,6 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     }
   };
   const [query, setQuery] = useState('');
-  const [view, setView] = useState(readView);
-  const chooseView = (next: 'cards' | 'list') => { setView(next); try { localStorage.setItem(VIEW, next); } catch { /* view preference only */ } };
   const workspace = scope.kind === 'workspace' ? workspaces.find(row => row.id === scope.workspaceId) : undefined;
   const scopeLabel = scope.kind === 'user' ? tx('workflows:scope.global-files') : workspace?.displayName ?? '';
   const showingWorkspace = tab === 'workspace';
@@ -117,16 +110,15 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       {!showingWorkspace && context}
       <div className={css.controlsRight}>
         <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
-        <CatalogViewSwitch view={view} onChange={chooseView} />
       </div>
     </div>
     {showingWorkspace && context}
     {showingWorkspace && catalog && !workspaces.length ? <p className={css.state}>{tx('workflows:library.no-workspaces')}</p>
-      : <WorkflowFiles library={library} state={state} scopeLabel={scopeLabel} query={query} view={view} revoked={revoked}
+      : <WorkflowFiles library={library} state={state} scopeLabel={scopeLabel} query={query} revoked={revoked}
         onTransfer={onTransfer} transferDisabled={transferDisabled} />}
     {showingWorkspace && <section className={css.scopeGroup} aria-label={tx('resources:scope.inherited')}>
       <h2 className={css.context}>{tx('resources:scope.inherited')}{globalListing && <> · {globalListing.files.length}</>}</h2>
-      <WorkflowFiles library={globalLibrary} state={globalState} scopeLabel={tx('workflows:scope.global-files')} query={query} view={view}
+      <WorkflowFiles library={globalLibrary} state={globalState} scopeLabel={tx('workflows:scope.global-files')} query={query}
         onTransfer={onTransfer} transferDisabled={transferDisabled} />
     </section>}
     {transferIntent && <TransferDialog intent={transferIntent} close={() => setTransferIntent(undefined)} refresh={() => {
@@ -136,8 +128,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   </section>;
 }
 
-function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTransfer, transferDisabled }: {
-  library: WorkflowLibraryActor; state: WorkflowLibrarySnapshot; scopeLabel: string; query: string; view: CatalogView; revoked?: boolean;
+function WorkflowFiles({ library, state, scopeLabel, query, revoked, onTransfer, transferDisabled }: {
+  library: WorkflowLibraryActor; state: WorkflowLibrarySnapshot; scopeLabel: string; query: string; revoked?: boolean;
   onTransfer?: (scope: WorkflowScope['kind'], file: WorkflowFileSummary, operation: TransferIntent['operation']) => void;
   transferDisabled: boolean;
 }) {
@@ -187,29 +179,25 @@ function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTra
   else if (!listing) body = <p className={css.state} role="status">{tx('workflows:library.loading')}</p>;
   else if (listing.diagnostic) body = <p className={css.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
   else if (!files.length) body = <p className={css.state}>{query.trim() ? tx('workflows:library.empty-search') : tx('workflows:library.empty')}</p>;
-  else if (view === 'cards') body = <ul className={css.cards} aria-label={tx('workflows:library.title')}>
+  else body = <ul className={css.list} aria-label={tx('workflows:library.title')}>
     {files.map(file => <li key={file.file_name} className={clsx(css.card, unreadable(file) && css.invalidCard)}>
       <div className={css.cardHead}>
         <button type="button" className={css.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.display?.title ?? file.id ?? file.file_name}>
-          <span className={css.fileTile}>{unreadable(file) ? <IconFile size={18} /> : <WorkflowIcon icon={file.display?.icon} />}</span>
-          <span className={css.cardName}><span className={css.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>{file.display && <span className={css.cardId}>{file.id}</span>}</span>
+          <span className={css.fileTile}>{unreadable(file) ? <IconFile size={24} /> : <WorkflowIcon icon={file.display?.icon} size={24} />}</span>
+          <span className={css.cardName}>
+            <span className={css.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>
+            {file.display && <span className={css.cardId}>{file.id}</span>}
+          </span>
         </button>
         {toggle(file)}
         <CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} />
       </div>
-      <FileFacts file={file} />
-      <div className={css.cardFoot}><span className={css.path}><IconFile size={14} /><span>{file.relative_path}</span></span><span className={css.time}>{modified(file.modified_ms)}</span></div>
+      <div className={css.cardBody}>
+        <FileFacts file={file} />
+        <div className={css.cardFoot}><span className={css.path}><IconFile size={14} /><span>{file.relative_path}</span></span><span className={css.time}>{modified(file.modified_ms)}</span></div>
+      </div>
     </li>)}
   </ul>;
-  else body = <table className={css.table}>
-    <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th className={css.optionalColumn}>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th>{tx('workflows:library.column-enabled')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
-    <tbody>{files.map(file => <tr key={file.file_name}>
-      <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={unreadable(file) ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
-      <td><FileFacts file={file} compact /></td>
-      <td className={css.optionalColumn}><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td><td>{toggle(file)}</td>
-      <td><CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} /></td>
-    </tr>)}</tbody>
-  </table>;
 
   return <>
     {operationFailure && <div className={css.banner} role="alert">

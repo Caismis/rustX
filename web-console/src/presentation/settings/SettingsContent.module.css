@@ -70,7 +70,6 @@
 
 .page { gap: 16px; }
 .page p { margin: 0; overflow-wrap: anywhere; }
-.page section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 /* Page title and description. */
 .page h3 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; overflow-wrap: anywhere; }
 .page h3 + p { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
@@ -80,28 +79,21 @@
 .page h5 { margin: 8px 0 0; font-size: 13px; font-weight: 500; }
 .page ul { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
 
-/* Setting row card: one native semantic unit — its title, its native facts,
-   its fields and its actions. A restrained outline over the module fill;
-   groups nested inside it are separated by hairlines, never by more cards. */
+/* Setting row: one native semantic unit — its title, its native facts and
+   its fields. Flat DSH rows separated by a hairline, never cards; the only
+   actions live in the shared page footer. */
 .page .unit {
-  margin: 0; min-height: 56px; box-sizing: border-box; padding: 12px 16px;
-  border: .5px solid var(--dsw-alias-border-l2); border-radius: 16px;
-  background: var(--dsw-alias-bg-module-platform);
+  margin: 0; min-height: 56px; box-sizing: border-box; padding: 12px 0;
+  border: 0; border-bottom: .5px solid var(--dsw-alias-border-l2); border-radius: 0;
+  background: transparent;
 }
+.page .unit:last-child { border-bottom: 0; }
 .page .unit legend { margin: 0 0 4px; padding: 0; font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
 .page .unit fieldset fieldset { margin: 12px 0 0; padding: 12px 0 0; border: 0; border-top: .5px solid var(--dsw-alias-border-l2); border-radius: 0; }
 .page .unit fieldset fieldset legend { font-size: 13px; }
 /* The unit's own field wrapper is not a nested group: no hairline, no inset. */
 .page .unit fieldset.fields { margin: 4px 0 0; padding: 0; border-top: 0; }
 .page .unit .actions { margin-top: 12px; }
-/* A card with a draft keeps its Save / Discard row in reach while its fields
-   scroll past: the row sticks to the bottom of the one scrolling pane for as
-   long as the card itself is on screen, and never outlives it. */
-.page .unit[data-draft] .actions {
-  position: sticky; bottom: -1px; z-index: 1; margin: 12px -16px -12px; padding: 12px 16px;
-  border-top: .5px solid var(--dsw-alias-border-l2); border-radius: 0 0 16px 16px;
-  background: var(--dsw-alias-bg-module-platform);
-}
 .page label { padding: 8px 0; }
 /* Secondary text in the Settings pages sits on the card fill as often as on the
    panel, so it takes the secondary label color, which keeps WCAG AA contrast
@@ -119,8 +111,6 @@
 @container settings (max-width: 680px) {
   .page .grid, .page dl { grid-template-columns: minmax(0, 1fr); }
   .page .actions { align-items: stretch; }
-  .page .unit { padding: 12px; }
-  .page .unit[data-draft] .actions { margin-inline: -12px; padding-inline: 12px; margin-bottom: -12px; }
   .page th, .page td { padding: 4px; }
   .context { align-items: flex-start; flex-wrap: wrap; }
 }
@@ -146,3 +136,91 @@
 .settings .unit.unitResource .actions { position: static; justify-content: flex-end; margin: 12px 0 0; padding: 0; background: none; box-shadow: none; gap: 6px; }
 .unitResource .actions button { font-size: 12px; border-radius: 8px; }
 .unitDialog .actions > button[type=submit] { margin-left: 0; }
+
+/* The inline staged reset link beside a row label. It stages the removal
+   into the page transaction — no request is sent. */
+.resetLink {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--dsw-alias-state-business-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.resetLink[data-staged] {
+  color: var(--dsw-alias-label-secondary);
+}
+
+@media (hover: hover) {
+  .resetLink:hover { text-decoration: underline; }
+}
+
+/* The Settings surface and its per-page frame: each page renders the shared
+   960px shell (pageHead / scrolling pageBody / fixed pageFooter). */
+.surface {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editorFrame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editorFrame > fieldset {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.editorFrame > fieldset:disabled {
+  opacity: 0.6;
+}
+
+.scopeOutlet {
+  flex: none;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px clamp(24px, 4vw, 48px) 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scopeOutlet > * {
+  max-width: 100%;
+}
+
+.scopeOutlet:empty {
+  display: none;
+}
+
+.surfaceNotices {
+  flex: none;
+  padding: 8px clamp(24px, 4vw, 48px);
+}
+
+.surfaceNotices > * {
+  max-width: 960px;
+  margin: 0 auto;
+}

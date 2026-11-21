@@ -23,10 +23,9 @@ import { ConfigUnavailable } from '../forms/ConfigUnavailable';
  * holds. */
 export function NativeExtensions({ source, scope, revision }: { source: SourceSettings; scope: SourceScope; revision?: string }) {
   const tx = useTranslation();
-  if (revision === undefined) return <section aria-label={tx('settings:native-extensions.native-extensions')}><h4>{tx('settings:native-extensions.native-extensions')}</h4><ConfigUnavailable /></section>;
+  if (revision === undefined) return <ConfigUnavailable />;
   const plugins = sourceView(source, scope)?.authored?.agent?.plugins;
   return <section aria-label={tx('settings:native-extensions.native-extensions')}>
-    <h4>{tx('settings:native-extensions.native-extensions')}</h4>
 
     <UnitForm<TodoExtensionDocument> title={tx('settings:native-extensions.todo-extension')} authored={plugins?.todo ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'todo', authored } })}>
@@ -44,6 +43,7 @@ export function NativeExtensions({ source, scope, revision }: { source: SourceSe
     </UnitForm>
   </section>;
 }
+// The page provides the group heading; the sections inside are the units.
 
 export function StatusFields({ value, change }: { value: AgentStatusExtensionDocument; change: (value: AgentStatusExtensionDocument) => void }) {
   const tx = useTranslation();

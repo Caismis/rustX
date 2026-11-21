@@ -4,14 +4,17 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
-import { Button as AriaButton, GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
+import { Button as AriaButton } from 'react-aria-components';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
-import { IconApiOutline14, IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
-import { TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
+import { IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
+import { PageTransactionFooter, TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
+import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
+import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
+import { providerMutation } from './ProviderTemplates';
 import { JsonObjectEditor } from '../forms/fields';
 import { Advanced, Choice, ConfirmAction, Search } from '../primitives/aria';
 import { catalogEntries, sourceView, type CatalogEntry, type SettingsTarget, observedResult, observedResultLabel, unitApplication } from '../projection';
@@ -35,7 +38,6 @@ export interface ModelsPageProps {
   focus?: PageFocus['models'];
   onFocus: (focus?: PageFocus['models']) => void;
   onRefresh?: () => void;
-  refreshing?: boolean;
 }
 
 const compactContext = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
@@ -47,7 +49,7 @@ const emptyModel = (provider = '', id = ''): Model => ({
 
 /** Provider and model settings backed by rustX's native semantic units.
  * Each model inherits its provider's connection protocol. */
-export function ModelsPage({ client, host, target, source, scope, revision, models, profiles, focus, onFocus, onRefresh, refreshing = false }: ModelsPageProps) {
+export function ModelsPage({ client, host, target, source, scope, revision, models, profiles, focus, onFocus, onRefresh }: ModelsPageProps) {
   const tx = useTranslation();
   const landing = useRef<HTMLElement>(null);
   const previousProvider = useRef<string>(undefined);
@@ -74,7 +76,9 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   ];
   const requested = focus?.kind === 'provider' ? focus.id : focus?.kind === 'model' ? focus.provider : undefined;
   const missing = !!requested && !navigationProviders.some(entry => entry.id === requested);
-  const selected = missing ? navigationProviders[0]?.id : requested ?? navigationProviders[0]?.id;
+  // The detail view exists only for a focused provider; the list never picks
+  // one for the user.
+  const selected = missing ? undefined : requested;
   useLayoutEffect(() => {
     const previous = previousProvider.current;
     previousProvider.current = selected;
@@ -82,6 +86,12 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
     if (removed || missing && focus?.kind === 'provider') {
       onFocus(undefined);
       landing.current?.focus();
+    } else if (previous !== selected && selected) {
+      // Opening a detail swaps the list out, dropping the clicked card's
+      // focus to <body>. Move it into the detail — unless the page itself
+      // is hidden (an authority replacement may keep it mounted inert).
+      const el = landing.current;
+      if (el && !el.closest('[hidden]')) el.focus();
     }
   }, [navigationProviders, selected, missing, focus?.kind, onFocus]);
   const search = query.trim().toLocaleLowerCase();
@@ -101,71 +111,93 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   });
   const application = observedResult(unitApplication(source.application, 'provider'));
   const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
-  return <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
-    <div className={cards.toolbar}>
-      <div><h3>{tx('settings:models-page.models')}</h3>
-        <p className={cards.description}>{tx('settings:models.description')}</p></div>
-      <div className={cards.headerActions}>
-        {onRefresh && <Button size="sm" variant="outline" aria-label={tx('settings:settings.reload-configuration')} title={tx('settings:settings.reload-configuration')} disabled={refreshing} onClick={onRefresh}><IconRefreshOutline16/></Button>}
-        <Button size="sm" variant="primary" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>
-      </div>
-    </div>
-    <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
-    <div className={cards.layout}>
-      {!!navigationProviders.length && <div className={cards.navigation}>
-        <h4>{tx('settings:models.custom-providers')}</h4>
-        <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
-        <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" disallowEmptySelection selectedKeys={selected ? [selected] : []}
-          onSelectionChange={keys => {
-            if (keys === 'all') return;
-            const id = keys.values().next().value;
-            if (id !== undefined) onFocus({ kind: 'provider', id: String(id) });
-          }}>
-          {navigation.map(entry => {
-            const provider = entry.authored ?? entry.effective;
-            const name = provider?.display_name ?? entry.id;
-            const hasModels = catalog.some(item => {
-              const model = item.authored ?? item.effective;
-              return model?.provider === entry.id && !model.hidden;
-            });
-            return <GridListItem id={entry.id} key={entry.id} textValue={name} aria-label={name} className={cards.provider}>
-              <ProviderIcon icon={provider?.icon} size={16}/>
-              <span className={cards.providerName} title={name}>{name}</span>
-              <span className={cards.providerDot} data-state={provider?.hidden ? 'off' : provider && hasModels ? 'ready' : 'empty'} aria-hidden="true"/>
-            </GridListItem>;
-          })}
-        </GridList>
-        {!navigation.length && <p className={cards.emptyNavigation}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
-      </div>}
-      {selected ? <div className={cards.detailPane}>
-          <ProviderConnection key={selected} scope={scope} revision={revision} id={selected} authored={providerEntry?.authored}
-            inherited={scope === 'workspace' ? (providerEntry?.authored ? source.user.authored?.providers?.[selected] : providerEntry?.effective) : undefined}
-            hasModels={selectedModels.length > 0}/>
-          <div className={cards.modelsHeading}><h4>{tx('settings:models.list')}</h4>
-            <Button size="sm" variant="toolbar" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
-              disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>
-          </div>
-          {selectedModels.length ? <GridList aria-label={tx('settings:models-page.models-of-provider-value', { p0: selectedProvider?.display_name ?? selected })} className={cards.modelList}>
-            {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
-              scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
-              onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected })}/>)}
-          </GridList> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
-      </div> : <div className={cards.unselected}><IconApiOutline14 size={24}/><p>{tx('settings:models.empty-providers')}</p></div>}
-    </div>
-    <div className={cards.defaultModel}>
-      <Advanced title={tx('settings:models-page.default-model-for-new-sessions')}>
+  const providerName = selected ? (providerEntry?.authored ?? providerEntry?.effective)?.display_name ?? selected : undefined;
+  const listToolbar = <><PageScopeToolbar />{onRefresh && <PageRefreshButton />}</>;
+
+  if (focus?.kind === 'provider' && providerEntry) return <SettingsPageShell className={`${css.settings} ${css.page}`} title={providerName ?? ''}
+    breadcrumb={<Button variant="ghost" size="sm" onClick={() => onFocus(undefined)}>← {tx('settings:models-page.models')}</Button>}
+    toolbar={listToolbar} footer={<PageTransactionFooter leading={undefined}/>}>
+    <section ref={landing} tabIndex={-1} aria-label={providerName} className={cards.section}>
+      <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
+      <SettingsGroup title={tx('settings:models-page.provider-value', { p0: providerName ?? '' })}>
+        <ProviderConnection key={selected} scope={scope} revision={revision} id={selected!} authored={providerEntry?.authored}
+          inherited={scope === 'workspace' ? (providerEntry?.authored ? source.user.authored?.providers?.[selected!] : providerEntry?.effective) : undefined}
+          hasModels={selectedModels.length > 0}/>
+      </SettingsGroup>
+      <SettingsGroup title={tx('settings:models.list')}
+        action={<Button size="sm" variant="outline" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
+          disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>}>
+        {selectedModels.length ? <div className={cards.modelList}>
+          {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
+            scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
+            onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected! })}/>)}
+        </div> : <p className={css.hint}>{tx('settings:models.empty-models')}</p>}
+      </SettingsGroup>
+    </section>
+    {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
+  </SettingsPageShell>;
+
+  return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:models-page.models')}
+    description={tx('settings:models.description')} toolbar={listToolbar} footer={<PageTransactionFooter/>}>
+    <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
+      <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
+      <SettingsGroup title={tx('settings:models-page.default-model-for-new-sessions')}>
         <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
           blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
           removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
           {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
             <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
         </UnitForm>
-      </Advanced>
-    </div>
+      </SettingsGroup>
+      <SettingsGroup title={tx('settings:models.custom-providers')}
+        action={<Button size="sm" variant="outline" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>}>
+        <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
+        {navigation.map(entry => <ProviderCard key={entry.id} entry={entry} revision={revision} scope={scope}
+          modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
+          onOpen={() => onFocus({ kind: 'provider', id: entry.id })}/>)}
+        {!navigation.length && <p className={css.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
+      </SettingsGroup>
+    </section>
     {adding === 'provider' && <ProviderNameDialog revision={revision} exists={[...providers.map(entry => entry.id), ...draftedProviders]} onClose={() => setAdding(undefined)}
       onCreate={id => { setAdding(undefined); onFocus({ kind: 'provider', id }); }} />}
-    {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
     {focus?.kind === 'model' && <ModelDialog source={source} scope={scope} revision={revision} id={focus.id} provider={focus.provider} onClose={closeModel} />}
+  </SettingsPageShell>;
+}
+
+/** One provider row of the list: icon, name, protocol and model count, the
+ * instant show/hide Switch a level-1 list keeps, and a [配置 →] detail link. */
+function ProviderCard({ entry, revision, scope, modelCount, onOpen }: {
+  entry: CatalogEntry<ProviderView>; revision: string; scope: SourceScope; modelCount: number; onOpen: () => void;
+}) {
+  const tx = useTranslation();
+  const provider = entry.authored ?? entry.effective;
+  const unit = useUnitEditing<ProviderWrite>({
+    authored: entry.authored && {
+      display_name: entry.authored.display_name, hidden: entry.authored.hidden, icon: entry.authored.icon,
+      protocol: entry.authored.protocol, base_url: entry.authored.base_url, credential: { kind: 'retain' },
+    },
+    blank: {
+      display_name: entry.effective?.display_name, icon: entry.effective?.icon, hidden: entry.effective?.hidden,
+      protocol: entry.effective?.protocol ?? 'openai_chat_completions', base_url: entry.effective?.base_url ?? '',
+      credential: { kind: 'literal', value: '' },
+    },
+    inherited: () => undefined, revision,
+    draftKey: JSON.stringify(providerMutation(entry.id, null)),
+    mutation: value => providerMutation(entry.id, value, scope === 'workspace' && !!entry.effective && !entry.authored),
+  });
+  const name = provider?.display_name ?? entry.id;
+  return <section className={css.card}>
+    <div className={css.rowHead}>
+      <ProviderIcon icon={provider?.icon} size={16}/>
+      <strong>{name}</strong>
+      {provider && <Badge>{provider.protocol}</Badge>}
+      <span className={css.hint}>{modelCount ? String(modelCount) : ''}</span>
+      {provider && <Switch checked={!provider.hidden} label={tx('settings:models.show-provider', { p0: name })}
+        disabled={!unit.admitted || unit.busy || unit.awaitingObservation || unit.draft || !entry.authored}
+        onChange={checked => unit.apply({ ...unit.displayed, hidden: !checked })}/>}
+      <Button size="sm" variant="outline" onClick={onOpen}>{name} →</Button>
+    </div>
+    <UnitOutcomeNotice title={name} outcome={unit.outcome}/>
   </section>;
 }
 
@@ -185,7 +217,7 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
   const title = tx('settings:models-page.model-value', { p0: entry.id });
   const removeLabel = tx(restoresGlobal ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: title });
   const removeDisabled = !unit.admitted || unit.busy || unit.awaitingObservation;
-  return <GridListItem id={entry.id} textValue={model.id} aria-label={entry.id} onAction={onOpen} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
+  return <div role="listitem" aria-label={entry.id} onClick={onOpen} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(); } }} tabIndex={0} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
     <div className={cards.modelIdentity}>
       <span className={cards.modelName} title={model.id}>{model.id}</span>
       <div className={cards.modelBadges}>
@@ -212,7 +244,7 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
         onChange={checked => unit.apply({ ...model, hidden: !checked })}/>
     </div>
     <UnitOutcomeNotice title={entry.id} outcome={unit.outcome} />
-  </GridListItem>;
+  </div>;
 }
 
 function ModelDialog({ source, scope, revision, id, provider, suggestDeepSeek, onClose }: { source: SourceSettings; scope: SourceScope; revision: string; id?: string; provider?: string; suggestDeepSeek?: boolean; onClose: () => void }) {

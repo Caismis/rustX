@@ -67,14 +67,14 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
   fireEvent.click(screen.getByRole('button', { name: 'SECRET_ENV' }));
   const form = within(screen.getByRole('form', { name: 'Environment SECRET_ENV' }));
   // Opening authors nothing: Save is unavailable until the user says so.
-  expect((form.getByRole('button', { name: 'Save Environment SECRET_ENV' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(form.getByRole('button', { name: 'Override Environment SECRET_ENV' }));
   // Override starts from the neutral seed, never from the inherited literal.
   const field = form.getByLabelText('Value') as HTMLInputElement;
   expect(field.value).toBe('');
   expect(field.type).toBe('password');
   fireEvent.change(field, { target: { value: 'WORKSPACE-ONLY' } });
-  fireEvent.click(form.getByRole('button', { name: 'Save Environment SECRET_ENV' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0][0]).toEqual({
     method: 'configuration/sourceWrite',

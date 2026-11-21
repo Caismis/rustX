@@ -6,6 +6,8 @@ import {Button} from '../../../presentation/primitives/Button';
 import {AvailabilityDetail} from '../../resources/shared/AvailabilityDetail';
 import type {PageFocus} from '../machines/navigation';
 import {extensionEntries} from '../../resources/shared/inventory';
+import {SettingsPageShell,SettingsGroup} from '../../../presentation/settings/SettingsPageShell';
+import {PageTransactionFooter} from '../forms/bridge';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 export function ExtensionDetail({source,scope,revision,name,onFocus}: {
  source:SourceSettings;scope:SourceScope;revision?:string;name:string;
@@ -13,9 +15,13 @@ export function ExtensionDetail({source,scope,revision,name,onFocus}: {
 }) {
  const tx=useTranslation();
  const entry=extensionEntries(source,scope,'managed_python').find(row=>row.name===name);
- return <section><Button size="sm" onClick={()=>onFocus(undefined)}>{tx('settings:extension-detail.extensions')}</Button><h3>{name}</h3>
-  <p>{tx('settings:extensions.manage-files')}</p>{entry?.path&&<p className={css.hint}>{entry.path}</p>}
-  <SettingsNotice text={entry?.diagnostics[0] ?? (source.prospective_resources?.sources[`python:${name}`]?.status === 'unavailable' ? tx('settings:extensions.unavailable') : undefined)}/>
-  <AvailabilityDetail source={source} scope={scope} revision={revision} family="managed_python" name={name}/>
- </section>;
+ return <SettingsPageShell className={`${css.settings} ${css.page}`} title={name}
+  breadcrumb={<Button variant="ghost" size="sm" onClick={()=>onFocus(undefined)}>← {tx('settings:extension-detail.extensions')}</Button>}
+  footer={<PageTransactionFooter/>}>
+  <SettingsGroup title={name} description={entry?.path ? <code>{entry.path}</code> : undefined}>
+   <p>{tx('settings:extensions.manage-files')}</p>
+   <SettingsNotice text={entry?.diagnostics[0] ?? (source.prospective_resources?.sources[`python:${name}`]?.status === 'unavailable' ? tx('settings:extensions.unavailable') : undefined)}/>
+   <AvailabilityDetail source={source} scope={scope} revision={revision} family="managed_python" name={name}/>
+  </SettingsGroup>
+ </SettingsPageShell>;
 }

@@ -16,21 +16,21 @@ test('Workspace settings save permissions and features, and keep configuration r
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openWorkspaceSettings(page, 'Workspace A');
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    const saved = async (unit: string) => expect(settledSave(settings, unit)).toBeVisible();
+    const saved = async () => expect(settledSave(settings)).toBeVisible();
     await openSettingsPage(page, 'Agent');
     await expect(settings.getByRole('form', { name: 'Global instructions', exact: true })).toHaveCount(0);
     const guidance = settings.getByRole('form', { name: 'Project guidance', exact: true });
     await guidance.getByRole('switch', { name: 'Automatically load project guidance' }).uncheck();
-    await guidance.getByRole('button', { name: 'Save Project guidance', exact: true }).click();
-    await saved('Project guidance');
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await saved();
     expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('inherit = false');
     await expect(settings.getByRole('form', { name: 'Instructions', exact: true })).toHaveCount(0);
 
     await openSettingsPage(page, 'Tools & Permissions');
     const tools = settings.getByRole('form', { name: 'Built-in tools', exact: true });
     await tools.getByLabel('read', { exact: true }).uncheck();
-    await tools.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-    await saved('Built-in tools');
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await saved();
     await expect(settings.getByRole('form',{name:'Available skills',exact:true})).toHaveCount(0);
     await expect(settings.getByRole('note', { name: 'Agent controls' })).toHaveCount(0);
 
@@ -38,8 +38,8 @@ test('Workspace settings save permissions and features, and keep configuration r
     await settings.getByRole('tab', { name: 'Built-in', exact: true }).click();
     const todo = settings.getByRole('switch', { name: 'Enable Todo', exact: true });
     await todo.locator('xpath=ancestor::label').click();
-    await settings.getByRole('button', { name: 'Save Todo extension', exact: true }).click();
-    await saved('Todo extension');
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await saved();
     await expect(todo).toBeChecked();
 
     await openSettingsPage(page, 'Advanced');

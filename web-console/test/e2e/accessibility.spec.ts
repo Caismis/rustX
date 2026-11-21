@@ -105,14 +105,14 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     await keyboardPage('Models'); await expandModelAuthoring(page);
     // A resource list is one grid: the row opens its detail with Enter.
-    await tabTo(settings.getByRole('row', { name: 'fixture', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(settings.getByRole('button', { name: 'fixture →', exact: true })); await page.keyboard.press('Enter');
     const endpoint = settings.getByLabel('Base URL', { exact: true });
     await tabTo(endpoint); await expect(endpoint).toBeFocused();
     await page.keyboard.press('End'); await page.keyboard.type('/draft-only');
     const actions = settings.getByRole('button', { name: 'Provider actions', exact: true });
     await tabTo(actions);
-    // Leaving the endpoint starts its native autosave. The focusable menu
-    // trigger refuses activation until that write has been observed.
+    // The endpoint edit stays a staged draft; the footer commits it, so the
+    // menu trigger stays usable while the page is dirty.
     await expect(actions).toHaveAttribute('aria-disabled', 'false');
     await page.keyboard.press('Enter');
     await expect(page.getByRole('menuitem', { name: 'Choose provider icon', exact: true })).toBeVisible();
@@ -122,6 +122,9 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     // The dedicated MCP page and create flow are keyboard reachable.
     await tabTo(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'MCP servers',exact:true}));
     await page.keyboard.press('Enter');
+    // The staged provider draft asks before leaving; abandon it here.
+    const leave = page.getByRole('button', { name: 'Discard and leave', exact: true });
+    if (await leave.isVisible()) await leave.click();
     const mcp=page.getByRole('region',{name:'MCP servers',exact:true});
     await tabTo(mcp.getByRole('tab',{selected:true}));await page.keyboard.press('End');
     await tabTo(mcp.getByRole('button', { name: '＋ New MCP server', exact: true })); await page.keyboard.press('Enter');

@@ -281,8 +281,8 @@ it('authority replacement cannot activate a model dialog owned by the hidden Set
   await mounted();
   await navigate('Settings');
   await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
-  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'transport' })));
-  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'main' })));
+  await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'transport →' })));
+  await act(async () => fireEvent.click(await screen.findByRole('listitem', { name: 'main' })));
   const dialog = await screen.findByRole('dialog', { name: 'Model main' });
   await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
   await act(async () => { server.authorityId = 'replacement'; await server.connect(); });
@@ -311,8 +311,8 @@ it('hiding a model dialog retains its form while its admitted exact-CAS write se
   await mounted();
   await navigate('Settings');
   await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
-  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'transport' })));
-  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'main' })));
+  await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'transport →' })));
+  await act(async () => fireEvent.click(await screen.findByRole('listitem', { name: 'main' })));
   const field = screen.getByLabelText('Context window') as HTMLInputElement;
   fireEvent.change(field, { target: { value: '256000' } });
   server.held.add('configuration/sourceWrite');
@@ -320,6 +320,9 @@ it('hiding a model dialog retains its form while its admitted exact-CAS write se
   const write = await server.waitFor('configuration/sourceWrite', 1);
   const home = document.querySelector<HTMLButtonElement>('[data-primary-navigation] button[aria-label="Home"]')!;
   await act(async () => fireEvent.click(home));
+  // An in-flight write is unsaved work: leaving takes the explicit discard.
+  const guardModal = screen.getAllByRole('dialog').find(node => within(node).queryByRole('button', { name: 'Discard and leave' }));
+  if (guardModal) await act(async () => fireEvent.click(within(guardModal).getByRole('button', { name: 'Discard and leave' })));
   await waitFor(() => expect(home.getAttribute('aria-current')).toBe('page'));
   expect(field.isConnected).toBe(true);
   expect(field.closest('[hidden]')).toBeTruthy();

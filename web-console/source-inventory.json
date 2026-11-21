@@ -630,7 +630,9 @@
         "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../../workspaces/host",
+        "../ScopeToolbar",
         "../SettingsFeedback",
         "../forms/bridge",
         "../forms/fields",
@@ -674,7 +676,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d36b8ae42075895e3ae4fb24580b97f422f8e4f4f54d5aa7de446946c5e822b4"
+      "local_sha256": "c34856fbc9712c370ff1732ea4535e611e3d12d374b9c2580efbd14debbbef2a"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -686,9 +688,11 @@
         "../../../locale/react",
         "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../resources/shared/AvailabilityDetail",
         "../../resources/shared/inventory",
         "../SettingsFeedback",
+        "../forms/bridge",
         "../machines/navigation"
       ],
       "excluded_dependencies": [
@@ -730,7 +734,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b574c35fb445c167640d811b87c379fd1467a00b54039963f71ed2728e0d6ca2"
+      "local_sha256": "6aaa2bd6ff3bb5544ff95b3906e8c9febcd718f7ff2c1b4756fd734e98046529"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -745,17 +749,19 @@
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
         "../../presentation/settings/SettingsContent.module.css",
+        "../../presentation/settings/SettingsPageShell",
         "../../presentation/settings/SettingsRoot",
         "../../workspaces/associations",
         "../../workspaces/host",
         "../appearance",
         "./ConnectionSettings",
+        "./ScopeToolbar",
         "./SettingsFeedback",
-        "./SettingsScopeMenu",
         "./advanced/AdvancedPage",
         "./agent/AgentPage",
         "./extensions/ExtensionsPage",
         "./forms/bridge",
+        "./forms/guard",
         "./general/GeneralPage",
         "./machines/navigation",
         "./machines/react",
@@ -782,7 +788,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "26aac9cc6567d0a84b276b70083cf66c01b0fbca47891bb486b932161402394c"
+      "local_sha256": "99b87265d3c7eef90c3bdfa2dc9f216f7ad8aebfd3b43a4f8aa4ecadc5e3e7e7"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2837,7 +2843,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "c2f99217bc63d8b85489d983b6b8864a028a55ed7d13bfabaeb10087b2727680",
+      "local_sha256": "77b95bacfcda797f96ba7eb599bec75005928e7a7a21fbbea4514eb8b6a2842b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2879,7 +2885,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "bfe4c00b3cfac19605104bb26e48da8897c41e01cba40908482447b39a15d08f",
+      "local_sha256": "a05ec6d53c1e78e52b29ef20cb191271f66ac8a9cfe68787b795e526d87175df",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2906,7 +2912,7 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "b687e75f778d13c55dac7f3aa01319178f87eed885624d945661d20b1143c413",
+      "local_sha256": "3f6a239495ac8f827bf777f7a58ffd1f58f94e669d99969e8192534f0732aefc",
       "classification": "B"
     },
     {
@@ -4170,7 +4176,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "b577f175a9e0fcfc832d9dda4b915825473316e19be7d2240a3907167d14173e"
+      "local_sha256": "74cabcabbd2a9e75c865fc1dad8656b6e35e601082df87cb14737b3ab5c13f56"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -8399,6 +8405,7 @@
         "../../settings/SettingsFeedback",
         "../../settings/SettingsScopeMenu",
         "../../settings/forms/bridge",
+        "../../settings/forms/guard",
         "../../settings/models/ModelsPage",
         "../../settings/primitives/aria",
         "../../settings/projection",
@@ -8447,7 +8454,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c7d0db12b1373cd5de72eefa93b2ec3acc848b6b071af92b9767832876d6b127"
+      "local_sha256": "8b3bdf2f84f5b8a0ee39a604807b8e8e94affa8d72165695075ff63b2af0fe93"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

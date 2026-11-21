@@ -20,6 +20,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     if (locale === 'zh') {
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
       await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+      await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
       await page.getByRole('button', { name: '主页', exact: true }).click();
     }
     await expect(page).toHaveTitle(/rustX/);
