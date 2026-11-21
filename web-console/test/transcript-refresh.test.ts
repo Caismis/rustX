@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v80';
 import { AgentReading } from '../src/client/agent-reading';
-import { repairTranscript, replaceTranscript } from '../src/client/transcript';
+import { refreshTranscript, repairTranscript, replaceTranscript } from '../src/client/transcript';
 import { Server, snapshot, readingWindow } from './fixture';
 
 const row = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `reply-${n}`, role: 'assistant', content: [{ type: 'text', text: `Answer ${n}` }] } } });
@@ -80,6 +80,26 @@ it('child history uses the same silent identity reread and stops after disposal'
   const history = reader.getSnapshot().history; reader.dispose();
   reader.observe({ ...state([row(3), row(4)]), conversation_id: 'child' });
   expect(reader.getSnapshot().history).toBe(history);
+});
+it('retains committed rows when a settlement burst slides the native head past them', () => {
+  // A settlement burst folds several commits into one atomic transition. When
+  // the bounded native head moves past every row the client already holds,
+  // the held rows are below-window history, not a rewritten lineage.
+  const live = pending(); live.cursor = '2'; live.item = { type: 'message', message: { id: 'reply-2', role: 'assistant', content: [{ type: 'text', text: 'Answer 2' }] } };
+  const cache = replaceTranscript({ entries: [row(1), live], next_cursor: '0' });
+  const next = refreshTranscript(cache, { entries: [row(4), row(5), row(6)], next_cursor: '3' });
+  expect(next.page.entries!.map(entry => entry.cursor)).toEqual(['1', '2', '4', '5', '6']);
+  expect(next.page.entries![1].response_pending).toBe(true);
+  // Pagination continues from the fresh block downward so the skipped rows
+  // (cursor 3) stay reachable through loadEarlier.
+  expect(next.page.next_cursor).toBe('3');
+});
+it('still replaces when cursors interleave but identities diverge', () => {
+  const cache = replaceTranscript({ entries: [row(1), row(2)] });
+  const divergent = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `other-${n}`, role: 'assistant', content: [{ type: 'text', text: `Other ${n}` }] } } });
+  const next = refreshTranscript(cache, { entries: [divergent(2), divergent(3)], next_cursor: null });
+  expect(next.page.entries!.map(entry => entry.cursor)).toEqual(['2', '3']);
+  expect(next.epoch).toBe(2);
 });
 it('rejects an identity-mismatched native repair without changing cached presentation', () => {
   const cache = replaceTranscript({ entries: [pending(), row(2)] });

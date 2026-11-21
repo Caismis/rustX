@@ -92,8 +92,26 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
   if (!previous) return replaceTranscript(page);
   if (previous.window) return previous;
   const fresh = pageRows(page);
-  const overlap = [...pageRows(previous.page)].some(([cursor, identity]) => fresh.get(cursor) === identity);
-  if (!overlap) return replaceTranscript(page, previous);
+  const held = pageRows(previous.page);
+  const overlap = [...held].some(([cursor, identity]) => fresh.get(cursor) === identity);
+  if (!overlap) {
+    // A bounded native head delivers only its newest rows. One atomic
+    // transition may slide that window past every loaded row: all held
+    // positions are then strictly older history to retain, never a rewritten
+    // lineage. Only interleaved or backward moves replace the cache.
+    if (held.size && fresh.size) {
+      const positions = (rows: Map<number | string, string>) => [...rows.keys()].map(key => BigInt(key));
+      const newest = positions(held).reduce((a, b) => a > b ? a : b);
+      const oldest = positions(fresh).reduce((a, b) => a < b ? a : b);
+      if (newest < oldest) {
+        // Continue pagination from the fresh block downward so the rows the
+        // slide skipped stay reachable through loadEarlier; dedup in
+        // mergePages handles the refetched held rows.
+        return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: page.next_cursor ?? previous.page.next_cursor } };
+      }
+    }
+    return replaceTranscript(page, previous);
+  }
   // Keep the reader's rows in place. Mutable projections outside this head are
   // reread by identity in the background, never by discarding loaded history.
   return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor } };
