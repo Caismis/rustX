@@ -79,3 +79,9 @@ mod scripted_suites;
 #[path = "../tests/boundary/mod.rs"]
 mod boundary_suites;
 pub mod credentials;
+
+/// cache-candidates round-3 marker 3: semantic root-crate edit — if sccache
+/// hashes extern/source content this must cascade misses to every unit that
+/// embeds rustx metadata; a small miss count again would show dependents got
+/// stale hits instead.
+pub const CACHE_CANDIDATES_MARKER_3: u32 = 3;
