@@ -133,3 +133,8 @@ pub mod response_completed;
 pub use store::canonical::{
     CommittedModelTurn, CommittedModelTurnBoundary, ModelTurnBoundary, ModelTurnSettlement,
 };
+
+/// cache-candidates round-3 marker 2: semantic change (not a comment) — forces
+/// real recompilation of rustx-durable and its dependents so the warm runs
+/// measure true workspace-crate invalidation on cand-a vs sccache misses.
+pub const CACHE_CANDIDATES_MARKER_2: u32 = 2;

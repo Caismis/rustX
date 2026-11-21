@@ -202,3 +202,10 @@ pub mod scheduler {
 pub mod workspace_changes {
     pub mod capture;
 }
+// cache-candidates round-3 marker 1: rustx-types edit — measures warm restore +
+// types-crate invalidation cost across cand-a (deps-only) and cand-b (sccache).
+
+/// Semantic types-crate edit: if sccache hashes extern CONTENT, every dependent
+/// crate (conversation, publication, durable, workflow, rustx...) must miss;
+/// a ~2-miss result would prove path-keyed stale hits instead.
+pub const CACHE_CANDIDATES_MARKER_1B: u32 = 1;
