@@ -98,7 +98,10 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
       <form ref={form} tabIndex={-1} aria-label={formName} aria-busy={busy} className={`${settings.settings} ${css.form}`}
         data-definition={unit.definition} data-authored-value={unit.authoredPresent ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
         onSubmit={event => event.preventDefault()}>
-        <fieldset className={css.body} disabled={!editable || busy}>
+        {page?.stagedRemovals.has(unit.identity)
+          ? <div className={`${css.notice} ${css.noticeWarn}`}><p role="status">{tx('resources:subagents.remove-staged', { p0: formName })}</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => page.unstageRemoval(unit.identity)}>{tx('settings:unsaved.undo-removal')}</Button></div>
+          : <fieldset className={css.body} disabled={!editable || busy}>
           {(unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit}/>}
           <SettingsNotice text={current?.source.diagnostic ?? undefined} />
           <fieldset className={css.fields} disabled={!unit.writable}>
@@ -170,11 +173,9 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
               </fieldset>
             </section>
           </fieldset>
-        </fieldset>
+        </fieldset>}
         <UnitOutcomeNotice title={formName} outcome={unit.outcome} />
         <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}/>
-        {page?.stagedRemovals.has(unit.identity) && <div className={`${css.notice} ${css.noticeWarn}`}><p role="status">{tx('resources:subagents.remove-staged', { p0: formName })}</p>
-          <Button type="button" variant="outline" size="sm" onClick={() => page.unstageRemoval(unit.identity)}>{tx('settings:unsaved.undo-removal')}</Button></div>}
         <PageTransactionFooter leading={<>
           {unit.authoredPresent && !page?.stagedRemovals.has(unit.identity) && <span data-removal={restoring ? 'override-removal' : 'authored-removal'}><ConfirmAction
             label={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}

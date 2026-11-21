@@ -20,6 +20,12 @@
   padding: 18px clamp(24px, 4vw, 48px) 0;
 }
 
+/* The Settings field vocabulary flexes every <header> (.settings header);
+   the shell's own head must stay a block so .headInner keeps its 960px
+   canvas and the title holds the left edge when the toolbar is portaled
+   out — otherwise it shrink-wraps and margin:auto centers it. */
+.shell > .pageHead { display: block; }
+
 .headInner {
   max-width: 960px;
   margin: 0 auto;

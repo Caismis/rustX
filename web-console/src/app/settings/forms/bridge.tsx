@@ -363,7 +363,7 @@ export function UnitResetControl({ unit }: { unit: UnitEditing<any> }) {
   if (!page || !unit.authoredPresent || unit.busy || unit.awaitingObservation) return null;
   const staged = page.stagedRemovals.has(unit.identity);
   const restores = unit.scope === 'workspace' && (unit.definition === undefined || unit.shadowed !== undefined);
-  const label = staged ? tx('settings:unsaved.undo-removal')
+  const label = staged ? tx(restores ? 'settings:unsaved.undo-reset' : 'settings:unsaved.undo-removal')
     : restores ? tx('settings:models.restore') : tx('settings:forms.reset-default');
   return <button type="button" className={css.resetLink} data-staged={staged || undefined}
     onClick={() => staged ? page.unstageRemoval(unit.identity) : page.stageRemoval(unit.identity)}>{label}</button>;

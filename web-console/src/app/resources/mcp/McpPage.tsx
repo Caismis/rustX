@@ -47,8 +47,10 @@ export function McpDetail({ source, scope, revision, focus, scopeControl, onClos
     breadcrumb={<Button variant="ghost" size="sm" onClick={() => guard.guard(onClose)}>{tx('settings:mcp.back')}</Button>}
     toolbar={scopeControl} footer={<PageTransactionFooter/>}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
+    <div className={css.page}>
     <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
       scopeControl={scopeControl} close={onClose} />
+    </div>
   </SettingsPageShell>;
 }
 
