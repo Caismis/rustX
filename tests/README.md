@@ -309,7 +309,9 @@ Workspace Python, and delegated Subagent Write/Edit/Read/Bash. The
 Subagent case keeps the authored role fixture available to the Server and
 overlays the execution directory only on the Client. It verifies that the
 physical output appears exclusively in that overlay and that Session drain
-reaps the supervision probe.
+reaps the supervision probe. The Client-only configuration case covers cold
+Session load and explicit Workspace reconciliation. The Server has no
+directory at the reserved path during either operation.
 
 Browser scenarios driving native tools create and enroll the exact testing
 Session before connecting the browser. The ordinary browser connection and

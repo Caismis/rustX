@@ -161,6 +161,7 @@ pub(super) fn install_process_guard(
     parents.iter().find_map(|parent| {
         let directory = tempfile::Builder::new()
             .prefix("rustx-python-guard-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(parent)
             .ok()?;
         install_guard(directory.path(), diagnostic)?;

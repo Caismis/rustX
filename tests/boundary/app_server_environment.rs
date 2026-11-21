@@ -156,3 +156,18 @@ async fn skill_large_metadata_and_body_use_bounded_native_ranges() {
 async fn skill_catalog_pages_trim_by_encoded_bytes_and_resume_at_exact_offset() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::skill_catalog_page_scenario()).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_returns_the_client_cancelled_snapshot_without_retiring_the_binding() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::start_returns_the_client_cancelled_snapshot()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_reports_an_admitted_client_with_lost_control_as_unconfirmed() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_control_is_unconfirmed_in_host_drain()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::refused_register_does_not_allocate_a_cancellation_tombstone()).await;
+}

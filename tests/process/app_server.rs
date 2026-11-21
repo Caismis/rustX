@@ -1157,7 +1157,13 @@ async fn remote_execution_serves_session_reads_over_websocket() {
 
         let mut argv = rustx::app_server::command::ExecParams {
             session_id: f.sessions[0].clone(),
-            command: vec!["/usr/bin/printf".into(), "<%s>".into(), String::new()],
+            command: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"printf '%s:<%s>' "$#" "$1""#.into(),
+                "argv-proof".into(),
+                String::new(),
+            ],
             cwd: workspace.display().to_string(),
             env: std::collections::BTreeMap::new(),
             process_id: None,
@@ -1178,7 +1184,7 @@ async fn remote_execution_serves_session_reads_over_websocket() {
             base64::engine::general_purpose::STANDARD
                 .decode(command.stdout_base64)
                 .unwrap(),
-            b"<>"
+            b"1:<>"
         );
         assert_eq!(command.stderr_base64, "");
         for invalid in [

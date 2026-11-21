@@ -220,9 +220,12 @@ delivered command's receipt arrives on the very next poll.
   publish never crossed; `AlreadyCrossed` that it had; `Unknown` that
   no live ticket matched — never claimed "cancelled with no effect",
   never retried.
-- The command budget is four queued plus in-flight commands; a fifth
-  fails promptly `WouldBlock` — orphan waiters count until terminal
-  delivery or retirement.
+- The command budget is four queued plus in-flight commands. Health
+  probes receive `WouldBlock` immediately when full. Cancellation,
+  StopWatch, and Revoke can wait for a slot within the original absolute
+  command deadline. A delivered Revoke uses that same deadline for its
+  physical settlement receipt. A lost lane leaves an admitted Client's
+  settlement unconfirmed unless the binding recorded a valid receipt.
 - The `ControlHandle` is cloneable and independent of the data
   connection's dispatch lock: health and cancel progress while a data
   write is physically blocked mid-send (proven on both transports with
@@ -1051,9 +1054,9 @@ envelope.
 
 - The remote transport is a real authenticated WebSocket channel with
   identical record/Session semantics as the Unix socket, bound to
-  loopback plaintext `ws` or an operator-provisioned `wss` ingress —
-  there is no Server-side TLS listener, no cross-host proxy, and no
-  recovery windows (recovery stays #577). The paired control lane —
+  a loopback `wss` listener with a per-reservation pinned certificate or
+  an operator-provisioned `wss` ingress with a trusted local forwarding
+  hop. Recovery stays #577. The paired control lane —
   health, `CancelMutation`, `Revoke` on an independent channel — is
   implemented and exercised at member and endpoint level including
   real physical congestion proofs; what remains open under T11 is
@@ -1167,7 +1170,12 @@ envelope.
   The Server parses and authorizes the document, combines it with User
   policy, and applies native units. The path-keyed Session-creation
   catalog, authored resource discovery, and automatic source watching
-  still use Server-authored inputs. Host resource snapshots and remote
+  still use Server-authored inputs. Cold loading and explicit Workspace
+  reconciliation can use an authenticated binding when its logical path
+  is absent on the Server. Workspace-authored resources remain a separate
+  discovery source. Explicit unavailable resource selections have their
+  own diagnostics, and reconciliation tracks each Client capture in its
+  own Session scope. Host resource snapshots and remote
   resource discovery are tracked in [#578](https://github.com/Caismis/rustX/issues/578).
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
@@ -1209,14 +1217,25 @@ the pair and preserves the authoritative data outcome. Neither path
 reissues the commit. A pending data lane must pass an immediate socket
 readiness check during pair commit, independently of the watchdog.
 
-Application Server drain closes Host and Session dispatch admission
-before waiting for Client revocation. One absolute shutdown deadline
-starts before admission closes. Independent Client pairs revoke
-concurrently outside the Host lock. A missing physical receipt remains
-an explicit failure. Streamed pipe stdin reports a close as applied
+Application Server drain closes Host and Session dispatch admission in a
+synchronous step that stores the settlement plan. Async drain takes that
+plan. One absolute shutdown deadline starts before admission closes.
+Independent Client pairs revoke concurrently outside the Host lock. At
+pair commit the binding starts tracking physical settlement. A valid
+Revoke receipt resolves it even if the transport subsequently detaches.
+A reservation that never paired has no Client work to settle. Detachment
+without a receipt leaves settlement unconfirmed. After sending Revoke,
+the control worker waits for its receipt until the original command
+deadline. Streamed pipe stdin reports a close as applied
 only once the physical input connection has been shut down. The argv
 contract accepts empty positional arguments and rejects empty program
-names and embedded NULs.
+names and embedded NULs. An authoritative Register refusal ends cleanup
+ownership. A terminal START receipt drives the output and release state,
+including a cancelled operation with an empty journal. A failed cancel
+checks the most recent terminal evidence before fencing. Private Bash
+capture discard waits for bounded data admission and either confirms
+release or retires its owning binding. Non-EOF PTY read errors preserve
+output loss in the terminal disposition.
 
 ### Workspace Python readiness
 
@@ -1228,8 +1247,9 @@ preparation. The Client verifies the opened Workspace identity, resolves
 and interpreter probes with its process supervisor. Agent Shell START
 applies the verified interpreter or the guarded unready environment. An
 authorized Shell START may schedule preparation when the runtime loaded
-before admission. Session revocation drains the physical worker. During orderly exit the Client removes
-its process-private uv discovery and fallback guard directories. The
+before admission. Session revocation drains the physical worker. The
+process-private uv discovery and fallback guard directories are created
+with mode 0700. The Client removes them during orderly exit. The
 local composer waits for and reaps that Client. UI argv commands have
 an independent environment contract. Managed Python remains
 under [#577](https://github.com/Caismis/rustX/issues/577).
@@ -1250,6 +1270,10 @@ restricted copy of the repository configuration. Each candidate stages
 its Git objects and index privately. The binding retains up to 512 MiB
 and 65,536 unique loose objects. Exceeding either limit discards the
 candidate and preserves the previous index and existing observations.
+A completed Finish owns its first Summary delivery. A completed Compare
+owns its indexed Comparison delivery. The pending delivery protects the
+record until a matching poll claims it or 60 seconds pass after completion.
+A new Begin at capacity may reclaim delivered or expired history.
 The quota covers retained data. A single serialized Git attempt may
 temporarily use additional scratch before the quota check. A rename that crosses the
 Workspace edge is observed only through its in-scope endpoint. Files outside

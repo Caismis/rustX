@@ -206,6 +206,8 @@ enum Record {
 }
 
 struct Inner {
+    #[cfg(test)]
+    fail_pty_read: bool,
     records: BTreeMap<OperationId, Record>,
 }
 
@@ -258,6 +260,8 @@ impl Operations {
         );
         Ok(Self {
             inner: Arc::new(Mutex::new(Inner {
+                #[cfg(test)]
+                fail_pty_read: false,
                 records: BTreeMap::new(),
             })),
             root,
@@ -1441,8 +1445,18 @@ async fn run_operation(
                 }
             }
             result = async { terminal.as_ref().expect("terminal").read(&mut terminal_buf).await }, if !terminal_done => {
+                #[cfg(test)]
+                let result = if std::mem::take(&mut inner.lock().unwrap().fail_pty_read) {
+                    Err(std::io::ErrorKind::PermissionDenied.into())
+                } else {
+                    result
+                };
                 match result {
-                    Ok(0) | Err(_) => terminal_done = true,
+                    Ok(0) => terminal_done = true,
+                    Err(_) => {
+                        terminal_done = true;
+                        output_failed = true;
+                    }
                     Ok(n) => push(&inner, &key, ProcessStream::Pty, &terminal_buf[..n]),
                 }
             }
@@ -2360,6 +2374,32 @@ mod tests {
         assert_eq!(snapshot.disposition, SettledDisposition::Known);
         let (out, _) = drain(&ops, &key);
         assert!(out.windows(9).any(|w| w == b"pty-input"), "got {out:?}");
+        assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn a_non_eio_pty_read_failure_does_not_settle_as_known_output() {
+        assert!(
+            supervisor_staged(),
+            "stage bash-supervisor for the PTY test"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut spec = spec(&["/bin/echo", "terminal output"]);
+        spec.pty = Some(PtySpec { rows: 24, cols: 80 });
+        spec.stdin = ProcessStdin::Streamed;
+        ops.inner.lock().unwrap().fail_pty_read = true;
+        assert!(matches!(
+            register(&ops, &key, &spec),
+            ProcessReply::Registered { .. }
+        ));
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.exit_code, Some(0));
+        assert_eq!(snapshot.disposition, SettledDisposition::Failed);
+        assert!(!ops.inner.lock().unwrap().fail_pty_read);
         assert!(ops.shutdown().is_ok());
     }
 

@@ -64,7 +64,6 @@ impl ChildExecutionGrant {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             connection_released: tokio::sync::Notify::new(),
             dispatch_closed: std::sync::atomic::AtomicBool::new(false),
-            revocation_confirmed: std::sync::atomic::AtomicBool::new(false),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             workspace: workspace.to_path_buf(),

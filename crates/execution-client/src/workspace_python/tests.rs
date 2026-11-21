@@ -3290,3 +3290,49 @@ async fn changed_fixed_interpreter_during_capacity_wait_does_not_create_a_target
         );
     }
 }
+
+#[test]
+fn scratch_directories_stay_private_with_a_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+    const CHILD: &str = "RUSTX_PYTHON_SCRATCH_PERMISSION_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 000; exec \"$@\"", "scratch-test"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workspace_python::tests::scratch_directories_stay_private_with_a_permissive_umask",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}
+{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let parent = tempfile::tempdir().unwrap();
+    let parents = [parent.path().to_path_buf()];
+    let guard = super::guard::install_process_guard(&parents, "private guard").unwrap();
+    let mut discovery = None;
+    let discovery_path = super::interpreter::fresh_discovery(&mut discovery, &parents).unwrap();
+    let guard_path = guard.path().to_path_buf();
+    for path in [&guard_path, &discovery_path] {
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+    }
+    let output = std::process::Command::new(guard_path.join("python"))
+        .env(super::GUARD_MESSAGE_KEY, "private guard")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(127));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("private guard"));
+    std::fs::write(discovery_path.join("probe"), "probe").unwrap();
+    drop(guard);
+    drop(discovery);
+    assert!(!guard_path.exists() && !discovery_path.exists());
+}

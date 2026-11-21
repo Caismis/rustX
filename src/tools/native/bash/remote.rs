@@ -92,9 +92,7 @@ pub(crate) fn discard_private_output(workspace: &Workspace, path: &Path) {
         && let Ok(endpoint) = scope.endpoint()
         && let Ok(key) = operation.key_for(&endpoint)
     {
-        tokio::spawn(async move {
-            let _ = exchange(&endpoint, ProcessRequest::DiscardBashOutput { key }, None).await;
-        });
+        tokio::spawn(endpoint.discard_bash_capture(key));
     }
 }
 
@@ -281,6 +279,12 @@ impl RemoteBash {
             ProcessReply::Refused { reason, .. } => {
                 operation.cleanup = false;
                 Err(io::Error::other(reason))
+            }
+            ProcessReply::Conflict { .. } => {
+                operation.cleanup = false;
+                Err(io::Error::other(
+                    "the Client refused conflicting Agent Bash registration",
+                ))
             }
             _ => Err(io::Error::other(
                 "the Execution Client did not register Agent Bash",
@@ -535,8 +539,7 @@ impl Drop for RemoteBash {
                         None,
                     )
                     .await;
-                    let _ =
-                        exchange(&endpoint, ProcessRequest::DiscardBashOutput { key }, None).await;
+                    endpoint.discard_bash_capture(key).await;
                 } else {
                     endpoint.cut_pair();
                 }
@@ -606,11 +609,9 @@ async fn deliver_cancel(
     let _ = tokio::task::spawn_blocking(move || {
         let deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
-        endpoint.cancel_operation(
-            &key,
-            deadline,
-            settled.load(std::sync::atomic::Ordering::Acquire),
-        );
+        endpoint.cancel_operation(&key, deadline, || {
+            settled.load(std::sync::atomic::Ordering::Acquire)
+        });
     })
     .await;
 }

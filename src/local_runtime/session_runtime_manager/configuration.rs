@@ -471,12 +471,38 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
-            target.validate().map_err(SourceSettingsError::Source)?;
-            // Explicit reconciliation observes external edits: the User source
-            // composes every target, the Workspace only its own.
-            owner.repair_sources(&target);
+            let has_bound_consumer = target.workspace().is_some_and(|directory| {
+                rustx_execution_protocol::is_normalized_absolute_path(directory)
+                    && owner
+                        .sessions
+                        .configuration_bindings
+                        .lock()
+                        .expect("Session configuration bindings")
+                        .iter()
+                        .any(|(session, binding)| {
+                            binding.input.cwd.as_os_str() == directory.as_os_str()
+                                && owner
+                                    .execution
+                                    .configuration_endpoint(session)
+                                    .ok()
+                                    .flatten()
+                                    .is_some()
+                        })
+            });
+            let authored = match target.validate() {
+                Ok(()) => true,
+                Err(_) if has_bound_consumer => false,
+                Err(error) => return Err(SourceSettingsError::Source(error)),
+            };
+            if authored {
+                owner.repair_sources(&target);
+            }
             let mut application = owner.applications.lock();
-            let bound = owner.capture_source_consumers(&mut application, &target);
+            let bound = if authored {
+                owner.capture_source_consumers(&mut application, &target)
+            } else {
+                owner.collect_configuration_consumers(&mut application, &target, false)
+            };
             // Reconciliation is an explicit recovery boundary. Ordinary
             // source capture deduplicates unchanged files, but invalidated or
             // unavailable MCP catalogs still require fresh discovery. Completed
@@ -505,7 +531,18 @@ impl SessionRuntimeManager {
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
+            let bound_sessions = (!authored).then(|| {
+                bound
+                    .iter()
+                    .map(|capture| capture.session.clone())
+                    .collect::<Vec<_>>()
+            });
             owner.capture_bound_consumers(bound);
+            if let Some((sessions, directory)) = bound_sessions.as_deref().zip(target.workspace()) {
+                let mut application = owner.applications.lock();
+                application.record_bound_reconciliation(&target, directory, sessions);
+                owner.applications.notify(&application);
+            }
             for runtime in recoveries {
                 tokio::runtime::Handle::current().spawn(async move {
                     let _ = runtime.refresh_runtime_catalogs().await;
@@ -616,6 +653,15 @@ impl SessionRuntimeManager {
                 );
             }
         }
+        self.collect_configuration_consumers(application, target, true)
+    }
+
+    fn collect_configuration_consumers(
+        &self,
+        application: &mut super::super::configuration::application::ApplicationState,
+        target: &super::super::configuration::settings::SourceTarget,
+        authored: bool,
+    ) -> Vec<BoundCapture> {
         let inputs: Vec<_> = self
             .sessions
             .configuration_bindings
@@ -625,7 +671,7 @@ impl SessionRuntimeManager {
             .filter(|(_, binding)| {
                 target
                     .workspace()
-                    .is_none_or(|directory| directory == binding.input.cwd)
+                    .is_none_or(|directory| directory.as_os_str() == binding.input.cwd.as_os_str())
             })
             .map(|(session, binding)| (session.clone(), binding.input.clone()))
             .collect();
@@ -633,7 +679,7 @@ impl SessionRuntimeManager {
         for (session, input) in inputs {
             application.cancel_bound_capture(&session);
             match self.execution.configuration_endpoint(&session) {
-                Ok(None) => {
+                Ok(None) if authored => {
                     application.capture(
                         session.to_string(),
                         &input.cwd,
@@ -644,6 +690,7 @@ impl SessionRuntimeManager {
                         ),
                     );
                 }
+                Ok(None) => {}
                 Ok(Some(endpoint)) => {
                     let ticket = application.begin_bound_capture(session.clone());
                     bound.push(BoundCapture {

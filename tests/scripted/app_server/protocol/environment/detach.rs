@@ -61,7 +61,6 @@ async fn proxy_data(
     resume: oneshot::Receiver<()>,
     released: mpsc::UnboundedSender<Released>,
 ) -> io::Result<()> {
-    forward_hello(&mut client, &mut server).await;
     let mut gate = Some((parked, resume));
     let mut trace = ProcessTrace::default();
     while let Ok(request) = receive::<ClientRequest>(&mut server).await {
@@ -121,7 +120,6 @@ async fn proxy_control(
     resume: oneshot::Receiver<()>,
     cancels: mpsc::UnboundedSender<(ProcessOperationKey, ProcessCancelDisposition)>,
 ) -> io::Result<()> {
-    forward_hello(&mut client, &mut server).await;
     let mut gate = Some((parked, resume));
     while let Ok(poll) = receive::<ControlPoll>(&mut client).await {
         if matches!(poll.receipt, Some(ControlReply::Healthy { .. }))
@@ -189,11 +187,17 @@ fn ui_call(id: i64, call: Method) -> tokio_tungstenite::tungstenite::Message {
     .into()
 }
 
-#[allow(clippy::too_many_lines)] // Keep the barrier ordering together in the scenario.
-pub(crate) async fn detach_during_data_and_control_backpressure() {
+struct ProxiedClient {
+    data: (UnixStream, UnixStream),
+    control: (UnixStream, UnixStream),
+    endpoint: Arc<rustx::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    child: tokio::process::Child,
+    _scratch: tempfile::TempDir,
+}
+
+async fn proxied_client(fixture: &Fixture) -> ProxiedClient {
+    use rustx::local_runtime::session_runtime_manager::EndpointAdmission;
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-    let fixture = Fixture::with_session_count(None, 1).await;
-    grant(&fixture);
     let endpoint = fixture
         .manager
         .reserve_local_execution(&fixture.sessions[0].id)
@@ -223,7 +227,7 @@ pub(crate) async fn detach_during_data_and_control_backpressure() {
     let client = std::env::current_exe()
         .unwrap()
         .with_file_name("rustx-execution-client");
-    let mut child = tokio::process::Command::new(client)
+    let child = tokio::process::Command::new(client)
         .arg("--binding-file")
         .arg(bundle.canonicalize().unwrap())
         .arg("--workspace")
@@ -240,59 +244,61 @@ pub(crate) async fn detach_during_data_and_control_backpressure() {
     };
     listener.set_nonblocking(true).unwrap();
     let listener = UnixListener::from_std(listener.try_clone().unwrap()).unwrap();
+    let pair_lane = || async {
+        let (mut peer, _) = bounded(proxy.accept()).await.unwrap();
+        let mut server = UnixStream::connect(&socket_path).await.unwrap();
+        let (stream, _) = bounded(listener.accept()).await.unwrap();
+        let admit = tokio::task::spawn_blocking({
+            let endpoint = endpoint.clone();
+            move || endpoint.admit_local_stream(stream.into_std().unwrap())
+        });
+        forward_hello(&mut peer, &mut server).await;
+        ((peer, server), admit.await.unwrap().unwrap())
+    };
+    let (data, admission) = pair_lane().await;
+    assert!(matches!(admission, EndpointAdmission::Pending));
+    let (control, admission) = pair_lane().await;
+    assert!(matches!(admission, EndpointAdmission::Live));
+    ProxiedClient {
+        data,
+        control,
+        endpoint,
+        child,
+        _scratch: scratch,
+    }
+}
+
+#[allow(clippy::too_many_lines)] // Keep the barrier ordering together in the scenario.
+pub(crate) async fn detach_during_data_and_control_backpressure() {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data: data_lane,
+        control,
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
     let (data_waiting, data_parked) = oneshot::channel();
     let (resume_data, data_resume) = oneshot::channel();
     let (output_release, mut released) = mpsc::unbounded_channel();
-    let (peer, _) = bounded(proxy.accept()).await.unwrap();
-    let server = UnixStream::connect(&socket_path).await.unwrap();
     let data = tokio::spawn(proxy_data(
-        peer,
-        server,
+        data_lane.0,
+        data_lane.1,
         data_waiting,
         data_resume,
         output_release,
     ));
-    let (stream, _) = bounded(listener.accept()).await.unwrap();
-    {
-        let endpoint = endpoint.clone();
-        let accepted = tokio::task::spawn_blocking(move || {
-            endpoint.admit_local_stream(stream.into_std().unwrap())
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(matches!(
-            accepted,
-            rustx::local_runtime::session_runtime_manager::EndpointAdmission::Pending
-        ));
-    }
-
     let (control_waiting, control_parked) = oneshot::channel();
     let (resume_control, control_resume) = oneshot::channel();
     let (cancel_receipt, mut cancels) = mpsc::unbounded_channel();
-    let (peer, _) = bounded(proxy.accept()).await.unwrap();
-    let server = UnixStream::connect(&socket_path).await.unwrap();
     let control_task = tokio::spawn(proxy_control(
-        peer,
-        server,
+        control.0,
+        control.1,
         control_waiting,
         control_resume,
         cancel_receipt,
     ));
-    let (stream, _) = bounded(listener.accept()).await.unwrap();
-    {
-        let endpoint = endpoint.clone();
-        let accepted = tokio::task::spawn_blocking(move || {
-            endpoint.admit_local_stream(stream.into_std().unwrap())
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(matches!(
-            accepted,
-            rustx::local_runtime::session_runtime_manager::EndpointAdmission::Live
-        ));
-    }
 
     let ui_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/", ui_listener.local_addr().unwrap());
@@ -432,4 +438,130 @@ pub(crate) async fn detach_during_data_and_control_backpressure() {
     }
     assert!(released.try_recv().is_err(), "one physical release");
     assert!(cancels.try_recv().is_err(), "one physical cancellation");
+}
+
+pub(crate) async fn lost_control_is_unconfirmed_in_host_drain() {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data: (mut data_peer, mut data_server),
+        control: (mut control_peer, mut control_server),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let (stop, stopped) = oneshot::channel::<()>();
+    let control = tokio::spawn(async move {
+        tokio::select! {
+            _ = stopped => {},
+            _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server) => {
+                panic!("both control peers stay connected until the test cuts the lane")
+            }
+        }
+    });
+    let (eof, closed) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        // No client data messages are expected until the Host cuts the pair.
+        let length = data_server.read(&mut [0]).await.unwrap();
+        assert_eq!(length, 0);
+        eof.send(()).unwrap();
+        let _ = data_peer.shutdown().await;
+    });
+    let live = endpoint.control().unwrap();
+    bounded(tokio::task::spawn_blocking(move || live.health()))
+        .await
+        .unwrap()
+        .unwrap();
+    stop.send(()).unwrap();
+    bounded(control).await.unwrap();
+    bounded(closed).await.unwrap();
+    assert!(endpoint.control().is_none());
+    assert_eq!(fixture.host.file_observers().available_permits(), 32);
+    let failures = bounded(fixture.host.drain()).await;
+    assert_eq!(
+        failures,
+        [
+            "Client revocation is unconfirmed: admitted Client has no control lane or physical settlement receipt"
+        ]
+    );
+    bounded(data).await.unwrap();
+    let _client_exit = bounded(child.wait()).await.unwrap();
+}
+
+pub(crate) async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
+    use rustx_execution_protocol::process::SpecRefusal;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data: (mut data_peer, mut data_server),
+        control: (mut control_peer, mut control_server),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let (refused, mut refusals) = mpsc::unbounded_channel();
+    let data = tokio::spawn(async move {
+        while let Ok(request) = receive::<ClientRequest>(&mut data_server).await {
+            send(&mut data_peer, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut data_peer).await.unwrap();
+            if let ClientReply::Process(ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::InvalidCwd,
+            }) = &reply
+            {
+                refused.send(key.clone()).unwrap();
+            }
+            send(&mut data_server, &reply).await.unwrap();
+        }
+    });
+    let (cancels, mut cancelled) = mpsc::unbounded_channel();
+    let control = tokio::spawn(async move {
+        while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
+            if let Some(ControlReply::ProcessCancelled { key, .. }) = &poll.receipt {
+                cancels.send(key.clone()).unwrap();
+            }
+            send(&mut control_server, &poll).await.unwrap();
+            let Ok(turn) = receive::<ControlTurn>(&mut control_server).await else {
+                break;
+            };
+            send(&mut control_peer, &turn).await.unwrap();
+        }
+    });
+    let connection = AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    let process = "refused-register-has-no-cleanup";
+    let watcher = crate::app_server::command::observe_cancellation_watcher(process);
+    let mut params = parameters(&fixture, &["/bin/true"]);
+    params.process_id = Some(process.into());
+    params.cwd = fixture.workspaces[0]
+        .join("missing-cwd")
+        .display()
+        .to_string();
+    assert_eq!(
+        rejected(&connection, 1, Method::CommandExec(params)).await,
+        crate::app_server::protocol::ErrorData::EnvironmentUnauthorized
+    );
+    let key = bounded(refusals.recv()).await.unwrap();
+    bounded(bounded(watcher).await.unwrap()).await.unwrap();
+    assert!(matches!(
+        cancelled.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    let query = ProcessRequest::Query { key: key.clone() };
+    let observed = tokio::task::spawn_blocking(move || endpoint.process(&query))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed, ProcessReply::Unknown { key });
+    assert!(matches!(
+        call(&connection, 2, Method::CommandExec(parameters(&fixture, &["/bin/true"]))).await,
+        MethodResult::CommandExec { result } if result.exit_code == Some(0)
+    ));
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    // The Client gets a genuine protocol Close from the Server on the
+    // data route. Wait for it without interrupting physical cleanup.
+    assert!(bounded(child.wait()).await.unwrap().success());
+    data.abort();
+    control.abort();
 }

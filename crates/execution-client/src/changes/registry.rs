@@ -7,10 +7,12 @@ use std::{
     collections::BTreeMap,
     path::Path,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const MAX_RECORDS: usize = 32;
+const RESULT_CLAIM_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) struct Changes {
     records: Mutex<BTreeMap<OperationId, Arc<Record>>>,
@@ -32,22 +34,89 @@ enum Phase {
     Preparing,
     Ready(Arc<ChangeRecording>),
     Finalizing,
-    Complete,
+    Complete {
+        summary_claim_until: Option<Instant>,
+    },
     Failed,
+}
+
+enum Comparison {
+    Pending {
+        index: usize,
+    },
+    Ready {
+        index: usize,
+        reply: ChangeReply,
+        claim_until: Instant,
+    },
+}
+
+impl Comparison {
+    fn owns_delivery(&self, now: Instant) -> bool {
+        match self {
+            Self::Pending { .. } => true,
+            Self::Ready { claim_until, .. } => now < *claim_until,
+        }
+    }
 }
 
 struct Record {
     phase: Mutex<Phase>,
     scope: Arc<ChangesStore>,
-    comparison: Mutex<Option<(usize, ChangeReply)>>,
+    comparison: Mutex<Option<Comparison>>,
     signal: rustx_process_supervisor::signal::ProcessSignal,
-    created: std::time::Instant,
+    created: Instant,
     _slot: OwnedSemaphorePermit,
 }
 
 impl Record {
     fn cancel(&self) {
         self.signal.cancel();
+    }
+
+    fn is_history(&self, now: Instant) -> bool {
+        let phase = self.phase.lock().expect("Workspace observation");
+        let summary_settled = match *phase {
+            Phase::Complete {
+                summary_claim_until,
+            } => summary_claim_until.is_none_or(|until| now >= until),
+            Phase::Failed => true,
+            _ => false,
+        };
+        summary_settled
+            && self
+                .comparison
+                .lock()
+                .expect("Workspace comparison")
+                .as_ref()
+                .is_none_or(|comparison| !comparison.owns_delivery(now))
+    }
+
+    fn claim_summary(&self, id: OperationId) -> ChangeReply {
+        match &mut *self.phase.lock().expect("Workspace observation") {
+            Phase::Finalizing => ChangeReply::Pending,
+            Phase::Complete {
+                summary_claim_until,
+            } => {
+                *summary_claim_until = None;
+                ChangeReply::Summary(self.scope.summary(&format!("{:032x}", id.as_u128())))
+            }
+            _ => ChangeReply::Unavailable,
+        }
+    }
+
+    fn claim_comparison(&self, index: usize) -> ChangeReply {
+        let mut comparison = self.comparison.lock().expect("Workspace comparison");
+        match comparison.as_ref() {
+            Some(Comparison::Pending { index: active }) if index == *active => ChangeReply::Pending,
+            Some(Comparison::Ready { index: active, .. }) if index == *active => {
+                let Some(Comparison::Ready { reply, .. }) = comparison.take() else {
+                    unreachable!("the ready result is locked");
+                };
+                reply
+            }
+            _ => ChangeReply::Unavailable,
+        }
     }
 
     fn set_phase(&self, phase: Phase) {
@@ -106,23 +175,9 @@ impl Changes {
                 Self::capture(workspace, &record, &path)
             }
             ChangeRequest::Finish { .. } => Self::finish(operations, &record),
-            ChangeRequest::Summary { .. } => {
-                match *record.phase.lock().expect("Workspace observation") {
-                    Phase::Finalizing => ChangeReply::Pending,
-                    Phase::Complete => ChangeReply::Summary(
-                        record.scope.summary(&format!("{:032x}", id.as_u128())),
-                    ),
-                    _ => ChangeReply::Unavailable,
-                }
-            }
+            ChangeRequest::Summary { .. } => record.claim_summary(id),
             ChangeRequest::Compare { index, .. } => Self::compare(operations, &record, index, id),
-            ChangeRequest::Comparison { index, .. } => record
-                .comparison
-                .lock()
-                .expect("Workspace comparison")
-                .as_ref()
-                .filter(|(active, _)| index == *active)
-                .map_or(ChangeReply::Unavailable, |(_, reply)| reply.clone()),
+            ChangeRequest::Comparison { index, .. } => record.claim_comparison(index),
             ChangeRequest::Begin { .. } | ChangeRequest::Release { .. } => unreachable!(),
         };
         if serde_json::to_vec(&reply).is_ok_and(|bytes| bytes.len() <= MAX_CHANGE_BYTES) {
@@ -157,7 +212,7 @@ impl Changes {
             scope: Arc::clone(&self.scope),
             comparison: Mutex::new(None),
             signal: operations.auxiliary_signal(),
-            created: std::time::Instant::now(),
+            created: Instant::now(),
             _slot: slot,
         });
         let id = key.operation;
@@ -187,15 +242,10 @@ impl Changes {
     }
 
     fn evict_completed(&self, records: &mut BTreeMap<OperationId, Arc<Record>>) {
+        let now = Instant::now();
         let oldest = records
             .iter()
-            .filter(|(_, record)| {
-                Arc::strong_count(record) == 1
-                    && matches!(
-                        *record.phase.lock().expect("Workspace observation"),
-                        Phase::Complete | Phase::Failed
-                    )
-            })
+            .filter(|(_, record)| Arc::strong_count(record) == 1 && record.is_history(now))
             .min_by_key(|(_, record)| record.created)
             .map(|(id, _)| *id);
         if let Some(id) = oldest
@@ -237,7 +287,9 @@ impl Changes {
         if operations.start_auxiliary(async move {
             let saved = recording.record().await.is_ok() && !worker.signal.is_cancelled();
             worker.set_phase(if saved {
-                Phase::Complete
+                Phase::Complete {
+                    summary_claim_until: Some(Instant::now() + RESULT_CLAIM_TIMEOUT),
+                }
             } else {
                 Phase::Failed
             });
@@ -257,7 +309,7 @@ impl Changes {
     ) -> ChangeReply {
         if !matches!(
             *record.phase.lock().expect("Workspace observation"),
-            Phase::Complete
+            Phase::Complete { .. }
         ) {
             return ChangeReply::Unavailable;
         }
@@ -265,11 +317,11 @@ impl Changes {
             let mut pending = record.comparison.lock().expect("Workspace comparison");
             if pending
                 .as_ref()
-                .is_some_and(|(_, reply)| *reply == ChangeReply::Pending)
+                .is_some_and(|comparison| comparison.owns_delivery(Instant::now()))
             {
                 return ChangeReply::Unavailable;
             }
-            *pending = Some((index, ChangeReply::Pending));
+            *pending = Some(Comparison::Pending { index });
         }
         let worker = Arc::clone(record);
         if operations.start_auxiliary(async move {
@@ -281,7 +333,11 @@ impl Changes {
                 Ok(comparison) => ChangeReply::Comparison { index, comparison },
                 Err(_) => ChangeReply::Unavailable,
             };
-            *worker.comparison.lock().expect("Workspace comparison") = Some((index, reply));
+            *worker.comparison.lock().expect("Workspace comparison") = Some(Comparison::Ready {
+                index,
+                reply,
+                claim_until: Instant::now() + RESULT_CLAIM_TIMEOUT,
+            });
         }) {
             ChangeReply::Accepted
         } else {
@@ -295,41 +351,133 @@ impl Changes {
 mod tests {
     use super::*;
 
+    fn retain_summary(
+        changes: &Changes,
+        finished: OperationId,
+        scratch: &Path,
+    ) -> rustx_execution_protocol::changes::ChangesSummary {
+        let summary = rustx_execution_protocol::changes::ChangesSummary {
+            files: vec![rustx_execution_protocol::changes::ChangedFile {
+                path: "/workspace/changed.bin".into(),
+                display: "changed.bin".into(),
+                added: 0,
+                deleted: 0,
+                binary: true,
+                oversized: false,
+            }],
+            total: 1,
+            added: 0,
+            deleted: 0,
+        };
+        changes.scope.records.lock().unwrap().insert(
+            format!("{:032x}", finished.as_u128()),
+            Arc::new(super::super::Recorded {
+                summary: summary.clone(),
+                sources: Vec::new(),
+                repository: None,
+                trees: None,
+                _directory: Arc::new(super::super::SnapshotDirectory::create(scratch).unwrap()),
+                _capture_directory: None,
+            }),
+        );
+        summary
+    }
+
     #[test]
-    fn retained_history_releases_capacity_without_evicting_live_observers() {
+    fn saturated_history_protects_unclaimed_summary_and_comparison() {
         let changes = Changes {
-            slots: Arc::new(Semaphore::new(3)),
+            slots: Arc::new(Semaphore::new(4)),
             ..Changes::default()
         };
-        let now = std::time::Instant::now();
-        let make = |phase, elapsed| {
+        let now = Instant::now();
+        let claim_until = now + RESULT_CLAIM_TIMEOUT;
+        let make = |phase, comparison, serial| {
             Arc::new(Record {
                 phase: Mutex::new(phase),
                 scope: Arc::clone(&changes.scope),
-                comparison: Mutex::new(None),
+                comparison: Mutex::new(comparison),
                 signal: rustx_process_supervisor::signal::ProcessSignal::new(),
-                created: now + std::time::Duration::from_millis(elapsed),
+                created: now + Duration::from_millis(serial),
                 _slot: Arc::clone(&changes.slots).try_acquire_owned().unwrap(),
             })
         };
         let live = OperationId::new();
         let compared = OperationId::new();
-        let complete = OperationId::new();
-        let comparison_holds_slot = make(Phase::Complete, 1);
+        let finished = OperationId::new();
+        let history = OperationId::new();
+        let scratch = tempfile::tempdir().unwrap();
+        let summary = retain_summary(&changes, finished, scratch.path());
+        let exact = ChangeReply::Comparison {
+            index: 3,
+            comparison: Some(rustx_execution_protocol::changes::FileComparison {
+                hunks: Vec::new(),
+                binary: true,
+                oversized: false,
+                truncated: false,
+            }),
+        };
         let mut records = BTreeMap::from([
-            (live, make(Phase::Preparing, 0)),
-            (compared, Arc::clone(&comparison_holds_slot)),
-            (complete, make(Phase::Complete, 2)),
+            (live, make(Phase::Preparing, None, 0)),
+            (
+                compared,
+                make(
+                    Phase::Complete {
+                        summary_claim_until: None,
+                    },
+                    Some(Comparison::Ready {
+                        index: 3,
+                        reply: exact.clone(),
+                        claim_until,
+                    }),
+                    1,
+                ),
+            ),
+            (
+                finished,
+                make(
+                    Phase::Complete {
+                        summary_claim_until: Some(claim_until),
+                    },
+                    None,
+                    2,
+                ),
+            ),
+            (
+                history,
+                make(
+                    Phase::Complete {
+                        summary_claim_until: None,
+                    },
+                    None,
+                    3,
+                ),
+            ),
         ]);
+        // Workers are gone. A new Begin at capacity must reclaim only the
+        // delivered history, leaving both cross-process claims intact.
         assert_eq!(changes.slots.available_permits(), 0);
+        assert!(!records[&finished].is_history(now));
+        assert!(records[&finished].is_history(claim_until));
+        assert!(!records[&compared].is_history(now));
+        assert!(records[&compared].is_history(claim_until));
         changes.evict_completed(&mut records);
-        assert!(!records.contains_key(&complete));
-        assert!(records.contains_key(&live));
-        assert!(records.contains_key(&compared));
-        assert_eq!(changes.slots.available_permits(), 1);
-        drop(comparison_holds_slot);
+        let competing_begin = make(Phase::Preparing, None, 4);
+        assert!(!records.contains_key(&history));
+        changes.evict_completed(&mut records);
+        assert_eq!(changes.slots.available_permits(), 0);
+        assert_eq!(
+            records[&compared].claim_comparison(2),
+            ChangeReply::Unavailable
+        );
+        assert_eq!(records[&compared].claim_comparison(3), exact);
+        assert_eq!(
+            records[&finished].claim_summary(finished),
+            ChangeReply::Summary(Some(summary))
+        );
+        changes.evict_completed(&mut records);
         changes.evict_completed(&mut records);
         assert_eq!(records.keys().copied().collect::<Vec<_>>(), [live]);
         assert_eq!(changes.slots.available_permits(), 2);
+        drop(competing_begin);
     }
 }

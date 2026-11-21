@@ -80,3 +80,6 @@ cargo test -p rustx --all-features --locked --lib \
     -- --exact --nocapture
 cargo test -p rustx --all-features --locked --test subagent \
     a_real_child_executes_native_tools_in_the_frozen_nested_workspace -- --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    bound_configuration_load_and_reconcile_without_any_server_workspace_directory \
+    -- --ignored --nocapture

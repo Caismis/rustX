@@ -826,6 +826,40 @@ impl ApplicationState {
         self.source_inputs.insert(scope, process);
     }
 
+    /// Summarize what was observed through the bound consumers of this
+    /// Workspace. Their individual Sessions retain application diagnostics.
+    /// This does not authorize source writes or seed the creation cache.
+    pub(crate) fn record_bound_reconciliation(
+        &mut self,
+        target: &super::settings::SourceTarget,
+        directory: &std::path::Path,
+        consumers: &[super::super::session::SessionId],
+    ) {
+        let revisions: BTreeMap<_, _> = consumers
+            .iter()
+            .filter_map(|session| {
+                let revision = self
+                    .scopes
+                    .get(session.as_ref())?
+                    .desired
+                    .input_revision
+                    .clone()?;
+                Some((std::path::PathBuf::from(session.as_ref()), revision))
+            })
+            .collect();
+        let revision =
+            (!revisions.is_empty()).then(|| super::capture::source_manifest_revision(&revisions));
+        let scope = target.application_scope();
+        self.own_scope(&scope, directory);
+        self.desire(scope.clone(), revision);
+        self.pending.remove(&scope);
+        self.scopes
+            .get_mut(&scope)
+            .expect("bound observation scope")
+            .units
+            .clear();
+    }
+
     pub(crate) fn record_source(
         &mut self,
         source: &std::path::Path,

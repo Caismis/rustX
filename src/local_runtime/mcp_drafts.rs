@@ -167,8 +167,12 @@ impl McpDraftRegistry {
         scopes.push(Arc::downgrade(&scope));
         McpDraftScope(Arc::new(ScopeLease(scope)))
     }
-    pub(crate) fn begin_drain(&self) {
+    pub(crate) fn close_admission(&self) {
         self.draining.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn begin_drain(&self) {
+        self.close_admission();
         for scope in self
             .scopes
             .lock()

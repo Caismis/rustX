@@ -39,21 +39,18 @@ pub const LOCAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// busy-loop and never blocks commands behind a sleep.
 pub const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// The per-frame deadline on the Server's control-lane read: a Client
-/// that stops polling for this long has lost the lane outright, at
-/// roughly forty idle periods of slack — far beyond scheduling jitter,
-/// far inside any useful liveness signal.
+/// The normal control-frame deadline, including idle Client polling.
+/// An in-flight Revoke uses its absolute command deadline for the
+/// physical settlement receipt.
 pub const CONTROL_FRAME_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The maximum count of queued plus in-flight control commands —
-/// probes included — before a new command is refused immediately.
+/// probes included. Health refuses immediately on saturation, while
+/// settlement and cancellation commands can wait within their budget.
 pub const MAX_CONTROL_COMMANDS: usize = 4;
 
 /// The absolute bound on one control command's round trip: queue wait,
-/// poll delivery, client handling, and the acknowledging poll. A
-/// control lane healthy enough to deliver within this window settles
-/// every waiter well inside it; a lane that cannot is torn down by the
-/// frame timeout long before waiters meaningfully accumulate.
+/// poll delivery, Client handling, and the acknowledging poll.
 pub const CONTROL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The absolute deadline for one bounded logical page exchange —

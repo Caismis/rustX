@@ -439,6 +439,7 @@ pub(super) fn fresh_discovery(
         *cached = parents.iter().find_map(|parent| {
             tempfile::Builder::new()
                 .prefix("rustx-uv-discovery-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
                 .tempdir_in(parent)
                 .ok()
         });

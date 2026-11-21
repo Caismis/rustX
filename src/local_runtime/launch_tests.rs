@@ -2388,7 +2388,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     .unwrap();
     assert!(
         crate::runtime::load_project_context_files(
-            &f.host.launch_directory,
+            Some(&f.host.launch_directory),
             &f.host.home_directory.join("rustx/.agents"),
         )
         .unwrap_err()

@@ -32,6 +32,7 @@ pub(super) struct ControlState {
 /// One queued or in-flight server command and its private waiter.
 pub(super) struct ControlCommand {
     request: ControlRequest,
+    deadline: Option<Instant>,
     responder: mpsc::Sender<io::Result<ControlReply>>,
 }
 
@@ -83,7 +84,11 @@ impl ControlShared {
             let in_flight = state.queue.len() + usize::from(state.inflight.is_some());
             if in_flight < MAX_CONTROL_COMMANDS {
                 let (responder, receipt) = mpsc::channel();
-                state.queue.push_back(ControlCommand { request, responder });
+                state.queue.push_back(ControlCommand {
+                    request,
+                    deadline,
+                    responder,
+                });
                 self.ready.notify_one();
                 return Ok(receipt);
             }
@@ -107,7 +112,11 @@ impl ControlShared {
     /// no in-flight command, a missing receipt for a delivered one, or a
     /// receipt the wrong shape or echo for its request is a protocol
     /// violation that fails the lane, not just the waiter.
-    pub(super) fn resolve(&self, receipt: Option<ControlReply>) -> bool {
+    pub(super) fn resolve(
+        &self,
+        receipt: Option<ControlReply>,
+        confirm_revocation: impl FnOnce(),
+    ) -> bool {
         let mut state = self.lock();
         let command = state.inflight.take();
         if command.is_some() {
@@ -117,6 +126,16 @@ impl ControlShared {
             (None, None) => true,
             (Some(command), Some(reply)) => {
                 if receipt_matches(&command.request, &reply) {
+                    if matches!(reply, ControlReply::Revoked) {
+                        if command
+                            .deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
+                            let _ = command.responder.send(Err(io::ErrorKind::TimedOut.into()));
+                            return false;
+                        }
+                        confirm_revocation();
+                    }
                     let _ = command.responder.send(Ok(reply));
                     true
                 } else {
@@ -139,6 +158,14 @@ impl ControlShared {
             }
             (None, Some(_)) => false,
         }
+    }
+
+    fn revoke_deadline(&self) -> Option<Instant> {
+        self.lock()
+            .inflight
+            .as_ref()
+            .filter(|command| matches!(command.request, ControlRequest::Revoke))
+            .and_then(|command| command.deadline)
     }
 
     /// Moves the next queued command into the in-flight slot — only
@@ -454,7 +481,8 @@ impl ControlWorker {
     /// channel: it reads [`ControlPoll`]s, resolves the in-flight
     /// command's waiter from each receipt, and answers with
     /// [`ControlTurn`]s carrying the next queued command. Every frame
-    /// runs under a per-frame absolute deadline; the lane's own
+    /// runs under a per-frame deadline. An in-flight Revoke uses its
+    /// original command deadline for the receipt. The lane's own
     /// shutdown handle wakes a blocked read on stop or fence.
     pub(super) fn spawn(
         mut channel: RecordChannel,
@@ -472,10 +500,20 @@ impl ControlWorker {
             .spawn(move || {
                 let mut next_sequence = 1u64;
                 loop {
-                    let deadline = Instant::now() + CONTROL_FRAME_TIMEOUT;
-                    let poll: ControlPoll = match channel.receive(Some(deadline)) {
-                        Ok(poll) => poll,
-                        Err(_) => break,
+                    let deadline = shared
+                        .revoke_deadline()
+                        .unwrap_or_else(|| Instant::now() + CONTROL_FRAME_TIMEOUT);
+                    let Ok(poll) = channel.receive::<ControlPoll>(Some(deadline)) else {
+                        if shared
+                            .revoke_deadline()
+                            .is_some_and(|limit| Instant::now() >= limit)
+                        {
+                            shared.reject(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "control command outlived its budget",
+                            ));
+                        }
+                        break;
                     };
                     // The client's own sequence must advance exactly:
                     // a skip or replay is a protocol violation, not a
@@ -484,7 +522,9 @@ impl ControlWorker {
                         break;
                     }
                     next_sequence = next_sequence.saturating_add(1);
-                    if !shared.resolve(poll.receipt) {
+                    if !shared.resolve(poll.receipt, || {
+                        worker_owner.confirm_revocation(&connection);
+                    }) {
                         break;
                     }
                     let request = shared.next_command();
@@ -496,7 +536,11 @@ impl ControlWorker {
                     let Ok(encoded) = encode_record(&turn) else {
                         break;
                     };
-                    if channel.send(&encoded, Some(deadline)).is_err() {
+                    let frame_deadline = Instant::now() + CONTROL_FRAME_TIMEOUT;
+                    let send_deadline = shared
+                        .revoke_deadline()
+                        .map_or(frame_deadline, |limit| frame_deadline.min(limit));
+                    if channel.send(&encoded, Some(send_deadline)).is_err() {
                         break;
                     }
                 }

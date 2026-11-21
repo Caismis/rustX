@@ -62,7 +62,6 @@ pub struct LocalExecutionEndpoint {
     connection: Mutex<Option<LocalConnection>>,
     connection_released: tokio::sync::Notify,
     dispatch_closed: std::sync::atomic::AtomicBool,
-    revocation_confirmed: std::sync::atomic::AtomicBool,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -194,7 +193,6 @@ impl LocalExecutionEndpoint {
             connection: Mutex::new(None),
             connection_released: tokio::sync::Notify::new(),
             dispatch_closed: std::sync::atomic::AtomicBool::new(false),
-            revocation_confirmed: std::sync::atomic::AtomicBool::new(false),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -245,7 +243,6 @@ impl LocalExecutionEndpoint {
             connection: Mutex::new(None),
             connection_released: tokio::sync::Notify::new(),
             dispatch_closed: std::sync::atomic::AtomicBool::new(false),
-            revocation_confirmed: std::sync::atomic::AtomicBool::new(false),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -724,22 +721,22 @@ impl LocalExecutionEndpoint {
         self.with_connection(None, false, |connection| connection.poll_watch(id, path))
     }
 
+    fn revocation_confirmed(&self) -> bool {
+        match &self.authority {
+            EndpointAuthority::Reserved(reservation) => reservation.binding.revocation_confirmed(),
+            EndpointAuthority::Delegated { .. } => false,
+        }
+    }
+
     pub(crate) fn stop_watch(&self, id: WatchId) -> io::Result<()> {
-        if self
-            .revocation_confirmed
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
+        if self.revocation_confirmed() {
             return Ok(());
         }
         let result = self
             .control()
             .ok_or(io::ErrorKind::NotConnected)
             .and_then(|control| control.stop_watch(id).map_err(|error| error.kind()));
-        if result.is_err()
-            && self
-                .revocation_confirmed
-                .load(std::sync::atomic::Ordering::Acquire)
-        {
+        if result.is_err() && self.revocation_confirmed() {
             return Ok(());
         }
         if result.is_err() {
@@ -1093,15 +1090,9 @@ impl LocalExecutionEndpoint {
     }
 
     pub(super) fn fence_connection_by(&self, deadline: Instant) -> io::Result<()> {
-        let control = self.reservation().binding.control();
-        let result = control
-            .as_ref()
-            .map_or(Ok(()), |control| control.request_revoke_by(deadline));
-        if control.is_some() && result.is_ok() {
-            self.revocation_confirmed
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
-        let fenced = self.reservation().binding.fence();
+        let binding = &self.reservation().binding;
+        let result = binding.settle_revocation_by(deadline);
+        let fenced = binding.fence();
         match self.connection.try_lock() {
             Ok(mut guard) => match guard.as_mut() {
                 // An idle stored connection earns the orderly Close.
@@ -1125,7 +1116,7 @@ impl LocalExecutionEndpoint {
 
     /// Delivers one keyed cancellation on the control lane under one absolute
     /// `deadline` (queue wait and receipt included) and fails closed. Unless
-    /// `settled` proves the operation already finished, an undeliverable or
+    /// `reconciled` proves there is no operation left to cancel, an undeliverable or
     /// `Unknown` cancellation cuts the pair at once: the binding is fenced and
     /// its sockets shut without waiting on any in-flight data exchange. A
     /// delivered, known disposition keeps the pair live. A receipt is never
@@ -1134,8 +1125,11 @@ impl LocalExecutionEndpoint {
         &self,
         key: &rustx_execution_protocol::process::ProcessOperationKey,
         deadline: std::time::Instant,
-        settled: bool,
+        reconciled: impl Fn() -> bool,
     ) {
+        if reconciled() {
+            return;
+        }
         let delivered = match self.control() {
             Some(control) => control.cancel_process_by(key, deadline),
             None => Err(io::Error::new(
@@ -1147,7 +1141,34 @@ impl LocalExecutionEndpoint {
             delivered,
             Ok(disposition) if !matches!(disposition, rustx_execution_protocol::ProcessCancelDisposition::Unknown)
         );
-        if !settled && !proven {
+        if !proven && !reconciled() {
+            self.cut_pair();
+        }
+    }
+
+    /// Dispose of a private Bash capture under the original binding. If
+    /// capacity or an exact receipt cannot be obtained, retire the pair so
+    /// the Client's binding teardown owns the outstanding capture.
+    pub(crate) async fn discard_bash_capture(
+        self: Arc<Self>,
+        key: rustx_execution_protocol::process::ProcessOperationKey,
+    ) {
+        let deadline = Instant::now() + rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT;
+        let _ =
+            tokio::task::spawn_blocking(move || self.discard_bash_capture_by(key, deadline)).await;
+    }
+
+    fn discard_bash_capture_by(
+        &self,
+        key: rustx_execution_protocol::process::ProcessOperationKey,
+        deadline: Instant,
+    ) {
+        use rustx_execution_protocol::process::{ProcessReply, ProcessRequest};
+        let request = ProcessRequest::DiscardBashOutput { key };
+        let result = self.with_bounded_data_connection(deadline, |connection| {
+            connection.process_until(&request, deadline)
+        });
+        if !matches!(result, Ok(ProcessReply::OutputReleased { .. })) {
             self.cut_pair();
         }
     }
@@ -3597,6 +3618,10 @@ mod tests {
         );
         let deadline = Instant::now() + std::time::Duration::from_secs(2);
         host.begin_drain_by(deadline);
+        let settlement = tokio::spawn({
+            let host = host.clone();
+            async move { host.settle_execution().await }
+        });
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), seen)
             .await
             .unwrap()
@@ -3614,10 +3639,10 @@ mod tests {
             host.admit_request(RequestLane::Control, |_| panic!("draining request entered")),
             Err(HostAdmissionError::ServerDraining)
         ));
-        let failures =
-            tokio::time::timeout(std::time::Duration::from_secs(5), host.settle_execution())
-                .await
-                .unwrap();
+        let failures = tokio::time::timeout(std::time::Duration::from_secs(5), settlement)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(Instant::now() >= deadline);
         assert_eq!(
             failures,
@@ -3625,6 +3650,60 @@ mod tests {
         );
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
         release.send(()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drain_accepts_revoke_receipt_after_the_normal_control_frame_timeout() {
+        use rustx_execution_protocol::transport::{CONTROL_COMMAND_TIMEOUT, CONTROL_FRAME_TIMEOUT};
+        let (_root, manager, sessions) = fixture(1).await;
+        let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
+        let (seen, pending) = tokio::sync::oneshot::channel();
+        let seen = std::sync::Mutex::new(Some(seen));
+        let (release, held) = std::sync::mpsc::channel();
+        let _data_peer = admit_scripted_peer(
+            &endpoint,
+            BTreeSet::from([Capability::Connection]),
+            move |control| {
+                control_peer_loop_with(control, |request| {
+                    if request == &ControlRequest::Revoke {
+                        seen.lock()
+                            .unwrap()
+                            .take()
+                            .unwrap()
+                            .send(Instant::now())
+                            .unwrap();
+                        held.recv().unwrap();
+                    }
+                });
+            },
+        );
+        let host = crate::app_server::host::AppServerHost::new(
+            manager,
+            crate::local_runtime::app_server_policy::AppServerPolicy::default(),
+        );
+        let deadline = Instant::now() + CONTROL_COMMAND_TIMEOUT;
+        std::thread::spawn({
+            let host = host.clone();
+            move || host.begin_drain_by(deadline)
+        })
+        .join()
+        .unwrap();
+        assert!(host.server_draining());
+        let settling = tokio::spawn(async move { host.settle_execution().await });
+        let received_at =
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), pending)
+                .await
+                .unwrap()
+                .unwrap();
+        let release_at = received_at + CONTROL_FRAME_TIMEOUT + Duration::from_millis(50);
+        assert!(release_at < deadline);
+        // The channel proves delivery first. The timer advances only the
+        // deadline interval; the peer cannot issue the receipt until released.
+        tokio::time::sleep_until(tokio::time::Instant::from_std(release_at)).await;
+        assert!(!settling.is_finished());
+        release.send(()).unwrap();
+        assert_eq!(settling.await.unwrap(), [] as [String; 0]);
+        assert!(endpoint.binding().revocation_confirmed());
     }
 
     /// A control peer that reports each `CancelProcess` key on `seen` and
@@ -3749,7 +3828,7 @@ mod tests {
         let cancel = {
             let endpoint = endpoint.clone();
             let key = key.clone();
-            std::thread::spawn(move || endpoint.cancel_operation(&key, deadline, false))
+            std::thread::spawn(move || endpoint.cancel_operation(&key, deadline, || false))
         };
         let observed = seen
             .recv_timeout(Duration::from_secs(10))
@@ -3783,7 +3862,7 @@ mod tests {
         let cancel = {
             let endpoint = endpoint.clone();
             let key = key.clone();
-            std::thread::spawn(move || endpoint.cancel_operation(&key, deadline, false))
+            std::thread::spawn(move || endpoint.cancel_operation(&key, deadline, || false))
         };
         assert_eq!(
             seen.recv_timeout(Duration::from_secs(10))
@@ -3798,6 +3877,115 @@ mod tests {
         release.send(()).unwrap();
         data_peer.join().unwrap();
         let _ = exchange.join();
+    }
+
+    #[test]
+    fn an_unknown_cancel_uses_the_terminal_evidence_observed_while_waiting() {
+        use rustx_execution_protocol::process::{
+            OperationId, OperationState, ProcessReply, ProcessRequest, SettledDisposition,
+            SettledSnapshot,
+        };
+        let (seen, pending) = std::sync::mpsc::channel();
+        let (ack, held) = std::sync::mpsc::channel();
+        let (_registry, _session, endpoint, mut peer, _workspace, _dir) = admitted_endpoint_with(
+            BTreeSet::from([Capability::Connection, Capability::Process]),
+            move |control| {
+                held_cancel_control_peer(
+                    control,
+                    &seen,
+                    &held,
+                    rustx_execution_protocol::ProcessCancelDisposition::Unknown,
+                );
+            },
+        );
+        let key = endpoint.process_key(OperationId::new()).unwrap();
+        let reconciled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancellation = std::thread::spawn({
+            let endpoint = endpoint.clone();
+            let key = key.clone();
+            let reconciled = reconciled.clone();
+            move || {
+                endpoint.cancel_operation(&key, Instant::now() + Duration::from_secs(5), || {
+                    reconciled.load(std::sync::atomic::Ordering::Acquire)
+                });
+            }
+        });
+        assert_eq!(pending.recv_timeout(Duration::from_secs(5)).unwrap(), key);
+        let reply = ProcessReply::State {
+            key: key.clone(),
+            state: OperationState::Settled(SettledSnapshot {
+                disposition: SettledDisposition::Known,
+                exit_code: Some(0),
+                stdout_total: DecimalU64::new(0),
+                stderr_total: DecimalU64::new(0),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                final_sequence: DecimalU64::new(0),
+            }),
+        };
+        let query = ProcessRequest::Query { key };
+        let (retire, retired) = std::sync::mpsc::channel::<()>();
+        let data = std::thread::spawn({
+            let query = query.clone();
+            let reply = reply.clone();
+            move || {
+                assert_eq!(
+                    read_record::<ClientRequest>(&mut peer).unwrap(),
+                    ClientRequest::Process(query)
+                );
+                write_record(&mut peer, &ClientReply::Process(reply)).unwrap();
+                retired.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        });
+        assert_eq!(endpoint.process(&query).unwrap(), reply);
+        reconciled.store(true, std::sync::atomic::Ordering::Release);
+        ack.send(()).unwrap();
+        cancellation.join().unwrap();
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
+        endpoint.control().unwrap().health().unwrap();
+        retire.send(()).unwrap();
+        data.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_capture_discard_that_cannot_be_sent_retires_the_owning_binding() {
+        use rustx_execution_protocol::process::OperationId;
+
+        let (_registry, _session, endpoint, mut data, _workspace, _directory) =
+            admitted_endpoint_with(
+                BTreeSet::from([Capability::Connection, Capability::Process]),
+                control_peer_loop,
+            );
+        let (held, waiting) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let contending_data = tokio::task::spawn_blocking({
+            let endpoint = endpoint.clone();
+            move || {
+                endpoint.hold_data_exchange_for_test(|| {
+                    held.send(()).unwrap();
+                    released.recv().unwrap();
+                })
+            }
+        });
+        waiting.await.unwrap();
+        let key = endpoint.process_key(OperationId::new()).unwrap();
+        tokio::task::spawn_blocking({
+            let endpoint = endpoint.clone();
+            move || endpoint.discard_bash_capture_by(key, Instant::now())
+        })
+        .await
+        .unwrap();
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
+        data.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert_eq!(
+            tokio::task::spawn_blocking(move || data.read(&mut [0]))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        release.send(()).unwrap();
+        contending_data.await.unwrap().unwrap();
     }
 
     /// A busy exchange parks on the reply read holding the connection's

@@ -195,6 +195,7 @@ pub struct ProspectiveSessionConfig {
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub(crate) locations: SessionLocations,
+    has_authored_workspace: bool,
     pub(crate) config: std::sync::Arc<CurrentRuntimeConfig>,
     pub(crate) models: ModelCatalog,
     pub(crate) provenance: BTreeMap<String, Origin>,

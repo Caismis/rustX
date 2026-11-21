@@ -415,9 +415,9 @@ fn websocket_refuses_a_different_loopback_tls_identity_before_admission() {
 }
 
 #[test]
-fn websocket_malformed_upgrade_never_consumes_the_reservation() {
+fn websocket_plaintext_never_consumes_the_tls_reservation() {
     let rig = ws_rig();
-    // A garbage HTTP upgrade fails inside transport accept; the binding
+    // A plaintext peer fails at the TLS handshake; the binding
     // stays Reserved and the real Client still wins afterwards.
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
     raw.write_all(b"GET /execution/v1 HTTP/1.1\r\nHost: x\r\n\r\n")

@@ -244,7 +244,7 @@ impl UserConfigManager {
                         .map_err(|e| e.to_string())?;
                     Ok(capture)
                 })
-                .and_then(|capture| self.resolve_resources(request, capture))
+                .and_then(|capture| self.resolve_resources(request, capture, workspace.is_some()))
                 .map_err(|error| error.diagnostic.reason)
         });
         self.verify_documents(&documents, &revisions)
@@ -280,7 +280,7 @@ impl UserConfigManager {
         let (layers, documents) = self.capture_layers(request, None)?;
         let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
-        let prospective = self.resolve_resources(request, resolved)?;
+        let prospective = self.resolve_resources(request, resolved, false)?;
         self.verify_documents(&documents, &prospective.source_revisions)?;
         Ok(prospective)
     }
@@ -731,6 +731,7 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         resolved: SourceCapture,
+        bound_document: bool,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         crate::package_io::check_cancelled(&self.resource_io)
             .map_err(|error| LaunchFailure::from(error.to_string()))?;
@@ -749,14 +750,29 @@ impl UserConfigManager {
         let host = &self.sources;
         // Capture authority once, including host path aliases and missing leaves.
         // Configuration preparation retains this physical identity; validators must not rebind it.
+        // Authored resources are a separate Server-side source. A Client
+        // configuration document does not require a matching resource root.
+        let authored_workspace = (!bound_document
+            || canonical_directory(&locations.workspace)
+                .is_ok_and(|path| path == locations.workspace))
+        .then_some(locations.workspace.as_path());
+        if authored_workspace.is_none() && !scoped_workflows[1].is_empty() {
+            return Err(LaunchFailure::at(
+                None,
+                "agent.workflows",
+                "selected Workspace Workflows are unavailable through Server resource discovery",
+                "remove the unavailable Workflow selection",
+                locations.workspace.display().to_string(),
+            ));
+        }
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
         let agent_root = normalize_missing(&user_resource_root.join("agents"))?;
         let project_context_files = {
-            crate::runtime::load_project_context_files(&locations.workspace, &user_resource_root)
+            crate::runtime::load_project_context_files(authored_workspace, &user_resource_root)
                 .map_err(LaunchFailure::resource)?
         };
         let (subagents, role_sources) =
-            super::super::agent_resources::load_authorized(Some(&locations.workspace), &agent_root)
+            super::super::agent_resources::load_authorized(authored_workspace, &agent_root)
                 .map_err(LaunchFailure::resource)?;
         revisions.extend(
             role_sources
@@ -773,7 +789,7 @@ impl UserConfigManager {
         // admitted, and never keeps a Session from starting.
         let mut workflows = {
             super::super::workflow_resources::load(
-                Some(&locations.workspace),
+                authored_workspace,
                 &host.home_directory.join("rustx/.agents"),
             )
             .map_err(LaunchFailure::resource)?
@@ -784,12 +800,18 @@ impl UserConfigManager {
             workflows.enabled_by_owning_scope(id, &scoped_workflows[0], &scoped_workflows[1])
         });
         let discover_skills = || {
-            self.discover_skills(Some(&locations.workspace))
+            self.discover_skills(authored_workspace)
                 .ok_or_else(|| LaunchFailure::from("cannot open Workspace for Skill discovery"))
         };
         let skill_discovery = discover_skills()?;
-        let skill_sources =
-            crate::skills::automatic_skill_roots(Some(&host.home_directory), &locations.workspace);
+        let skill_sources = authored_workspace.map_or_else(
+            || {
+                vec![crate::skills::AutomaticSkillRoot::user(
+                    &host.home_directory,
+                )]
+            },
+            |root| crate::skills::automatic_skill_roots(Some(&host.home_directory), root),
+        );
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
         {
@@ -822,7 +844,7 @@ impl UserConfigManager {
             &models,
         ));
         let managed_python = super::super::managed_python_resources::discover_controlled(
-            Some(&locations.workspace),
+            authored_workspace,
             &host.home_directory.join("rustx/.agents"),
             &self.resource_io,
         )
@@ -953,10 +975,11 @@ impl UserConfigManager {
         }
         #[cfg(test)]
         self.test_hooks.reach("before_resource_verification");
-        for (root, scope) in [
-            (host.home_directory.join("rustx/.agents"), SourceScope::User),
-            (locations.workspace.join(".agents"), SourceScope::Workspace),
-        ] {
+        for (root, scope) in
+            std::iter::once((host.home_directory.join("rustx/.agents"), SourceScope::User)).chain(
+                authored_workspace.map(|root| (root.join(".agents"), SourceScope::Workspace)),
+            )
+        {
             let actual = super::super::resource_directory::revision_with_cancellation(
                 &root,
                 scope,
@@ -1007,7 +1030,7 @@ impl UserConfigManager {
                 return Err("configuration inputs changed during capture; rescan to retry".into());
             }
         }
-        if crate::runtime::load_project_context_files(&locations.workspace, &user_resource_root)
+        if crate::runtime::load_project_context_files(authored_workspace, &user_resource_root)
             .map_err(LaunchFailure::resource)?
             != project_context_files
         {
@@ -1020,10 +1043,12 @@ impl UserConfigManager {
         }
         // The project Skill collection is the revision key of the complete
         // User and Workspace inventory.
-        revisions.insert(
-            crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root,
-            skill_discovery.revision(),
+        let skill_scope = authored_workspace.map_or_else(
+            || crate::skills::AutomaticSkillRoot::user(&host.home_directory),
+            crate::skills::AutomaticSkillRoot::workspace,
         );
+        revisions.insert(skill_scope.root, skill_discovery.revision());
+        let has_authored_workspace = authored_workspace.is_some();
         diagnostics.sort();
         diagnostics.dedup();
         diagnostics.truncate(256);
@@ -1054,6 +1079,7 @@ impl UserConfigManager {
             agent_root,
             role_sources,
             locations,
+            has_authored_workspace,
             config: std::sync::Arc::new(config),
             models,
             provenance,

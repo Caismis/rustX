@@ -1287,3 +1287,70 @@ async fn disabled_workflow_external_sources_do_not_block_session_creation_or_rel
         fixture.close().await;
     }
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn bound_configuration_load_and_reconcile_without_any_server_workspace_directory() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use std::os::unix::fs::PermissionsExt as _;
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::rename(workspace, &physical).unwrap();
+        let document = physical.join("rustx.toml");
+        std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 23456\n").unwrap();
+        let launcher = mount.path().join("client");
+        let staged = std::env::current_exe().unwrap().with_file_name("rustx-execution-client");
+        std::os::unix::fs::symlink(staged, mount.path().join("client-real")).unwrap();
+        std::fs::write(
+            &launcher,
+            r#"#!/bin/sh
+set -eu
+test ! -e "$4"
+bin=${0%/*}
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}" --bind "$bin/physical" "$4" -- "$bin/client-real" "$@"
+"#,
+        ).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!workspace.exists());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let retained = || {
+            fixture.manager.sessions.configuration_bindings.lock().unwrap()[&fixture.sessions[0].id]
+                .config.tool_deadline_policy.hard_deadline_ms
+        };
+        assert_eq!(retained(), 23_456);
+
+        let source = SourceTarget::Workspace { directory: workspace.clone() };
+        let old = {
+            let state = fixture.manager.applications.lock();
+            state.view(fixture.sessions[0].id.as_ref()).and_then(|application| application.desired.input_revision)
+        };
+        std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 34567\n").unwrap();
+        let observation = fixture.manager.reconcile_configuration(&source).await.unwrap();
+        assert_eq!(observation.scope, source.application_scope());
+        assert!(observation.desired.input_revision.is_some());
+        let application = applied(&fixture, 0).await;
+        assert_ne!(application.desired.input_revision, old);
+        assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let effective = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap();
+        assert_eq!(effective.tool_deadline.hard_deadline_ms, 34_567);
+
+        std::fs::write(&document, "[agent]\nworkflows = [\"client-resource\"]\n").unwrap();
+        fixture.manager.reconcile_configuration(&source).await.unwrap();
+        let application = settled(&fixture, 0).await;
+        assert!(matches!(
+            &application.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { diagnostic } if diagnostic.contains("selected Workspace Workflows are unavailable")
+        ), "{application:?}");
+        assert!(!workspace.exists());
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}

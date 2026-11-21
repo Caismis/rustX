@@ -98,7 +98,7 @@ impl LocalConnection {
                         .and_then(|()| control.receive::<ControlReceipt>(deadline));
                     match receipt {
                         Ok(ControlReceipt::Client(reply)) => {
-                            if !shared.resolve(Some(reply)) {
+                            if !shared.resolve(Some(reply), || {}) {
                                 break;
                             }
                         }

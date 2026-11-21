@@ -154,6 +154,14 @@ impl ConnectionOwner {
         }
     }
 
+    pub(super) fn confirm_revocation(&self, connection: &ConnectionId) {
+        let mut inner = self.inner();
+        if matches!(&inner.settlement, PhysicalSettlement::Unconfirmed { control } if control == connection)
+        {
+            inner.settlement = PhysicalSettlement::Confirmed;
+        }
+    }
+
     /// The fence half of [`Binding::fence`] on the shared owner:
     /// terminal `Revoked`, every lane's handle seized.
     pub(super) fn fence(&self) -> FencedHandles {
@@ -206,8 +214,16 @@ impl ConnectionOwner {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum PhysicalSettlement {
+    NeverAdmitted,
+    Unconfirmed { control: ConnectionId },
+    Confirmed,
+}
+
 struct Inner {
     phase: BindingPhase,
+    settlement: PhysicalSettlement,
     connection: Option<ConnectionId>,
     /// A shutdown-capable duplicate of the live data connection's
     /// transport — the Unix socket for a local binding or the raw TCP
@@ -322,6 +338,7 @@ impl Binding {
             inner: Arc::new(ConnectionOwner {
                 inner: Mutex::new(Inner {
                     phase: BindingPhase::Reserved,
+                    settlement: PhysicalSettlement::NeverAdmitted,
                     connection: None,
                     stream: None,
                     control: None,
@@ -359,6 +376,9 @@ impl Binding {
         match inner.phase {
             BindingPhase::Reserved => {
                 inner.phase = BindingPhase::Live;
+                inner.settlement = PhysicalSettlement::Unconfirmed {
+                    control: connection.clone(),
+                };
                 inner.connection = Some(connection);
                 Ok(self.admission())
             }
@@ -635,6 +655,9 @@ impl Binding {
             return Err(Reject::InvalidPairing);
         }
         inner.phase = BindingPhase::Live;
+        inner.settlement = PhysicalSettlement::Unconfirmed {
+            control: connection.clone(),
+        };
         inner.connection = Some(pending.connection.clone());
         inner.stream = pending.shutdown.take();
         inner.control = Some(LiveControl {
@@ -697,6 +720,50 @@ impl Binding {
             .control
             .as_ref()
             .map(|control| control.handle.clone())
+    }
+
+    /// Wait for the admitted Client's physical revocation receipt. A
+    /// never-admitted reservation is closed atomically so a pairing cannot
+    /// gain execution authority after it was counted as settled.
+    ///
+    /// # Errors
+    ///
+    /// Reports an unconfirmed revocation if a previously admitted Client
+    /// lost the control path or did not return its receipt by the deadline.
+    pub fn settle_revocation_by(&self, deadline: Instant) -> io::Result<()> {
+        let control = {
+            let mut inner = self.inner.inner();
+            match &inner.settlement {
+                PhysicalSettlement::NeverAdmitted => {
+                    inner.phase = BindingPhase::Revoked;
+                    inner.pending = None;
+                    self.inner.pair_ready.notify_all();
+                    return Ok(());
+                }
+                PhysicalSettlement::Confirmed => return Ok(()),
+                PhysicalSettlement::Unconfirmed { .. } => {
+                    inner.control.as_ref().map(|lane| lane.handle.clone())
+                }
+            }
+        };
+        let result = control
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "admitted Client has no control lane or physical settlement receipt",
+                )
+            })
+            .and_then(|control| control.request_revoke_by(deadline));
+        if self.revocation_confirmed() {
+            return Ok(());
+        }
+        result
+    }
+
+    /// Whether this binding's control lane supplied a validated Revoke receipt.
+    #[must_use]
+    pub fn revocation_confirmed(&self) -> bool {
+        self.inner.inner().settlement == PhysicalSettlement::Confirmed
     }
 
     /// A consistent snapshot of the binding's phase and live connection.

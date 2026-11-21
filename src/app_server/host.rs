@@ -55,6 +55,7 @@ struct HostInner {
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
     environment_stop: crate::runtime::CancellationSignal,
+    execution_drain_plan: Mutex<Option<ExecutionDrain>>,
     execution_drain: watch::Sender<Option<Vec<String>>>,
     /// A finite chain of admitted intent jobs. The host request limit bounds
     /// these owners; completion order, rather than reply polling, orders clocks.
@@ -73,6 +74,13 @@ struct HostInner {
         >,
     >,
 }
+#[derive(Debug)]
+struct ExecutionDrain {
+    initializations: Vec<Arc<crate::local_runtime::session_runtime_manager::Initialization>>,
+    endpoints: Vec<Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>>,
+    deadline: std::time::Instant,
+}
+
 #[derive(Clone, Debug)]
 pub struct AppServerHost(Arc<HostInner>);
 
@@ -278,6 +286,7 @@ impl AppServerHost {
             state: Mutex::default(),
             requests: watch::channel(0).0,
             environment_stop: crate::runtime::CancellationSignal::new(),
+            execution_drain_plan: Mutex::default(),
             execution_drain: watch::channel(None).0,
             submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
@@ -402,32 +411,53 @@ impl AppServerHost {
     }
 
     pub(crate) fn begin_drain_by(&self, deadline: std::time::Instant) {
-        let (initializations, endpoints) = {
+        {
             let mut state = self.0.state.lock().expect("host mutex");
             if state.lifecycle != ServerLifecycle::Accepting {
                 return;
             }
-            let retirement = self.manager().begin_draining();
+            let (initializations, endpoints) = self.manager().begin_draining();
+            *self
+                .0
+                .execution_drain_plan
+                .lock()
+                .expect("execution drain plan") = Some(ExecutionDrain {
+                initializations,
+                endpoints,
+                deadline,
+            });
             self.0.manager.close_schedule_admission();
+            self.0.manager.mcp_drafts.close_admission();
             state.lifecycle = ServerLifecycle::Draining;
-            // START grants and Host admission close together.
             self.0.environment_stop.cancel();
-            retirement
-        };
-        let settled = self.0.execution_drain.clone();
-        tokio::spawn(async move {
-            let failures =
-                SessionRuntimeManager::settle_execution_bindings(endpoints, deadline).await;
-            settled.send_replace(Some(failures));
-        });
-        for initialization in initializations {
-            initialization.retire();
         }
-        self.manager().mcp_drafts.begin_drain();
         self.uploads().revoke_prepared();
     }
 
     pub(crate) async fn settle_execution(&self) -> Vec<String> {
+        let plan = self
+            .0
+            .execution_drain_plan
+            .lock()
+            .expect("execution drain plan")
+            .take();
+        if let Some(ExecutionDrain {
+            initializations,
+            endpoints,
+            deadline,
+        }) = plan
+        {
+            for initialization in initializations {
+                initialization.retire();
+            }
+            self.manager().mcp_drafts.begin_drain();
+            let settled = self.0.execution_drain.clone();
+            tokio::spawn(async move {
+                let failures =
+                    SessionRuntimeManager::settle_execution_bindings(endpoints, deadline).await;
+                settled.send_replace(Some(failures));
+            });
+        }
         self.0
             .execution_drain
             .subscribe()
@@ -493,6 +523,12 @@ impl AppServerHost {
             return Err("Client file observer settlement is unconfirmed".into());
         }
         if state.lifecycle != ServerLifecycle::Draining
+            || self
+                .0
+                .execution_drain
+                .borrow()
+                .as_ref()
+                .is_none_or(|failures| !failures.is_empty())
             || !self.manager().is_empty()
             || !self.manager().mcp_drafts.is_settled()
             || !self.manager().mcp_probes.is_settled()

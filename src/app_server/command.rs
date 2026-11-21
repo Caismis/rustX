@@ -140,9 +140,9 @@ struct Entry {
     process_id: String,
     endpoint: Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
     cancellation: crate::runtime::CancellationSignal,
-    /// Set once the driver has observed the Client's settled snapshot: a
-    /// settled operation never fences the pair on a cancel answer.
-    settled: std::sync::atomic::AtomicBool,
+    /// Set by an authoritative registration refusal or terminal snapshot.
+    /// Either proves this driver has no outstanding physical cancellation.
+    reconciled: std::sync::atomic::AtomicBool,
     /// The strict input sequence — serialized so concurrent writes can
     /// never double-assign one sequence position.
     next_input: tokio::sync::Mutex<u64>,
@@ -284,7 +284,7 @@ impl Commands {
             process_id: process_id.clone(),
             endpoint: endpoint.clone(),
             cancellation: cancellation.clone(),
-            settled: std::sync::atomic::AtomicBool::new(false),
+            reconciled: std::sync::atomic::AtomicBool::new(false),
             next_input: tokio::sync::Mutex::new(1),
         });
         state.active.insert(process_id.clone(), entry.clone());
@@ -294,17 +294,20 @@ impl Commands {
         let commands = self.clone();
         let streaming = params.tty || params.stream_stdout_stderr;
         let (disarm, disarmed) = oneshot::channel::<()>();
-        watch_cancellation(
+        let watcher = watch_cancellation(
             entry.clone(),
             cancellation.clone(),
             root_retired.clone(),
             events.closed.clone(),
             disarmed,
         );
+        #[cfg(test)]
+        let watcher = record_cancellation_watcher(&process_id, watcher);
+        drop(watcher);
         tokio::spawn(async move {
             let _owner = owner;
             let result = run(
-                entry,
+                entry.clone(),
                 key,
                 spec,
                 process_id.clone(),
@@ -315,10 +318,9 @@ impl Commands {
                 root_retired,
             )
             .await;
-            // Success means the driver released the settled journal: the
-            // watcher is disarmed and never sends. Any failure hands the
-            // cancellation to the same watcher, which delivers it once.
-            if result.is_err() {
+            // A failure with an unresolved registration or operation
+            // hands it to the cancellation watcher.
+            if result.is_err() && !entry.reconciled.load(std::sync::atomic::Ordering::Acquire) {
                 cancellation.cancel();
             } else {
                 let _ = disarm.send(());
@@ -688,6 +690,9 @@ async fn run(
                 // bytes were consumed by the earlier attempt and are not
                 // available here. Only an output-free outcome can be
                 // reported exactly; anything else is honestly unknown.
+                entry
+                    .reconciled
+                    .store(true, std::sync::atomic::Ordering::Release);
                 if snapshot.final_sequence.get() != 0
                     || snapshot.stdout_total.get() != 0
                     || snapshot.stderr_total.get() != 0
@@ -697,6 +702,9 @@ async fn run(
                 return Ok(result_from(snapshot, streaming, Vec::new(), Vec::new()));
             }
             Exchange::Reply(ProcessReply::Refused { reason, .. }) => {
+                entry
+                    .reconciled
+                    .store(true, std::sync::atomic::Ordering::Release);
                 return Err(match reason {
                     SpecRefusal::InvalidCwd => domain(ErrorData::EnvironmentUnauthorized),
                     SpecRefusal::CapacityExhausted | SpecRefusal::TombstonesSaturated => {
@@ -706,6 +714,9 @@ async fn run(
                 });
             }
             Exchange::Reply(ProcessReply::Conflict { .. }) => {
+                entry
+                    .reconciled
+                    .store(true, std::sync::atomic::Ordering::Release);
                 return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
             }
             Exchange::Reply(_) => return Err(domain(ErrorData::OperationFailed)),
@@ -718,31 +729,10 @@ async fn run(
         tokio::time::sleep(OPERATION_POLL).await;
     }
 
-    // Test seam: hold immediately before the Start dispatch. A
-    // revocation observed while held fences the dispatch itself — the
-    // loop's first gate returns before the request leaves. Only the
-    // hold keyed to *this* operation's `process_id` is claimed; a
-    // parallel test's exec leaves foreign holds untouched.
     #[cfg(test)]
-    {
-        let hold = {
-            let mut pending = START_HOLDS.lock().expect("start hold");
-            pending
-                .iter()
-                .position(|pending| pending.process_id == process_id)
-                .map(|index| pending.remove(index))
-        };
-        if let Some(hold) = hold {
-            let _ = hold.entered.send(true);
-            hold.released
-                .subscribe()
-                .wait_for(|released| *released)
-                .await
-                .expect("start hold");
-        }
-    }
+    pause_start(&process_id, &key, false).await;
 
-    loop {
+    let start_state = loop {
         if cancellation.is_cancelled()
             || root_retired.is_cancelled()
             || events.closed.is_cancelled()
@@ -752,8 +742,10 @@ async fn run(
             // `Registered` record to pin a capacity slot.
             return Err(domain(ErrorData::ConnectionClosed));
         }
+        #[cfg(test)]
+        pause_start(&process_id, &key, true).await;
         match exchange(&endpoint, ProcessRequest::Start { key: key.clone() }).await {
-            Exchange::Reply(ProcessReply::State { .. }) => break,
+            Exchange::Reply(ProcessReply::State { state, .. }) => break state,
             Exchange::Reply(ProcessReply::Unknown { .. }) => {
                 return Err(domain(ErrorData::OperationFailed));
             }
@@ -768,14 +760,30 @@ async fn run(
             return Err(domain(ErrorData::OutcomeUnknown));
         }
         tokio::time::sleep(OPERATION_POLL).await;
-    }
+    };
 
-    let mut settled: Option<SettledSnapshot> = None;
+    if accounting.observe(&start_state).is_err() {
+        return Err(contradicted(&endpoint).await);
+    }
+    let mut settled = if let OperationState::Settled(snapshot) = start_state {
+        entry
+            .reconciled
+            .store(true, std::sync::atomic::Ordering::Release);
+        Some(snapshot)
+    } else {
+        None
+    };
     let mut cancelled = false;
     // The UI can no longer receive output: the driver keeps tracking the
     // physical operation to settlement and releases it, never delivering.
     let mut detached = false;
-    let mut drained = false;
+    // Cancellation before START settles a minimal record with no journal.
+    let mut drained = settled.is_some_and(|snapshot| {
+        snapshot.disposition == SettledDisposition::Cancelled
+            && snapshot.final_sequence.get() == 0
+            && snapshot.stdout_total.get() == 0
+            && snapshot.stderr_total.get() == 0
+    });
     let mut finished = false;
     let mut delta_sequence = 0_u64;
     let mut stdout = Vec::new();
@@ -964,7 +972,7 @@ async fn run(
                     }
                     if let OperationState::Settled(snapshot) = state {
                         entry
-                            .settled
+                            .reconciled
                             .store(true, std::sync::atomic::Ordering::Release);
                         settled = Some(snapshot);
                     }
@@ -1007,10 +1015,10 @@ fn watch_cancellation(
     root_retired: crate::runtime::CancellationSignal,
     closed: crate::runtime::CancellationSignal,
     disarmed: oneshot::Receiver<()>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        // Only an explicit disarm (a successful release) ends the watch
-        // without delivery; a dropped sender means the driver failed.
+        // An explicit disarm ends the watch. A dropped sender leaves
+        // cleanup to the watcher if physical ownership is still unresolved.
         let disarmed_ok = tokio::select! {
             biased;
             disarmed = disarmed => disarmed.is_ok(),
@@ -1023,24 +1031,12 @@ fn watch_cancellation(
         }
         let deadline = std::time::Instant::now() + CANCEL_BUDGET;
         let _ = tokio::task::spawn_blocking(move || {
-            let settled = entry.settled.load(std::sync::atomic::Ordering::Acquire);
-            deliver_cancel(&entry.endpoint, &entry.key, settled, deadline);
+            entry.endpoint.cancel_operation(&entry.key, deadline, || {
+                entry.reconciled.load(std::sync::atomic::Ordering::Acquire)
+            });
         })
         .await;
-    });
-}
-
-/// Delivers the keyed cancel under one absolute budget. Delivery failures
-/// fail closed through the endpoint unless the operation is already settled;
-/// a receipt is never reported as containment — the driver waits for the
-/// Client's settled snapshot.
-fn deliver_cancel(
-    endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
-    key: &ProcessOperationKey,
-    settled: bool,
-    deadline: std::time::Instant,
-) {
-    endpoint.cancel_operation(key, deadline, settled);
+    })
 }
 
 /// Releases the settled journal through its exact final sequence. Only a
@@ -1091,32 +1087,62 @@ async fn release_output(
 #[cfg(test)]
 struct PendingStartHold {
     process_id: String,
-    entered: tokio::sync::watch::Sender<bool>,
+    after_gate: bool,
+    entered: tokio::sync::watch::Sender<Option<ProcessOperationKey>>,
     released: tokio::sync::watch::Sender<bool>,
 }
+
 #[cfg(test)]
 static START_HOLDS: std::sync::Mutex<Vec<PendingStartHold>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+async fn pause_start(process_id: &str, key: &ProcessOperationKey, after_gate: bool) {
+    let hold = {
+        let mut pending = START_HOLDS.lock().expect("start hold");
+        pending
+            .iter()
+            .position(|item| item.process_id == process_id && item.after_gate == after_gate)
+            .map(|index| pending.remove(index))
+    };
+    if let Some(hold) = hold {
+        let _ = hold.entered.send(Some(key.clone()));
+        hold.released
+            .subscribe()
+            .wait_for(|released| *released)
+            .await
+            .expect("start hold");
+    }
+}
 
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct StartHold {
     process_id: String,
-    entered: tokio::sync::watch::Receiver<bool>,
+    entered: tokio::sync::watch::Receiver<Option<ProcessOperationKey>>,
     released: tokio::sync::watch::Sender<bool>,
 }
+
 #[cfg(test)]
 impl StartHold {
     pub async fn await_entered(&self) {
+        self.key().await;
+    }
+
+    pub async fn key(&self) -> ProcessOperationKey {
         self.entered
             .clone()
-            .wait_for(|entered| *entered)
+            .wait_for(Option::is_some)
             .await
-            .expect("start hold");
+            .expect("start hold")
+            .clone()
+            .expect("published operation")
     }
+
     pub fn release(&self) {
         self.released.send_replace(true);
     }
 }
+
 #[cfg(test)]
 impl Drop for StartHold {
     fn drop(&mut self) {
@@ -1126,15 +1152,27 @@ impl Drop for StartHold {
             .retain(|pending| pending.process_id != self.process_id);
     }
 }
+
 #[cfg(test)]
 pub(crate) fn hold_start(process_id: &str) -> StartHold {
-    let (entered_tx, entered_rx) = tokio::sync::watch::channel(false);
+    install_start_hold(process_id, false)
+}
+
+#[cfg(test)]
+pub(crate) fn hold_start_after_gate(process_id: &str) -> StartHold {
+    install_start_hold(process_id, true)
+}
+
+#[cfg(test)]
+fn install_start_hold(process_id: &str, after_gate: bool) -> StartHold {
+    let (entered_tx, entered_rx) = tokio::sync::watch::channel(None);
     let (released_tx, _released_rx) = tokio::sync::watch::channel(false);
     START_HOLDS
         .lock()
         .expect("start hold")
         .push(PendingStartHold {
             process_id: process_id.to_string(),
+            after_gate,
             entered: entered_tx,
             released: released_tx.clone(),
         });
@@ -1142,6 +1180,38 @@ pub(crate) fn hold_start(process_id: &str) -> StartHold {
         process_id: process_id.to_string(),
         entered: entered_rx,
         released: released_tx,
+    }
+}
+
+#[cfg(test)]
+type CancelWatcherSender = oneshot::Sender<tokio::task::JoinHandle<()>>;
+#[cfg(test)]
+static CANCEL_WATCHERS: Mutex<Vec<(String, CancelWatcherSender)>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn observe_cancellation_watcher(
+    id: &str,
+) -> oneshot::Receiver<tokio::task::JoinHandle<()>> {
+    let (send, receive) = oneshot::channel();
+    CANCEL_WATCHERS
+        .lock()
+        .expect("cancellation watchers")
+        .push((id.to_owned(), send));
+    receive
+}
+
+#[cfg(test)]
+fn record_cancellation_watcher(
+    id: &str,
+    watcher: tokio::task::JoinHandle<()>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let mut observers = CANCEL_WATCHERS.lock().expect("cancellation watchers");
+    if let Some(index) = observers.iter().position(|(process, _)| id == process) {
+        let (_, sender) = observers.remove(index);
+        let _ = sender.send(watcher);
+        None
+    } else {
+        Some(watcher)
     }
 }
 

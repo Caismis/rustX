@@ -480,3 +480,38 @@ fn bracketed_ipv6_urls_use_the_scheme_default_port() {
     assert_eq!(clear.address(), "[::1]:80".parse().unwrap());
     assert!(ExecutionUrl::validate("wss://::1/execution/v1").is_err());
 }
+
+#[test]
+fn trusted_loopback_tls_reaches_and_rejects_a_malformed_websocket_upgrade() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let tls = super::LoopbackTls::new(address.ip()).unwrap();
+    let trust = crate::endpoint::client_config(None, Some(tls.certificate())).unwrap();
+    let worker = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        tls.accept(stream, Instant::now() + Duration::from_secs(5))
+            .err()
+            .expect("HTTP Upgrade must fail after TLS")
+    });
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut client = rustls::ClientConnection::new(
+        std::sync::Arc::new(trust),
+        rustls_pki_types::ServerName::IpAddress(address.ip().into()),
+    )
+    .unwrap();
+    while client.is_handshaking() {
+        client.complete_io(&mut stream).unwrap();
+    }
+    let mut stream = rustls::StreamOwned::new(client, stream);
+    stream
+        .write_all(b"GET /execution/v1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        .unwrap();
+    let failure = worker.join().unwrap();
+    assert_eq!(failure.kind(), std::io::ErrorKind::InvalidData, "{failure}");
+}

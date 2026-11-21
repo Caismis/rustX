@@ -652,3 +652,68 @@ pub(crate) async fn release_retries_prewire_busy_then_releases() {
     );
     execution.kill().await.unwrap();
 }
+
+pub(crate) async fn start_returns_the_client_cancelled_snapshot() {
+    use rustx_execution_protocol::ProcessCancelDisposition;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let id = "client-cancel-before-start-arbitration";
+    let held = crate::app_server::command::hold_start_after_gate(id);
+    let release = crate::app_server::command::observe_release(id);
+    let mut params = parameters(
+        &fixture,
+        &["/bin/sh", "-c", "printf spawned > started-marker"],
+    );
+    params.process_id = Some(id.into());
+    let command = tokio::spawn({
+        let connection = connection.clone();
+        async move { call(&connection, 1, Method::CommandExec(params)).await }
+    });
+    let key = bounded(held.key()).await;
+    let endpoint = fixture
+        .manager
+        .execution_endpoint(&fixture.sessions[0].id)
+        .unwrap();
+    let control = endpoint.control().unwrap();
+    assert_eq!(
+        tokio::task::spawn_blocking(move || control.cancel_process(&key))
+            .await
+            .unwrap()
+            .unwrap(),
+        ProcessCancelDisposition::CancelledBeforeStart,
+    );
+    held.release();
+    let result = completion(&connection, command).await;
+    assert_eq!(result.status, ExecStatus::Terminated);
+    assert_eq!(result.stdout_base64, "");
+    assert_eq!(result.stderr_base64, "");
+    assert_eq!(
+        release.outcomes(),
+        [crate::app_server::command::ReleaseOutcome::Released]
+    );
+    assert!(!fixture.workspaces[0].join("started-marker").exists());
+
+    let MethodResult::CommandExec { result } = call(
+        &connection,
+        2,
+        Method::CommandExec(parameters(&fixture, &["/bin/echo", "still admitted"])),
+    )
+    .await
+    else {
+        panic!("the next operation must run on the same binding");
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(
+        endpoint
+            .read_range(std::path::Path::new("rustx.toml"), 0, 128, None)
+            .unwrap()
+            .bytes,
+        std::fs::read(fixture.workspaces[0].join("rustx.toml")).unwrap(),
+    );
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    assert!(bounded(execution.wait()).await.unwrap().success());
+}
