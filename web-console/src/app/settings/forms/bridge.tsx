@@ -143,7 +143,12 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const headStatus = useSelector(actor, target => {
     if (!head) return 'idle' as const;
     const ref = target.context.units[head.id];
-    if (!ref) return 'settled' as const; // retired after a definitive commit
+    // A queued submission refused by admission spawns no unit actor —
+    // `ensureUnit` only runs on the accepted transition — so an absent ref
+    // means 'settled' only while submission is also free to proceed now.
+    // Otherwise the head waits for the barrier and retries, never silently
+    // dropping its mutation.
+    if (!ref) return admitsSourceMutation(target.context) ? 'settled' as const : 'waiting' as const;
     const snapshot = ref.getSnapshot();
     // `acknowledged` is a definitive commit still owed an observation — that
     // debt is the unit's, not the queue's: the write already answered.
