@@ -5,7 +5,6 @@ import { Switch } from '../../../presentation/primitives/Switch';
 import { UnitForm } from '../forms/bridge';
 import { SettingsNotice } from '../SettingsFeedback';
 import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
-import { PageTransactionFooter } from '../forms/bridge';
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
@@ -36,11 +35,10 @@ export function AgentPage({ scope = 'user', config, globalGuidance, closed, body
       title={tx('settings:agent-page.agent')}
       bodyDisabled={bodyDisabled}
       toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}
-      footer={<PageTransactionFooter />}
     >
       {globalGuidance && (
         <SettingsGroup title={instructions} description={<code>{globalGuidance.path}</code>}>
-          <UnitForm<string>
+          <UnitForm<string> immediate
             title={instructions}
             legendHidden
             authored={globalGuidance.authored ?? undefined}
@@ -72,7 +70,7 @@ export function AgentPage({ scope = 'user', config, globalGuidance, closed, body
             title={tx('settings:agent-page.project-guidance')}
             description={tx('settings:agent-page.automatic-guidance-description')}
           >
-            <UnitForm<AgentProjectInstructionsDocument>
+            <UnitForm<AgentProjectInstructionsDocument> immediate
               title={tx('settings:agent-page.project-guidance')}
               legendHidden
               authored={config.document.agent?.agents_md ?? undefined}

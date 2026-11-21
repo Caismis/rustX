@@ -28,7 +28,7 @@ it('collapse, rail expansion and Settings appearance gestures emit no native ope
   // other setting it stages and only applies on the footer's Save.
   const theme = (option: string) => {
     fireEvent.click(screen.getByRole('button', { name: option }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   };
   theme('Dark');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);

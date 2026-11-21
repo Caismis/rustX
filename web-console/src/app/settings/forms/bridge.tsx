@@ -122,6 +122,14 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const detached = useRef(new Map<string, PageUnitHandle>());
   const detachedSubs = useRef(new Map<string, { unsubscribe(): void }>());
   const [moduleReset, setModuleResetState] = useState<readonly SourceMutation[]>();
+  // The staged reset mirrored into a ref: savePage reads the ref, so a
+  // gesture that stages and saves in the same tick never races React state.
+  const moduleResetRef = useRef<readonly SourceMutation[] | undefined>(undefined);
+  const stageModuleReset = useCallback((mutations: readonly SourceMutation[] | undefined) => {
+    const next = mutations && mutations.length > 0 ? mutations : undefined;
+    moduleResetRef.current = next;
+    setModuleResetState(next);
+  }, []);
   const moduleResetCancelRef = useRef<(() => void) | undefined>(undefined);
   // Module-reset mutations refused during the current save run. They are
   // re-staged when the queue drains: a refused removal is still the user's
@@ -177,12 +185,12 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const finishSave = useCallback(() => {
     const refused = resetFailuresRef.current;
     resetFailuresRef.current = [];
-    if (refused.length) setModuleResetState(refused);
+    if (refused.length) stageModuleReset(refused);
     else moduleResetCancelRef.current = undefined;
     dispatchedRef.current.clear();
     localSaveRef.current?.();
     onAllSavedRef.current?.();
-  }, []);
+  }, [stageModuleReset]);
 
   // The save queue advances one unit at a time: submit, wait for the unit's
   // own settle (or its transaction retiring after a definitive commit), then
@@ -269,11 +277,12 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       const ref = units[identity];
       if (ref && ref.getSnapshot().context.draft !== undefined) items.push({ kind: 'unit', id: identity });
     }
-    if (moduleReset?.length) {
-      moduleReset.forEach((mutation, index) => {
+    const stagedReset = moduleResetRef.current;
+    if (stagedReset?.length) {
+      stagedReset.forEach((mutation, index) => {
         items.push({ kind: 'mutation', id: `module-reset:${index}`, mutation, selector: revisionSelector(mutation) });
       });
-      setModuleResetState(undefined);
+      stageModuleReset(undefined);
     }
     dispatchedRef.current.clear();
     setConflict(undefined);
@@ -281,7 +290,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     if (!items.length) { finishSave(); return; }
     setQueue(items);
     submitItem(items[0]);
-  }, [actor, moduleReset, submitItem, finishSave]);
+  }, [actor, submitItem, finishSave, stageModuleReset]);
 
   const discardDrafts = useCallback(() => {
     for (const handle of [...handles.current.values(), ...detached.current.values()]) handle.current.discard();
@@ -297,9 +306,9 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     setConflict(undefined);
     const onCancel = moduleResetCancelRef.current;
     moduleResetCancelRef.current = undefined;
-    setModuleResetState(undefined);
+    stageModuleReset(undefined);
     onCancel?.();
-  }, [discardDrafts]);
+  }, [discardDrafts, stageModuleReset]);
 
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -373,8 +382,8 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
 
   const setModuleReset = useCallback((mutations: readonly SourceMutation[] | undefined, onCancel?: () => void) => {
     moduleResetCancelRef.current = onCancel;
-    setModuleResetState(mutations && mutations.length > 0 ? mutations : undefined);
-  }, []);
+    stageModuleReset(mutations);
+  }, [stageModuleReset]);
   const setLocalEntry = useCallback((nextDirty: boolean, save?: () => void, cancel?: () => void, beforeSave?: () => boolean | void) => {
     const entry = { save, cancel, beforeSave };
     localEntryRef.current = entry;
@@ -499,6 +508,9 @@ export interface UnitEditing<T> {
   readonly edit: (value: T) => void;
   /** One explicit quick-setting gesture, refused while another draft needs review. */
   readonly apply: (value: T) => void;
+  /** Immediate-write commit for auto-save surfaces: identical to `apply` but
+   * tolerates a staged draft — the committed value supersedes it. */
+  readonly commit: (value: T) => void;
   readonly submit: (remove?: boolean) => void;
   readonly discard: () => void;
   readonly review: () => void;
@@ -686,6 +698,11 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
       begin(value);
       submit(value);
     },
+    commit: (value: T) => {
+      if (!writable || !admitted || busy || (snapshot && requiresReview(snapshot))) return;
+      begin(value);
+      submit(value);
+    },
     override: definition === 'inherited' ? () => { if (!awaitingObservation) begin(overrideSeed); } : undefined,
     submit: (remove = false) => {
       if (!remove && !draft) return;
@@ -761,10 +778,13 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             title={tx('settings:bridge.use-the-global-default-for-value', { p0: title })} confirm={tx('settings:bridge.use-global-default-value', { p0: title })}
             description={tx('settings:forms.restore-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>
-          // Otherwise the removal really removes this scope's authored unit.
-          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={unit.configUnit && !presentation ? tx('settings:forms.reset-default') : tx('settings:bridge.remove-value', { p0: title })} triggerText={unit.configUnit && !presentation ? tx('settings:forms.reset-default') : tx('settings:copy.delete')} disabled={!unit.admitted}
+          // A config unit on a settings page has no authored-removal
+          // affordance — there is no "reset to default"; the field simply
+          // edits the authored value. Resource identities keep their delete.
+          : unit.configUnit && !presentation ? null
+          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={tx('settings:bridge.remove-value', { p0: title })} triggerText={tx('settings:copy.delete')} disabled={!unit.admitted}
             title={tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: owner })} confirm={tx('settings:bridge.remove-value', { p0: title })}
-            description={removalNotice ?? tx(unit.configUnit && !presentation ? 'settings:forms.reset-help' : 'settings:forms.delete-help')}
+            description={removalNotice ?? tx('settings:forms.delete-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>);
   return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={`${css.unit}${presentation ? ` ${presentation === 'dialog' ? css.unitDialog : css.unitResource}` : ''}`} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}
@@ -830,19 +850,43 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
   return <SettingsNotice text={text} fallback={<p role="alert" className={css.error}>{text}</p>}/>;
 }
 
+/** Auto-save flush for `immediate` forms: a change stages the draft and a
+ * short debounce commits it, matching how DSH/pi-web/ZCode write scalar
+ * settings on every gesture. The debounce gives typing a single commit per
+ * pause and gives a superseding gesture a chance to supersede the draft
+ * before it is submitted. */
+function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
+  useEffect(() => {
+    if (!enabled || !unit.draft || unit.busy || unit.awaitingObservation) return;
+    // A draft pending review (external divergence or a failed commit) waits
+    // for the explicit review gesture — auto-save never retries into it.
+    // `review` clears reviewNeeded and the flush re-arms on the newer base.
+    if (unit.reviewNeeded) return;
+    const timer = setTimeout(() => unit.commit(unit.displayed), 400);
+    return () => clearTimeout(timer);
+  }, [enabled, unit.draft, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.displayed, unit]);
+}
+
 /** One native semantic unit's editing surface, with a plain value contract.
  *
  * Used where the unit is a single scalar or a small closed choice, so a typed
  * form layer would add mechanics without removing any. */
-export function UnitForm<T>({ title, children, removable = true, removalNotice, saveLabel, legendHidden, ...options }: UnitOptions<T> & {
+export function UnitForm<T>({ title, children, removable = true, removalNotice, saveLabel, presentation, legendHidden, immediate = false, ...options }: UnitOptions<T> & {
   title: string; children: (value: T, change: (value: T) => void) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode; saveLabel?: string;
+  /** 'dialog' gives the unit its own Save inside the card; a structured
+   * editor uses it where no page footer exists. */
+  presentation?: 'resource' | 'dialog';
   /** Inside a `SettingsGroup` the group's own title is the visible heading;
    * the legend stays as the fieldset's accessible name only. */
   legendHidden?: boolean;
+  /** Auto-save: every staged draft commits on a short debounce; the form
+   * renders no Save affordance. */
+  immediate?: boolean;
 }) {
   const unit = useUnitEditing(options);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} saveLabel={saveLabel} legendHidden={legendHidden}>
+  useImmediateCommit(unit, immediate);
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} saveLabel={saveLabel} presentation={presentation} legendHidden={legendHidden}>
     {children(unit.displayed, unit.edit)}
   </UnitShell>;
 }
@@ -868,12 +912,15 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
  *    the transaction owns; this component never calls a native operation.
  *
  * There is therefore exactly one value called the draft, and the actor owns it. */
-export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, legendHidden, onCancel, onSaved, ...options }: UnitOptions<T> & {
+export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, legendHidden, onCancel, onSaved, immediate = false, ...options }: UnitOptions<T> & {
   title: string; children: (form: TypedUnitForm<T>) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode;
   presentation?: 'resource' | 'dialog'; legendHidden?: boolean; onCancel?: () => void;
+  /** Auto-save: every staged draft commits on a short debounce. */
+  immediate?: boolean;
 }) {
   const unit = useUnitEditing({ ...options, onSaved });
+  useImmediateCommit(unit, immediate);
   // The value this form last pushed into the transaction actor. Comparing the
   // actor's current value against it — rather than against the form's own
   // state — is what tells an external change apart from this form's own edit.

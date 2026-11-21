@@ -280,7 +280,7 @@ test('Chinese settings use the same model dialog without Smart configuration', a
   await page.goto(fixture);
   await page.getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('group',{name:'外观',exact:true}).getByRole('button',{name:'深色',exact:true}).click();
-  await page.getByRole('region',{name:'设置',exact:true}).getByRole('button',{name:'保存',exact:true}).click();
+  // Appearance applies immediately on General; no footer save exists there.
   await page.getByRole('tab',{name:'模型',exact:true}).click();
   await page.getByRole('button',{name:`${provider} →`,exact:true}).click();
   await page.getByRole('listitem',{name:model,exact:true}).getByRole('button', { name: '编辑模型', exact: true }).click();

@@ -22,7 +22,6 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
         await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
         await page.getByRole('button', { name: '主页' }).click();
       }
       await editor.fill('Fork source'); await editor.press('Enter');

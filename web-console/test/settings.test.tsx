@@ -15,7 +15,7 @@ import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
-  chooseOption, confirmation, enableWorkspaceCustomization, followGlobalSettings, openResourceRow,
+  chooseOption, enableWorkspaceCustomization, followGlobalSettings, openResourceRow,
   openSettingsPage, renderEditor, sameRevision, settingsReady, SettingsSurface, newSubagent, settingsActor,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
@@ -57,7 +57,6 @@ it('C09 Workspace A/B drafts survive navigation and Session focus without retarg
  expect(nativeTools().getByRole('switch', { name: 'write' }).getAttribute('aria-checked')).toBe('false');
  s.state.views = {}; ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- fireEvent.click(screen.getByRole('button', { name: 'Save' }));
  await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { mutation: { authored: ['read'] } } } }));
 });
 
@@ -70,8 +69,10 @@ it('C09 external source revision notification preserves dirty draft and original
  act(() => s.publish({ configuration: { 'source:user': { ...cfg3Application(), scope: 'source:user', version: '9' } } }));
  await revisionOnAdvanced(/Revision: external/, 'Tools & Permissions');
  expect(screen.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
- fireEvent.click(screen.getByRole('button', { name: 'Save' }));
- await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'user-1' } }));
+ // Auto-save never commits a draft whose base diverged from the observed
+ // source: the explicit review gesture resubmits it on the newer revision.
+ fireEvent.click(within(screen.getByRole('form', { name: 'Built-in tools' })).getByRole('button', { name: 'Use latest setting' }));
+ await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'external' } }));
 });
 
 it('C10 Workspace revocation disables mutation and preserves local draft', async () => {
@@ -84,7 +85,7 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
  act(() => settingsActor().send({ type: 'REFRESH' }));
  await screen.findByRole('alert');
  expect(screen.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
- fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+ // The revoked Workspace refuses the staged commit; nothing is written.
  expect(s.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
 });
 
@@ -132,7 +133,6 @@ it('General owns the persisted busy Enter selector', async () => {
   render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
   fireEvent.click(screen.getByRole('button', { name: /Send behavior while busy/ }));
   fireEvent.click(await screen.findByRole('option', { name: 'Immediately' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   expect(composerPreferences().getSnapshot()).toBe('steer');
   expect(localStorage.getItem(COMPOSER_PREFERENCE_KEY)).toBe('steer');
   act(() => composerPreferences().setBusyEnter('queue'));
@@ -221,19 +221,21 @@ it('preserves stale drafts and exact revision until a separate explicit review g
   });
   await open(subject, 'Tools & Permissions');
   enableWorkspaceCustomization();
-  fireEvent.click(screen.getByRole('switch', { name: 'read' })); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  fireEvent.click(screen.getByRole('switch', { name: 'read' }));
+  // The staged draft commits itself and conflicts; it stays staged with its
+  // frozen base until the explicit review gesture — auto-save never retries.
   await screen.findByRole('alert'); await screen.findAllByRole('button', { name: 'Use latest setting' });
   expect(screen.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
   expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/sourceWrite')).toHaveLength(1);
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  fireEvent.click(within(screen.getByRole('form', { name: 'Built-in tools' })).getByRole('button', { name: 'Use latest setting' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/sourceWrite')).toHaveLength(2));
   const writes = subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/sourceWrite');
-  expect(writes[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1' } });
+  expect(writes[1][0]).toMatchObject({ params: { expected_revision: 'external-edit' } });
 });
 
 it('repairs uncertain writes by rereading and never replays the mutation', async () => {
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') throw new OutcomeUncertain(); });
-  await open(subject, 'Tools & Permissions'); enableWorkspaceCustomization(); fireEvent.click(screen.getByRole('switch', { name: 'read' })); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await open(subject, 'Tools & Permissions'); enableWorkspaceCustomization(); fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   // The target reports the unknown outcome and the unit reports its own; both
   // say the write is never replayed, and neither claims it was saved.
   await waitFor(() => expect(screen.getAllByRole('alert').map(node => node.textContent).join(' ')).toMatch(/result is unknown/));
@@ -292,8 +294,8 @@ it('retains a Workspace draft and its original CAS revision across page navigati
   act(() => settingsActor().send({ type: 'REFRESH' }));
   await waitForSettingsRevision('external');
   expect(screen.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'workspace-1' } }));
+  fireEvent.click(within(screen.getByRole('form', { name: 'Built-in tools' })).getByRole('button', { name: 'Use latest setting' }));
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'external' } }));
 });
 
 it('replaces against the newer revision only after an explicit review gesture', async () => {
@@ -302,9 +304,9 @@ it('replaces against the newer revision only after an explicit review gesture', 
     if (op.method === 'configuration/sourceWrite' && first) { first = false; source.workspace!.revision = 'reviewed'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'reviewed' } }); }
   });
   await open(subject, 'Tools & Permissions'); enableWorkspaceCustomization(); fireEvent.click(screen.getByRole('switch', { name: 'read' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // The staged draft conflicts on its own commit; the review gesture is the
+  // explicit step that re-submits it against the newer revision.
   fireEvent.click(await within(screen.getByRole('form', { name: 'Built-in tools' })).findByRole('button', { name: 'Use latest setting' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitForSettingsSave();
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'reviewed', mutation: { mutation: { authored: ['read'] } } } });
 });
@@ -322,10 +324,8 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
     enableWorkspaceCustomization();
     fireEvent.click(screen.getByRole('switch', { name: 'read' }));
     fireEvent.click(screen.getByRole('switch', { name: 'read' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   } else {
     followGlobalSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   }
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
@@ -362,7 +362,6 @@ it('keeps contributor default intent unspecified when enabling the closed Agent 
   fireEvent.click(screen.getByRole('tab', { name: 'Built-in' }));
   enableWorkspaceCustomization();
   fireEvent.click(await screen.findByRole('switch', { name: 'Enable Agent Status' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'agent_status', authored: { enabled: true } } } } }));
   const write = subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')![0];
   expect(JSON.stringify(write)).not.toMatch(/"time"|"background"|npm|cordis/);
@@ -472,61 +471,10 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
  expect((screen.getByLabelText('Model ID') as HTMLInputElement).value).toBe('rejected-model');
 });
 
-it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
-  const subject = cfg3Client(async (op, source) => {
-    if (op.method === 'configuration/sourceWrite') {
-      source.user.revision = 'external-removal-conflict';
-      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: op.params.expected_revision, actual: source.user.revision } });
-    }
-  });
-  subject.source.user.authored = { agent: { tools: { builtin: ['bash'] } } };
-  await open(subject, 'Tools & Permissions', 'User');
-  const nativeTools = () => within(screen.getByRole('form', { name: 'Built-in tools' }));
-  fireEvent.click(nativeTools().getByRole('button', { name: 'Reset to default' }));
-  fireEvent.click(within(await confirmation('Remove Built-in tools')).getByRole('button', { name: 'Remove Built-in tools' }));
-  await screen.findAllByRole('button', { name: 'Use latest setting' });
-  fireEvent.click(nativeTools().getByRole('button', { name: 'Reset to default' }));
-  fireEvent.click(within(await confirmation('Remove Built-in tools')).getByRole('button', { name: 'Remove Built-in tools' }));
-  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'user-1', mutation: { mutation: { authored: null } } } });
-});
-
-it('preserves a clean removal\'s frozen CAS base across an editor remount and advances it only through explicit review', async () => {
-  const subject = cfg3Client(async (op, source) => {
-    if (op.method === 'configuration/sourceWrite') {
-      source.user.revision = 'external-removal-conflict';
-      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: op.params.expected_revision, actual: source.user.revision } });
-    }
-  });
-  subject.source.user.authored = { agent: { tools: { builtin: ['bash'] } } };
-  await open(subject, 'Tools & Permissions', 'User');
-  // The transaction belongs to this semantic unit. Scoping queries avoids
-  // recomputing every unrelated editor's accessible names on each retry.
-  const nativeTools = () => within(screen.getByRole('form', { name: 'Built-in tools' }));
-  const remove = async () => {
-    fireEvent.click(nativeTools().getByRole('button', { name: 'Reset to default' }));
-    fireEvent.click(within(await confirmation('Remove Built-in tools')).getByRole('button', { name: 'Remove Built-in tools' }));
-  };
-  await remove();
-  await nativeTools().findByRole('button', { name: 'Use latest setting' });
-  // Leaving and re-entering the page remounts the editor subtree. The frozen
-  // base is durable transaction state, not component-local state.
-  await openSettingsPage('Agent');
-  await openSettingsPage('Tools & Permissions');
-  await nativeTools().findByRole('button', { name: 'Reset to default' });
-  expect(nativeTools().getByRole('button', { name: 'Use latest setting' })).toBeTruthy();
-  await remove();
-  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'user-1', mutation: { mutation: { authored: null } } } });
-  // Submission alone does not settle its conflict and authoritative reread.
-  // Wait for the unit to admit another removal before reviewing that revision.
-  await waitFor(() => expect((nativeTools().getByRole('button', { name: 'Reset to default' }) as HTMLButtonElement).disabled).toBe(false));
-  // Only the explicit reviewed-revision gesture advances the operation to R2.
-  fireEvent.click(nativeTools().getByRole('button', { name: 'Use latest setting' }));
-  await remove();
-  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(3));
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[2][0]).toMatchObject({ params: { expected_revision: 'external-removal-conflict', mutation: { mutation: { authored: null } } } });
-});
+// Config units on a settings page no longer carry an authored-removal
+// affordance ("reset to default" was removed): removal CAS paths for
+// scalar units are exercised by resource definitions and workspace
+// overrides instead.
 
 it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
@@ -550,7 +498,6 @@ it.each([
   } else {
     enableWorkspaceCustomization();
     fireEvent.click(screen.getByRole('switch', { name: 'read' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitForSettingsSave();
     await openSettingsPage('Advanced');
   }
@@ -656,7 +603,6 @@ it('a late acknowledgement advances the CAS base without erasing a newer draft s
   await settingsReady(); await openSettingsPage('Tools & Permissions');
   enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
   // A newer editing intent exists before the first mutation is acknowledged.
   fireEvent.click(screen.getByRole('switch', { name: 'write' }));
@@ -679,7 +625,6 @@ it('keeps a confirmed Workspace save when the post-write authoritative reread fa
   enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   failReads = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   // The commit is reported as saved, and the failed reread is a separate fact.
   await waitForSettingsSave();
   await screen.findByText(/Saved, but the authoritative reread failed/);
@@ -687,7 +632,7 @@ it('keeps a confirmed Workspace save when the post-write authoritative reread fa
   // A failed reread never turns the confirmed write back into an unsaved draft:
   // the submitted intent was retired with its confirmed commit, so there is no
   // pending Save and no review conflict against a stale base.
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('form', { name: 'Built-in tools' }) as HTMLFormElement).getAttribute('data-draft') ?? '').toBe('');
   expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull();
 });
 
@@ -704,13 +649,11 @@ it('authors read_image through the native selection, rereads it, and excludes fi
   expect(selected()).toBe('false');
   expect(screen.queryByRole('form', { name: 'read_image policy' })).toBeNull();
   fireEvent.click(screen.getByRole('switch', { name: 'read_image' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read_image'] } } } }));
   await waitFor(() => expect(subject.source.workspace!.revision).toBe('saved-2'));
   act(() => settingsActor().send({ type: 'REFRESH' }));
   await waitFor(() => expect(selected()).toBe('true'));
   fireEvent.click(screen.getByRole('switch', { name: 'read_image' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').at(-1)?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: [] } } } }));
   act(() => settingsActor().send({ type: 'REFRESH' }));
   await waitFor(() => expect(selected()).toBe('false'));
@@ -728,7 +671,6 @@ it('WorkspaceFollowGlobal hides clean module controls, reveals without writes on
   expect(toggle().getAttribute('aria-checked')).toBe('false');
   expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Approval mode' })).toBeTruthy();
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
 
   followGlobalSettings();
   expect(toggle().getAttribute('aria-checked')).toBe('true');
@@ -736,7 +678,7 @@ it('WorkspaceFollowGlobal hides clean module controls, reveals without writes on
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
 });
 
-it('WorkspaceFollowGlobal stages clearing multiple overrides, restores on Cancel, and commits all removals sequentially on Save', async () => {
+it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially on the toggle itself', async () => {
   let rev = 1;
   const subject = cfg3Client(async (op, source) => {
     if (op.method !== 'configuration/sourceWrite' || op.params.mutation.kind !== 'config') return;
@@ -757,28 +699,13 @@ it('WorkspaceFollowGlobal stages clearing multiple overrides, restores on Cancel
   expect(screen.getByRole('form', { name: 'Approval mode' })).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
 
-  // Flipping ON hides fields and stages Cancel/Save without writing yet.
+  // Flipping ON commits both removals sequentially via exact CAS and settles ON.
   followGlobalSettings();
-  expect(toggle().getAttribute('aria-checked')).toBe('true');
-  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
-  expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(false);
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
-
-  // Cancel restores the customized Workspace view with zero writes.
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-  expect(toggle().getAttribute('aria-checked')).toBe('false');
-  expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
-
-  // Flipping ON + Save commits both removals sequentially via exact CAS and settles ON.
-  followGlobalSettings();
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   const writes = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').map(([op]) => op);
   expect(writes[0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'approval', authored: null } } } });
   expect(writes[1]).toMatchObject({ params: { expected_revision: 'workspace-2', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: null } } } });
   await waitForSettingsSave();
   expect(toggle().getAttribute('aria-checked')).toBe('true');
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
 });

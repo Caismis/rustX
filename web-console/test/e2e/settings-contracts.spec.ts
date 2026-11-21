@@ -1,4 +1,4 @@
-import {openResourceModule, settledSave } from './shell-actions';
+import {openResourceModule, settledSetting } from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
@@ -53,10 +53,13 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
       const form = surface.getByRole('form', { name: title, exact: true });
       const save = async () => {
-        // One page-level staged save commits every unit; per-form Save buttons are gone.
-        await surface.getByRole('button', { name: 'Save', exact: true }).click();
-        if (owner === 'Root') await expect(settledSave(surface)).toBeVisible();
-        else await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible({ timeout: 15_000 });
+        // The scalar 'Default model' unit commits itself after a short
+        // debounce; the structured subagent editor still saves explicitly.
+        if (owner === 'Root') await settledSetting(form);
+        else {
+          await surface.getByRole('button', { name: 'Save', exact: true }).click();
+          await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible({ timeout: 15_000 });
+        }
       };
       if (owner === 'Root') {
         await expect(form.getByRole('button', { name: /Auxiliary model$/ })).toBeHidden();

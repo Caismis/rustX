@@ -8,6 +8,12 @@ export function settledSave(scope: Page | Locator, title?: string) {
   return scope.getByRole('button', { name: title ? `Save ${title}` : 'Save', exact: true })
     .and(scope.locator('button[aria-busy="false"]:disabled'));
 }
+/** Scalar settings commit themselves after a short debounce: the form's
+ * staged-draft marker clears when the write has settled. Structured editors
+ * still save through `settledSave`. */
+export async function settledSetting(form: Locator) {
+  await expect(form).not.toHaveAttribute('data-draft', /./);
+}
 /** A settings/resource page can greet a retained detail instead of its list.
  * Wait for either surface to mount, then step back when the detail greeted. */
 export async function leaveRetainedDetail(back: Locator, landing: Locator) {
@@ -217,7 +223,13 @@ export async function expandModelAuthoring(page: Page) {
 export async function enableWorkspaceCustomization(page: Page) {
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
   const toggle = settings.getByRole('switch', { name: 'Follow global settings', exact: true });
-  if (await toggle.isVisible() && await toggle.isChecked()) await toggle.click();
+  if (!(await toggle.isVisible())) return;
+  // The toggle commits immediately now, and a rescan re-render can swallow the
+  // first click: retry until the unchecked (customized) state settles.
+  await expect(async () => {
+    if (await toggle.isChecked()) await toggle.click();
+    await expect(toggle).not.toBeChecked();
+  }).toPass();
 }
 
 /** Enter a resource module and select the exact native source scope. */

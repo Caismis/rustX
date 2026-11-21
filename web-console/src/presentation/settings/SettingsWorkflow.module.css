@@ -135,11 +135,6 @@
 .confirmDialog h2 { margin: 0 0 10px; font-size: 16px; font-weight: 500; }
 .confirmDialog p { margin: 8px 0; }
 .confirmActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
-/* The confirm action of a real deletion carries the destructive color; the
-   confirm action that restores inheritance is an ordinary primary action. */
-/* Deepened from the state color so its label keeps AA contrast in both themes. */
-.confirmActions .destructive { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 88%, black); color: var(--dsw-alias-label-primary-foreground); }
-.confirmActions .destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 76%, black); }
 /* A deletion trigger is marked by its error-colored glyph; its label keeps
    full contrast. */
 .removal .dangerTrigger > span:first-child { color: var(--dsw-alias-state-error-primary); }
@@ -168,14 +163,16 @@
   position: relative; display: inline-block; flex: none; width: 36px; height: 20px; border-radius: 999px;
   background: var(--dsw-alias-border-l3); transition: background .15s ease;
 }
-.switch[data-selected] .switchTrack { background: var(--dsw-alias-state-business-primary); }
+.switch[data-selected] .switchTrack { background: var(--dsw-alias-brand-primary); }
 .switch[data-focus-visible] .switchTrack { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 .switch[data-disabled] { opacity: .5; cursor: default; }
 .switchTrack::after {
   content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--dsw-alias-bg-layer-1, #fff); transition: transform .15s ease;
+  background: var(--dsw-alias-switch-thumb, var(--dsw-alias-bg-layer-1, #fff)); transition: transform .15s ease;
 }
-.switch[data-selected] .switchTrack::after { transform: translateX(16px); }
+/* The checked track is the platform's near-black brand fill, not the
+   business-blue state color — DSH switches read as neutral on/off pills. */
+.switch[data-selected] .switchTrack::after { background: var(--dsw-alias-label-primary-foreground); transform: translateX(16px); }
 
 /* Reduced motion: state changes are immediate. */
 @media (prefers-reduced-motion: reduce) {

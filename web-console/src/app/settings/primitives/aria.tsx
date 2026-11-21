@@ -198,7 +198,10 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
       {description}
       <div className={css.confirmActions}>
         <button type="button" ref={cancel} className={`${buttonCss.button} ${buttonCss.outline} ${buttonCss.md}`} onClick={() => setOpen(false)}>{tx('settings:aria.cancel')}</button>
-        <button type="button" className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md} ${destructive ? css.destructive : ''}`}
+        {/* DSH keeps the confirm button primary even for destructive commits:
+            the destructive signal lives in the title, description and trash
+            trigger, not in a second red fill. */}
+        <button type="button" className={`${buttonCss.button} ${buttonCss.primary} ${buttonCss.md}`}
           onClick={() => { closing.current = 'confirmed'; setOpen(false); onConfirm(); }}>{confirm}</button>
       </div>
     </DialogSurface>

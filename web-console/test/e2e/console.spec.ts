@@ -1,4 +1,4 @@
-import { settledSave } from './shell-actions';
+import { settledSetting } from './shell-actions';
 import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
@@ -66,16 +66,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expandModelAuthoring(page);
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(settledSave(settings)).toBeVisible();
+    await settledSetting(defaultModel);
     await openSettingsPage(page, 'Advanced');
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await openSettingsPage(page, 'Models');
-    // Restoring inheritance is controlled by the workspace Follow global switch.
+    // Restoring inheritance is controlled by the workspace Follow global switch,
+    // which commits the restore itself.
     await followGlobal.click();
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(settledSave(settings)).toBeVisible();
     await expect(followGlobal).toBeChecked();
     await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 

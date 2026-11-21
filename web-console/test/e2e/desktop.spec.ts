@@ -41,7 +41,6 @@ test('workspace primary/menu actions, keyboard, failure, retry and localization 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
   await choose(settings, 'Language', '中文');
-  await settings.getByRole('button', { name: 'Save', exact: true }).click();
   await page.getByRole('button', { name: '主页', exact: true }).click();
   await expect(page.getByRole('button', { name: '打开工作区', exact: true })).toBeVisible();
   for (const width of [1440, 390]) {

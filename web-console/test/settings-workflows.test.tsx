@@ -113,7 +113,6 @@ it('S2-03 saving the default model writes the root_model source unit and sends n
   const before = methods(s).length;
   const form = screen.getByRole('form', { name: 'Default model' });
   await chooseOption('Model', 'main', within(form));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ target: { kind: 'user' }, mutation: { kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main' } } } });
   await waitForSettingsSave();

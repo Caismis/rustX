@@ -6,7 +6,6 @@ import { AvailabilityDetail } from '../../resources/shared/AvailabilityDetail';
 import type { PageFocus } from '../machines/navigation';
 import { extensionEntries } from '../../resources/shared/inventory';
 import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
-import { PageTransactionFooter } from '../forms/bridge';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 export function ExtensionDetail({ source, scope, revision, name, onFocus, bodyDisabled = false }: {
@@ -28,7 +27,6 @@ export function ExtensionDetail({ source, scope, revision, name, onFocus, bodyDi
           onClick={() => onFocus(undefined)}
         />
       }
-      footer={<PageTransactionFooter />}
     >
       <SettingsGroup title={name} description={entry?.path ? <code>{entry.path}</code> : undefined}>
         <div style={{ padding: '14px 16px' }}>

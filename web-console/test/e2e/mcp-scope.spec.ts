@@ -17,7 +17,9 @@ test('MCP keeps its resource scope separate from Settings and opens global defin
  await search.clear();
  await expect(inherited.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
  await openSettingsPage(page,'General');
- await expect(page.getByRole('button',{name:'User (global)',exact:true})).toHaveAttribute('aria-pressed','true');
+ // General is webui-only and carries no scope segment; the resource module
+ // must keep its own selection regardless.
+ await expect(page.getByRole('region',{name:'Settings',exact:true}).getByRole('heading',{name:'General',exact:true})).toBeVisible();
  await openResourceModule(page,'mcp');
  await expect(mcp.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');
  await inherited.getByRole('button',{name:'MCP exa',exact:true}).click();

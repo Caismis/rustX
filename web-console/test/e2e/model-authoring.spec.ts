@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { choose, connectRemote, leaveRetainedDetail, openEmptySession, openSettingsPage, settledSave } from './shell-actions';
+import { choose, connectRemote, leaveRetainedDetail, openEmptySession, openSettingsPage, settledSave, settledSetting } from './shell-actions';
 import { captureEvidence } from './screenshot';
 import { wireProbe } from './wire-probe';
 
@@ -26,8 +26,8 @@ test('new sessions receive independently configured title and compaction models'
     await expect(auxiliary).toHaveAttribute('aria-expanded', 'false');
     await auxiliary.click();
     await choose(defaults, 'Auxiliary model', 'fixture/second-model');
-    await settingsPage.getByRole('button', {name:'Save', exact:true}).click();
-    await expect(settledSave(settingsPage)).toBeVisible();
+    // Scalar units commit on change; settling the form means the write landed.
+    await settledSetting(defaults);
     const session = await openEmptySession(page, fixture, 'Workspace A');
     native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
     const { settings } = await native.readSettings(session);
@@ -212,8 +212,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await settings.getByRole('button', { name: 'Model Settings', exact: true }).click();
     const defaults = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaults, 'Model', 'custom/first-model');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await settledSetting(defaults);
     await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('model = "custom/first-model"');
     const sessionId = await openEmptySession(page, fixture, 'Workspace A');
     expect(sessionId).toBeTruthy();
@@ -222,9 +221,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     if (width === 1440) {
       await openSettingsPage(page, 'General');
       await choose(settings, 'Language', '中文');
-      // Language is a staged page edit like every other unit: the footer
-      // Save commits it before the Chinese surface mounts.
-      await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
+      // Language applies immediately — the Chinese surface mounts directly.
       const chinese = page.getByRole('region', { name: '设置', exact: true });
       await chinese.getByRole('tab', { name: '模型', exact: true }).click();
       await captureEvidence(chinese, 'models-zh-desktop');

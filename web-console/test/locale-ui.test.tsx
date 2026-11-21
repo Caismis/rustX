@@ -25,8 +25,8 @@ it('switches the complete active shell and General through Language, preserving 
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
   const before = [...server.requests];
   fireEvent.click(screen.getByRole('button', { name: /Language$/ }));
+  // General preferences apply the moment they are picked; no save exists.
   await act(async () => fireEvent.click(screen.getByRole('option', { name: '中文' })));
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
   expect(document.documentElement.lang).toBe('zh-CN');
   expect(localStorage.getItem('rustx-locale-v1')).toBe('zh');
   expect(server.requests).toEqual(before);

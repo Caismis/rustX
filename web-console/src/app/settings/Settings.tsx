@@ -3,7 +3,7 @@ import { useTranslation } from '../../locale/react';
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
 import { PageScopeToolbar, PageRefreshButton, ScopeNavContext } from './ScopeToolbar';
-import { PageTransactionFooter, PageTransactionProvider } from './forms/bridge';
+import { PageTransactionProvider } from './forms/bridge';
 import { useNavigationGuard } from './forms/guard';
 import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../presentation/settings/SettingsPageShell';
 import { SettingsPageSkeleton } from '../../presentation/primitives/Skeleton';
@@ -290,14 +290,14 @@ function SourcePending({ lifecycle, retry }: { lifecycle: ReturnType<typeof sett
 
 /** The malformed-`rustx.toml` page: the diagnostic plus the single
  * `repair_config` mutation the source contract admits, committed by the
- * shared page footer like any other staged edit. */
+ * repair form's own explicit Save. */
 function MalformedPage({ title, config, bodyDisabled = false }: {
   title: string;
   bodyDisabled?: boolean;
   config: { state: 'malformed'; path: string; diagnostic?: string; revision: string } | { state: 'structured' } | { state: 'unavailable' };
 }) {
   if (config.state !== 'malformed') return null;
-  return <SettingsPageShell title={title} bodyDisabled={bodyDisabled} footer={<PageTransactionFooter />}>
+  return <SettingsPageShell title={title} bodyDisabled={bodyDisabled} footer={null}>
     <div className={css.page}>
       <MalformedNotice config={config} />
       <RepairSourceForm revision={config.revision} />
@@ -309,7 +309,9 @@ function MalformedPage({ title, config, bodyDisabled = false }: {
  * current revision. It exists only while the source contract is invalid. */
 function RepairSourceForm({ revision }: { revision: string }) {
   const tx = useTranslation();
+  // A structured repair commits through its own Save, wherever it renders.
   return <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={revision} removable={false}
+    presentation="dialog" saveLabel={tx('settings:bridge.save')}
     mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
     {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
   </UnitForm>;

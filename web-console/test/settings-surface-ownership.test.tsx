@@ -55,7 +55,7 @@ it('S1-02 Workspace Settings stays bound to its exact target across Session focu
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
   await screen.findByRole('alert');
   expect(screen.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   expect(writes(s)).toHaveLength(0);
   expect(s.request.mock.calls.every(([op]) => op.method !== 'configuration/sourceWrite' || writeTarget(op).kind === 'workspace')).toBe(true);
 });
@@ -82,12 +82,12 @@ it('S1-04 an inherited unit displays the native effective value and authors noth
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.authored).toBe('absent');
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.effective).toBe('available');
   // Nothing is dirty, so there is no authored intent to submit.
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('form', { name: 'Built-in tools' }) as HTMLFormElement).dataset.draft ?? '').toBe('');
 });
 
 it('S1-04 opening an inherited unit and saving without an edit writes nothing', async () => {
   const s = cfg3Client(); await inheritedTools(s);
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   fireEvent.submit(screen.getByRole('form', { name: 'Built-in tools' }));
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(1));
   // No `configuration/sourceWrite` at all: the inherited ["read"] is never
@@ -98,8 +98,8 @@ it('S1-04 opening an inherited unit and saving without an edit writes nothing', 
 it('S1-04 an explicit edit authors exactly the edited unit', async () => {
   const s = cfg3Client(); const form = await inheritedTools(s);
   fireEvent.click(form.getByLabelText('write'));
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  expect((screen.getByRole('form', { name: 'Built-in tools' }) as HTMLFormElement).dataset.draft).toBe('true');
+  // Scalar settings auto-save on edit; no footer Save exists.
   // The edit starts from the displayed native effective value, so the authored
   // unit is exactly what the user sees plus the change they made.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read', 'write'] } } } }));
@@ -112,7 +112,7 @@ it('S1-04 turning Follow global settings off then authoring an explicit empty se
   expect(form.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
   fireEvent.click(form.getByLabelText('read'));
   expect(form.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('false');
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: [] } } } }));
   // An explicit empty array is a legal authored value, never a removal.
   expect((writes(s)[0][0].params as { mutation: { mutation: { authored: unknown } } }).mutation.mutation.authored).toEqual([]);
@@ -155,13 +155,12 @@ it('S1-04 Follow global settings removes a real Workspace override through exact
   // Flipping Follow global settings ON hides overrides and stages removal for footer Save.
   followGlobalSettings();
   expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
-  expect(writes(s)).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  // The outgoing mutation is the exact revision-fenced removal of this unit.
+  // The toggle itself commits the outgoing mutation: the exact
+  // revision-fenced removal of this unit.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: null } } } }));
   await waitForSettingsRevision('saved-2');
   // The authoritative reread settles back to Follow global settings ON cleanly.
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   expect(screen.getByRole('switch', { name: 'Follow global settings' }).getAttribute('aria-checked')).toBe('true');
   expect(writes(s)).toHaveLength(1);
   // Revealing controls shows the native inherited value with absent workspace authoring.
@@ -199,7 +198,7 @@ it('S1-04 an explicitly empty global instructions file is still authored', async
   const form = screen.getByRole('form', { name: 'Global instructions' });
   expect(form.dataset.authored).toBe('present');
   expect(within(form).getByRole('textbox', { name: 'Global instructions' })).toHaveProperty('value', '');
-  expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+  expect((form as HTMLElement).dataset.draft ?? '').toBe('');
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -214,21 +213,8 @@ it('S1-04 an invalid Workspace document offers no unit editor and no removal, be
   expect(writes(s)).toHaveLength(0);
 });
 
-it('S1-04 Cancel returns to the inherited presentation without authoring anything', async () => {
-  const s = cfg3Client(); const form = await inheritedTools(s);
-  fireEvent.click(form.getByLabelText('write'));
-  expect(form.getByRole('switch', { name: 'write' }).getAttribute('aria-checked')).toBe('true');
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-  // Back to the native effective value, not to a client-side empty default.
-  expect(form.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
-  expect(form.getByRole('switch', { name: 'write' }).getAttribute('aria-checked')).toBe('false');
-  expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.authored).toBe('absent');
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
-  expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.submit(screen.getByRole('form', { name: 'Built-in tools' }));
-  await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(1));
-  expect(writes(s)).toHaveLength(0);
-});
+// Auto-save has no Cancel gesture: re-editing simply writes the selection
+// again through the same semantic-unit path as the first edit.
 
 it('S1-04 an authored Workspace override is displayed and reported as an override, not as inheritance', async () => {
   const s = cfg3Client();
@@ -244,7 +230,7 @@ it('S1-04 an authored Workspace override is displayed and reported as an overrid
   // An existing override needs no Override action, and a no-op Save is still
   // unavailable: authoring is an edit, never a re-write of the same value.
   expect(form.queryByRole('button', { name: 'Override Built-in tools' })).toBeNull();
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('form', { name: 'Built-in tools' }) as HTMLFormElement).dataset.draft ?? '').toBe('');
 });
 
 // Blocking finding 4 — a malformed lower source makes the effective value
@@ -265,7 +251,7 @@ it('S1-13 an unresolvable configuration never presents the effective value as Un
   expect(screen.getByRole('form', { name: 'Built-in tools' }).querySelector('pre')).toBeNull();
   // The valid Workspace source remains authorable through exact CAS.
   fireEvent.click(form.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read'] } } } }));
 });
 
@@ -282,7 +268,7 @@ it('S1-06 a successful read clears only the relevant read error, never a distinc
   fireEvent.click(screen.getByLabelText('read'));
   // A distinct write failure.
   failWrites = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await screen.findByText(/native write rejected/);
   // A failed read reports its own error.
   failReads = true;
@@ -305,7 +291,7 @@ it('S1-07 a committed save followed by a failed reread is saved plus uncertain, 
   enableWorkspaceCustomization();
   fireEvent.click(screen.getByLabelText('read'));
   failReads = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await waitForSettingsSave();
   expect(screen.getByText(/Could not load settings/)).toBeTruthy();
   expect(document.querySelector('[data-lifecycle=stale]')).toBeTruthy();
@@ -323,7 +309,7 @@ it('S1-09 a lost write reply rereads authority once and never replays or leaks a
   await waitForSettingsRevision('workspace-1'); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   enableWorkspaceCustomization();
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await screen.findByText(/The save result is unknown/);
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(2));
   expect(writes(s)).toHaveLength(1);
@@ -341,7 +327,7 @@ it.each(['before', 'after'] as const)('S1-09 an uncertain save stays uncertain w
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await waitForSettingsRevision('user-1'); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   const outcome = async () => { await act(async () => { fail(); await held.catch(() => {}); }); await screen.findByText(/The save result is unknown/); };
   // The App Server connection is replaced: a new generation with its own
@@ -419,7 +405,7 @@ it('S1-12 invalid configuration stays repairable and is not presented as empty o
   // Repair submits an exact revision-fenced repair mutation.
   const repair = screen.getByRole('form', { name: 'Repair invalid source' });
   fireEvent.change(repair.querySelector('textarea')!, { target: { value: '[agent]\n' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  fireEvent.click(within(repair).getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'repair_config', document: '[agent]\n' } } }));
 });
 
@@ -736,17 +722,15 @@ it('S1-35 while the page save holds the target mutation barrier every other unit
   const tools = within(screen.getByRole('form', { name: 'Tools' }));
   const status = within(screen.getByRole('form', { name: 'Status' }));
   const saveStatus = () => screen.getByRole('button', { name: /^(?:Save|Saving…)$/ }) as HTMLButtonElement;
-  const removeStatus = () => status.getByRole('button', { name: 'Reset to default' }) as HTMLButtonElement;
   fireEvent.change(tools.getByLabelText('Tool'), { target: { value: 'read' } });
   fireEvent.change(status.getByLabelText('Status'), { target: { value: 'on' } });
   expect(saveStatus().disabled).toBe(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  fireEvent.click(saveStatus());
   await waitFor(() => expect(submitted).toHaveBeenCalledTimes(1));
   // Tools owns the barrier while natively submitting. Status stays editable,
   // but its submission is truthfully unavailable: the page footer commits
   // every staged unit, and it is disabled until the in-flight save settles.
   await waitFor(() => expect(saveStatus().disabled).toBe(true));
-  expect(removeStatus()).toBeTruthy();
   const statusInput = status.getByLabelText('Status') as HTMLInputElement;
   expect(statusInput.disabled).toBe(false);
   fireEvent.change(statusInput, { target: { value: 'on!' } });

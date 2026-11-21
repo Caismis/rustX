@@ -77,10 +77,10 @@ it('navigation A: a newer User Settings decision fences a stale owner-lookup fai
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('button', { name: 'User (global)' });
+  await screen.findByRole('heading', { name: 'General' });
   await release(held);
   // The newer target stands, and the obsolete rejection never becomes an error.
-  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'General' })).toBeTruthy();
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
 });
 
@@ -101,11 +101,11 @@ it('navigation B: a newer Workspace Settings decision fences a stale owner-looku
 it('navigation C: leaving Settings fences a stale owner-lookup failure', async () => {
   const { startLookup } = await mountOwnerFailure();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('button', { name: 'User (global)' });
+  await screen.findByRole('heading', { name: 'General' });
   const held = startLookup();
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   await screen.findByRole('button', { name: 'Open Session A' });
-  expect(screen.queryByRole('button', { name: 'User (global)' })).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'General' })).toBeNull();
   await release(held);
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
@@ -149,10 +149,10 @@ it('navigation success: a delayed successful lookup is fenced by a newer navigat
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('button', { name: 'User (global)' });
+  await screen.findByRole('heading', { name: 'General' });
   await release(held, true);
   // The late success cannot reopen or retarget the newer Settings decision.
-  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'General' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: /^Workspace A$/ })).toBeNull();
 });
 
@@ -211,7 +211,7 @@ it('navigation F: a Connection decision while Settings stays mounted shows Conne
   await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })); });
   await act(async () => { await server.client.disconnect(); });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('button', { name: 'User (global)' });
+  await screen.findByRole('heading', { name: 'General' });
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   expect(selected('Tools & Permissions')).toBe('true');
   // The dialog is still mounted when the recovery surface decides otherwise.
@@ -225,7 +225,7 @@ it('navigation F: a Connection decision while Settings stays mounted shows Conne
 it('navigation F: an owning-Workspace decision while Settings stays mounted opens its landing page', async () => {
   const { startLookup } = await mountOwnerFailure();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('button', { name: 'User (global)' });
+  await screen.findByRole('heading', { name: 'General' });
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   expect(selected('Tools & Permissions')).toBe('true');
   const held = startLookup();
@@ -259,7 +259,7 @@ async function openWorkspaceB() {
 it('N10 real App: User Settings → Advanced exposes Connection', async () => {
   await mountApp();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('button', { name: 'User (global)' });
+  await screen.findByRole('heading', { name: 'General' });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(connectionShown()).toBe(true);

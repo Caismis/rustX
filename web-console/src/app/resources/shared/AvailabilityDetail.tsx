@@ -13,7 +13,7 @@ export function AvailabilityDetail({source,scope,revision,family,name}:{source:S
  const document=(scope==='user'?source.user:source.workspace)?.authored;
  const id=toolSourceId(family,name);
  return <section aria-label={tx('settings:extension-detail.root-agent-availability')}><h4>{tx('settings:extension-detail.availability-to-the-root-agent')}</h4>
-  <UnitForm<SourceToolSelection> title={tx('settings:extension-detail.source-value',{p0:id})} authored={document?.agent?.tools?.sources?.[id]??undefined} blank={[]} revision={revision}
+  <UnitForm<SourceToolSelection> immediate title={tx('settings:extension-detail.source-value',{p0:id})} authored={document?.agent?.tools?.sources?.[id]??undefined} blank={[]} revision={revision}
    mutation={authored=>({kind:'config',mutation:{unit:'source_tools',id,authored}})}>{(value,change)=><Selection label={id} value={value} change={change}/>}</UnitForm>
  </section>;
 }

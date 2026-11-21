@@ -677,7 +677,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f6b1fbb34b98ddfe1e287ffdea69c04afa6de7bee3b23ebf61457033227fe4ea"
+      "local_sha256": "c1838527d51bbe479f87f19fc2847802df852439d79da575c5f5df0b7565d774"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -692,7 +692,6 @@
         "../../resources/shared/AvailabilityDetail",
         "../../resources/shared/inventory",
         "../SettingsFeedback",
-        "../forms/bridge",
         "../machines/navigation"
       ],
       "excluded_dependencies": [
@@ -734,7 +733,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4b625a7ebdd2aa9fd8e183250d80e753fd5a4ff7c84747393ca64c386476e5ce"
+      "local_sha256": "0e5757f31286b2a81edfe95b35c8240c8d69241f71d515403ea71b36123e00be"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -789,7 +788,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "015ca4d0ee30a83c82164dfcc78e16f7673094382b280d238a4f52acca20ebb1"
+      "local_sha256": "6518a7b956939a6a122c1cb5134769849d1854120c3fe96ef1acae5739d999b7"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2599,7 +2598,7 @@
       "treatment": "Direct theme-token switch track/thumb styling.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "9baa1cfa828e5806cf59d88b82bbde6d9ba5f795c1105a2e819476388f734149",
-      "local_sha256": "13f11d90a28e7e4bf69a66260a2e5cf5bcb42b5bf18ecad168f9259dcf49071f",
+      "local_sha256": "8de5d94e585d9c2902f8084337f986f0aecead190af0e9d70068a5149fe35c33",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -3015,7 +3014,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "5f4555fa1f03a38ea8dd550a928dad0d00a50bdbba5eeb760a6f3ea3211855c5",
+      "local_sha256": "d42b0d0f4e5960ee54138b877261237bdd7af2805333ff3a4b6c1608b29ea7ce",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -4177,7 +4176,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "e53f24ce66bb1f0f7fc97d81bb7290cb3084cfcbae9bc06eabab36e603f956f7"
+      "local_sha256": "5fe0d338cff2c0a9ab2d818d0c53ce7ebe0f2d1676c7a1d7ea6dba4a66e689d4"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -8510,7 +8509,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3e6808b81ff47fad6fb1a04e816f1b8574a01ea491c7fa973a62e6768c1bc92f"
+      "local_sha256": "e6c9392ad8108fba8bc57d2ae361225d0dbe2510fd754ca4b29f65331c5ea44b"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

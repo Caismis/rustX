@@ -885,7 +885,8 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   await leaveSettings('Advanced');
   s.held.add('configuration/sourceWrite');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // The scalar unit commits itself; native holds the write in flight.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   expect(write.params).toMatchObject({ expected_revision: 'user-1' });
   const before = s.client.getSnapshot();
@@ -1129,7 +1130,7 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await leaveSettings('Advanced');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // The scalar unit commits itself.
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();
@@ -1205,7 +1206,7 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await leaveSettings('Advanced');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // The scalar unit commits itself.
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();

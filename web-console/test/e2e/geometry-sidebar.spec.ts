@@ -265,7 +265,6 @@ test('Workbench CAD uses the shared document body and defaults to revealing the 
     await openSettingsPage(page, 'General');
     await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await choose(settings, 'Language', '中文');
-    await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
     const home = page.getByRole('button', { name: '主页', exact: true });
     await home.click();
     await expect(home).toHaveAttribute('aria-current', 'page');

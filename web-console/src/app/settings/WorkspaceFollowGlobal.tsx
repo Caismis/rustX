@@ -124,7 +124,11 @@ export function WorkspaceFollowGlobal({
                   page?.discardDrafts();
                   setCustomized(false);
                   if (hasOverrides && authoredRemovals.length > 0) {
+                    // Following global again clears this scope's authored
+                    // overrides; like every scalar gesture it commits at once —
+                    // the staged mutations land through savePage in this tick.
                     setModuleReset?.(authoredRemovals, () => setCustomized(true));
+                    page?.savePage();
                   }
                 } else {
                   setModuleReset?.(undefined);

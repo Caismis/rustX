@@ -26,8 +26,7 @@ it('General edits the three preferences, bounds the font stepper and persists th
   fireEvent.click(screen.getByRole('button', {name:/Work details$/}));
   fireEvent.click(await screen.findByRole('option', {name:'Fully expanded'}));
   fireEvent.click(screen.getByRole('switch', {name:'Show coding view'}));
-  // The page transaction stages every preference; the footer commits.
-  fireEvent.click(screen.getAllByRole('button', {name:'Save'}).pop()!);
+  // General preferences apply the moment each control is used; no save exists.
   expect(new ConversationPreferenceStore().getSnapshot()).toEqual({fontSize:15, transcriptMode:'verbose', codingView:false});
   act(()=>conversationPreferences().update({fontSize:22}));
   expect((screen.getByRole('button',{name:'Increase font size'}) as HTMLButtonElement).disabled).toBe(true);

@@ -27,17 +27,17 @@ export function NativeExtensions({ source, scope, revision }: { source: SourceSe
   const plugins = sourceView(source, scope)?.authored?.agent?.plugins;
   return <section aria-label={tx('settings:native-extensions.native-extensions')}>
 
-    <UnitForm<TodoExtensionDocument> title={tx('settings:native-extensions.todo-extension')} authored={plugins?.todo ?? undefined} blank={{}} revision={revision}
+    <UnitForm<TodoExtensionDocument> immediate title={tx('settings:native-extensions.todo-extension')} authored={plugins?.todo ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'todo', authored } })}>
       {(value, change) => <Toggle label={tx('settings:native-extensions.enable-todo')} checked={value.enabled ?? false} onChange={enabled => change({ enabled })} />}
     </UnitForm>
 
-    <UnitForm<GoalExtensionDocument> title={tx('settings:native-extensions.goal-extension')} authored={plugins?.goal ?? undefined} blank={{}} revision={revision}
+    <UnitForm<GoalExtensionDocument> immediate title={tx('settings:native-extensions.goal-extension')} authored={plugins?.goal ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'goal', authored } })}>
       {(value, change) => <Toggle label={tx('settings:native-extensions.enable-goal')} checked={value.enabled ?? false} onChange={enabled => change({ enabled })} />}
     </UnitForm>
 
-    <UnitForm<AgentStatusExtensionDocument> title={tx('settings:native-extensions.agent-status-extension')} authored={plugins?.agent_status ?? undefined} blank={{}} revision={revision}
+    <UnitForm<AgentStatusExtensionDocument> immediate title={tx('settings:native-extensions.agent-status-extension')} authored={plugins?.agent_status ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'agent_status', authored } })}>
       {(value, change) => <StatusFields value={value} change={change} />}
     </UnitForm>

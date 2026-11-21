@@ -292,7 +292,6 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByRole('button', { name: '主页', exact: true }).click();
     const chinesePanel = page.getByRole('complementary', { name: '预览', exact: true });
     await expect(chinesePanel.locator('[data-pdf-page="1"] .textLayer').nth(0)).toContainText('rustX');

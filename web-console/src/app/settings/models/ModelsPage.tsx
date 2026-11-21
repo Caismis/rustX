@@ -152,12 +152,12 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   </SettingsPageShell>;
 
   return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:models-page.models')}
-    description={tx('settings:models.description')} bodyDisabled={bodyDisabled} toolbar={listToolbar} footer={<PageTransactionFooter/>}>
+    description={tx('settings:models.description')} bodyDisabled={bodyDisabled} toolbar={listToolbar}>
     <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
       <WorkspaceFollowGlobal scope={scope} hasOverrides={hasWorkspaceOverrides} authoredRemovals={workspaceRemovals} units={['root_model', 'model', 'provider']}>
         <SettingsGroup title={tx('settings:models-page.default-model-for-new-sessions')}>
-          <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} legendHidden authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
+          <UnitForm<ModelLayer> immediate title={tx('settings:models-page.default-model')} legendHidden authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
             blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
             removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
             {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>

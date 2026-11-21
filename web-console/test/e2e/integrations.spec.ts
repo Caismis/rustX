@@ -124,7 +124,6 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     // Scope switching retains the current tab; Appearance lives on General.
     await openSettingsPage(page, 'General');
     await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     settings=await openResourceModule(page,'subagents','Workspace A');

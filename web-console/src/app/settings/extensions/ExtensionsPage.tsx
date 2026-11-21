@@ -9,7 +9,6 @@ import { ExtensionDetail } from './ExtensionDetail';
 import type { PageFocus } from '../machines/navigation';
 import { FilterTabs, Search } from '../primitives/aria';
 import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
-import { PageTransactionFooter } from '../forms/bridge';
 import { sourceView } from '../projection';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
 import css from '../../../presentation/settings/SettingsContent.module.css';
@@ -84,7 +83,6 @@ export function ExtensionsPage({
           </Button>
         </>
       }
-      footer={<PageTransactionFooter />}
     >
       <FilterTabs
         label={tx('settings:extensions-page.extension-kinds')}

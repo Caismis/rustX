@@ -7,7 +7,7 @@ import type {
 } from '../../../../../protocol/app-server/v80';
 import { Button } from '../../../presentation/primitives/Button';
 import { Switch } from '../../../presentation/primitives/Switch';
-import { UnitForm, PageTransactionFooter } from '../forms/bridge';
+import { UnitForm } from '../forms/bridge';
 import { Selection, TextField, nativeTools } from '../forms/controls';
 import { Choice } from '../primitives/aria';
 import { reachableIdentities, sourceView } from '../projection';
@@ -45,11 +45,10 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
       title={tx('settings:tools-page.tools-amp-permissions')}
       bodyDisabled={bodyDisabled}
       toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}
-      footer={<PageTransactionFooter />}
     >
       <WorkspaceFollowGlobal scope={scope} hasOverrides={hasWorkspaceOverrides} authoredRemovals={workspaceRemovals} units={['approval', 'native_tools', 'source_tools']}>
         <SettingsGroup title={tx('settings:tools-page.approval-mode')}>
-          <UnitForm<ApprovalMode>
+          <UnitForm<ApprovalMode> immediate
             title={tx('settings:tools-page.approval-mode')}
             legendHidden
             authored={document.approval_mode ?? undefined}
@@ -70,7 +69,7 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
         </SettingsGroup>
 
         <SettingsGroup title={tx('settings:extension-detail.native-tools')}>
-          <UnitForm<string[]>
+          <UnitForm<string[]> immediate
             title={tx('settings:extension-detail.native-tools')}
             legendHidden
             authored={agent?.tools?.builtin ?? undefined}
@@ -97,7 +96,7 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
 
         <SettingsGroup title={tx('settings:tools-page.tool-sources')}>
           {sources.map(id => (
-            <UnitForm<SourceToolSelection>
+            <UnitForm<SourceToolSelection> immediate
               key={id}
               title={tx('settings:extension-detail.source-value', { p0: id })}
               authored={agent?.tools?.sources?.[id] ?? undefined}

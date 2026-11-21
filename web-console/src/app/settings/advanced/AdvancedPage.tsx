@@ -5,7 +5,7 @@ import type {
   TimeoutLayer, ToolDeadlineLayer,
 } from '../../../../../protocol/app-server/v80';
 import { Button } from '../../../presentation/primitives/Button';
-import { UnitForm, PageTransactionFooter } from '../forms/bridge';
+import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
 import { Choice } from '../primitives/aria';
 import { reachableEnvironment } from '../projection';
@@ -59,7 +59,6 @@ export function AdvancedPage({
       description={tx('settings:advanced-page.runtime-limits-environment-process-policy-and-the-native-diagnos')}
       bodyDisabled={bodyDisabled}
       toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}
-      footer={<PageTransactionFooter />}
     >
       {openConnection && (
         <SettingsGroup title={tx('settings:connection-settings.connection')}>
@@ -126,7 +125,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
   return (
     <WorkspaceFollowGlobal scope={scope} hasOverrides={hasWorkspaceOverrides} authoredRemovals={workspaceRemovals} units={['context', 'model_timeout', 'tool_deadline', 'capacity', 'environment']}>
       <SettingsGroup title={tx('settings:advanced-page.context-policy')}>
-        <UnitForm<ContextLayer>
+        <UnitForm<ContextLayer> immediate
           title={tx('settings:advanced-page.context-policy')}
           legendHidden
           authored={document.context ?? undefined}
@@ -167,7 +166,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
       </SettingsGroup>
 
       <SettingsGroup title={tx('settings:advanced-page.context-and-runtime-limits')}>
-        <UnitForm<TimeoutLayer>
+        <UnitForm<TimeoutLayer> immediate
           title={tx('settings:advanced-page.model-timeout')}
           authored={document.model_timeout_policy ?? undefined}
           blank={{}}
@@ -188,7 +187,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           )}
         </UnitForm>
 
-        <UnitForm<ToolDeadlineLayer>
+        <UnitForm<ToolDeadlineLayer> immediate
           title={tx('settings:advanced-page.tool-deadline')}
           authored={document.tool_deadline_policy ?? undefined}
           blank={{}}
@@ -219,7 +218,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           )}
         </UnitForm>
 
-        <UnitForm<SubagentsLayer>
+        <UnitForm<SubagentsLayer> immediate
           title={tx('settings:advanced-page.child-capacity')}
           authored={document.subagents ?? undefined}
           blank={{}}
@@ -259,7 +258,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           )}
         </div>
         {selectedEnvironment && (
-          <UnitForm<string>
+          <UnitForm<string> immediate
             key={selectedEnvironment}
             title={tx('settings:advanced-page.environment-value', { p0: selectedEnvironment })}
             authored={document.environment?.includes(selectedEnvironment) ? '' : undefined}

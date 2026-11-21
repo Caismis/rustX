@@ -9,7 +9,7 @@ const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { openResourceModule, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu, settledSave } from './shell-actions';
+import { openResourceModule, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu, settledSetting } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
@@ -35,8 +35,8 @@ async function openUserSettings(page: Page) {
 }
 async function setTheme(page: Page, theme: 'Light' | 'Dark') {
   await openUserSettings(page);
+  // General preferences are webui-local and apply the moment they are picked.
   await settingsPage(page).getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: theme, exact: true }).click();
-  await settingsPage(page).getByRole('button', { name: 'Save', exact: true }).click();
   await returnHome(page);
 }
 
@@ -113,8 +113,9 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     // One stable page frame: a section change never resizes or moves it.
     expect(await panelBox(page)).toEqual(frame);
     await expect(settings.getByRole('heading', { level: 1, name: name === 'Models' ? 'Model Settings' : name, exact: true })).toBeVisible();
-    // The owner and observation state live in the fixed header on every page.
-    await expect(settings.getByRole('button', { name: 'User (global)', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    // The owner and observation state live in the fixed header of every scoped
+    // page; General is webui-only and carries no scope segment.
+    if (name !== 'General') await expect(settings.getByRole('button', { name: 'User (global)', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(settings.locator('[data-lifecycle="ready"]')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectAccessible(page, settingsScope);
@@ -128,12 +129,12 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
   await expect(instructions).toHaveAttribute('data-authored', 'absent');
   await expect(settings.getByText('/home/user/rustx/.agents/AGENTS.md', { exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: /^Author (Global instructions|Project guidance)$/ })).toHaveCount(0);
-  const save = settings.getByRole('button', { name: 'Save', exact: true });
-  await expect(save).toBeDisabled();
+  // A scalar unit commits itself: the draft marker appears on the edit and
+  // clears when the write has settled.
+  await expect(instructions).not.toHaveAttribute('data-draft', /./);
   await instructions.getByRole('textbox', { name: 'Global instructions', exact: true }).fill('Review the changes.');
-  await expect(save).toBeEnabled();
-  await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(save).toBeDisabled();
+  await expect(instructions).toHaveAttribute('data-draft', 'true');
+  await settledSetting(instructions);
   const unit = await instructions.evaluate(el => {
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
@@ -171,7 +172,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   await expect(followAdvanced).not.toBeChecked();
   const contextForm = settings.getByRole('form', { name: 'Context' });
   await expect(contextForm).toHaveAttribute('data-authored', 'absent');
-  await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await expect(contextForm).not.toHaveAttribute('data-draft', /./);
   await followAdvanced.click();
   await expect(followAdvanced).toBeChecked();
   await expect(settings.getByRole('form', { name: 'Context' })).toHaveCount(0);
@@ -189,33 +190,28 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-workspace-inherited-light.png');
 
-  // Overridden and dirty: sub-options start visible; footer Save / Cancel stages edits.
+  // Overridden and dirty: sub-options start visible; a scalar edit stages a
+  // draft that commits itself after a short debounce.
   await openSettingsPage(page, 'Agent');
   const followAgent = settings.getByRole('switch', { name: 'Follow global settings', exact: true });
   await expect(followAgent).not.toBeChecked();
   const guidance = settings.getByRole('form', { name: 'Project guidance' });
   await expect(settings.getByRole('form', { name: /^(Agent name|Description|Global instructions)$/ })).toHaveCount(0);
   await expect(guidance).toHaveAttribute('data-authored', 'present');
+  // Workspace writes cross the Product Host boundary, not the User RPC socket.
+  const writes = () => page.evaluate(() => (window as unknown as { rustxWorkspaceWrites: () => number }).rustxWorkspaceWrites());
   await guidance.getByRole('switch', { name: 'Automatically load project guidance' }).click();
   await expect(guidance).toHaveAttribute('data-draft', 'true');
-  await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await settledSetting(guidance);
+  expect(await writes()).toBe(1);
   await expectStableScreenshot(settings, 'settings-workspace-override-light.png');
-  await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(guidance).not.toHaveAttribute('data-draft', 'true');
 
-  // Turning Follow global settings ON stages clearing workspace overrides;
-  // Cancel restores the customized controls without writing.
+  // Turning Follow global settings ON commits clearing workspace overrides
+  // immediately — no footer, no staging.
   await followAgent.click();
   await expect(followAgent).toBeChecked();
   await expect(guidance).toHaveCount(0);
-  const writes = () => page.evaluate(() => (window as unknown as { rustxNativeRequests: () => { method: string }[] }).rustxNativeRequests().filter(request => request.method === 'configuration/sourceWrite').length);
-  expect(await writes()).toBe(0);
-  await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
-  await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(followAgent).not.toBeChecked();
-  await expect(guidance).toBeVisible();
-  await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
-  expect(await writes()).toBe(0);
+  await expect.poll(writes).toBe(2);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
@@ -374,11 +370,12 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(guidance.getByRole('button', { name: 'Advanced options' })).toHaveCount(0);
   await automatic.press('Space');
   await expect(automatic).not.toBeChecked();
-  await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  await settledSetting(guidance);
   await expectNoHorizontalOverflow(page);
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(page, 'settings-agent-mobile-dark.png');
-  await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await automatic.press('Space');
+  await settledSetting(guidance);
   await expect(automatic).toBeChecked();
 
   // Subagent details now belong to their independent resource module.
@@ -672,7 +669,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
-test('staging a restore of inheritance keeps focus in settings; the footer Save writes it in flight', async ({ page }) => {
+test('toggling Follow global settings commits the restore of inheritance while the write is in flight', async ({ page }) => {
   const errors = await start(page, '?write=held');
   const settings = settingsPage(page);
   await openWorkspaceSettings(page, 'Workspace A');
@@ -682,29 +679,18 @@ test('staging a restore of inheritance keeps focus in settings; the footer Save 
   // This Workspace mutation travels through the native Product Host boundary.
   const writes = () => page.evaluate(() => (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites());
 
-  // Toggling Follow global settings ON and cancelling stays local: nothing is written
-  // until the footer Save submits the removal.
+  // Toggling Follow global settings ON submits the removal immediately; the
+  // write is held in flight while the switch already reads as following.
   await expect(follow).not.toBeChecked(); await follow.focus(); await expect(follow).toBeFocused();
   await page.keyboard.press('Space');
   await expect(follow).toBeChecked();
   await expect(unit).toHaveCount(0);
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
-  expect(await writes()).toBe(0);
-  await settings.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(unit).toBeVisible();
-  await expect(follow).not.toBeChecked();
-  expect(await writes()).toBe(0);
-
-  // Stage it again, then Save: the removal is submitted and held in flight.
-  await follow.click();
-  await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
-  await settings.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(writes).toBe(1);
-  expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
 
   await releaseWrites(page);
-  await expect(settledSave(settings)).toBeVisible();
   await expect(follow).toBeChecked();
+  await expect(unit).toHaveCount(0);
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
@@ -887,18 +873,21 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
   });
 }
 
-test('DSH footer stays flush at viewport bottom and Connection controls render cleanly', async ({ page }) => {
+test('scalar pages have no footer; the structured provider editor keeps one flush at viewport bottom, and Connection controls render cleanly', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
   const settings = settingsPage(page);
 
   for (const name of ['General', 'Models', 'Agent', 'Advanced'] as const) {
     await openSettingsPage(page, name);
-    const footer = settings.locator('[data-settings-footer]');
-    await expect(footer).toBeVisible();
-    const box = (await footer.boundingBox())!;
-    expect(Math.abs(box.y + box.height - 1000)).toBeLessThanOrEqual(2);
+    await expect(settings.locator('[data-settings-footer]')).toHaveCount(0);
   }
+  await openSettingsPage(page, 'Models');
+  await settings.getByRole('button', { name: 'transport →', exact: true }).click();
+  const footer = settings.locator('[data-settings-footer]');
+  await expect(footer).toBeVisible();
+  const box = (await footer.boundingBox())!;
+  expect(Math.abs(box.y + box.height - 1000)).toBeLessThanOrEqual(2);
 
   await openSettingsPage(page, 'Advanced');
   await settings.getByRole('button', { name: 'Connection', exact: true }).click();

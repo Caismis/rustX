@@ -7,10 +7,8 @@ for (const locale of ['en', 'zh'] as const) test(`Harness appearance cards follo
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.locator('[data-settings-page]');
   const label = (en: string, zh: string) => locale === 'en' ? en : zh;
-  const save = () => settings.getByRole('button', { name: label('Save', '保存'), exact: true }).click();
   if (locale === 'zh') {
     await choose(settings, 'Language', '中文');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('group', { name: '外观', exact: true })).toBeVisible();
   }
   const row = page.getByRole('group', { name: label('Appearance', '外观'), exact: true });
@@ -22,16 +20,15 @@ for (const locale of ['en', 'zh'] as const) test(`Harness appearance cards follo
   await expect(system).toHaveAttribute('aria-pressed', 'true');
   const dark = row.getByRole('button', { name: label('Dark', '深色'), exact: true });
   await dark.focus(); await page.keyboard.press('Space');
-  // A staged choice owns the segment; the page footer commits it.
+  // Appearance commits on choice; the segment and theme follow immediately.
   await expect(dark).toHaveAttribute('aria-pressed', 'true');
-  await save();
   await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
   await page.emulateMedia({ colorScheme: 'dark' }); await page.emulateMedia({ colorScheme: 'light' });
   await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
   await page.reload(); await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
   await page.getByRole('button', { name: label('Settings', '设置'), exact: true }).click();
   await expect(dark).toHaveAttribute('aria-pressed', 'true');
-  await system.click(); await save();
+  await system.click();
   await expect(page.locator('body')).not.toHaveAttribute('data-ds-dark-theme', '');
   expect(await page.evaluate(() => localStorage.getItem('rustx-appearance-v1'))).toBe('system');
   await page.screenshot({ path: `/tmp/rustx-appearance-${locale}-light.png` });

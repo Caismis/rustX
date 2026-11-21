@@ -88,7 +88,8 @@ async function saveHeldWrite(s: Server, native: Native) {
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; the debounced commit lands next.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; native.application = native.applied('1', 'preparing');
   s.commit(write);
@@ -183,7 +184,8 @@ it('S6 a publication arriving during an outstanding convergence read still drive
   const s = await open(native); // settles at application 1
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; the debounced commit lands next.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   // Native commits the write and republishes application 2, still preparing.
   native.revision = 'user-2'; native.application = native.applied('2', 'preparing');
@@ -221,7 +223,8 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const read = sent(s, 'configuration/sourcesRead')[1];
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; the debounced commit lands next.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   // The acknowledgement captured revision B at application version 7.
   native.revision = 'user-2'; native.inheritGuidance = true;
@@ -260,7 +263,8 @@ it('S8 a write acknowledgement cannot cancel an outstanding newer-authority read
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const read = sent(s, 'configuration/sourcesRead')[1];
   // The older acknowledgement lands while that read is outstanding.
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; the debounced commit lands next.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; s.commit(write); // captured before application 3
   // Native settles at application 3 while the read is outstanding; the
@@ -344,7 +348,8 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await waitForSettingsRevision('user-1');
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; the debounced commit lands next.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; native.application = native.applied('2', 'preparing');
   s.commit(write);
@@ -388,7 +393,8 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   s.commit(r1);
   // Step 3: deliver the successful sourceWrite acknowledgement.
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; the debounced commit lands next.
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2';
   s.commit(write);
@@ -477,7 +483,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
   application = { ...cfg3SourceApplication(target), version: '2' };
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await capturedB;
   // Step: external authority advances to C while the write response is held.
   revision = 'ws-C';
@@ -559,7 +565,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   // Step 2: a Workspace save whose write-owned reread captured revision B.
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   // Step 3: hold the write response carrying that reread.
   await captured.reached;
   // Step 4/5: a newer authoritative read N+1 is initiated and stays pending. It
@@ -630,7 +636,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   await waitForSettingsRevision('ws-A');
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  // Scalar settings auto-save on edit; no footer Save exists.
   await captured.reached;
   // A newer authoritative read is initiated and held pending.
   s.held.add('configuration/sourcesRead');
