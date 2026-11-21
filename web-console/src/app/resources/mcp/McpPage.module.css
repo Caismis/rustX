@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness ModelsSection settings materials
  * and shared rustX settings geometry; see PROVENANCE.md. */
 .page { width:100%; min-width:0; display:flex; flex-direction:column; gap:16px; container:mcp-editor / inline-size; }
-.page h3 { font-size:24px; line-height:32px; font-weight: 500; margin:0; overflow-wrap:anywhere; }
+.page h3 { font-size:20px; line-height:28px; font-weight: 500; margin:0; overflow-wrap:anywhere; }
 .actions { display:flex; gap:8px; align-items:center; }
 .actions > button { white-space:nowrap; }
 .icon { width:100%; height:100%; display:grid; place-items:center; position:relative; z-index:1; }
