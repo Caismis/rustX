@@ -755,7 +755,7 @@ pub enum InputOutcome {
     Pending,
     /// The physical stdin/PTY operation was actually applied.
     Applied,
-    /// The physical operation honestly failed — never a forged ack.
+    /// The physical operation failed. An input prefix may already have applied.
     Failed,
     /// The physical layer vetoed the operation before applying it —
     /// e.g. a byte-delivered EOF under a raw-mode termios policy.

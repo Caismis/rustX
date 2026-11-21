@@ -909,6 +909,7 @@ pub(crate) async fn expired_input_cleanup_settles_the_binding(revoking: bool) {
     let mut params = parameters(&fixture, &["/bin/cat"]);
     params.process_id = Some(process_id.into());
     params.stream_stdin = true;
+    params.stream_stdout_stderr = true;
     let driver = connection.clone();
     let mut command = tokio::spawn(async move {
         driver
@@ -938,6 +939,14 @@ pub(crate) async fn expired_input_cleanup_settles_the_binding(revoking: bool) {
         }
     });
     bounded(collector_parked).await.unwrap();
+    let mut echoed = Vec::new();
+    while echoed.len() < b"accepted".len() {
+        echoed.extend(output(&connection, process_id).await);
+    }
+    assert_eq!(
+        echoed, b"accepted",
+        "the process consumed the complete input"
+    );
     let (data_held, holding_data) = oneshot::channel();
     let (release_data, contested) = std::sync::mpsc::channel();
     let lock = tokio::task::spawn_blocking({
@@ -960,7 +969,7 @@ pub(crate) async fn expired_input_cleanup_settles_the_binding(revoking: bool) {
         None
     };
     resume_collector.send(()).unwrap();
-    assert_eq!(bounded(input).await.unwrap(), ErrorData::OperationFailed);
+    assert_eq!(bounded(input).await.unwrap(), ErrorData::OutcomeUnknown);
     assert_eq!(
         endpoint.control().is_some(),
         revoking,
@@ -995,6 +1004,105 @@ pub(crate) async fn expired_input_cleanup_settles_the_binding(revoking: bool) {
         "one real Client input admission"
     );
     bounded(control).await.unwrap();
+}
+
+pub(crate) async fn failed_input_receipt_after_poll_expiry_preserves_the_binding() {
+    use crate::app_server::command::{hold_expired_input_poll, hold_start_after_gate};
+    use rustx_execution_protocol::process::InputOutcome;
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = tokio::spawn(async move {
+        let mut receipts = Vec::new();
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            send(&mut client_data, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if let ClientRequest::Process(ProcessRequest::InputReceipt {
+                abandon_pending, ..
+            }) = request
+            {
+                let ClientReply::Process(ProcessReply::InputReceipt {
+                    sequence, status, ..
+                }) = reply
+                else {
+                    panic!("expected an exact input receipt, got {reply:?}");
+                };
+                assert_eq!(sequence.get(), 1);
+                receipts.push((abandon_pending, status));
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        receipts
+    });
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let id = "failed-receipt-after-poll-expiry";
+    let start = hold_start_after_gate(id);
+    let (collector_parked, resume_collector) = hold_expired_input_poll(id);
+    let mut params = parameters(&fixture, &["/bin/cat"]);
+    params.process_id = Some(id.into());
+    params.stream_stdin = true;
+    let command = tokio::spawn({
+        let connection = connection.clone();
+        async move { call(&connection, 1, Method::CommandExec(params)).await }
+    });
+    let key = bounded(start.key()).await;
+    let input = tokio::spawn({
+        let connection = connection.clone();
+        async move {
+            rejected(
+                &connection,
+                2,
+                Method::CommandWrite(WriteParams {
+                    process_id: id.into(),
+                    delta_base64: None,
+                    close_stdin: true,
+                }),
+            )
+            .await
+        }
+    });
+    bounded(collector_parked).await.unwrap();
+    let cancel = endpoint.control().unwrap();
+    assert_eq!(
+        bounded(tokio::task::spawn_blocking(
+            move || cancel.cancel_process(&key)
+        ))
+        .await
+        .unwrap()
+        .unwrap(),
+        ProcessCancelDisposition::CancelledBeforeStart
+    );
+    start.release();
+    let MethodResult::CommandExec { result } = bounded(command).await.unwrap() else {
+        panic!("the cancelled command must settle");
+    };
+    assert_eq!(result.status, ExecStatus::Terminated);
+    resume_collector.send(()).unwrap();
+    assert_eq!(bounded(input).await.unwrap(), ErrorData::OutcomeUnknown);
+    assert!(
+        endpoint.control().is_some(),
+        "the claimed Failed receipt settles ownership"
+    );
+    assert!(matches!(
+        call(&connection, 3, Method::CommandExec(parameters(&fixture, &["/bin/true"]))).await,
+        MethodResult::CommandExec { result } if result.exit_code == Some(0)
+    ));
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    assert_eq!(bounded(data).await.unwrap(), [(true, InputOutcome::Failed)]);
+    bounded(control).await.unwrap();
+    assert!(bounded(child.wait()).await.unwrap().success());
 }
 
 pub(crate) async fn queued_workspace_release_hands_off_to_binding_revocation() {

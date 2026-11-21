@@ -179,6 +179,8 @@ struct Operation {
     receipts: BTreeMap<u64, InputOutcome>,
     #[cfg(test)]
     pipe_close_received: Option<std::sync::mpsc::Sender<()>>,
+    #[cfg(test)]
+    partial_input_failure: Option<PartialInputFailure>,
     cancel: ProcessSignal,
     witness: Option<ProcessWitness>,
     bash_file: Option<Arc<CaptureFile>>,
@@ -642,6 +644,8 @@ impl Operations {
                 receipts: BTreeMap::new(),
                 #[cfg(test)]
                 pipe_close_received: None,
+                #[cfg(test)]
+                partial_input_failure: None,
                 cancel: ProcessSignal::new(),
                 witness: None,
                 bash_file,
@@ -1296,6 +1300,12 @@ struct PendingInput {
     sequence: u64,
 }
 
+#[cfg(test)]
+struct PartialInputFailure {
+    offset: Option<std::sync::mpsc::Sender<usize>>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
 /// The physical worker of one operation. The outer supervisor spawn is
 /// not business START: `Running` publishes only on the runner's own
 /// witness of the crossed grant, `Exited` only on `ShellExited`, and the
@@ -1399,6 +1409,11 @@ async fn run_operation(
     let mut input_stream: Option<tokio::net::UnixStream> = None;
     let mut input_closed = input_rx.is_none() && terminal.is_none();
     let mut pending_input: Option<PendingInput> = None;
+    #[cfg(test)]
+    let mut partial_input_failure = match inner.lock().unwrap().records.get_mut(&key.operation) {
+        Some(Record::Full(op)) => op.partial_input_failure.take(),
+        _ => None,
+    };
     let mut stdout_buf = vec![0u8; 16 * 1024];
     let mut stderr_buf = vec![0u8; 16 * 1024];
     let mut terminal_buf = vec![0u8; 16 * 1024];
@@ -1531,6 +1546,19 @@ async fn run_operation(
             written = async {
                 let pending = pending_input.as_ref().expect("pending input");
                 let bytes = &pending.bytes[pending.offset..];
+                #[cfg(test)]
+                let bytes = if let Some(fault) = &mut partial_input_failure {
+                    if pending.offset > 0 {
+                        if let Some(reached) = fault.offset.take() {
+                            let _ = reached.send(pending.offset);
+                        }
+                        let _ = (&mut fault.release).await;
+                        return Err(io::ErrorKind::BrokenPipe.into());
+                    }
+                    &bytes[..bytes.len().min(1)]
+                } else {
+                    bytes
+                };
                 if let Some(term) = &terminal {
                     term.write(bytes).await
                 } else {
@@ -2240,6 +2268,79 @@ mod tests {
         let (stdout, _) = drain(&ops, &key);
         assert_eq!(stdout, b"<>");
         assert_eq!(snapshot.stderr_total.get(), 0);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn partial_physical_stdin_write_records_failed() {
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut specification = spec(&["/bin/cat"]);
+        specification.stdin = ProcessStdin::Streamed;
+        register(&ops, &key, &specification);
+
+        let (reached, written) = std::sync::mpsc::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        {
+            let mut inner = ops.inner.lock().unwrap();
+            let Some(Record::Full(op)) = inner.records.get_mut(&key.operation) else {
+                panic!("registered input owner");
+            };
+            op.partial_input_failure = Some(PartialInputFailure {
+                offset: Some(reached),
+                release,
+            });
+        }
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let sequence = DecimalU64::new(1);
+        assert_eq!(
+            ops.dispatch(ProcessRequest::WriteStdin {
+                key: key.clone(),
+                sequence,
+                delta_base64: base64::engine::general_purpose::STANDARD.encode(b"prefix"),
+                close: false,
+            }),
+            ProcessReply::InputAccepted {
+                key: key.clone(),
+                sequence
+            }
+        );
+        assert_eq!(written.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+        let receipt = || {
+            ops.dispatch(ProcessRequest::InputReceipt {
+                key: key.clone(),
+                sequence,
+                abandon_pending: false,
+            })
+        };
+        assert!(matches!(
+            receipt(),
+            ProcessReply::InputReceipt {
+                status: InputOutcome::Pending,
+                ..
+            }
+        ));
+        resume.send(()).unwrap();
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.exit_code, Some(0));
+        let (stdout, _) = drain(&ops, &key);
+        assert_eq!(stdout, b"p");
+        for status in [InputOutcome::Failed, InputOutcome::Unknown] {
+            assert_eq!(
+                receipt(),
+                ProcessReply::InputReceipt {
+                    key: key.clone(),
+                    sequence,
+                    status
+                }
+            );
+        }
         ops.shutdown().unwrap();
     }
 

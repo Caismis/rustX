@@ -4,21 +4,32 @@ struct InputHold {
     process_id: String,
     entered: oneshot::Sender<()>,
     released: oneshot::Receiver<()>,
-    expire_cleanup: bool,
+    mode: InputHoldMode,
 }
 static INPUT_HOLDS: Mutex<Vec<InputHold>> = Mutex::new(Vec::new());
 
+#[derive(PartialEq, Eq)]
+pub(super) enum InputHoldMode {
+    Observe,
+    ExpireCleanup,
+    ExpireFirstPoll,
+}
+
 pub(crate) fn hold_input_receipt(id: &str) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
-    install_input_hold(id, false)
+    install_input_hold(id, InputHoldMode::Observe)
 }
 
 pub(crate) fn hold_expired_input_cleanup(id: &str) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
-    install_input_hold(id, true)
+    install_input_hold(id, InputHoldMode::ExpireCleanup)
+}
+
+pub(crate) fn hold_expired_input_poll(id: &str) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+    install_input_hold(id, InputHoldMode::ExpireFirstPoll)
 }
 
 fn install_input_hold(
     id: &str,
-    expire_cleanup: bool,
+    mode: InputHoldMode,
 ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
     let (entered, arrived) = oneshot::channel();
     let (resume, released) = oneshot::channel();
@@ -26,12 +37,12 @@ fn install_input_hold(
         process_id: id.to_owned(),
         entered,
         released,
-        expire_cleanup,
+        mode,
     });
     (arrived, resume)
 }
 
-pub(super) async fn pause_input_receipt(id: &str) -> bool {
+pub(super) async fn pause_input_receipt(id: &str) -> InputHoldMode {
     let hold = {
         let mut holds = INPUT_HOLDS.lock().unwrap();
         holds
@@ -39,10 +50,12 @@ pub(super) async fn pause_input_receipt(id: &str) -> bool {
             .position(|hold| hold.process_id == id)
             .map(|index| holds.remove(index))
     };
-    let Some(hold) = hold else { return false };
+    let Some(hold) = hold else {
+        return InputHoldMode::Observe;
+    };
     let _ = hold.entered.send(());
     let _ = hold.released.await;
-    hold.expire_cleanup
+    hold.mode
 }
 
 fn parameters() -> ExecParams {

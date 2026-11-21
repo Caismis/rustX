@@ -1114,8 +1114,11 @@ envelope.
   claim, acknowledged abandonment, or binding teardown. If the final
   exchange fails, the receipt owner fences an Open binding. An existing
   terminal owner keeps the control lane to receive `Revoked`.
-  A stale sequence is never reapplied and an ambiguous
-  write is never retried. The Client holds at most four
+  Public input results report `outcome_unknown` after admission when the
+  final receipt is unavailable or reports `Failed`. A collected `Failed`
+  receipt releases its slot and may describe an already-applied prefix.
+  A stale sequence is never reapplied and an ambiguous write is never
+  retried. The Client holds at most four
   concurrent operations per Session plus a bounded tombstone budget.
   Native Agent Bash uses a separate `RegisterAgentBash` message and
   negotiates `AgentBash` on the same authenticated binding. Ordinary

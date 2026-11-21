@@ -491,7 +491,9 @@ async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
         rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT,
     );
     #[cfg(test)]
-    let budgets = if tests::pause_input_receipt(&entry.process_id).await {
+    let hold = tests::pause_input_receipt(&entry.process_id).await;
+    #[cfg(test)]
+    let budgets = if hold == tests::InputHoldMode::ExpireCleanup {
         (Duration::ZERO, Duration::ZERO)
     } else {
         budgets
@@ -500,8 +502,16 @@ async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
     let deadline = Instant::now() + observation_budget;
     let mut finish_after_error = false;
     loop {
-        let cancelled = entry.cancellation.is_cancelled();
-        let abandon_pending = finish_after_error || cancelled || Instant::now() >= deadline;
+        let abandon_pending =
+            finish_after_error || entry.cancellation.is_cancelled() || Instant::now() >= deadline;
+        let exchange_deadline = Instant::now() + exchange_budget;
+        #[cfg(test)]
+        let exchange_deadline = if hold == tests::InputHoldMode::ExpireFirstPoll && !abandon_pending
+        {
+            Instant::now()
+        } else {
+            exchange_deadline
+        };
         match exchange_until(
             &entry.endpoint,
             ProcessRequest::InputReceipt {
@@ -509,7 +519,7 @@ async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
                 sequence: sequence.into(),
                 abandon_pending,
             },
-            Instant::now() + exchange_budget,
+            exchange_deadline,
         )
         .await
         {
@@ -524,9 +534,9 @@ async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
                 return match status {
                     InputOutcome::Applied => Ok(()),
                     InputOutcome::Rejected => Err(domain(ErrorData::InvalidParams)),
-                    InputOutcome::Failed => Err(domain(ErrorData::OperationFailed)),
-                    InputOutcome::Pending if cancelled => Err(domain(ErrorData::ConnectionClosed)),
-                    InputOutcome::Pending | InputOutcome::Unknown => {
+                    // A completed receipt releases the slot. Failed can
+                    // still represent a write that applied a prefix.
+                    InputOutcome::Failed | InputOutcome::Pending | InputOutcome::Unknown => {
                         Err(domain(ErrorData::OutcomeUnknown))
                     }
                 };
@@ -541,12 +551,9 @@ async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
                 finish_after_error = true;
                 continue;
             }
-            Exchange::Reply(ProcessReply::Conflict { .. }) => {
-                return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
-            }
-            Exchange::Reply(_) => return Err(domain(ErrorData::OperationFailed)),
-            Exchange::Failed(error) => return Err(error),
-            Exchange::Busy => return Err(domain(ErrorData::OutcomeUnknown)),
+            // The input crossed admission. A failure observing its final
+            // receipt cannot prove what the physical input did.
+            _ => return Err(domain(ErrorData::OutcomeUnknown)),
         }
         tokio::select! {
             () = entry.cancellation.cancelled() => {}
@@ -1398,4 +1405,4 @@ fn result_from(
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::{hold_expired_input_cleanup, hold_input_receipt};
+pub(crate) use tests::{hold_expired_input_cleanup, hold_expired_input_poll, hold_input_receipt};

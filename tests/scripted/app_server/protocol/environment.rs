@@ -1867,10 +1867,9 @@ pub(crate) async fn partial_stdin_scenario() {
             success.result,
             MethodResult::EnvironmentAccepted {}
         )),
-        Response::Failure(failure) => assert!(matches!(
-            failure.error.data,
-            Some(ErrorData::OperationFailed | ErrorData::OutcomeUnknown)
-        )),
+        Response::Failure(failure) => {
+            assert_eq!(failure.error.data, Some(ErrorData::OutcomeUnknown));
+        }
     }
     assert!(matches!(
         bounded(command).await.unwrap(),

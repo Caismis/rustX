@@ -12,6 +12,20 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `3939bf702`
+
+- Before expiring the final input receipt request, both cleanup regressions
+  observe the full input echoed by the real Client's `cat` process. The public
+  response is `outcome_unknown`, with zero receipt requests sent. The Open
+  binding retires and the Revoking binding delivers its original `Revoked`
+  receipt to complete drain.
+- A Client test pauses after a real one-byte pipe write and injects an error on
+  the next write. It observes exactly that byte on stdout and claims one
+  `Failed` receipt. A separate real Client boundary test takes an expired
+  ordinary poll through the final claim, observes the matching `Failed`
+  receipt on the wire and `outcome_unknown` at the public API, then runs
+  another command on the same binding.
+
 ## Review follow-up on `bf38fcd00`
 
 - Each accepted input retains a Server receipt owner. An ordinary polling
