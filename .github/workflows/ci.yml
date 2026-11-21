@@ -583,7 +583,7 @@ jobs:
               *) rustup toolchain uninstall "$tc" || true ;;
             esac
           done < <(rustup toolchain list)
-          rustc --version --verbose | head -n 3
+          rustc --version --verbose
       # One lineage per lane; see the policy note in the `quality` job. The
       # macOS lineages share nothing with any Linux lane: the action's key
       # carries the runner OS, architecture and host triple.
@@ -726,7 +726,7 @@ jobs:
               *) rustup toolchain uninstall "$tc" || true ;;
             esac
           done < <(rustup toolchain list)
-          rustc --version --verbose | head -n 3
+          rustc --version --verbose
       # One lineage per lane; see the policy note in the `quality` job. The
       # macOS lineages share nothing with any Linux lane: the action's key
       # carries the runner OS, architecture and host triple.
@@ -999,7 +999,7 @@ jobs:
               *) rustup toolchain uninstall "$tc" || true ;;
             esac
           done < <(rustup toolchain list)
-          rustc --version --verbose | head -n 3
+          rustc --version --verbose
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
