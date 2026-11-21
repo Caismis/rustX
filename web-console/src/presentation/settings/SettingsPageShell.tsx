@@ -30,8 +30,10 @@ export function SettingsPageShell({ title, description, breadcrumb, toolbar, foo
 /** The fixed footer of a Settings/resource page: status on the left,
  * Cancel / Save on the right. Both actions stay in place and grey out when
  * the page has nothing to commit, so the layout never shifts. */
-export function SettingsPageFooter({ dirty, saving, status, onCancel, onSave, leading }: {
+export function SettingsPageFooter({ dirty, saving, status, onCancel, onSave, leading, removalOnly }: {
   dirty: boolean; saving?: boolean; status?: ReactNode; leading?: ReactNode;
+  /** The pending save is a deletion — style Save as a destructive action. */
+  removalOnly?: boolean;
   onCancel: () => void; onSave: () => void;
 }) {
   const tx = useTranslation();
@@ -47,7 +49,7 @@ export function SettingsPageFooter({ dirty, saving, status, onCancel, onSave, le
     <div className={css.footerStatus}>{leading}{status}</div>
     <div className={css.footerButtons} ref={buttons} tabIndex={-1}>
       <Button variant="outline" disabled={!dirty || !!saving} onClick={onCancel}>{tx('settings:aria.cancel')}</Button>
-      <Button variant="primary" disabled={!dirty || !!saving} aria-busy={!!saving} onClick={onSave}>{tx(saving ? 'settings:catalog.saving' : 'settings:bridge.save')}</Button>
+      <Button variant={removalOnly ? 'danger' : 'primary'} disabled={!dirty || !!saving} aria-busy={!!saving} onClick={onSave}>{tx(saving ? 'settings:catalog.saving' : 'settings:bridge.save')}</Button>
     </div>
   </div></footer>;
 }

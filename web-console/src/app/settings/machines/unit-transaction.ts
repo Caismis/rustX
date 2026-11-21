@@ -391,6 +391,23 @@ export function discardable(snapshot: UnitTransactionSnapshot): boolean {
     || (snapshot.matches({ base: 'pinned' }) && !snapshot.matches({ mutation: 'acknowledged' }));
 }
 
+/** Whether the transaction holds intent that has NOT been submitted — what a
+ * navigation away from the page would lose. A mutation already acknowledged
+ * (or settled) is owned by the target actor and completes regardless of what
+ * the page does, so it never counts; a still-in-flight submission counts
+ * (leaving mid-save still asks, per the guard contract); a draft edited again
+ * after its submission counts until that newer intent is itself submitted. */
+export function unsavedIntent(snapshot: UnitTransactionSnapshot): boolean {
+  const { draft, submitted, generation } = snapshot.context;
+  // A pure-removal pin whose submission was refused is durable conflict state
+  // in the owning actor — it survives a page swap, so leaving asks nothing.
+  if (snapshot.matches({ mutation: 'unconfirmed' }) && draft === undefined) return false;
+  const unsubmittedDraft = draft !== undefined && submitted?.generation !== generation;
+  const pinnedIntent = snapshot.matches({ base: 'pinned' })
+    && !snapshot.matches({ mutation: 'acknowledged' });
+  return unsubmittedDraft || pinnedIntent;
+}
+
 /** Whether the last submitted mutation is natively confirmed. */
 export function committed(snapshot: UnitTransactionSnapshot): boolean {
   return snapshot.matches({ mutation: 'acknowledged' }) || snapshot.matches({ mutation: 'settled' });

@@ -305,6 +305,15 @@ test('390 × 844: section menu, list → detail → back, long identities and no
     await expectNoHorizontalOverflow(page);
     await expectAccessible(page, settingsScope);
   }
+  // Workspace scope must satisfy the same side-escape check at 390px: the
+  // scope toolbar (segment + workspace chooser + reload) wraps inside the
+  // panel and never slides under the primary nav rail.
+  await openWorkspaceSettings(page, 'Workspace A');
+  for (const name of pages.filter(name => name !== 'General')) {
+    await openSettingsPage(page, name);
+    await expectNoHorizontalOverflow(page);
+  }
+  await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await expect(settings.getByRole('button', { name: `${longProvider} →`, exact: true })).toBeVisible();
   await expectStableScreenshot(page, 'settings-mobile-dark.png');

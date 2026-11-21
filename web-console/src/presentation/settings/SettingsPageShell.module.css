@@ -56,7 +56,9 @@
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  min-width: 0;
+  /* Below this width the toolbar wraps to its own line under the title
+     instead of cramming against it. */
+  min-width: min(260px, 100%);
 }
 
 .pageBody {
@@ -149,6 +151,19 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* File paths quoted in group descriptions read as a mono chip and break
+   cleanly at narrow widths instead of hard-wrapping mid-word. */
+.groupDescription code {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .groupRows {
   display: flex;
   flex-direction: column;
@@ -221,6 +236,7 @@
   font-size: 13px;
   line-height: 20px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .scopeSegment button[aria-pressed='true'] {
@@ -267,6 +283,14 @@
   gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
+}
+
+/* Narrow pages: flatten the bar into its host's flex flow so the segment,
+   chooser and refresh button wrap as one set — the chooser grows to share
+   the second line with the refresh button instead of leaving it orphaned. */
+@media (max-width: 640px) {
+  .scopeBar { display: contents; }
+  .scopeChooser { flex: 1; min-width: 120px; }
 }
 
 /* A page shell carrying the Settings field vocabulary (.settings/.page) keeps

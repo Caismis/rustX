@@ -7,11 +7,12 @@ import clsx from 'clsx'
 import css from './Button.module.css'
 
 /** Visual variant, each backed by its --dsw-alias-button-* token family. */
-export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
+export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar' | 'danger'
 
 /**
  * Render a button.
- * @param props.variant - visual family (default 'ghost').
+ * @param props.variant - visual family (default 'ghost'). 'danger' is a
+ * destructive action (e.g. confirming a deletion).
  * @param props.size - 'md' 36px capsule (figma Button) or 'sm' 28px compact.
  * @param props.icon - optional leading 16px icon node.
  * @returns the button element; native button attributes pass through.

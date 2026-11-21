@@ -67,11 +67,12 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
     const openMcp = async () => {
       if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
-      // Leaving a dirty surface asks first. The crossing lands here because
-      // the just-saved model detail can still hold a live transaction; that
-      // intent is already committed, so confirming the leave discards it.
+      // A save whose response was deliberately lost above leaves genuinely
+      // uncertain intent — the guard may ask, and discarding abandons only the
+      // local record (the write already landed server-side). A surface with no
+      // pending uncertainty must NOT ask on this crossing.
       await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'MCP servers',exact:true}).click();
-      if (await leave.waitFor({ timeout: 3000 }).then(() => true).catch(() => false)) await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
+      if (await leave.isVisible()) await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
       await expect(mcp).toBeVisible();
       await expect(mcp).toHaveAttribute('data-lifecycle', 'ready');
       const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });

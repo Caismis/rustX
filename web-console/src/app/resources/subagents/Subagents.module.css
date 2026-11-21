@@ -213,3 +213,6 @@
   .narrowDescription { display: block; margin-top: 4px; }
 }
 .notice { display:flex; flex-direction:column; gap:8px; }
+.noticeWarn { padding:10px 12px; border-left:2px solid var(--dsw-alias-state-warn-primary); border-radius:6px; background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent); }
+.noticeWarn p { margin:0; color:var(--dsw-alias-label-primary); }
+.noticeWarn button { align-self:flex-start; }

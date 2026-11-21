@@ -10,7 +10,7 @@ import { useNavigationGuard } from './guard';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
-import { awaitingCommitObservation, committed as unitCommitted, discardable, editingCompletion, requiresReview } from '../machines/unit-transaction';
+import { awaitingCommitObservation, committed as unitCommitted, discardable, editingCompletion, requiresReview, unsavedIntent } from '../machines/unit-transaction';
 import {
   revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
   type ShadowedDefinition,
@@ -57,6 +57,10 @@ export interface PageTransaction {
   readonly generation: number;
   /** Unit identities whose removal is staged but not yet submitted. */
   readonly stagedRemovals: ReadonlySet<string>;
+  /** True when the only pending change is a staged removal — the footer's
+   * Save switches to a danger treatment so committing a deletion reads
+   * differently from committing an edit. */
+  readonly removalOnly: boolean;
   readonly stageRemoval: (identity: string) => void;
   readonly unstageRemoval: (identity: string) => void;
   readonly savePage: () => void;
@@ -66,8 +70,8 @@ export interface PageTransaction {
   readonly conflict?: { identity: string; adopt(): void; retry(): void };
   /** Internal: a `useUnitEditing` result registers its live handle. */
   readonly register: (identity: string, handle: PageUnitHandle) => () => void;
-  /** Internal: a unit reports its draft flag so the page stays dirty even
-   * when the draft predates this mount (restored intent). */
+  /** Internal: a unit reports its unsaved-intent flag so the page stays dirty
+   * even when the intent predates this mount (restored intent). */
   readonly reportDraft: (identity: string, hasDraft: boolean) => void;
   /** A page-local draft that has no unit of its own (client preferences,
    * an unsaved import). `save`/`cancel` run inside the page batch.
@@ -127,9 +131,13 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const onAllSavedRef = useRef(onAllSaved);
   onAllSavedRef.current = onAllSaved;
 
-  // Each unit reports its own draft flag: registered refs alone leave the
-  // guard blind to a draft that was restored while its editor was unmounted,
-  // because registration produces no actor event to re-run a selector on.
+  // Each unit reports its own unsaved-intent flag: registered refs alone
+  // leave the guard blind to a draft that was restored while its editor was
+  // unmounted, because registration produces no actor event to re-run a
+  // selector on. The flag is `unsavedIntent`, not a bare draft flag: a draft
+  // already submitted (in-flight or awaiting its settling observation) is
+  // owned by the app-level actor and survives page unmount, so leaving must
+  // not ask about it — that was the post-Save guard race.
   const [draftFlags, setDraftFlags] = useState<ReadonlyMap<string, boolean>>(new Map());
   const reportDraft = useCallback((identity: string, hasDraft: boolean) => {
     setDraftFlags(current => current.get(identity) === hasDraft ? current : new Map(current).set(identity, hasDraft));
@@ -244,9 +252,15 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
 
   // Leaving a dirty page — another settings page, another scope, a detail
   // back gesture, a primary-nav switch or closing the window — asks first.
+  // A queued item counts until its own submission is sent: the head is safe
+  // once it is pending/settled (on the wire); every item behind it, and a
+  // refused head, is still unsubmitted intent the unmount would drop. Draft
+  // units report their own flag; only staged-removal units (no draft) need
+  // this queue accounting.
+  const unsubmitted = queue.filter((_, index) => index > 0 || headStatus === 'waiting').length;
   const token = useRef<object | undefined>(undefined);
   if (!token.current) token.current = {};
-  useEffect(() => { guard.reportSurface(token.current!, dirty || saving, cancelRef.current); }, [guard, dirty, saving]);
+  useEffect(() => { guard.reportSurface(token.current!, dirty || unsubmitted > 0, cancelRef.current); }, [guard, dirty, unsubmitted]);
   useEffect(() => () => guard.reportSurface(token.current!, false), [guard]);
 
   useEffect(() => {
@@ -315,6 +329,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
 
   const transaction: PageTransaction = {
     dirty, saving, generation, stagedRemovals, stageRemoval, unstageRemoval,
+    removalOnly: stagedRemovals.size > 0 && !anyDraft && !localDirty,
     savePage, cancelPage, conflict, register, reportDraft, setLocal: setLocalEntry,
     footerLeading, setFooterLeading,
   };
@@ -330,7 +345,7 @@ export function PageTransactionFooter({ leading, status }: { leading?: ReactNode
   if (!page) return null;
   const conflict = page.conflict;
   const footerLeading = leading || page.footerLeading ? <>{leading}{page.footerLeading}</> : undefined;
-  return <SettingsPageFooter dirty={page.dirty} saving={page.saving} leading={footerLeading}
+  return <SettingsPageFooter dirty={page.dirty} saving={page.saving} removalOnly={page.removalOnly} leading={footerLeading}
     status={conflict ? <span role="alert">
       {tx('settings:unsaved.save-conflict')}
       <Button variant="ghost" size="sm" onClick={conflict.adopt}>{tx('settings:unsaved.adopt-latest')}</Button>
@@ -653,8 +668,9 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // callbacks: anything broader would unregister/re-register on every render.
   const register = page?.register;
   const reportDraft = page?.reportDraft;
+  const unsaved = !!snapshot && unsavedIntent(snapshot);
   useLayoutEffect(() => register?.(identity, handle.current), [register, identity]);
-  useEffect(() => { reportDraft?.(identity, result.draft); }, [reportDraft, identity, result.draft]);
+  useEffect(() => { reportDraft?.(identity, unsaved); }, [reportDraft, identity, unsaved]);
   return unit;
 }
 

@@ -203,6 +203,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1'); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
+    await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-dark.png') });

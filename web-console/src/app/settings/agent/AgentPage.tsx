@@ -24,7 +24,7 @@ export function AgentPage({ config, globalGuidance, closed }: {
   return <SettingsPageShell className={`${settings.settings} ${settings.page}`} title={tx('settings:agent-page.agent')}
     toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={<PageTransactionFooter />}>
     {globalGuidance && <SettingsGroup title={instructions} description={<code>{globalGuidance.path}</code>}>
-      <UnitForm<string> title={instructions}
+      <UnitForm<string> title={instructions} legendHidden
         authored={globalGuidance.authored ?? undefined} blank="" revision={globalGuidance.revision} removable={false}
         mutation={value => ({ kind: 'global_guidance', document: value ?? '' })}>
         {(value, change) => <div className={css.instructions}>

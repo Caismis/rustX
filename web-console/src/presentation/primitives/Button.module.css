@@ -45,6 +45,17 @@
   background: var(--dsw-alias-button-primary-hover);
 }
 
+/* Destructive commit action (e.g. Save applying a staged removal). */
+.danger {
+  background: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.danger:hover:not(:disabled) {
+  background: var(--dsw-alias-state-error-primary);
+  filter: brightness(1.1);
+}
+
 .ghost:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -53,10 +64,11 @@
   background: var(--dsw-alias-interactive-bg-active);
 }
 
-/* Dialog Cancel (figma 451:18655): bordered capsule on transparent fill. */
+/* Dialog Cancel (figma 451:18655): bordered capsule on a light fill so it
+   stays legible next to the primary action in light theme. */
 .outline {
   border: 0.5px solid var(--dsw-alias-border-l2);
-  background: transparent;
+  background: var(--dsw-alias-bg-layer-1);
 }
 
 .outline:hover:not(:disabled) {

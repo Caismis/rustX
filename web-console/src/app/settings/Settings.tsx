@@ -221,7 +221,18 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   </>;
 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
-  const pageTitle = tx(`settings:page.${current}`);
+  // Fallback/error states render the same shell each page uses, with the same
+  // title — a retry must not swap "Models" for "Model Settings" or reflow
+  // the header.
+  const loadedTitles: Record<SettingsPage, string> = {
+    general: tx('settings:general-page.general'),
+    models: tx('settings:models-page.models'),
+    agent: tx('settings:agent-page.agent'),
+    tools: tx('settings:tools-page.tools-amp-permissions'),
+    extensions: tx('settings:extensions-page.extensions'),
+    advanced: tx('settings:advanced-page.advanced'),
+  };
+  const pageTitle = loadedTitles[current] ?? tx(`settings:page.${current}`);
   return <SettingsFeedback active={visible}><SettingsPanel pages={pages} activeId={current} visible={visible}
     onSelect={id => guard.guard(() => navigation.send({ type: 'SELECT', page: id as SettingsPage }))}>
     <section className={css.surface} data-settings-section={current} data-lifecycle={lifecycle} aria-busy={busy}>
@@ -229,10 +240,10 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
         {current === 'general'
           ? <PageTransactionProvider><GeneralPage theme={theme} setTheme={setTheme} /></PageTransactionProvider>
           : connectionFocused
-            ? <SettingsPageShell title={pageTitle} breadcrumb={<Button variant="ghost" size="sm" onClick={() => onFocus(undefined)}>← {tx('settings:settings.back-to-advanced')}</Button>} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
+            ? <SettingsPageShell className={`${css.settings} ${css.page}`} title={pageTitle} breadcrumb={<Button variant="ghost" size="sm" onClick={() => onFocus(undefined)}>← {tx('settings:settings.back-to-advanced')}</Button>} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
                 <ConnectionSettings connection={connection} client={client} />
               </SettingsPageShell>
-            : !source ? <SettingsPageShell title={pageTitle} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
+            : !source ? <SettingsPageShell className={`${css.settings} ${css.page}`} title={pageTitle} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
                 {/* Connection is client-owned global configuration: it never
                     waits for a source read, unlike every unit editor. */}
                 {connectionReachable && <SettingsGroup title={tx('settings:connection-settings.connection')}>

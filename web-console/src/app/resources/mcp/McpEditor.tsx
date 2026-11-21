@@ -207,12 +207,12 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
       () => commitJsonRef.current());
   }, [page, localDirty, focus.name]);
   return <>
-    <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
-      <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
+    <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div>{!removalStaged && <div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
+      <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div>}</div>
     <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => event.preventDefault()}>
       {removalStaged
-        ? <div className={css.notice}><p role="status">{tx('settings:mcp.remove-staged',{p0:identityTitle})}</p>
-          <Button type="button" onClick={() => page?.unstageRemoval(unit.identity)}>{tx('settings:unsaved.undo-removal')}</Button></div>
+        ? <div className={`${css.notice} ${css.noticeWarn}`}><p role="status">{tx('settings:mcp.remove-staged',{p0:identityTitle})}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => page?.unstageRemoval(unit.identity)}>{tx('settings:unsaved.undo-removal')}</Button></div>
         : <fieldset disabled={blocked} className={css.formBody}>
         <DefinitionNotice unit={unit}/>
         <div className={css.sectionHead}><h4>{tx('settings:mcp.connection')}</h4><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
@@ -233,6 +233,6 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>}
     </form>
-    {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
+    {focus.name && !removalStaged && <Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
   </>;
 }
