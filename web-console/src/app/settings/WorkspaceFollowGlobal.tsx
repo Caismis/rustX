@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { SourceMutation, SourceScope } from '../../../../protocol/app-server/v80';
 import { useTranslation } from '../../locale/react';
+import { Button } from '../../presentation/primitives/Button';
 import { Switch } from '../../presentation/primitives/Switch';
 import { SettingsGroup, SettingsRow } from '../../presentation/settings/SettingsPageShell';
 import { usePageTransaction } from './forms/bridge';
@@ -100,6 +101,14 @@ export function WorkspaceFollowGlobal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A conflicting save leaves the workspace overrides in place: the switch
+  // falls back to the honest customized view, and the row surfaces the same
+  // adopt/retry recovery the page footer would show.
+  const conflict = page?.conflict;
+  useEffect(() => {
+    if (conflict) setCustomized(true);
+  }, [conflict]);
+
   if (scope !== 'workspace') return <>{children}</>;
 
   const following = !customized;
@@ -138,6 +147,17 @@ export function WorkspaceFollowGlobal({
             />
           }
         />
+        {conflict && (
+          <SettingsRow
+            label={tx('settings:unsaved.save-conflict')}
+            control={
+              <>
+                <Button variant="ghost" size="sm" onClick={conflict.adopt}>{tx('settings:unsaved.adopt-latest')}</Button>
+                <Button variant="ghost" size="sm" onClick={conflict.retry}>{tx('settings:bridge.use-reviewed-revision')}</Button>
+              </>
+            }
+          />
+        )}
       </SettingsGroup>
       {customized ? children : null}
     </>
