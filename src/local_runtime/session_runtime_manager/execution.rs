@@ -3591,7 +3591,10 @@ mod tests {
                 });
             },
         );
-        let host = AppServerHost::new(manager, Default::default());
+        let host = AppServerHost::new(
+            manager,
+            crate::local_runtime::app_server_policy::AppServerPolicy::default(),
+        );
         let deadline = Instant::now() + std::time::Duration::from_secs(2);
         host.begin_drain_by(deadline);
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), seen)
@@ -4180,6 +4183,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // Keep the admitted wire sequence and competing writer order together.
     async fn cancelled_preparation_waits_for_the_competing_writer_before_abort() {
         let (registry, session, endpoint, mut client, _workspace, _dir) =
             admitted_endpoint(BTreeSet::from([
