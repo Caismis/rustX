@@ -259,6 +259,45 @@ impl SessionRuntimeManager {
         resident.and_then(|resident| resident.shutdown_runtime())
     }
 
+    fn refresh_reconciled_catalog(
+        &self,
+        session: &SessionId,
+        incarnation: super::RuntimeIncarnationId,
+    ) {
+        let resident = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            let Some(id) = state.by_session.get(session) else {
+                return;
+            };
+            let Some(Entry::Loaded(resident)) = state.entries.get(id) else {
+                return;
+            };
+            if resident.identity.incarnation != incarnation || state.fenced(id) {
+                return;
+            }
+            Arc::clone(resident)
+        };
+        let retained = {
+            let composition = resident.composition.lock().expect("composition mutex");
+            let Some(composition) = composition.as_ref() else {
+                return;
+            };
+            let runtime = composition.runtime();
+            let Ok(admission) = runtime.lifecycle().try_enter_preparation() else {
+                return;
+            };
+            // Drop the native handle before releasing the admission, including
+            // when the spawned future terminates before its first poll.
+            (runtime.clone(), admission.into_resident_resource())
+        };
+        if retained.0.needs_mcp_refresh() {
+            tokio::runtime::Handle::current().spawn(async move {
+                let (runtime, _admission) = &retained;
+                let _ = runtime.refresh_runtime_catalogs().await;
+            });
+        }
+    }
+
     /// The resident runtime together with the resource preparation of the
     /// same composition, read under one composition lock.
     /// The resident allocation a preparation runs against, with the
@@ -519,14 +558,14 @@ impl SessionRuntimeManager {
                         .workspace()
                         .is_none_or(|directory| directory == binding.input.cwd)
                 })
-                .map(|(session, binding)| (session.clone(), binding.clone()))
+                .map(|(session, _)| session.clone())
                 .collect::<Vec<_>>();
             let recoveries = sessions
                 .into_iter()
-                .filter_map(|(session, _)| {
+                .filter_map(|session| {
                     owner
-                        .configuration_runtime(&session)
-                        .filter(ConversationRuntime::needs_mcp_refresh)
+                        .resident_incarnation(&session)
+                        .map(|incarnation| (session, incarnation))
                 })
                 .collect::<Vec<_>>();
             owner.applications.notify(&application);
@@ -544,10 +583,8 @@ impl SessionRuntimeManager {
                 application.record_bound_reconciliation(&target, directory, sessions);
                 owner.applications.notify(&application);
             }
-            for runtime in recoveries {
-                tokio::runtime::Handle::current().spawn(async move {
-                    let _ = runtime.refresh_runtime_catalogs().await;
-                });
+            for (session, incarnation) in recoveries {
+                owner.refresh_reconciled_catalog(&session, incarnation);
             }
             Ok(())
         })

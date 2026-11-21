@@ -403,56 +403,7 @@ impl Commands {
             }
         }
         drop(next);
-        // The correlated receipt query: the physical outcome is polled
-        // — never waited on inside a single exchange — under one bounded
-        // budget. The entry's cancellation abandons the wait honestly.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if entry.cancellation.is_cancelled() {
-                return Err(domain(ErrorData::ConnectionClosed));
-            }
-            match exchange(
-                &entry.endpoint,
-                ProcessRequest::InputReceipt {
-                    key: entry.key.clone(),
-                    sequence: DecimalU64::new(sequence),
-                },
-            )
-            .await
-            {
-                Exchange::Reply(ProcessReply::InputReceipt {
-                    status: InputOutcome::Applied,
-                    ..
-                }) => return Ok(()),
-                Exchange::Reply(ProcessReply::InputReceipt {
-                    status: InputOutcome::Rejected,
-                    ..
-                }) => return Err(domain(ErrorData::InvalidParams)),
-                Exchange::Reply(
-                    ProcessReply::InputReceipt {
-                        status: InputOutcome::Unknown,
-                        ..
-                    }
-                    | ProcessReply::Unknown { .. },
-                ) => {
-                    return Err(domain(ErrorData::OutcomeUnknown));
-                }
-                Exchange::Reply(ProcessReply::InputReceipt {
-                    status: InputOutcome::Pending,
-                    ..
-                })
-                | Exchange::Busy => {}
-                Exchange::Reply(ProcessReply::Conflict { .. }) => {
-                    return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
-                }
-                Exchange::Reply(_) => return Err(domain(ErrorData::OperationFailed)),
-                Exchange::Failed(error) => return Err(error),
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(domain(ErrorData::OutcomeUnknown));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        collect_input(entry, sequence).await
     }
     pub async fn write(&self, params: WriteParams) -> Result<(), RpcError> {
         if params
@@ -511,6 +462,68 @@ impl Commands {
         Ok(())
     }
 }
+
+async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
+    #[cfg(test)]
+    tests::pause_input_receipt(&entry.process_id).await;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let cancelled = entry.cancellation.is_cancelled();
+        let abandon_pending = cancelled || std::time::Instant::now() >= deadline;
+        match exchange(
+            &entry.endpoint,
+            ProcessRequest::InputReceipt {
+                key: entry.key.clone(),
+                sequence: sequence.into(),
+                abandon_pending,
+            },
+        )
+        .await
+        {
+            Exchange::Reply(ProcessReply::InputReceipt {
+                status: InputOutcome::Applied,
+                ..
+            }) => {
+                return Ok(());
+            }
+            Exchange::Reply(ProcessReply::InputReceipt {
+                status: InputOutcome::Rejected,
+                ..
+            }) => {
+                return Err(domain(ErrorData::InvalidParams));
+            }
+            Exchange::Reply(
+                ProcessReply::InputReceipt {
+                    status: InputOutcome::Unknown,
+                    ..
+                }
+                | ProcessReply::Unknown { .. },
+            ) => return Err(domain(ErrorData::OutcomeUnknown)),
+            Exchange::Reply(ProcessReply::InputReceipt {
+                status: InputOutcome::Pending,
+                ..
+            })
+            | Exchange::Busy => {}
+            Exchange::Reply(ProcessReply::Conflict { .. }) => {
+                return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
+            }
+            Exchange::Reply(_) => return Err(domain(ErrorData::OperationFailed)),
+            Exchange::Failed(error) => return Err(error),
+        }
+        if abandon_pending {
+            return Err(domain(if cancelled {
+                ErrorData::ConnectionClosed
+            } else {
+                ErrorData::OutcomeUnknown
+            }));
+        }
+        tokio::select! {
+            () = entry.cancellation.cancelled() => {}
+            () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+    }
+}
+
 fn validate(params: &ExecParams) -> Result<(), RpcError> {
     if params.command.is_empty()
         || params.command.len() > 256
@@ -585,7 +598,15 @@ async fn exchange_until(
     deadline: std::time::Instant,
 ) -> Exchange {
     let endpoint = endpoint.clone();
-    match tokio::task::spawn_blocking(move || endpoint.process_until(&request, deadline)).await {
+    let result = tokio::task::spawn_blocking(move || match request {
+        ProcessRequest::InputReceipt {
+            abandon_pending: true,
+            ..
+        } => endpoint.finish_input_receipt_by(&request, deadline),
+        _ => endpoint.process_until(&request, deadline),
+    })
+    .await;
+    match result {
         Ok(Ok(reply)) => Exchange::Reply(reply),
         Ok(Err(io)) if io.kind() == std::io::ErrorKind::WouldBlock => Exchange::Busy,
         Ok(Err(io)) => Exchange::Failed(match io.kind() {
@@ -1345,3 +1366,5 @@ fn result_from(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::hold_input_receipt;

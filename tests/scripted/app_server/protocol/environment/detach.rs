@@ -853,6 +853,66 @@ fn detached_cancellation(
     )
 }
 
+pub(crate) async fn queued_workspace_release_hands_off_to_binding_revocation() {
+    use crate::runtime::identity::AttemptId;
+    use crate::tools::workspace::Workspace;
+    use crate::workspace_changes::{ChangeRecording, ChangesStore};
+    use rustx_execution_protocol::MAX_DATA_RECORDS_PER_CONNECTION;
+    use rustx_execution_protocol::changes::{ChangeReply, ChangeRequest};
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control,
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = tokio::spawn(async move {
+        let begin = receive::<ClientRequest>(&mut server_data).await.unwrap();
+        assert!(matches!(
+            begin,
+            ClientRequest::WorkspaceChanges(ChangeRequest::Begin { .. })
+        ));
+        send(&mut client_data, &begin).await.unwrap();
+        let reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+        assert_eq!(reply, ClientReply::WorkspaceChanges(ChangeReply::Accepted));
+        send(&mut server_data, &reply).await.unwrap();
+        assert!(
+            receive::<ClientRequest>(&mut server_data).await.is_err(),
+            "Release crossed after Revoke"
+        );
+    });
+    let (revoked, deliver_revoked, control) = park_revoked_receipt(control);
+    let session = &fixture.sessions[0].id;
+    let mut workspace = Workspace::new(endpoint.workspace()).unwrap();
+    workspace.bind_execution_scope(Some(fixture.manager.execution_scope(session)));
+    let recording = ChangeRecording::start(
+        AttemptId::new("workspace-release-under-revoke"),
+        &workspace,
+        Arc::new(ChangesStore::default()),
+        crate::runtime::CancellationSignal::new(),
+    );
+    let released = bounded(recording.observe_release_for_test()).await;
+    let writer = endpoint.writer_for_test().acquire_owned().await.unwrap();
+    drop(recording);
+    wait_for_data_capacity(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION - 1).await;
+    let host = fixture.host.clone();
+    let drain = tokio::spawn(async move { host.drain().await });
+    bounded(revoked).await.unwrap();
+    drop(writer);
+    bounded(released).await.unwrap();
+    assert!(
+        !drain.is_finished(),
+        "the Client's Revoke receipt is still parked"
+    );
+    deliver_revoked.send(()).unwrap();
+    assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
+}
+
 pub(crate) async fn cancelled_preparation_hands_off_to_binding_revocation() {
     use rustx_execution_protocol::MAX_DATA_RECORDS_PER_CONNECTION;
 

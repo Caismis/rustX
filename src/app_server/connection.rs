@@ -982,6 +982,8 @@ impl AppServerConnection {
                 | Method::SessionApplicationValueRead { .. }
                 | Method::SessionConfiguration { .. }
                 | Method::ConfigurationReconcile { .. }
+                | Method::CommandWrite(..)
+                | Method::CommandResize { .. }
         ) {
             let connection = self.clone();
             tokio::spawn(async move {

@@ -423,6 +423,7 @@ mod tests {
         let receipt = ProcessRequest::InputReceipt {
             key: key.clone(),
             sequence: DecimalU64::new(2),
+            abandon_pending: false,
         };
         let applied = ProcessReply::InputReceipt {
             key: key.clone(),

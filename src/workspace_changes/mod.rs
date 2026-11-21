@@ -99,6 +99,8 @@ impl ChangesStore {
 struct ClientRecord {
     scope: SessionExecutionScope,
     key: ProcessOperationKey,
+    #[cfg(test)]
+    release_observed: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl ClientRecord {
@@ -146,6 +148,8 @@ impl Drop for ClientRecord {
         };
         let scope = self.scope.clone();
         let key = self.key.clone();
+        #[cfg(test)]
+        let release_observed = self.release_observed.get_mut().unwrap().take();
         handle.spawn(async move {
             let endpoint = scope.endpoint().ok().filter(|endpoint| {
                 endpoint
@@ -161,7 +165,11 @@ impl Drop for ClientRecord {
             if !matches!(reply, Ok(ChangeReply::Accepted))
                 && let Some(endpoint) = endpoint
             {
-                endpoint.cut_pair();
+                endpoint.cut_pair_if_open();
+            }
+            #[cfg(test)]
+            if let Some(observer) = release_observed {
+                let _ = observer.send(());
             }
         });
     }
@@ -207,7 +215,12 @@ impl ChangeRecording {
                     .ok()?
                     .process_key(OperationId::new())
                     .ok()?;
-                let record = Arc::new(ClientRecord { scope, key });
+                let record = Arc::new(ClientRecord {
+                    scope,
+                    key,
+                    #[cfg(test)]
+                    release_observed: Mutex::new(None),
+                });
                 (record
                     .send(
                         ChangeRequest::Begin {
@@ -242,6 +255,14 @@ impl ChangeRecording {
             })
             .await
             .as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn observe_release_for_test(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (observer, released) = tokio::sync::oneshot::channel();
+        let source = self.source().await.expect("Client accepted Begin");
+        *source.release_observed.lock().unwrap() = Some(observer);
+        released
     }
 
     #[cfg(test)]

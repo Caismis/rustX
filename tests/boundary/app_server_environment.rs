@@ -188,6 +188,22 @@ async fn cancelled_preparation_hands_off_to_binding_revocation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_workspace_release_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::queued_workspace_release_hands_off_to_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn released_output_preserves_the_unclaimed_input_receipt() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::released_output_preserves_the_unclaimed_input_receipt()).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconcile_waiting_for_client_does_not_retain_the_unloaded_writer() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::reconcile_waiting_for_client_does_not_retain_the_unloaded_writer()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_mutation_cancel_hands_off_to_binding_revocation() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::unknown_mutation_cancel_hands_off_to_binding_revocation()).await;
 }

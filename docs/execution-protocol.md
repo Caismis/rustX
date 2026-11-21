@@ -1104,8 +1104,14 @@ envelope.
   while a minimal tombstone keeps replay honest. Input controls are
   admitted as `InputAccepted` and their physical outcome — `Pending`,
   `Applied`, `Failed`, `Rejected`, or `Unknown` — is correlated by
-  `InputReceipt`; a stale sequence is never reapplied and an
-  ambiguous write is never retried. The Client holds at most four
+  `InputReceipt`. A pending poll keeps the receipt and a terminal poll
+  takes it. The Server can explicitly abandon a pending receipt without
+  withdrawing its already-admitted physical input. At most eight receipts
+  may be outstanding per operation. The Client refuses admission before
+  assigning the next sequence when that capacity is full. `ReleaseOutput`
+  frees the journal while any unclaimed input receipts remain with the
+  same operation. A stale sequence is never reapplied and an ambiguous
+  write is never retried. The Client holds at most four
   concurrent operations per Session plus a bounded tombstone budget.
   Native Agent Bash uses a separate `RegisterAgentBash` message and
   negotiates `AgentBash` on the same authenticated binding. Ordinary

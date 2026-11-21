@@ -2,8 +2,8 @@
 //!
 //! One binding owns a finite record map keyed by `OperationId`: a record
 //! is `Full` (complete spec, descended cwd descriptor, ordered output
-//! journal, worker wiring) or `Minimal` (fingerprint + settled snapshot
-//! only, after an exact `ReleaseOutput`). `Full` records — including
+//! journal, worker wiring) or `Minimal` (fingerprint, settled snapshot and
+//! independently retained results after `ReleaseOutput`). `Full` records — including
 //! settled-but-unreleased ones — occupy the per-Session slots.
 //!
 //! Every request is gated on the bound [`Admission`]: a key naming a
@@ -174,11 +174,8 @@ struct Operation {
     /// the worker so ordered input admitted while `Registered`/`Starting`
     /// queues honestly instead of being refused for a missing sink.
     input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
-    /// The bounded physical receipts for admitted input controls —
-    /// `Pending` on admission, `Applied`/`Failed` once the worker's
-    /// physical operation completes. Bounded like the input queue: the
-    /// oldest receipt is evicted past `INPUT_QUEUE_DEPTH`, and an
-    /// evicted sequence queries `Unknown` — never a guess.
+    /// Each admitted input owns a slot until its terminal receipt is
+    /// collected or the observer explicitly abandons it.
     receipts: BTreeMap<u64, InputOutcome>,
     #[cfg(test)]
     pipe_close_received: Option<std::sync::mpsc::Sender<()>>,
@@ -188,9 +185,9 @@ struct Operation {
     bash_result: Option<BashCaptureResult>,
 }
 
-/// A record after an exact `ReleaseOutput` consumed the journal: the
-/// complete immutable fingerprint and the settled snapshot — nothing
-/// else. A `None` fingerprint is the cancelled-before-register
+/// A record after an exact `ReleaseOutput` consumed the journal, retaining
+/// the fingerprint, settled snapshot and any independently owned results.
+/// A `None` fingerprint is the cancelled-before-register
 /// tombstone a control-lane cancel plants for an owned key whose
 /// `Register` has not landed yet: a later `Register` attaches the
 /// `Cancelled` snapshot and can never spawn.
@@ -198,6 +195,7 @@ struct Minimal {
     fingerprint: Option<SpecFingerprint>,
     snapshot: SettledSnapshot,
     bash_file: Option<(String, Arc<CaptureFile>)>,
+    receipts: BTreeMap<u64, InputOutcome>,
 }
 
 enum Record {
@@ -401,9 +399,11 @@ impl Operations {
                         // never pins a capacity slot waiting for a
                         // `Start` or `ReleaseOutput` that cannot come.
                         if matches!(operation.state, OperationState::Registered) {
+                            resolve_pending(operation);
                             let minimal = Minimal {
                                 fingerprint: Some(operation.fingerprint),
                                 bash_file: registered_capture(operation),
+                                receipts: std::mem::take(&mut operation.receipts),
                                 snapshot: SettledSnapshot {
                                     disposition: SettledDisposition::Cancelled,
                                     exit_code: None,
@@ -442,6 +442,7 @@ impl Operations {
                     Record::Minimal(Minimal {
                         fingerprint: None,
                         bash_file: None,
+                        receipts: BTreeMap::new(),
                         snapshot: SettledSnapshot {
                             disposition: SettledDisposition::Cancelled,
                             exit_code: None,
@@ -507,7 +508,11 @@ impl Operations {
                 sequence,
                 size,
             } => self.resize(key, sequence, size),
-            ProcessRequest::InputReceipt { key, sequence } => self.input_receipt(key, sequence),
+            ProcessRequest::InputReceipt {
+                key,
+                sequence,
+                abandon_pending,
+            } => self.input_receipt(key, sequence, abandon_pending),
             ProcessRequest::ReleaseOutput {
                 key,
                 final_sequence,
@@ -902,7 +907,8 @@ impl Operations {
         if op.key != key || sequence.get() != op.input_sequence {
             return ProcessReply::Conflict { key };
         }
-        if matches!(op.state, OperationState::Settled(_)) {
+        if matches!(op.state, OperationState::Settled(_)) || op.receipts.len() >= INPUT_QUEUE_DEPTH
+        {
             return ProcessReply::Conflict { key };
         }
         let Some(tx) = &op.input else {
@@ -918,13 +924,6 @@ impl Operations {
             return ProcessReply::Conflict { key };
         }
         op.input_sequence += 1;
-        if op.receipts.len() >= INPUT_QUEUE_DEPTH {
-            // Evict the oldest tracked receipt — an evicted sequence
-            // later queries `Unknown`, never a fabricated outcome.
-            if let Some(oldest) = op.receipts.keys().next().copied() {
-                op.receipts.remove(&oldest);
-            }
-        }
         op.receipts.insert(sequence.get(), InputOutcome::Pending);
         ProcessReply::InputAccepted {
             key,
@@ -932,26 +931,34 @@ impl Operations {
         }
     }
 
-    /// The physical receipt of one admitted input sequence.
-    fn input_receipt(&self, key: ProcessOperationKey, sequence: DecimalU64) -> ProcessReply {
+    /// Claim the physical receipt. Pending polling never consumes a slot,
+    /// and abandoning a receipt leaves the already-admitted input in order.
+    fn input_receipt(
+        &self,
+        key: ProcessOperationKey,
+        sequence: DecimalU64,
+        abandon_pending: bool,
+    ) -> ProcessReply {
         if !self.own_key(&key) {
             return ProcessReply::Unknown { key };
         }
-        let inner = self.inner.lock().expect("operation registry");
-        let Some(Record::Full(op)) = inner.records.get(&key.operation) else {
-            return ProcessReply::Unknown { key };
+        let mut inner = self.inner.lock().expect("operation registry");
+        let receipts = match inner.records.get_mut(&key.operation) {
+            Some(Record::Full(op)) if op.key == key => &mut op.receipts,
+            Some(Record::Minimal(op)) => &mut op.receipts,
+            _ => return ProcessReply::Unknown { key },
         };
-        if op.key != key {
-            return ProcessReply::Unknown { key };
+        let status = receipts
+            .get(&sequence.get())
+            .copied()
+            .unwrap_or(InputOutcome::Unknown);
+        if status != InputOutcome::Pending || abandon_pending {
+            receipts.remove(&sequence.get());
         }
         ProcessReply::InputReceipt {
             key,
             sequence,
-            status: op
-                .receipts
-                .get(&sequence.get())
-                .copied()
-                .unwrap_or(InputOutcome::Unknown),
+            status,
         }
     }
 
@@ -1011,7 +1018,7 @@ impl Operations {
                 ProcessReply::Conflict { key }
             };
         }
-        let Some(Record::Full(op)) = inner.records.get(&key.operation) else {
+        let Some(Record::Full(op)) = inner.records.get_mut(&key.operation) else {
             return ProcessReply::Unknown { key };
         };
         if op.key != key {
@@ -1028,12 +1035,14 @@ impl Operations {
         }
         let fingerprint = op.fingerprint;
         let bash_file = registered_capture(op);
+        let receipts = std::mem::take(&mut op.receipts);
         inner.records.insert(
             key.operation,
             Record::Minimal(Minimal {
                 fingerprint: Some(fingerprint),
                 snapshot,
                 bash_file,
+                receipts,
             }),
         );
         ProcessReply::OutputReleased { key }
@@ -2235,7 +2244,7 @@ mod tests {
     }
 
     #[test]
-    fn pipe_close_receipt_stays_pending_until_the_real_stdin_connects() {
+    fn pipe_close_receipt_survives_capacity_pressure_before_physical_eof() {
         assert!(
             supervisor_staged(),
             "run test-support/prepare_native_tests.py"
@@ -2266,16 +2275,39 @@ mod tests {
             .build()
             .unwrap()
             .block_on(hold.await_entered());
-        let sequence = DecimalU64::new(1);
-        assert!(
-            matches!(ops.dispatch(ProcessRequest::CloseStdin { key: key.clone(), sequence }),
-            ProcessReply::InputAccepted { sequence: accepted, .. } if accepted == sequence)
-        );
+        let close = |sequence| {
+            ops.dispatch(ProcessRequest::CloseStdin {
+                key: key.clone(),
+                sequence: DecimalU64::new(sequence),
+            })
+        };
+        let accept = |sequence| {
+            assert_eq!(
+                close(sequence),
+                ProcessReply::InputAccepted {
+                    key: key.clone(),
+                    sequence: sequence.into()
+                }
+            );
+        };
+        accept(1);
         seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The worker has removed the first item from the channel, but has
+        // not applied it. The receipt bound must refuse the ninth input
+        // while the channel still has room.
+        let bound = u64::try_from(INPUT_QUEUE_DEPTH).unwrap();
+        for next in 2..=bound {
+            accept(next);
+        }
+        assert_eq!(
+            close(bound + 1),
+            ProcessReply::Conflict { key: key.clone() }
+        );
         let receipt = || {
             ops.dispatch(ProcessRequest::InputReceipt {
                 key: key.clone(),
-                sequence,
+                sequence: 1.into(),
+                abandon_pending: false,
             })
         };
         assert!(matches!(
@@ -2285,16 +2317,26 @@ mod tests {
                 ..
             }
         ));
-        hold.release();
-        let snapshot = await_settled(&ops, &key);
-        assert_eq!(snapshot.exit_code, Some(0));
         assert!(matches!(
-            receipt(),
+            ops.dispatch(ProcessRequest::InputReceipt {
+                key: key.clone(),
+                sequence: 2.into(),
+                abandon_pending: true,
+            }),
             ProcessReply::InputReceipt {
-                status: InputOutcome::Applied,
+                status: InputOutcome::Pending,
                 ..
             }
         ));
+        accept(bound + 1);
+        hold.release();
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.exit_code, Some(0));
+        for expected in [InputOutcome::Applied, InputOutcome::Unknown] {
+            assert!(
+                matches!(receipt(), ProcessReply::InputReceipt { status, .. } if status == expected)
+            );
+        }
         let (stdout, _) = drain(&ops, &key);
         assert_eq!(stdout, b"eof");
         ops.shutdown().unwrap();
@@ -2358,6 +2400,7 @@ mod tests {
             match ops.dispatch(ProcessRequest::InputReceipt {
                 key: key.clone(),
                 sequence: DecimalU64::new(2),
+                abandon_pending: false,
             }) {
                 ProcessReply::InputReceipt {
                     status: InputOutcome::Applied,

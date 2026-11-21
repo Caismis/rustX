@@ -6,6 +6,8 @@ mod app_server_conformance;
 mod authentication;
 mod compaction_ownership;
 mod configuration;
+#[cfg(feature = "mcp-fixture")]
+pub(crate) use configuration::reconcile_waiting_for_client_does_not_retain_the_unloaded_writer;
 mod inbound_model;
 #[cfg(unix)]
 mod job_wait_ownership;

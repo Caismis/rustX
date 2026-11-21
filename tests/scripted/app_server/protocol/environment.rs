@@ -1767,6 +1767,65 @@ pub(crate) async fn skill_large_resources_scenario() {
     connection.close();
 }
 
+pub(crate) async fn released_output_preserves_the_unclaimed_input_receipt() {
+    use crate::app_server::command::{ReleaseOutcome, hold_input_receipt, observe_release};
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let process_id = "output-release-before-input-receipt";
+    let mut params = parameters(&fixture, &["/bin/cat"]);
+    params.process_id = Some(process_id.into());
+    params.stream_stdin = true;
+    let (held, resume) = hold_input_receipt(process_id);
+    let release = observe_release(process_id);
+
+    let driver = connection.clone();
+    let mut command =
+        tokio::spawn(async move { call(&driver, 1, Method::CommandExec(params)).await });
+    admit_or_fail(&connection, process_id, &mut command).await;
+    let input = tokio::spawn({
+        let connection = connection.clone();
+        async move {
+            call(
+                &connection,
+                2,
+                Method::CommandWrite(WriteParams {
+                    process_id: process_id.into(),
+                    delta_base64: Some(
+                        base64::engine::general_purpose::STANDARD.encode(b"before EOF"),
+                    ),
+                    close_stdin: true,
+                }),
+            )
+            .await
+        }
+    });
+    bounded(held).await.unwrap();
+    let MethodResult::CommandExec { result } = bounded(command).await.unwrap() else {
+        panic!("command result");
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result.stdout_base64)
+            .unwrap(),
+        b"before EOF"
+    );
+    assert_eq!(release.outcomes().last(), Some(&ReleaseOutcome::Released));
+    assert!(!input.is_finished());
+    resume.send(()).unwrap();
+    assert!(matches!(
+        bounded(input).await.unwrap(),
+        MethodResult::EnvironmentAccepted {}
+    ));
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    assert!(bounded(execution.wait()).await.unwrap().success());
+}
+
 pub(crate) async fn partial_stdin_scenario() {
     let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);

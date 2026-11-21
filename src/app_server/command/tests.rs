@@ -1,5 +1,32 @@
 use super::*;
 
+type InputHold = (String, oneshot::Sender<()>, oneshot::Receiver<()>);
+static INPUT_HOLDS: Mutex<Vec<InputHold>> = Mutex::new(Vec::new());
+
+pub(crate) fn hold_input_receipt(id: &str) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+    let (entered, arrived) = oneshot::channel();
+    let (resume, released) = oneshot::channel();
+    INPUT_HOLDS
+        .lock()
+        .unwrap()
+        .push((id.to_owned(), entered, released));
+    (arrived, resume)
+}
+
+pub(super) async fn pause_input_receipt(id: &str) {
+    let hold = {
+        let mut holds = INPUT_HOLDS.lock().unwrap();
+        holds
+            .iter()
+            .position(|(process, _, _)| process == id)
+            .map(|index| holds.remove(index))
+    };
+    if let Some((_, entered, released)) = hold {
+        let _ = entered.send(());
+        let _ = released.await;
+    }
+}
+
 fn parameters() -> ExecParams {
     ExecParams {
         session_id: crate::local_runtime::session::SessionId::generate(),

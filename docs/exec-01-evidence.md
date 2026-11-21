@@ -12,6 +12,25 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `f4c0519b6`
+
+- Public configuration reconciliation parks before reading the authenticated
+  Client's Workspace document with an invalidated MCP catalog. Unload releases
+  the old Runtime, and Session deletion acquires the allocation while
+  reconciliation is still parked. Resuming it produces no further discovery
+  for the retired incarnation.
+- A real Client accepts WorkspaceChanges Begin. Dropping the Server record
+  queues Release behind the data writer. While the Client's actual Revoked
+  receipt is held, the queued cleanup finishes without sending Release or
+  closing the control lane. Delivering the original receipt completes drain.
+- A command writes bytes and EOF on real Client stdin. The input call is held
+  before polling the receipt until the command exits and the Client
+  acknowledges ReleaseOutput. The original input then reports Applied.
+  With physical EOF held, the Client admits eight controls, rejects the
+  ninth before assigning its sequence, and retains the first Pending
+  receipt. Abandoning another pending receipt permits the same ninth
+  sequence, and the first receipt returns Applied exactly once.
+
 ## Review follow-up on `f4545e8a2`
 
 - The physical Client publishes one write and returns `Written`. The

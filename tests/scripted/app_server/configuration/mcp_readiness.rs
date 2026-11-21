@@ -16,6 +16,77 @@ mod profile_controls;
 
 const TOOL: &str = "startup_echo";
 
+pub(crate) async fn reconcile_waiting_for_client_does_not_retain_the_unloaded_writer() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::protocol::{Method, MethodResult};
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+
+    let mcp = McpFixture::start().await;
+    let mut fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    let session = create(&fixture).await;
+    fixture.sessions.push(session.clone());
+    let mut execution = fixture.start_execution(0).await;
+    let managed = fixture.load(0).await.unwrap().unwrap();
+    let conversation = managed.conversation_id().clone();
+    let runtime = managed.inspect_runtime().unwrap();
+    runtime
+        .capability()
+        .mcp_invalidation()
+        .lock()
+        .advance(&McpServerId::new("late"));
+    assert!(runtime.needs_mcp_refresh());
+    let old = runtime.weak_inner();
+    drop(runtime);
+    let discovery_count = mcp.control.lists.load(Ordering::SeqCst);
+    assert_eq!(discovery_count, 1);
+    let revision = super::super::deletion::deletion_revision(&fixture, 0).await;
+
+    let (reached, reading) = tokio::sync::oneshot::channel();
+    let (resume, parked) = std::sync::mpsc::channel();
+    fixture
+        .manager
+        .configuration
+        .test_hooks
+        .insert("before_bound_source_read", move || {
+            let _ = reached.send(());
+            let _ = parked.recv();
+        });
+    let connection = crate::app_server::connection::AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    let target = SourceTarget::Workspace {
+        directory: fixture.workspaces[0].clone(),
+    };
+    let reconciliation = tokio::spawn(async move {
+        call(&connection, 1, Method::ConfigurationReconcile { target }).await
+    });
+    bounded(reading).await.unwrap();
+    bounded(fixture.manager.unload(&conversation))
+        .await
+        .unwrap();
+    assert!(
+        old.upgrade().is_none(),
+        "unload returned before releasing the old writer"
+    );
+    assert!(!reconciliation.is_finished());
+    assert!(matches!(
+        bounded(fixture.manager.delete_session(&session.id, &revision))
+            .await
+            .unwrap(),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    resume.send(()).unwrap();
+    assert!(matches!(
+        bounded(reconciliation).await.unwrap(),
+        MethodResult::ConfigurationReceipt { .. }
+    ));
+    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), discovery_count);
+    assert!(bounded(execution.wait()).await.unwrap().success());
+    fixture.close().await;
+    mcp.close().await;
+}
+
 #[derive(Clone)]
 struct StartupServer {
     gate: Arc<super::super::AsyncGate>,

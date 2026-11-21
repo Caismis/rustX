@@ -702,14 +702,16 @@ pub enum ProcessRequest {
         /// The new geometry; acknowledged in delivery order.
         size: PtySpec,
     },
-    /// Query the physical receipt of one admitted input control —
-    /// the correlated query that reports `Pending`/`Applied`/`Failed`
-    /// without holding the data lane across the physical operation.
+    /// Poll one admitted input control and take its terminal receipt.
+    /// A pending poll leaves the receipt owned by this input sequence
+    /// unless the Server ends observation with `abandon_pending`.
     InputReceipt {
         /// The operation owning the input sequence.
         key: ProcessOperationKey,
         /// The admitted input sequence to observe.
         sequence: DecimalU64,
+        /// Release a pending receipt without cancelling the physical input.
+        abandon_pending: bool,
     },
     /// Acknowledge consumption of all journal entries through
     /// `final_sequence`: bulky retained buffers are freed; the minimal
@@ -758,8 +760,8 @@ pub enum InputOutcome {
     /// The physical layer vetoed the operation before applying it —
     /// e.g. a byte-delivered EOF under a raw-mode termios policy.
     Rejected,
-    /// The sequence was never admitted or its bounded receipt was
-    /// evicted — an honest "not tracked", never a guess.
+    /// The sequence was never admitted or its receipt was already
+    /// collected or abandoned.
     Unknown,
 }
 
@@ -841,8 +843,8 @@ pub enum ProcessReply {
         key: ProcessOperationKey,
         /// The queried input sequence.
         sequence: DecimalU64,
-        /// The honest outcome — `Pending` while still queued or
-        /// in-flight, `Unknown` when never admitted or evicted.
+        /// The physical outcome at this poll. `Unknown` means the
+        /// sequence has no outstanding receipt.
         status: InputOutcome,
     },
     /// Journal bytes through `final_sequence` released; the minimal

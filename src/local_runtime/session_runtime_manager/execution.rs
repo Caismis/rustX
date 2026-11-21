@@ -494,6 +494,19 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// The input owner's final receipt poll waits for data capacity before
+    /// leaving the sequence to binding teardown. Called from the blocking
+    /// exchange worker under the same absolute wire deadline.
+    pub(crate) fn finish_input_receipt_by(
+        &self,
+        request: &rustx_execution_protocol::process::ProcessRequest,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::process::ProcessReply> {
+        self.with_bounded_data_connection(deadline, |connection| {
+            connection.process_until(request, deadline)
+        })
+    }
+
     pub(crate) fn process_key(
         &self,
         operation: rustx_execution_protocol::process::OperationId,
