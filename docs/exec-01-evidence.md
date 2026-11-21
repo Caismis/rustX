@@ -12,6 +12,18 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `f4545e8a2`
+
+- The physical Client publishes one write and returns `Written`. The
+  proxy holds the data receipt while the watcher observes `Unknown` for
+  that same ticket. With a real `Revoked` receipt also held, the watcher
+  completes its fencing decision and lets the original write and drain
+  settle in order. The data lane sees one commit request.
+- The cancelled preparation regression now waits for that ticket's
+  cleanup task to complete its final fencing decision while the Revoke
+  receipt is still held. The writer and data permit assertions continue
+  to cover the cleanup's admission.
+
 ## Review follow-up on `d03310bb8`
 
 - The cancelled preparation regression parks a real Client's prepared

@@ -65,6 +65,8 @@ pub struct LocalExecutionEndpoint {
     settlement_changed: std::sync::Condvar,
     #[cfg(test)]
     pub(crate) settlement_joined: tokio::sync::Notify,
+    #[cfg(test)]
+    mutation_test_hooks: Mutex<MutationTestHooks>,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -93,6 +95,31 @@ enum Settlement {
     Closing,
     Revoking,
     Finished(Result<(), Arc<io::Error>>),
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct MutationTestHooks {
+    preparation_cleanup: std::collections::BTreeMap<
+        rustx_execution_protocol::DecimalU64,
+        tokio::sync::oneshot::Sender<()>,
+    >,
+    cancel_fence: std::collections::BTreeMap<rustx_execution_protocol::DecimalU64, CancelFenceHook>,
+}
+
+#[cfg(test)]
+struct CancelFenceHook {
+    ready: tokio::sync::oneshot::Sender<Option<rustx_execution_protocol::CancelDisposition>>,
+    resume: tokio::sync::oneshot::Receiver<()>,
+    done: tokio::sync::oneshot::Sender<()>,
+}
+
+#[cfg(test)]
+pub(crate) struct CancelMutationFenceTest {
+    pub(crate) decision_ready:
+        tokio::sync::oneshot::Receiver<Option<rustx_execution_protocol::CancelDisposition>>,
+    pub(crate) resume: tokio::sync::oneshot::Sender<()>,
+    pub(crate) decision_done: tokio::sync::oneshot::Receiver<()>,
 }
 
 enum EndpointAuthority {
@@ -213,6 +240,8 @@ impl LocalExecutionEndpoint {
             settlement_changed: std::sync::Condvar::new(),
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            mutation_test_hooks: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -266,6 +295,8 @@ impl LocalExecutionEndpoint {
             settlement_changed: std::sync::Condvar::new(),
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            mutation_test_hooks: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -1283,6 +1314,82 @@ impl LocalExecutionEndpoint {
         self.data_slots.available_permits()
     }
 
+    #[cfg(test)]
+    pub(crate) fn watch_prepared_cleanup_for_test(
+        &self,
+        ticket: rustx_execution_protocol::DecimalU64,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (send, done) = tokio::sync::oneshot::channel();
+        self.mutation_test_hooks
+            .lock()
+            .unwrap()
+            .preparation_cleanup
+            .insert(ticket, send);
+        done
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_cancel_mutation_fence_for_test(
+        &self,
+        ticket: rustx_execution_protocol::DecimalU64,
+    ) -> CancelMutationFenceTest {
+        let (ready, decision_ready) = tokio::sync::oneshot::channel();
+        let (resume, parked) = tokio::sync::oneshot::channel();
+        let (done, decision_done) = tokio::sync::oneshot::channel();
+        self.mutation_test_hooks
+            .lock()
+            .unwrap()
+            .cancel_fence
+            .insert(
+                ticket,
+                CancelFenceHook {
+                    ready,
+                    resume: parked,
+                    done,
+                },
+            );
+        CancelMutationFenceTest {
+            decision_ready,
+            resume,
+            decision_done,
+        }
+    }
+
+    #[cfg(test)]
+    fn prepared_cleanup_completed_for_test(&self, ticket: rustx_execution_protocol::DecimalU64) {
+        if let Some(done) = self
+            .mutation_test_hooks
+            .lock()
+            .unwrap()
+            .preparation_cleanup
+            .remove(&ticket)
+        {
+            let _ = done.send(());
+        }
+    }
+
+    #[cfg(test)]
+    async fn pause_cancel_mutation_fence_for_test(
+        &self,
+        ticket: rustx_execution_protocol::DecimalU64,
+        disposition: Option<rustx_execution_protocol::CancelDisposition>,
+    ) -> Option<tokio::sync::oneshot::Sender<()>> {
+        let gate = self
+            .mutation_test_hooks
+            .lock()
+            .unwrap()
+            .cancel_fence
+            .remove(&ticket);
+        let CancelFenceHook {
+            ready,
+            resume,
+            done,
+        } = gate?;
+        ready.send(disposition).unwrap();
+        resume.await.unwrap();
+        Some(done)
+    }
+
     /// Fences the binding and shuts its sockets without taking the data lock:
     /// a wedged exchange fails on its own read, and the pair cannot be reused.
     pub(crate) fn cut_pair(&self) {
@@ -1342,6 +1449,8 @@ impl Drop for OwnedPrepared {
         let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             endpoint.cut_pair_if_open();
+            #[cfg(test)]
+            endpoint.prepared_cleanup_completed_for_test(prepared.ticket);
             return;
         };
         runtime.spawn(async move {
@@ -1353,6 +1462,8 @@ impl Drop for OwnedPrepared {
             {
                 endpoint.cut_pair_if_open();
             }
+            #[cfg(test)]
+            endpoint.prepared_cleanup_completed_for_test(prepared.ticket);
         });
     }
 }
@@ -2056,8 +2167,16 @@ impl SessionExecutionScope {
                                 }).await;
                                 let known = matches!(reply, Ok(Ok(disposition))
                                     if disposition != rustx_execution_protocol::CancelDisposition::Unknown);
+                                #[cfg(test)]
+                                let decision_done = endpoint.pause_cancel_mutation_fence_for_test(
+                                    ticket, reply.as_ref().ok().and_then(|reply| reply.as_ref().ok()).copied(),
+                                ).await;
                                 if !known && matches!(done_recv.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)) {
-                                    endpoint.cut_pair();
+                                    endpoint.cut_pair_if_open();
+                                }
+                                #[cfg(test)]
+                                if let Some(done) = decision_done {
+                                    let _ = done.send(());
                                 }
                             }
                             _ = &mut done_recv => {}

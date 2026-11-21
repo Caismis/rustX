@@ -1237,7 +1237,10 @@ contract accepts empty positional arguments and rejects empty program
 names and embedded NULs. An authoritative Register refusal ends cleanup
 ownership. A terminal START receipt drives the output and release state,
 including a cancelled operation with an empty journal. A failed cancel
-checks the most recent terminal evidence before fencing. Private Bash
+checks the most recent terminal evidence before fencing. When terminal
+settlement already owns a binding, a failed mutation cancel leaves the
+control lane available for Revoke. The original commit receipt still
+determines the mutation outcome. Private Bash
 capture discard waits for bounded data admission and either confirms
 release or retires its owning binding. Once terminal settlement closes
 ordinary data admission, queued capture discard and prepared-ticket

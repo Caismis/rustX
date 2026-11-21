@@ -871,8 +871,10 @@ pub(crate) async fn cancelled_preparation_hands_off_to_binding_revocation() {
         assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
         send(&mut client_data, &request).await.unwrap();
         let response = receive::<ClientReply>(&mut client_data).await.unwrap();
-        assert!(matches!(response, ClientReply::WritePrepared { .. }));
-        seen.send(()).unwrap();
+        let ClientReply::WritePrepared { ticket, .. } = response else {
+            panic!("the physical Client must prepare the ticket");
+        };
+        seen.send(ticket).unwrap();
         allow_reply.await.unwrap();
         send(&mut server_data, &response).await.unwrap();
         assert!(
@@ -896,7 +898,8 @@ pub(crate) async fn cancelled_preparation_hands_off_to_binding_revocation() {
                 .await
         }
     });
-    bounded(prepared).await.unwrap();
+    let ticket = bounded(prepared).await.unwrap();
+    let cleanup_done = endpoint.watch_prepared_cleanup_for_test(ticket);
     let mut writer = Box::pin(endpoint.writer_for_test().acquire_owned());
     assert!(futures_util::poll!(&mut writer).is_pending());
     signal.cancel();
@@ -913,6 +916,7 @@ pub(crate) async fn cancelled_preparation_hands_off_to_binding_revocation() {
     bounded(revoke).await.unwrap();
     drop(writer);
     wait_for_data_capacity(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION).await;
+    bounded(cleanup_done).await.unwrap();
     assert!(!drain.is_finished(), "the real Client receipt is parked");
     release_revoke.send(()).unwrap();
     assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
@@ -920,6 +924,89 @@ pub(crate) async fn cancelled_preparation_hands_off_to_binding_revocation() {
     bounded(data).await.unwrap();
     bounded(control).await.unwrap();
     assert!(!endpoint.workspace().join("unpublished").exists());
+}
+
+#[allow(clippy::too_many_lines)] // Order both physical receipts around the actual watcher decision.
+pub(crate) async fn unknown_mutation_cancel_hands_off_to_binding_revocation() {
+    use rustx_execution_protocol::CancelDisposition;
+    use std::path::Path;
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control,
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let (published, written) = oneshot::channel();
+    let (deliver_written, held) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        let prepare = receive::<ClientRequest>(&mut server_data).await.unwrap();
+        assert!(matches!(prepare, ClientRequest::PrepareWrite { .. }));
+        send(&mut client_data, &prepare).await.unwrap();
+        let response = receive::<ClientReply>(&mut client_data).await.unwrap();
+        let ClientReply::WritePrepared { ticket, .. } = response else {
+            panic!("the physical Client must prepare the ticket");
+        };
+        send(&mut server_data, &response).await.unwrap();
+        let commit = receive::<ClientRequest>(&mut server_data).await.unwrap();
+        assert_eq!(commit, ClientRequest::CommitWrite { ticket });
+        send(&mut client_data, &commit).await.unwrap();
+        let response = receive::<ClientReply>(&mut client_data).await.unwrap();
+        assert!(
+            matches!(response, ClientReply::Written { ticket: echoed, .. } if echoed == ticket)
+        );
+        published.send(()).unwrap();
+        held.await.unwrap();
+        send(&mut server_data, &response).await.unwrap();
+        assert!(
+            receive::<ClientRequest>(&mut server_data).await.is_err(),
+            "the mutation must not be replayed"
+        );
+    });
+    let (revoke, deliver_revoke, control) = park_revoked_receipt(control);
+    let scope = fixture.manager.execution_scope(&fixture.sessions[0].id);
+    let signal = crate::runtime::CancellationSignal::new();
+    let cancellation = detached_cancellation(signal.clone());
+    let relative = Path::new("already-published");
+    let prepared = scope
+        .prepare_write(relative, b"committed once".to_vec(), &cancellation)
+        .await
+        .unwrap();
+    let gate = endpoint.hold_cancel_mutation_fence_for_test(prepared.ticket);
+    let commit = tokio::spawn(async move { scope.commit_prepared(&prepared, &cancellation).await });
+    bounded(written).await.unwrap();
+    let path = endpoint.workspace().join(relative);
+    assert_eq!(std::fs::read(&path).unwrap(), b"committed once");
+    signal.cancel();
+    assert_eq!(
+        bounded(gate.decision_ready).await.unwrap(),
+        Some(CancelDisposition::Unknown)
+    );
+
+    let host = fixture.host.clone();
+    let drain = tokio::spawn(async move { host.drain().await });
+    bounded(revoke).await.unwrap();
+    gate.resume.send(()).unwrap();
+    bounded(gate.decision_done).await.unwrap();
+    assert!(
+        !commit.is_finished(),
+        "the original Written receipt is still parked"
+    );
+    assert!(
+        !drain.is_finished(),
+        "the physical Revoked receipt is still parked"
+    );
+    deliver_written.send(()).unwrap();
+    let metadata = bounded(commit).await.unwrap().unwrap();
+    assert_eq!(metadata.size, 14);
+    assert_eq!(std::fs::read(&path).unwrap(), b"committed once");
+    deliver_revoke.send(()).unwrap();
+    assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
 }
 
 #[allow(clippy::too_many_lines)] // Keep delegated ticket and capture ownership in the same wire scenario.

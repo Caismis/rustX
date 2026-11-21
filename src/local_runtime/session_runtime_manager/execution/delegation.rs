@@ -67,6 +67,8 @@ impl ChildExecutionGrant {
             settlement_changed: std::sync::Condvar::new(),
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            mutation_test_hooks: Mutex::default(),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             workspace: workspace.to_path_buf(),
