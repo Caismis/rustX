@@ -1,15 +1,14 @@
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
-import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import catalog from '../../../presentation/catalog/Catalog.module.css';
 import css from './ResourceCatalog.module.css';
 
-export function ResourceGroup({ label, count, view, empty, children }: {
-  label: string; count: number; view: CatalogView; empty: ReactNode; children: ReactNode;
+export function ResourceGroup({ label, count, empty, children }: {
+  label: string; count: number; empty: ReactNode; children: ReactNode;
 }) {
   return <section className={css.group} role="group" aria-label={label}>
     <h2 className={clsx(catalog.context, css.groupTitle)}>{label}<span aria-hidden> · </span>{count}</h2>
-    {count ? <ul role="list" className={clsx(catalog.cards, view === 'list' && css.list)}>{children}</ul> : <div className={catalog.state}>{empty}</div>}
+    {count ? <ul role="list" className={clsx(catalog.cards, css.list)}>{children}</ul> : <div className={catalog.state}>{empty}</div>}
   </section>;
 }
 

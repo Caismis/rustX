@@ -11,6 +11,7 @@ async function chinese(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await openSettingsPage(page, 'General');
   await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+  await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
   await page.getByRole('button', { name: '主页', exact: true }).click();
 }
 async function pick(page: Page, locale: string, name: string) {

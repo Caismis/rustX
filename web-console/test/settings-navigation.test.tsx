@@ -77,10 +77,10 @@ it('navigation A: a newer User Settings decision fences a stale owner-lookup fai
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   await release(held);
   // The newer target stands, and the obsolete rejection never becomes an error.
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
 });
 
@@ -91,21 +91,21 @@ it('navigation B: a newer Workspace Settings decision fences a stale owner-looku
   await screen.findByRole('button', { name: 'Workspace actions for Workspace B' });
   fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' }));
-  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  await screen.findByRole('button', { name: /^Workspace B$/ });
   await release(held);
   // Workspace B stays the target; the failed lookup for A cannot retarget it.
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace B' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Workspace B$/ })).toBeTruthy();
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
 });
 
 it('navigation C: leaving Settings fences a stale owner-lookup failure', async () => {
   const { startLookup } = await mountOwnerFailure();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   const held = startLookup();
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   await screen.findByRole('button', { name: 'Open Session A' });
-  expect(screen.queryByRole('heading', { name: 'User Settings' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'User (global)' })).toBeNull();
   await release(held);
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
@@ -140,7 +140,7 @@ it('navigation success: a current lookup still commits the exact owning Workspac
   const { startLookup } = await mountOwnerFailure();
   const held = startLookup();
   await release(held, true);
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Workspace A$/ })).toBeTruthy();
 });
 
 it('navigation success: a delayed successful lookup is fenced by a newer navigation', async () => {
@@ -149,11 +149,11 @@ it('navigation success: a delayed successful lookup is fenced by a newer navigat
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   await release(held, true);
   // The late success cannot reopen or retarget the newer Settings decision.
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
-  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^Workspace A$/ })).toBeNull();
 });
 
 /** Connection is the Advanced sub-surface of the global client: the Advanced
@@ -187,9 +187,9 @@ it('navigation E: recovery Show details fences a delayed successful owner lookup
   // Connection Settings remains the selected Settings surface, and the late
   // success can neither retarget it to the owning Workspace nor reopen it.
   expect(connectionShown()).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Back to Advanced' }));
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
-  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Back to Advanced/ }));
+  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^Workspace A$/ })).toBeNull();
 });
 
 it('navigation E: recovery Show details fences a stale owner-lookup failure', async () => {
@@ -197,8 +197,8 @@ it('navigation E: recovery Show details fences a stale owner-lookup failure', as
   await release(held);
   expect(connectionShown()).toBe(true);
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Back to Advanced' }));
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /Back to Advanced/ }));
+  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
 });
 
 // One owner for the displayed Settings page: the navigation machine. A
@@ -211,7 +211,7 @@ it('navigation F: a Connection decision while Settings stays mounted shows Conne
   await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })); });
   await act(async () => { await server.client.disconnect(); });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   expect(selected('Tools & Permissions')).toBe('true');
   // The dialog is still mounted when the recovery surface decides otherwise.
@@ -225,12 +225,12 @@ it('navigation F: a Connection decision while Settings stays mounted shows Conne
 it('navigation F: an owning-Workspace decision while Settings stays mounted opens its landing page', async () => {
   const { startLookup } = await mountOwnerFailure();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   expect(selected('Tools & Permissions')).toBe('true');
   const held = startLookup();
   await release(held, true);
-  expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Workspace A$/ })).toBeTruthy();
   // A Workspace surface is constrained: no General page, and it lands on Models.
   expect(screen.queryByRole('tab', { name: 'General' })).toBeNull();
   expect(selected('Models')).toBe('true');
@@ -253,13 +253,13 @@ async function mountApp() {
 async function openWorkspaceB() {
   fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B', hidden: true }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' }));
-  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  await screen.findByRole('button', { name: /^Workspace B$/ });
 }
 
 it('N10 real App: User Settings → Advanced exposes Connection', async () => {
   await mountApp();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  await screen.findByRole('heading', { name: 'User Settings' });
+  await screen.findByRole('button', { name: 'User (global)' });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(connectionShown()).toBe(true);
@@ -271,7 +271,7 @@ it('N10 real App: Workspace Settings → Advanced exposes no Connection although
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   expect(selected('Advanced')).toBe('true');
   expect(screen.queryByRole('button', { name: 'Connection' })).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Back to Advanced' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Back to Advanced/ })).toBeNull();
   expect(screen.queryByRole('region', { name: 'Connection Settings' })).toBeNull();
 });
 
@@ -285,8 +285,8 @@ it('N10 real App: OPEN.CONNECTION from Workspace Settings retargets to User Adva
   // The recovery surface's explicit Connection decision, taken while the
   // Workspace dialog stays mounted over it.
   fireEvent.click(screen.getByRole('button', { name: 'Show details', hidden: true }));
-  expect(screen.getByRole('heading', { name: 'User Settings' })).toBeTruthy();
-  expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace B' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'User (global)' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^Workspace B$/ })).toBeNull();
   expect(connectionShown()).toBe(true);
 });
 
@@ -295,7 +295,7 @@ it('N11 a Workspace navigation state cannot be forced into Connection, with the 
   const navigation = openSettingsNavigation(workspaceSettingsTarget('wB', 'Workspace B'), 'advanced');
   render(<SettingsSurface client={server.client} target={workspaceSettingsTarget('wB', 'Workspace B')} navigation={navigation}
     connection={new ConnectionController(server.client)} host={hostWith(async () => catalog())} />);
-  await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
+  await screen.findByRole('button', { name: /^Workspace B$/ });
   act(() => { navigation.send({ type: 'FOCUS', focus: { kind: 'connection' } }); });
   expect(navigation.getSnapshot().context).toMatchObject({ page: 'advanced', focus: {} });
   expect(screen.queryByRole('region', { name: 'Connection Settings' })).toBeNull();
@@ -304,6 +304,7 @@ it('N11 a Workspace navigation state cannot be forced into Connection, with the 
   // above is the capability and not a missing fixture.
   act(() => { navigation.send({ type: 'OPEN', target: userSettingsTarget }); });
   act(() => { navigation.send({ type: 'SELECT', page: 'advanced' }); });
+  await screen.findByRole('button', { name: 'Rescan configuration files' });
   fireEvent.click(await screen.findByRole('button', { name: 'Connection' }));
   expect(connectionShown()).toBe(true);
 });

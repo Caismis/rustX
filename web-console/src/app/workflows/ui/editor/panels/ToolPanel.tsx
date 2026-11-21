@@ -47,14 +47,16 @@ function argumentKind(schema: Record<string, unknown>): ArgumentKind {
 export function ToolPanel(props: PanelProps) {
   const tx = useTranslation(), tool = useNode(props, 'tool'), { node } = tool, catalog = useToolCatalog();
   const { selector } = node, source = selector.origin === 'source' ? selector.source_id : undefined;
-  useEffect(() => { if (source !== undefined && catalog.state.status === 'idle') catalog.load(); }, [source, catalog]);
+  // A source tool's dropdowns need the catalog whenever the origin is source,
+  // including before a source_id is picked.
+  useEffect(() => { if (selector.origin === 'source' && catalog.state.status === 'idle') catalog.load(); }, [selector.origin, catalog]);
   const choice = source === undefined ? props.vocabulary?.builtin_tools.find(item => item.name === selector.name)
     : catalog.state.status === 'ready' ? catalog.state.sources.find(item => item.source_id === source)?.tools.find(item => item.name === selector.name) : undefined;
   const fields = argumentFields(node.arguments);
   return <>
     {selector.origin==='builtin' && selector.name==='bash' && <p className={css.note}>{tx('workflows:data.code-cwd')}</p>}
     {source !== undefined && catalog.state.status === 'loading' && <p className={css.note} role="status">{tx('workflows:tool.loading')}</p>}
-    {!choice && <ToolSelection {...props} tool={tool} />}
+    <ToolSelection {...props} tool={tool} />
     {choice && fields ? <ToolInputs {...props} tool={tool} choice={choice} fields={fields} />
       : <Section title={tx('workflows:tool.inputs')}><ValueEditor label={tx('workflows:inspector.tool-arguments')} address={tool.at('arguments')} value={node.arguments} edit={props.edit} /></Section>}
     <ToolOutputs {...props} tool={tool} />
@@ -93,17 +95,28 @@ function ToolFailure(props: PanelProps & { tool: ToolNode }) {
 }
 
 function ToolSelection(props: PanelProps & { tool: ToolNode }) {
-  const tx = useTranslation(), { node, at, update } = props.tool;
+  const tx = useTranslation(), { node, at, update } = props.tool, catalog = useToolCatalog();
+  const sources = catalog.state.status === 'ready' ? catalog.state.sources : [];
+  const selectedSource = node.selector.origin === 'source' ? node.selector.source_id : '';
+  const tools = sources.find(item => item.source_id === selectedSource)?.tools ?? [];
   return <Section title={tx('workflows:panel.tool-config')}>
     <SelectField label={tx('workflows:inspector.tool-origin')} value={node.selector.origin} options={[{ value: 'builtin', label: tx('workflows:inspector.tool-origin-builtin') }, { value: 'source', label: tx('workflows:inspector.tool-origin-source') }]}
       onChange={origin => { if (origin !== node.selector.origin) update(current => ({ ...current, selector: origin === 'builtin' ? { origin, name: current.selector.name } : { origin, source_id: '', name: current.selector.name } }), at('selector')); }} />
-    {node.selector.origin === 'source' && <TextField label={tx('workflows:inspector.tool-source')} value={node.selector.source_id} invalid={!node.selector.source_id} field={encodeField(at('selector', 'source_id'))}
-      onChange={(source_id, session) => update(current => ({ ...current, selector: { origin: 'source', source_id, name: current.selector.name } }), at('selector', 'source_id'), undefined, session)} />}
+    {node.selector.origin === 'source' && (sources.length
+      ? <SelectField label={tx('workflows:inspector.tool-source')} value={node.selector.source_id}
+        options={[{ value: '', label: tx('workflows:tool.choose') }, ...sources.map(item => ({ value: item.source_id, label: item.source_id }))]}
+        onChange={source_id => update(current => ({ ...current, selector: { origin: 'source', source_id, name: current.selector.name } }), at('selector', 'source_id'))} />
+      : <TextField label={tx('workflows:inspector.tool-source')} value={node.selector.source_id} invalid={!node.selector.source_id} field={encodeField(at('selector', 'source_id'))}
+        onChange={(source_id, session) => update(current => ({ ...current, selector: { origin: 'source', source_id, name: current.selector.name } }), at('selector', 'source_id'), undefined, session)} />)}
     {node.selector.origin === 'builtin'
       ? <SelectField label={tx('workflows:inspector.tool-name')} value={node.selector.name} options={[{ value: '', label: tx('workflows:tool.choose') }, ...(props.vocabulary?.builtin_tools ?? []).map(item => ({ value: item.name, label: item.name }))]}
         onChange={name => update(current => ({ ...current, selector: { origin: 'builtin', name } }), at('selector', 'name'))} />
-      : <TextField label={tx('workflows:inspector.tool-name')} value={node.selector.name} invalid={!node.selector.name} field={encodeField(at('selector', 'name'))}
-        onChange={(name, session) => update(current => ({ ...current, selector: { ...current.selector, name } }), at('selector', 'name'), undefined, session)} />}
+      : tools.length
+        ? <SelectField label={tx('workflows:inspector.tool-name')} value={node.selector.name}
+          options={[{ value: '', label: tx('workflows:tool.choose') }, ...tools.map(item => ({ value: item.name, label: item.name }))]}
+          onChange={name => update(current => ({ ...current, selector: { ...current.selector, name } }), at('selector', 'name'))} />
+        : <TextField label={tx('workflows:inspector.tool-name')} value={node.selector.name} invalid={!node.selector.name} field={encodeField(at('selector', 'name'))}
+          onChange={(name, session) => update(current => ({ ...current, selector: { ...current.selector, name } }), at('selector', 'name'), undefined, session)} />}
   </Section>;
 }
 

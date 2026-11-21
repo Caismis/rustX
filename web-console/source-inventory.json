@@ -630,8 +630,11 @@
         "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../../workspaces/host",
+        "../ScopeToolbar",
         "../SettingsFeedback",
+        "../WorkspaceFollowGlobal",
         "../forms/bridge",
         "../forms/fields",
         "../machines/navigation",
@@ -674,7 +677,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d36b8ae42075895e3ae4fb24580b97f422f8e4f4f54d5aa7de446946c5e822b4"
+      "local_sha256": "f6b1fbb34b98ddfe1e287ffdea69c04afa6de7bee3b23ebf61457033227fe4ea"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -684,11 +687,12 @@
       "retained_dependencies": [
         "../../../../../protocol/app-server/v80",
         "../../../locale/react",
-        "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../resources/shared/AvailabilityDetail",
         "../../resources/shared/inventory",
         "../SettingsFeedback",
+        "../forms/bridge",
         "../machines/navigation"
       ],
       "excluded_dependencies": [
@@ -730,7 +734,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b574c35fb445c167640d811b87c379fd1467a00b54039963f71ed2728e0d6ca2"
+      "local_sha256": "4b625a7ebdd2aa9fd8e183250d80e753fd5a4ff7c84747393ca64c386476e5ce"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -743,19 +747,22 @@
         "../../connection/controller",
         "../../locale/react",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Skeleton",
         "../../presentation/primitives/icons",
         "../../presentation/settings/SettingsContent.module.css",
+        "../../presentation/settings/SettingsPageShell",
         "../../presentation/settings/SettingsRoot",
         "../../workspaces/associations",
         "../../workspaces/host",
         "../appearance",
         "./ConnectionSettings",
+        "./ScopeToolbar",
         "./SettingsFeedback",
-        "./SettingsScopeMenu",
         "./advanced/AdvancedPage",
         "./agent/AgentPage",
         "./extensions/ExtensionsPage",
         "./forms/bridge",
+        "./forms/guard",
         "./general/GeneralPage",
         "./machines/navigation",
         "./machines/react",
@@ -782,7 +789,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "26aac9cc6567d0a84b276b70083cf66c01b0fbca47891bb486b932161402394c"
+      "local_sha256": "015ca4d0ee30a83c82164dfcc78e16f7673094382b280d238a4f52acca20ebb1"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2186,7 +2193,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9c783903f8dbd7527ff19dc9f2a99d9d857f61ed6f851c56be0032d324ac5e27",
+      "local_sha256": "989534ec8437c625a9e6a1ba385f231fde980416762eaeb1bb4e43ce995d6e5e",
       "classification": "A"
     },
     {
@@ -2207,7 +2214,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3d815319babc3837cbfcec1c17788ebe5fbebb6c0011a3449ab00c85cb7056b9",
+      "local_sha256": "d4ff83704542c2af808b9fdd074977487ea9440aaa98ed977f78e31e2d70e7f3",
       "classification": "A"
     },
     {
@@ -2338,7 +2345,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ff7eabf53b32c73e23bf58082cbf3851ea4c701430b56887f4a9de2261a146f4",
+      "local_sha256": "4612773a1e54d290f91ec5581c1fd6fb0bdc98f72fb340506a04bb99b7bb4b3f",
       "classification": "A"
     },
     {
@@ -2359,7 +2366,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f0a215537e96d4a520e8d79bd22d258f7d6126fc885a2b94b7ba75756c82252f",
+      "local_sha256": "7a1a4a888164a6a43eb9e7afdbee4582c74fa6342ab3302d08e44f5c18ed4ffd",
       "classification": "A"
     },
     {
@@ -2478,7 +2485,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "af5ae86537bda57bf012c6d6cbe964f0dc658187b5eb857134dfb4f7da2abaa6",
+      "local_sha256": "2ed15ca4d391a1ea7e8e5562c059c57d608d6ce34a4d1bdb8a9196878a06fc1a",
       "classification": "A"
     },
     {
@@ -2837,7 +2844,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "c2f99217bc63d8b85489d983b6b8864a028a55ed7d13bfabaeb10087b2727680",
+      "local_sha256": "7accc907db09473ef20d51b7ac241af1f3323eb28cda5cc55f8c5cfdd1936692",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2879,7 +2886,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "bfe4c00b3cfac19605104bb26e48da8897c41e01cba40908482447b39a15d08f",
+      "local_sha256": "a5135e3df8799e80efbedd120328f2ac954732a5fa4fae695d1409a5fe063435",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2906,7 +2913,7 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "b687e75f778d13c55dac7f3aa01319178f87eed885624d945661d20b1143c413",
+      "local_sha256": "3f6a239495ac8f827bf777f7a58ffd1f58f94e669d99969e8192534f0732aefc",
       "classification": "B"
     },
     {
@@ -4170,7 +4177,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "b577f175a9e0fcfc832d9dda4b915825473316e19be7d2240a3907167d14173e"
+      "local_sha256": "e53f24ce66bb1f0f7fc97d81bb7290cb3084cfcbae9bc06eabab36e603f956f7"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6620,7 +6627,7 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/resources/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "a6eefe529af77062bf6ef3103957fa2827aaa814cdf8ce239fca0f46cb3485da",
+      "local_sha256": "3814745e3f54e4b8946a08b000b2e911765fadb40fb61fb57296fc55e3c0a71d",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Issue #499: wrap native connecting/catalog-hint provenance in the existing MCP list row; upstream baseline unchanged. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Centered editor with Harness setting-row spacing and persistent form actions.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
@@ -8393,12 +8400,13 @@
         "../../../locale/react",
         "../../../presentation/primitives/Button",
         "../../../presentation/primitives/Switch",
-        "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../../workspaces/host",
         "../../settings/SettingsFeedback",
         "../../settings/SettingsScopeMenu",
         "../../settings/forms/bridge",
+        "../../settings/forms/guard",
         "../../settings/models/ModelsPage",
         "../../settings/primitives/aria",
         "../../settings/projection",
@@ -8406,6 +8414,7 @@
         "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
+        "clsx",
         "react"
       ],
       "excluded_dependencies": [
@@ -8447,7 +8456,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c7d0db12b1373cd5de72eefa93b2ec3acc848b6b071af92b9767832876d6b127"
+      "local_sha256": "84307f5a7a129ad520bf8fcccf2ac2318fcdf138fc15c29ec0202e528d8417b1"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

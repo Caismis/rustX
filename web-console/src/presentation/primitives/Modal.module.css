@@ -13,6 +13,7 @@
 /* User/spec mask: rgba(0,0,0,0.24) + blur(2px) via --dsw-alias-bg-mask-1 /
    --dsw-mask-blur (light); dark theme raises mask opacity. */
 .mask {
+  overscroll-behavior: contain;
   position: absolute;
   inset: 0;
   background: var(--dsw-alias-bg-mask-1);
@@ -21,6 +22,7 @@
 
 /* Dialog card: r24, elevation-prominent, layer-2 fill, pb 24. */
 .dialog {
+  overscroll-behavior: contain;
   position: relative;
   z-index: 1;
   display: flex;

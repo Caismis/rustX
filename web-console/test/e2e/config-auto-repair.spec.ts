@@ -55,7 +55,8 @@ test('automatic configuration repair is announced once and inspected at its exac
     await expect(notice).toContainText('Configuration automatically repaired · 1 change in Workspace configuration');
     await notice.getByRole('button', { name: 'View details', exact: true }).click();
     await expect(settings).toBeVisible();
-    await expect(settings.getByRole('heading', { name: 'Workspace A' })).toBeVisible();
+    // The scope chooser carries the workspace name; there is no heading anymore.
+    await expect(settings.getByRole('button', { name: 'Workspace A', exact: true })).toBeVisible();
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     const workspace = settings.getByRole('region', { name: 'Auto Repair', exact: true });
     await expect(workspace.getByText('Removed an unknown field from agent', { exact: true })).toBeVisible();

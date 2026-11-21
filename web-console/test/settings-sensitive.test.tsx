@@ -5,7 +5,7 @@ import { waitForSettingsRevision } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
-import { openResourceRow, openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
+import { enableWorkspaceCustomization, openResourceRow, openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
 import { workspaceSettingsTarget, userSettingsTarget } from '../src/app/settings/projection';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
@@ -39,6 +39,7 @@ async function openWorkspaceRuntime(s: ReturnType<typeof cfg3Client>) {
   await settingsReady();
   await openSettingsPage('Advanced');
   await waitForSettingsRevision('workspace-1');
+  enableWorkspaceCustomization();
 }
 
 it('S1-15 an inherited environment identity is discoverable while its User value is never projected', async () => {
@@ -67,14 +68,13 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
   fireEvent.click(screen.getByRole('button', { name: 'SECRET_ENV' }));
   const form = within(screen.getByRole('form', { name: 'Environment SECRET_ENV' }));
   // Opening authors nothing: Save is unavailable until the user says so.
-  expect((form.getByRole('button', { name: 'Save Environment SECRET_ENV' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(form.getByRole('button', { name: 'Override Environment SECRET_ENV' }));
-  // Override starts from the neutral seed, never from the inherited literal.
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  // Entering a new value starts from empty without projecting any inherited literal.
   const field = form.getByLabelText('Value') as HTMLInputElement;
   expect(field.value).toBe('');
   expect(field.type).toBe('password');
   fireEvent.change(field, { target: { value: 'WORKSPACE-ONLY' } });
-  fireEvent.click(form.getByRole('button', { name: 'Save Environment SECRET_ENV' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0][0]).toEqual({
     method: 'configuration/sourceWrite',
@@ -103,6 +103,7 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   const s = cfg3Client(); redactedSources(s);
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
   await settingsReady();
+  enableWorkspaceCustomization();
   // The inherited identity is reachable and reported as a redacted native fact.
   await openResourceRow('transport');
   const dialog = screen.getByRole('region', { name: 'Settings' });

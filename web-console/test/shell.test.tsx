@@ -24,9 +24,11 @@ it('collapse, rail expansion and Settings appearance gestures emit no native ope
   fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   expect(document.querySelector('#home-sidebar')?.hasAttribute('hidden')).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-  // Appearance lives on General, the page global Settings opens at.
+  // Appearance lives on General, the page global Settings opens at; like every
+  // other setting it stages and only applies on the footer's Save.
   const theme = (option: string) => {
     fireEvent.click(screen.getByRole('button', { name: option }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   };
   theme('Dark');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(true);

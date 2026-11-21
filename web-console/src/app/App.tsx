@@ -55,7 +55,8 @@ import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
 import { AppFrame, type SidebarGeometry } from '../presentation/layout/AppFrame';
 import { HomeSidebar } from '../presentation/sidebar/HomeSidebar';
-import { PrimaryNavigationRail } from '../presentation/sidebar/PrimaryNavigationRail';
+import { PrimaryNavigationRail, type PrimaryNavigationItem } from '../presentation/sidebar/PrimaryNavigationRail';
+import { NavigationGuardProvider, useNavigationGuard } from './settings/forms/guard';
 import { ConnectionController } from '../connection/controller';
 import { ConnectionFeedback } from './ConnectionFeedback';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
@@ -90,6 +91,17 @@ import { readShellLayout, saveShellLayout } from './shell-preferences';
 
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 type AppProps = { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController };
+
+/** The primary rail under the unsaved-changes guard: switching module while
+ * a settings or resource page holds staged edits asks first. */
+function GuardedRail({ items, settings, ...rest }: {
+  label: string; activeId: string; items: readonly PrimaryNavigationItem[];
+  settings: PrimaryNavigationItem; feedback?: React.ReactNode;
+}) {
+  const guard = useNavigationGuard();
+  const wrap = (item: PrimaryNavigationItem) => ({ ...item, select: () => guard.guard(item.select) });
+  return <PrimaryNavigationRail {...rest} items={items.map(wrap)} settings={wrap(settings)} />;
+}
 /** Browser-session owners outlive the disposable rendered projection. */
 export function App({ client, workspaceHost = defaultWorkspaceHost, connection: providedConnection }: AppProps) {
   const workspaceAuthority = useMemo(() => new WorkspaceAuthority(workspaceHost), [workspaceHost]);
@@ -382,8 +394,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.OWNER', directory: owner.directory } });
   };
   const openTaskSession = (task: TaskRef) => open(task.session_id, undefined, undefined, { nodeId: task.node_id, conversationId: task.id.conversation_id });
-  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={activeSessionId} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
-    primary={geometry => <PrimaryNavigationRail label={tx('sidebar:navigation.label')} activeId={home ? 'home' : primaryRoute.kind}
+  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={activeSessionId} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><NavigationGuardProvider><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
+    primary={geometry => <GuardedRail label={tx('sidebar:navigation.label')} activeId={home ? 'home' : primaryRoute.kind}
       items={[
         { id: 'home', label: tx('sidebar:navigation.home'), icon: <IconHomeOutline16 size={18}/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
         { id: 'workflows', label: tx('workflows:nav.label'), icon: <IconWorkflow size={18}/>, select: () => shell.send({ type: 'WORKFLOWS' }) },
@@ -494,5 +506,5 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         navigate={choice => { if (!commandCurrent() || command.route.kind !== 'session') return; shell.send({ type: 'OPEN', destination: choice.kind === 'node' ? { ...choice, sessionId: command.route.sessionId } : { kind: 'transition', sessionId: command.route.sessionId, action: choice.action, selection: choice.selection } }); }} />}
 
     </section></SessionPanelProvider></FileLinks.Provider></div>
-  </AppFrame></ChangesReviewContext></PreviewContext></SubagentScope></TaskNavigationProvider>;
+  </AppFrame></NavigationGuardProvider></ChangesReviewContext></PreviewContext></SubagentScope></TaskNavigationProvider>;
 }

@@ -16,13 +16,6 @@ async function workspace(page:Page,scope:Locator) {
  await page.getByRole('menuitem',{name:'Workspace A',exact:true}).click();
 }
 async function checkCatalogView(scope: Locator, item: Locator) {
-  const list = scope.getByRole('button', { name: 'List view', exact: true });
-  await list.click();
-  await expect(list).toHaveAttribute('aria-pressed', 'true');
-  await expect(item).toBeVisible();
-  const cards = scope.getByRole('button', { name: 'Card view', exact: true });
-  await cards.click();
-  await expect(cards).toHaveAttribute('aria-pressed', 'true');
   await expect(item).toBeVisible();
   expect(await scope.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
 }
@@ -64,10 +57,27 @@ test('skill cards render, edit and upload package display information from the w
     await expect(pdf.locator('img')).toHaveAttribute('src', /^data:image\/svg\+xml;base64,/);
     await expect.poll(() => pdf.locator('img').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     await skills.getByRole('searchbox').clear();
+    const backToList = skills.getByRole('button', {name: 'Skills', exact: true});
+    const save = async (editor: Locator) => {
+      const saveButton = editor.getByRole('button', {name: 'Save', exact: true});
+      await saveButton.click();
+      // A committed save clears the staged draft only once the refreshed
+      // display lands, so the footer settling is the write acknowledgement.
+      await expect(saveButton).toBeDisabled({ timeout: 20000 });
+    };
+    const cancel = async (editor: Locator) => {
+      const cancelButton = editor.getByRole('button', {name: 'Cancel', exact: true});
+      if (await cancelButton.isEnabled()) await cancelButton.click();
+      await expect(cancelButton).toBeDisabled();
+    };
+    // Display metadata edits stage into an in-page detail view (not a dialog):
+    // the shared footer commits them, and '← Skills' returns to the catalog.
     const edit = async (name: string) => {
       await skills.getByRole('button', {name: `Actions for ${name}`, exact: true}).click();
       await page.getByRole('menuitem', {name: 'Edit display information', exact: true}).click();
-      return page.getByRole('dialog', {name: 'Edit display information', exact: true});
+      const editor = skills;
+      await expect(editor.getByRole('heading', {name: 'Edit display information', exact: true})).toBeVisible();
+      return editor;
     };
     const upload = async (editor: Locator, file: {name: string; mimeType: string; buffer: Buffer}) => {
       const choosing = page.waitForEvent('filechooser');
@@ -78,10 +88,10 @@ test('skill cards render, edit and upload package display information from the w
       name: 'updated-pdf.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(originalIcon.replace('red', '#5369dc')),
     };
     const globalEditor = await edit('PDF Toolkit');
-    await globalEditor.getByText('Existing asset paths', {exact: true}).click();
     await expect(globalEditor.getByLabel('Small icon path')).toHaveValue('./assets/pdf.svg');
     await globalEditor.getByLabel('Short description').fill('Review PDF pages');
-    await globalEditor.getByRole('button', {name: 'Save', exact: true}).click();
+    await save(globalEditor);
+    await backToList.click();
     await expect(pdf).toContainText('Review PDF pages');
     expect(readFileSync(globalMetadata, 'utf8')).toContain('brand_color:');
     expect(readFileSync(globalMetadata, 'utf8')).toContain('allow_implicit_invocation: false');
@@ -93,17 +103,21 @@ test('skill cards render, edit and upload package display information from the w
     await upload(staleEditor, updatedIcon);
     await expect(staleEditor.getByText(updatedIcon.name)).toBeVisible();
     await staleEditor.getByRole('button', {name: 'Save', exact: true}).click();
-    await expect(staleEditor.getByRole('alert')).toBeVisible();
+    // The page-level save surfaces a CAS conflict in the shared footer, after
+    // the remote write roundtrip refuses the stale base.
+    await expect(staleEditor.getByRole('alert')).toBeVisible({ timeout: 20000 });
     expect(readFileSync(globalMetadata, 'utf8')).toBe(externalEdit);
     expect(readdirSync(globalAssets)).toEqual(['pdf.svg']);
-    await staleEditor.getByRole('button', {name: 'Cancel', exact: true}).click();
+    await cancel(staleEditor);
+    await backToList.click();
     await expect(pdf).toContainText('Inspect a PDF');
 
     const uploadedPreview = `data:image/svg+xml;base64,${updatedIcon.buffer.toString('base64')}`;
     const previewOnly = await edit('PDF Toolkit');
     await upload(previewOnly, updatedIcon);
     await expect(previewOnly.locator('img')).toHaveAttribute('src', uploadedPreview);
-    await previewOnly.getByRole('button', {name: 'Cancel', exact: true}).click();
+    await cancel(previewOnly);
+    await backToList.click();
     expect(readdirSync(globalAssets)).toEqual(['pdf.svg']);
     expect(readFileSync(globalMetadata, 'utf8')).toBe(externalEdit);
 
@@ -115,7 +129,8 @@ test('skill cards render, edit and upload package display information from the w
     await expect(globalUpload.locator('img')).toHaveAttribute('src', uploadedPreview);
     await expect(globalUpload.getByRole('alert')).toHaveCount(0);
     await captureEvidence(globalUpload, 'skill-icon-upload-desktop');
-    await globalUpload.getByRole('button', {name: 'Save', exact: true}).click();
+    await save(globalUpload);
+    await backToList.click();
     await expect(pdf.locator('img')).toHaveAttribute('src', uploadedPreview);
     const globalYaml = readFileSync(globalMetadata, 'utf8');
     const globalIconPath = globalYaml.match(/icon_small: (\.\/assets\/icon-[0-9a-f]{64}\.svg)/)?.[1];
@@ -127,8 +142,8 @@ test('skill cards render, edit and upload package display information from the w
     const repeatUpload = await edit('PDF Toolkit');
     await upload(repeatUpload, updatedIcon);
     await expect(repeatUpload.getByText(updatedIcon.name)).toBeVisible();
-    await repeatUpload.getByRole('button', {name: 'Save', exact: true}).click();
-    await expect(repeatUpload).toHaveCount(0);
+    await save(repeatUpload);
+    await backToList.click();
     expect(readdirSync(globalAssets)).toEqual(savedGlobalAssets);
 
     await page.setViewportSize({width: 390, height: 844});
@@ -136,9 +151,10 @@ test('skill cards render, edit and upload package display information from the w
     await workspaceEditor.getByLabel('Display name').fill('Review Toolkit');
     await workspaceEditor.getByLabel('Short description').fill('Review workspace changes');
     await workspaceEditor.getByRole('button', {name: 'Choose Iconify icon', exact: true}).click();
-    await workspaceEditor.getByRole('searchbox').fill('book-open');
+    await workspaceEditor.getByRole('searchbox', {name: 'Search icons', exact: true}).fill('book-open');
     await workspaceEditor.getByRole('option', {name: 'book-open', exact: true}).click();
-    await workspaceEditor.getByRole('button', {name: 'Save', exact: true}).click();
+    await save(workspaceEditor);
+    await backToList.click();
     const review = skills.getByRole('listitem', {name: 'Review Toolkit', exact: true});
     await expect(review).toContainText('Review workspace changes');
     await expect(review.locator('svg.iconify')).toBeVisible();
@@ -161,7 +177,8 @@ test('skill cards render, edit and upload package display information from the w
     expect(readFileSync(localMetadata, 'utf8')).toContain('icon: lucide:book-open');
     expect(readdirSync(globalAssets)).toEqual(savedGlobalAssets);
     unlinkSync(localAssets);
-    await workspaceUpload.getByRole('button', {name: 'Save', exact: true}).click();
+    await save(workspaceUpload);
+    await backToList.click();
     await expect(review.locator('img')).toHaveAttribute('src', workspacePreview);
     const localYaml = readFileSync(localMetadata, 'utf8');
     const localIconPath = localYaml.match(/icon_small: (\.\/assets\/icon-[0-9a-f]{64}\.png)/)?.[1];
@@ -171,9 +188,10 @@ test('skill cards render, edit and upload package display information from the w
     expect(readFileSync(globalMetadata, 'utf8')).toBe(globalYaml);
     const reopened = await edit('Review Toolkit');
     await expect(reopened.locator('img')).toHaveAttribute('src', workspacePreview);
-    await reopened.getByRole('button', {name: 'Cancel', exact: true}).click();
+    await backToList.click();
     await review.getByRole('button', {name: 'Review Toolkit', exact: true}).click();
-    await expect(page.getByRole('dialog', {name: 'Review Toolkit', exact: true})).toContainText('Original instructions.');
+    await expect(skills.getByRole('heading', {name: 'Review Toolkit', exact: true})).toBeVisible();
+    await expect(skills).toContainText('Original instructions.');
     expect(errors).toEqual([]);
   } finally { await f.stop(false); }
 });
@@ -366,24 +384,26 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(globalSkill.getByRole('switch')).toBeChecked();
   const openSkill=globalSkill.getByRole('button',{name:'global-guide',exact:true});
   await openSkill.click();
-  const detail=page.getByRole('dialog',{name:'global-guide',exact:true});
+  // Read-only instructions render as an in-page detail inside the Skills
+  // region: no dialog, no editable fields, '← Skills' returns to the list.
+  const detail=skills;
+  await expect(detail.getByRole('heading',{name:'global-guide',exact:true})).toBeVisible();
   await expect(detail).toContainText('global guide instructions.');
   await expect(detail.getByRole('heading',{name:/^name:/})).toHaveCount(0);
   await expect(detail).toContainText('SKILL.md');
-  await expect(detail.getByRole('button',{name:'Close',exact:true})).toBeFocused();
   await expect(detail.getByRole('textbox')).toHaveCount(0);await expect(detail.locator('.cm-editor')).toHaveCount(0);
-  await expect(detail.getByRole('button',{name:/Save|Delete|Edit/})).toHaveCount(0);
+  await expect(detail.getByRole('button',{name:'Save',exact:true})).toHaveCount(0);
   await captureEvidence(detail,`skill-read-only-${width}`);
-  await page.keyboard.press('Escape');
-  await expect(openSkill).toBeFocused();
+  await detail.getByRole('button',{name:'Skills',exact:true}).click();
+  await expect(globalSkill).toBeVisible();
   await workspace(page,skills);
   const manual=skills.getByRole('listitem',{name:'manual-guide',exact:true});
   await expect(manual).toContainText('Manual skill.');
   await expect(manual.getByRole('switch')).toHaveCount(0);
   await manual.getByRole('button',{name:'manual-guide',exact:true}).click();
-  const manualDetail=page.getByRole('dialog',{name:'manual-guide',exact:true});
-  await expect(manualDetail).toContainText('Instructions in a standalone file.');
-  await manualDetail.getByRole('button',{name:'Close',exact:true}).click();
+  await expect(skills.getByRole('heading',{name:'manual-guide',exact:true})).toBeVisible();
+  await expect(skills).toContainText('Instructions in a standalone file.');
+  await skills.getByRole('button',{name:'Skills',exact:true}).click();
   const inheritedSkill=skills.getByRole('listitem',{name:'global-guide',exact:true});
   await expect(inheritedSkill.getByRole('switch')).toBeChecked();
   await inheritedSkill.getByRole('switch').click();
@@ -439,17 +459,18 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(globalAgent.getByRole('switch')).toBeChecked();await globalAgent.getByRole('switch').click();
   await expect.poll(()=>readFileSync(f.settings,'utf8')).toContain('agents = []');
   const naming = await newSubagent(agents, 'Invalid Name');
-  const saveNew = naming.getByRole('button', { name: 'Save New subagent' });
-  await expect(saveNew).toBeDisabled();
+  const saveNew = agents.getByRole('button', { name: 'Save', exact: true });
+  // The footer's Save is enabled by any staged draft; invalid names are
+  // vetoed at save time, so the form's own messages are the gate.
+  await expect(naming.getByText('Start with a lowercase letter')).toBeVisible();
   await naming.getByLabel('Name', { exact: true }).fill('global-reviewer');
   await expect(naming.getByText('This name already exists.')).toBeVisible();
-  await expect(saveNew).toBeDisabled();
   await naming.getByLabel('Name', { exact: true }).fill('auditor');
   await expect(saveNew).toBeInViewport({ ratio: 1 });
   await naming.getByLabel('Description', { exact: true }).fill('Reviews code');
   await naming.getByLabel('System prompt', { exact: true }).fill('Check the changes carefully.');
   await captureEvidence(agents, `subagent-profile-${width}`);
-  await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
+  await agents.getByRole('button', { name: 'Configuration scope', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
   await expect(naming.getByLabel('Name', { exact: true })).toHaveValue('auditor');
   await expect(naming.getByLabel('System prompt', { exact: true })).toHaveValue('Check the changes carefully.');
@@ -466,7 +487,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(draftSkills.getByRole('region', { name: 'Global' }).getByRole('checkbox', { name: 'catalog-33' })).toBeVisible();
   await draftSkills.getByRole('region', { name: 'Workspace' }).getByRole('checkbox', { name: 'local-guide' }).check();
   await expect(draftSkills.getByRole('checkbox', { name: 'manual-guide' })).toHaveCount(0);
-  await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
+  await agents.getByRole('button', { name: 'Configuration scope', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Global', exact: true }).click();
   await expect(naming.getByLabel('Description', { exact: true })).toHaveValue('Reviews code');
   await expect(naming.getByRole('checkbox', { name: 'read', exact: true })).toBeChecked();
@@ -491,7 +512,10 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   expect(await naming.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await captureEvidence(agents, `new-subagent-${width}`);
   await saveNew.click();
-  await expect(naming).toBeHidden();
+  // A committed save returns the editor to the catalog by itself once the
+  // write observation lands; the spec waits for that rather than the
+  // breadcrumb, whose transient dirty state would ask to discard.
+  await expect(agents.getByRole('button', { name: 'auditor', exact: true })).toBeVisible();
   const savedAgent=readFileSync(join(userRoot,'agents/auditor.toml'),'utf8');
   expect(savedAgent).toContain('Check the changes carefully.');
   expect(savedAgent).toContain('builtin = ["read"]');
@@ -507,16 +531,22 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   const editor = agents.getByRole('form', { name: 'Agent auditor', exact: true });
   await expect(editor.getByLabel('Name', { exact: true })).toHaveAttribute('readonly', '');
   await editor.getByLabel('Description', { exact: true }).fill('Unsaved description');
-  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await agents.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // Page-level Cancel discards the staged edit; the detail view stays open and
+  // the breadcrumb is the way back to the catalog.
+  await agents.getByRole('button', { name: 'Subagents', exact: true }).click();
   await agents.getByRole('button', { name: 'auditor', exact: true }).click();
   await expect(editor.getByLabel('Description', { exact: true })).toHaveValue('Reviews code');
   await expect(editor.getByRole('group', { name: 'MCP tools', exact: true }).getByRole('checkbox', { name: 'render_image' })).toBeChecked();
   await expect(editor.getByRole('group', { name: 'Skills', exact: true }).getByRole('checkbox', { name: 'global-guide' })).toBeChecked();
   await captureEvidence(agents, `edit-subagent-${width}`);
-  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // A clean editor reports nothing to discard: Cancel is already disabled.
+  await agents.getByRole('button', { name: 'Subagents', exact: true }).click();
   await agents.getByRole('button', { name: 'New subagent', exact: true }).click();
   await expect(naming.getByLabel('Name', { exact: true })).toHaveValue('');
-  await naming.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // The fresh editor holds no staged edit, so Cancel is disabled; the
+  // breadcrumb returns to the catalog.
+  await agents.getByRole('button', { name: 'Subagents', exact: true }).click();
   await agents.getByRole('listitem',{name:'auditor',exact:true}).getByRole('switch').click();
   await expect.poll(()=>readFileSync(f.settings,'utf8')).toContain('agents = ["auditor"]');
   await workspace(page,agents);
@@ -524,24 +554,16 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect.poll(workspaceDocument).toContain('global-reviewer');
   expect(readFileSync(f.settings,'utf8')).toContain('agents = ["auditor"]');
   await expect(agents.getByRole('listitem',{name:'global-reviewer',exact:true}).getByRole('switch')).toBeEnabled();
-  const listView = agents.getByRole('button', { name: 'List view', exact: true });
-  await listView.click();
-  await expect(listView).toHaveAttribute('aria-pressed', 'true');
-  const inheritedRow = agents.getByRole('row', { name: /global-reviewer/ });
+  // The card/table view switcher is gone: the catalog is the single card
+  // list, and the inherited definition still shows its badge and switch.
+  const inheritedRow = agents.getByRole('listitem', { name: 'global-reviewer', exact: true });
   await expect(inheritedRow.getByRole('switch')).toBeChecked();
   await expect(inheritedRow.getByText('Inherit default', { exact: true })).toBeVisible();
   expect(await agents.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await captureEvidence(agents, `workspace-subagents-list-${width}`);
+  await captureEvidence(agents, `workspace-subagents-${width}`);
   await inheritedRow.getByRole('button', { name: 'global-reviewer', exact: true }).click();
   await expect(agents.getByRole('form', { name: 'Agent global-reviewer' })).toBeVisible();
-  await agents.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(listView).toHaveAttribute('aria-pressed', 'true');
-  const cardView = agents.getByRole('button', { name: 'Card view', exact: true });
-  await cardView.click();
-  await expect(cardView).toHaveAttribute('aria-pressed', 'true');
-  await expect(agents.getByRole('listitem', { name: 'global-reviewer', exact: true }).getByRole('switch')).toBeChecked();
-  expect(await agents.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await captureEvidence(agents,`workspace-subagents-${width}`);
+  await agents.getByRole('button', { name: 'Subagents', exact: true }).click();
 
   await page.getByRole('button',{name:'MCP servers',exact:true}).click();
   const mcp=page.getByRole('region',{name:'MCP servers',exact:true});
@@ -663,7 +685,8 @@ test('Workspace cards edit Global resources and transfer definitions in both dir
     await sharedAgent.getByRole('button', { name: 'shared-agent', exact: true }).click();
     const editor = agents.getByRole('form', { name: 'Agent shared-agent', exact: true });
     await editor.getByLabel('Description', { exact: true }).fill('Updated Global profile');
-    await editor.getByRole('button', { name: 'Save Agent shared-agent', exact: true }).click();
+    await agents.getByRole('button', { name: 'Save', exact: true }).click();
+    // A committed editor save returns to the catalog by itself.
     await expect(sharedAgent).toContainText('Updated Global profile');
     expect(readFileSync(join(user, 'agents/shared-agent.toml'), 'utf8')).toContain('Updated Global profile');
     await transfer(sharedAgent, 'Copy to Workspace', 'shared-agent-copy', 'Copy');

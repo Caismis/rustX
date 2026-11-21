@@ -15,13 +15,10 @@ export interface SettingsPageEntry { id: string; label: string; icon: ReactNode 
 /** A first-class Settings page with internal section navigation. Container
  * queries choose the section tabs or compact menu; neither owns Shell routing.
  * Native configuration actors outlive this retained presentation. */
-export function SettingsPanel({ pages, activeId, onSelect, visible = true, context, children }: {
+export function SettingsPanel({ pages, activeId, onSelect, visible = true, children }: {
   /** `activeId` is always one of `pages`: the owner of navigation admits no
    * other, so it is rendered as it is. */
   pages: readonly SettingsPageEntry[]; activeId: string; onSelect: (id: string) => void;
-  /** The owner and observation state of the open Settings instance. It sits in
-   * the fixed header, so every page shares it and none of it scrolls away. */
-  context?: ReactNode;
   visible?: boolean; children: ReactNode;
 }) {
   const tx = useTranslation();
@@ -54,7 +51,6 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, conte
                   <IconChevronDownOutline14 className={css.sectionChevron} />
                 </button>} />
             </div>
-            <div className={css.context}>{context}</div>
           </header>
           <Tabs className={css.tabsRoot} orientation="vertical" selectedKey={activeId} onSelectionChange={key => { onSelect(String(key)); }}>
             <nav className={css.nav} aria-label={tx('settings:navigation.rail')} data-settings-navigation="">

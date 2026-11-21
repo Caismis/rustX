@@ -30,7 +30,10 @@ export function IconPicker({ value, onChange, disabled, className, label }: {
     placement: 'bottom-start',
     strategy: 'fixed',
     whileElementsMounted: autoUpdate,
-    middleware: [offset(6), flip({ padding: 12 }), shift({ padding: 12 }),
+    // The fixed primary rail (--dsh-primary-rail-width: 56px) is inside the
+    // viewport, so the left padding must clear it or a narrow viewport buries
+    // the panel under the rail.
+    middleware: [offset(6), flip({ padding: 12 }), shift({ padding: { left: 68, right: 12, top: 12, bottom: 12 } }),
       size({ padding: 12, apply: ({ availableHeight, elements }) => { elements.floating.style.maxHeight = `${Math.max(160, availableHeight)}px`; } })],
   });
   useEffect(() => {

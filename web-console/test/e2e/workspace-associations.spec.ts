@@ -31,6 +31,7 @@ for (const locale of ['en', 'zh'] as const) test(`UX-04 retains grouped and sele
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
       await openSettingsPage(page, 'General');
       await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+      await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
       const home = page.getByRole('button', { name: '主页', exact: true });
       await home.click();
       await expect(home).toHaveAttribute('aria-current', 'page');

@@ -7,11 +7,21 @@ import clsx from 'clsx'
 import css from './Button.module.css'
 
 /** Visual variant, each backed by its --dsw-alias-button-* token family. */
-export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
+export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar' | 'danger' | 'danger-outline'
+
+const VARIANT_CLASS: Record<ButtonVariant, string> = {
+  primary: css.primary,
+  ghost: css.ghost,
+  outline: css.outline,
+  toolbar: css.toolbar,
+  danger: css.danger,
+  'danger-outline': css.dangerOutline,
+}
 
 /**
  * Render a button.
- * @param props.variant - visual family (default 'ghost').
+ * @param props.variant - visual family (default 'ghost'). 'danger' is a
+ * destructive action (e.g. confirming a deletion).
  * @param props.size - 'md' 36px capsule (figma Button) or 'sm' 28px compact.
  * @param props.icon - optional leading 16px icon node.
  * @returns the button element; native button attributes pass through.
@@ -24,7 +34,11 @@ export function Button({ variant = 'ghost', size = 'md', icon, className, childr
   children?: ReactNode
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button type="button" className={clsx(css.button, css[variant], css[size], className)} {...rest}>
+    <button
+      type="button"
+      className={clsx(css.button, VARIANT_CLASS[variant], css[size], className)}
+      {...rest}
+    >
       {icon != null && <span className={css.icon}>{icon}</span>}
       {children}
     </button>

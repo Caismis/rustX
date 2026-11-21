@@ -279,7 +279,7 @@ describe('Model native editing document', () => {
     const inputs = within(inspector().getByRole('region', { name: 'Input variables' }));
     expect(inputs.getByText('The file to read.')).toBeTruthy();
     expect(inputs.getByLabelText('Required')).toBeTruthy();
-    expect(inspector().queryByRole('combobox', { name: 'Tool origin' })).toBeNull();
+    expect((inspector().getByRole('combobox', { name: 'Tool origin' }) as HTMLSelectElement).value).toBe('builtin');
     const path = inputs.getByRole('textbox', { name: 'path' });
     expect(path.closest('[aria-invalid="true"]')).toBeTruthy();
     fireEvent.change(inputs.getByRole('textbox', { name: 'offset' }), { target: { value: '12' } });

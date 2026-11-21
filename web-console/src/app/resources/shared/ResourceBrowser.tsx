@@ -1,17 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import type { SkillDescriptor, SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
-import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import { CardMenu, type CardMenuItems } from '../../../presentation/catalog/CardMenu';
+import { CatalogListSkeleton } from '../../../presentation/primitives/Skeleton';
 import { IconEditOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { SkillIcon } from '../skills/SkillIcon';
 import { SkillDeleteDialog } from '../skills/SkillDeleteDialog';
-import { SkillDisplayDialog, type SkillDisplayWriter } from '../skills/SkillDisplayDialog';
-import { SkillDetail } from '../skills/SkillDetail';
+import { SkillDetail, type SkillDisplayWriter } from '../skills/SkillDetail';
 import { useSkillCatalog } from '../skills/useSkillCatalog';
 import { useSettingsActor } from '../../settings/machines/react';
+import { PageTransactionProvider } from '../../settings/forms/bridge';
 import { extensionEntries } from './inventory';
 import { ResourceAvailability, SkillSelectionPolicy } from './ResourceAvailability';
 import { ResourceCard, ResourceGroup } from './ResourceCards';
@@ -28,19 +28,23 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
   return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
 }
 
-export function ResourceBrowser({ client, source, scope, revision, query, view, refresh, onRefresh, workspaceLabel,
-  bindDisplayWrite, bindDelete, onTransfer, transferDisabled }: {
+export function ResourceBrowser({ client, source, scope, revision, query, refresh, onRefresh, workspaceLabel,
+  bindDisplayWrite, bindDelete, onTransfer, transferDisabled, onFocusChange, bodyDisabled = false }: {
   client: AppServerClient; source: SourceSettings; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
   transferDisabled: boolean; workspaceLabel?: string;
-  query: string; view: CatalogView; refresh: number; onRefresh: () => void;
+  query: string; refresh: number; onRefresh: () => void;
+  onFocusChange?: (focused: boolean) => void; bodyDisabled?: boolean;
 }) {
   const tx = useTranslation();
   const [localRefresh, setLocalRefresh] = useState(0);
-  const [focus, setFocus] = useState<{ name: string; owner: SourceScope }>();
-  const [editing, setEditing] = useState<{ skill: SkillDescriptor; write: SkillDisplayWriter }>();
+  const [focus, setFocus] = useState<{ name: string; owner: SourceScope; write?: SkillDisplayWriter }>();
+  useEffect(() => {
+    onFocusChange?.(!!focus);
+  }, [focus, onFocusChange]);
+  useEffect(() => () => onFocusChange?.(false), [onFocusChange]);
   const [deleting, setDeleting] = useState<{ title: string; owner: SourceScope; path: string; remove: () => Promise<void> }>();
   const settings = useSettingsActor();
   const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
@@ -93,12 +97,12 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     return <ResourceCard key={key} name={name} subtitle={name === row.name ? undefined : row.name}
       icon={<SkillIcon icon={display?.icon} />}
       description={display?.authored.short_description ?? skill?.catalog.description ?? ''}
-      diagnostic={row.diagnostics[0]} onOpen={() => setFocus(row)}
+      diagnostic={row.diagnostics[0]} onOpen={() => setFocus({ name: row.name, owner: row.owner, write: skill && bindDisplayWrite(skill) })}
       menu={skill && !!items.length && <CardMenu label={tx('resources:card.actions', { p0: name })} items={items}
         onSelect={id => {
           if (id === 'edit') {
             const write = bindDisplayWrite(skill);
-            if (write) setEditing({ skill, write });
+            if (write) setFocus({ name: row.name, owner: row.owner, write });
           } else if (id === 'delete') {
             const remove = bindDelete(skill);
             if (remove) setDeleting({ title: name, owner: row.owner, path: skill.catalog.location.replace(/\/SKILL\.md$/, ''), remove });
@@ -112,34 +116,53 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
           skillNames={skillNames} skillEnabledByDefault={skill.enabled_by_default} />} />;
   };
 
-  return <>
+  const deleteDialog = deleting && <SkillDeleteDialog name={deleting.title}
+    scope={deleting.owner === 'user' ? tx('resources:scope.global') : workspaceLabel ?? tx('resources:scope.workspace')}
+    path={deleting.path} close={() => setDeleting(undefined)} remove={async () => {
+      try {
+        await deleting.remove();
+      } finally {
+        setFocus(undefined);
+        onRefresh();
+      }
+    }} />;
+
+  if (focus) {
+    const skill = descriptors.get(rowKey(focus.owner, focus.name));
+    return <>
+      <PageTransactionProvider>
+        <SkillDetail key={rowKey(focus.owner, focus.name)} client={client}
+          target={focus.owner === 'user' ? userTarget : source.target}
+          name={focus.name} display={skill?.display} owner={focus.owner}
+          bodyDisabled={bodyDisabled}
+          write={focus.write ? async (authored, upload) => {
+            try { await focus.write!(authored, upload); }
+            finally { setLocalRefresh(value => value + 1); }
+          } : undefined}
+          onDelete={skill && bindDelete(skill) ? () => setDeleting({ title: focus.name, owner: focus.owner,
+            path: skill.catalog.location.replace(/\/SKILL\.md$/, ''), remove: bindDelete(skill)! }) : undefined}
+          close={() => setFocus(undefined)} />
+      </PageTransactionProvider>
+      {deleteDialog}
+    </>;
+  }
+
+  return <fieldset disabled={bodyDisabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     {revision !== undefined && <SkillSelectionPolicy source={source} scope={scope} revision={revision} skillNames={skillNames} />}
     {catalogError && <p role="alert">{catalogError}</p>}
-    <ResourceGroup label={tx('resources:scope.owned')} count={owned.length} view={view}
-      empty={<p role="status">{tx(needle ? 'resources:no-results' : !effective ? 'resources:loading' : 'resources:empty')}</p>}>
-      {owned.map(renderCard)}
-    </ResourceGroup>
-    {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} view={view} empty={null}>
-      {inherited.map(renderCard)}
-    </ResourceGroup>}
-    {focus && <SkillDetail key={rowKey(focus.owner, focus.name)} client={client} target={focus.owner === 'user' ? userTarget : source.target}
-      name={focus.name} display={descriptors.get(rowKey(focus.owner, focus.name))?.display} close={() => setFocus(undefined)} />}
-    {editing?.skill.display && <SkillDisplayDialog name={editing.skill.catalog.name} display={editing.skill.display}
-      close={() => setEditing(undefined)} save={async (authored, upload) => {
-        try {
-          await editing.write(authored, upload);
-        } finally {
-          setLocalRefresh(value => value + 1);
-        }
-      }} />}
-    {deleting && <SkillDeleteDialog name={deleting.title}
-      scope={deleting.owner === 'user' ? tx('resources:scope.global') : workspaceLabel ?? tx('resources:scope.workspace')}
-      path={deleting.path} close={() => setDeleting(undefined)} remove={async () => {
-        try {
-          await deleting.remove();
-        } finally {
-          onRefresh();
-        }
-      }} />}
-  </>;
+    {!effective && !catalogError && !matches.length ? (
+      <CatalogListSkeleton label={tx('resources:loading')} />
+    ) : (
+      <>
+        <ResourceGroup label={tx('resources:scope.owned')} count={owned.length}
+          empty={<p role="status">{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>}>
+          {owned.map(renderCard)}
+        </ResourceGroup>
+        {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} empty={null}>
+          {inherited.map(renderCard)}
+        </ResourceGroup>}
+      </>
+    )}
+    {deleteDialog}
+  </fieldset>;
 }

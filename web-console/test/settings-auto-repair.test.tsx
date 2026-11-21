@@ -622,6 +622,15 @@ class Native {
   }
 }
 
+async function leaveSettings(name: string) {
+  fireEvent.click(screen.getByRole('tab', { name }));
+  const modal = screen.queryByRole('dialog');
+  // Leaving a page with staged edits requires the explicit discard; staying
+  // would keep them, which is the other half of the guard.
+  if (modal) fireEvent.click(within(modal).getByRole('button', { name: 'Discard and leave' }));
+  await screen.findByRole('tab', { name, selected: true });
+}
+
 it('renders Auto Repair from the authoritative read and keeps an unsaved draft fenced', async () => {
   const native = new Native();
   const s = new Server();
@@ -645,7 +654,8 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   expect(await screen.findByRole('button', { name: 'Use latest setting' })).toBeTruthy();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
-  await openSettingsPage('Advanced');
+  // Leaving discards the staged draft — the explicit gesture is what fences it.
+  await leaveSettings('Advanced');
   const repaired = await screen.findByRole('region', { name: 'Auto Repair' });
   expect(within(repaired).getByRole('status').textContent).toBe('Automatically repaired: 3 changes committed.');
   for (const line of ['Updated schema_version 8 → 10', 'Removed an unknown field from agent.plugins.todo', 'Removed agent.tools.builtin[1]: no such Native Tool'])
@@ -653,7 +663,8 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   expect(within(repaired).getByText('An exact private copy of the original file is kept in rustX storage.')).toBeTruthy();
   expect(within(repaired).queryByText(/sha256:/)).toBeNull();
   await openSettingsPage('Agent');
-  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
+  // The discarded draft is gone; the switch shows the authored value again.
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('true');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   s.client.disconnect();
 });
@@ -672,7 +683,7 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   expect(await screen.findByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
   expect(within(section).getByText('No backup copy was made.')).toBeTruthy();
   expect(within(section).getByText('Use Repair invalid source below to correct the document by hand.')).toBeTruthy();
-  expect(screen.getByRole('button', { name: /Save Repair invalid source/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
   s.client.disconnect();
 });
 
@@ -871,10 +882,10 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   await openSettingsPage('Agent');
   fireEvent.click(automaticGuidance());
   // An in-flight Save of another unit, held at native.
-  await openSettingsPage('Advanced');
+  await leaveSettings('Advanced');
   s.held.add('configuration/sourceWrite');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   expect(write.params).toMatchObject({ expected_revision: 'user-1' });
   const before = s.client.getSnapshot();
@@ -891,8 +902,8 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   expect(sent(s, 'configuration/sourcesRead')).toHaveLength(reads);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   expect((screen.getByLabelText('Reserved tokens') as HTMLInputElement).value).toBe('19');
-  await openSettingsPage('Agent');
-  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
+  await leaveSettings('Agent');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('true');
   s.client.disconnect();
 });
 
@@ -1116,9 +1127,9 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   // The Settings draft and its CAS base are untouched.
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
-  await openSettingsPage('Advanced');
+  await leaveSettings('Advanced');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();
@@ -1192,9 +1203,9 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   // The Settings draft and its CAS base are untouched.
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
-  await openSettingsPage('Advanced');
+  await leaveSettings('Advanced');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();

@@ -7,7 +7,7 @@ import {
   ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, OverlayTriggerStateContext, Popover as AriaPopover, SearchField, Select, SelectValue,
   Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs, Text,
 } from 'react-aria-components';
-import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import buttonCss from '../../../presentation/primitives/Button.module.css';
 import css from '../../../presentation/settings/SettingsWorkflow.module.css';
 import contentCss from '../../../presentation/settings/SettingsContent.module.css';
@@ -35,13 +35,16 @@ function Popover(props: React.ComponentProps<typeof AriaPopover>) {
 
 /** A closed enum. Native remains the authority on which values are legal; this
  * control only presents the ones the call site offers. */
-export function Choice<T extends string>({ label, value, onChange, options, disabled = false, disabledKeys, description, placeholder }: {
+export function Choice<T extends string>({ label, value, onChange, options, disabled = false, disabledKeys, description, placeholder, hideLabel = false }: {
   label: string; value: T | null; onChange: (value: T) => void;
   options: readonly (readonly [T, string])[]; disabled?: boolean; disabledKeys?: readonly T[]; description?: ReactNode; placeholder?: string;
+  /** Inside a `SettingsRow` the row's own label is the visible one; the
+   * control keeps it only as its accessible name. */
+  hideLabel?: boolean;
 }) {
-  return <Select className={css.select} selectedKey={value} placeholder={placeholder} isDisabled={disabled} disabledKeys={disabledKeys} onSelectionChange={key => { if (key !== null) onChange(key as T); }}>
-    <Label>{label}</Label>
-    <AriaButton className={css.selectTrigger}><SelectValue /><span aria-hidden="true">▾</span></AriaButton>
+  return <Select className={css.select} selectedKey={value} placeholder={placeholder} isDisabled={disabled} disabledKeys={disabledKeys} aria-label={hideLabel ? label : undefined} onSelectionChange={key => { if (key !== null) onChange(key as T); }}>
+    {!hideLabel && <Label>{label}</Label>}
+    <AriaButton className={css.selectTrigger}><SelectValue /><span aria-hidden="true"><IconChevronDownOutline14 /></span></AriaButton>
     {description && <Text slot="description" className={contentCss.hint}>{description}</Text>}
     <Popover className={css.popover}>
       <ListBox>{options.map(([key, text]) => <ListBoxItem key={key} id={key} className={css.option}>{text}</ListBoxItem>)}</ListBox>
@@ -172,7 +175,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
   const show = () => { closing.current = 'dismissed'; setOpen(true); };
   return <span className={css.removal} data-tone={tone}>
     {renderTrigger ? renderTrigger(show, trigger) : <AriaButton ref={trigger} isDisabled={disabled} aria-label={label}
-      className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}
+      className={clsx(buttonCss.button, destructive ? buttonCss.dangerOutline : buttonCss.outline, buttonCss.sm, destructive && css.dangerTrigger)}
       onPress={show}>
       {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{triggerText ?? label}
     </AriaButton>}
@@ -211,6 +214,6 @@ export function FilterTabs<T extends string>({ label, value, onChange, options, 
     <TabList className={css.filterTabs} aria-label={label}>
       {options.map(([key, text]) => <Tab key={key} id={key} className={css.filterTab}>{text}</Tab>)}
     </TabList>
-    <TabPanel id={value} className={css.pageTabPanel}>{children}</TabPanel>
+    <TabPanel id={value} className={css.filterTabPanel}>{children}</TabPanel>
   </Tabs>;
 }

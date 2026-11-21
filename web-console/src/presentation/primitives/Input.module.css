@@ -2,16 +2,22 @@
 .wrap {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 8px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-1);
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--settings-input-bg, var(--dsw-alias-bg-layer-1));
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background-color 0.14s ease;
+}
+
+.wrap:hover:not(:focus-within) {
+  border-color: var(--dsw-alias-border-l4);
 }
 
 .wrap:focus-within {
-  border-color: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent);
 }
 
 .icon {

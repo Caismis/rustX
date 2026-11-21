@@ -27,7 +27,9 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       const source = (await selected())!;
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文'); await page.getByRole('button', { name: '主页' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
+        await page.getByRole('button', { name: '主页' }).click();
       }
       await send('Sidebar source'); await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
       // Observe the client's admitted settlement instead of competing with its

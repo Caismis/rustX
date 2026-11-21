@@ -37,10 +37,9 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
         if (next === 'inherit') { if (unit.authoredPresent) unit.submit(true); }
         else unit.apply(next === 'all' ? 'all' : next === 'none' ? [] : selection === 'all' ? skillNames! : selection);
       }} />
-    <div className={css.availability}>
-      {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
-      {unit.draft && !unit.busy && !unit.awaitingObservation && <Button size="sm" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
-    </div>
+    {unit.reviewNeeded && <div className={css.availability}>
+      <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>
+    </div>}
     <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined} />
     <UnitOutcomeNotice title={tx('resources:skills.title')} outcome={unit.outcome}/>
   </section>;
@@ -78,7 +77,6 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
         || family === 'skill' && selection === 'all' && skillNames === undefined}
       onChange={enabled => unit.apply(family === 'mcp' ? enabled ? 'all' : [] : enabled ? [...new Set([...names, name])] : names.filter(item => item !== name))}/>
     {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
-    {unit.draft && !unit.busy && !unit.awaitingObservation && <Button size="sm" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
     <UnitOutcomeNotice title={name} outcome={unit.outcome}/>
   </div>;
 }

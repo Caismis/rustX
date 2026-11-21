@@ -30,10 +30,10 @@
   display: contents;
 }
 
-/* Nav rail (figma .Setting-nav 501:29958): pad (22,12,0), gap 18, no own fill
-   — the panel white shows through. 188px upstream; 216px so the longest
-   product page name, "Tools & Permissions", is never truncated. */
+/* Nav rail (DSH .nav-rail 188px): pad (22,12,0), gap 18, no own fill
+   — the panel white shows through. */
 .nav {
+  border-right: 1px solid var(--dsw-alias-border-l3);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -102,14 +102,12 @@
   text-overflow: ellipsis;
 }
 
-/* Header (figma .Header 501:29981): the owner and observation context of this
-   Settings instance. It never scrolls. The
-   section menu seat is present in the grid only on a narrow panel. */
+/* Header: only the compact section menu seat, and only on a narrow panel.
+   Each page owns its own pageHead (title, scope toolbar, actions). */
 .header {
   grid-area: header;
-  display: grid;
+  display: none;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "context";
   align-items: center;
   gap: 8px 12px;
   min-height: 60px;
@@ -117,8 +115,7 @@
   box-sizing: border-box;
 }
 
-.sections { grid-area: sections; display: none; min-width: 0; }
-.context { grid-area: context; min-width: 0; }
+.sections { min-width: 0; }
 
 /* Section menu trigger: the nav cell geometry as one button that names the
    current page. */
@@ -150,14 +147,23 @@
   outline-offset: 2px;
 }
 
-/* Options area (figma Options 501:29983): the one local scroll of the panel. */
+/* Options area: the page shell inside scrolls itself (pageBody), so this
+   pane only sizes it. */
 .options {
   grid-area: options;
   min-width: 0;
   min-height: 0;
-  padding: 20px 28px 28px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  display: flex;
+  overflow: hidden;
+}
+
+.options [role='tabpanel'] {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Narrow panel: the rail gives way to the section menu, the header takes two
@@ -168,11 +174,9 @@
   .nav { display: none; }
   .sections { display: block; }
   .header {
+    display: grid;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "sections" "context";
     padding: 12px 12px 10px 16px;
   }
-  /* Keep the bottom gutter outside the scrolling content. Long cards must
-     not paint through the panel's corner clip as their scroll layer moves. */
-  .options { margin-bottom: 20px; padding: 16px 16px 0; }
+  .options { margin-bottom: 0; }
 }

@@ -86,11 +86,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     // correctly prevent submission, which never exercises the native write CAS.
     invalidateNextWrite = true;
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(settings.getByRole('alert')).toContainText('was not saved because it changed elsewhere');
+    await expect(settings.getByRole('alert').filter({hasText:'was not saved because it changed elsewhere'})).toBeVisible();
     expect(invalidateNextWrite).toBe(false);
     await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('preserved-draft');
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
-    await settings.getByRole('button', { name: 'Use latest setting', exact: true }).click();
+    await settings.getByRole('button', { name: 'Use latest setting', exact: true }).first().click();
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(installedMcp.getByRole('listitem', { name: 'local-fixture', exact: true })).toContainText('preserved-draft');
     settings=await openResourceModule(page,'subagents','Workspace A');
@@ -100,10 +100,12 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(settings.getByRole('switch', { name: 'Todo', exact: true })).not.toBeChecked();
     await settings.getByLabel('System prompt', { exact: true }).fill('Review the requested change and report concrete findings.');
     await settings.getByLabel('read', { exact: true }).check();
-    await settings.getByRole('button', { name: 'Save New subagent', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    // A committed save closes the editor; the catalog entry opens it again.
     await settings.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();
     await expect(settings.getByLabel('Description',{exact:true})).toHaveValue('Independent review profile');
-    await settings.getByRole('button',{name:'Cancel',exact:true}).click();
+    // A clean editor's footer Cancel is disabled; leaving is the breadcrumb.
+    await settings.getByRole('button',{name:'Subagents',exact:true}).click();
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
     await openSettingsPage(page, 'Advanced');
     settings=page.getByRole('region',{name:'Settings',exact:true});
@@ -118,8 +120,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await returnHome(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     settings=page.getByRole('region',{name:'Settings',exact:true});
-    await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
+    await settings.getByRole('button', { name: 'User (global)', exact: true }).click();
+    // Scope switching retains the current tab; Appearance lives on General.
+    await openSettingsPage(page, 'General');
     await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     settings=await openResourceModule(page,'subagents','Workspace A');

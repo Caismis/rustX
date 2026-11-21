@@ -30,6 +30,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
         await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
         await page.getByRole('button', { name: '主页' }).click();
       }
       const input = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });

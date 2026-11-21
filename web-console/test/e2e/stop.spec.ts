@@ -18,6 +18,7 @@ for (const [width, locale, theme] of [[1440, 'en', 'light'], [390, 'zh', 'dark']
       if (!zh) return;
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
       await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+      await page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: 'Save', exact: true }).click();
       await page.getByRole('button', { name: '主页' }).click();
     };
     const message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });

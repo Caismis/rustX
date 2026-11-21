@@ -59,12 +59,12 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await openSettingsPage(page, 'Agent');
     await settings.getByRole('textbox', { name: 'Global instructions', exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
-    await settings.getByRole('button', { name: 'Save instructions', exact: true }).click();
-    await expect(settledSave(settings, 'instructions')).toBeVisible();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(settledSave(settings)).toBeVisible();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByLabel('read', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-    await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(settledSave(settings)).toBeVisible();
     const source = await readSource(remote,{kind:'user'});
     expect(source.global_guidance?.authored).toBe('TRACE_NEW_INSTRUCTIONS');
     expect(readFileSync(source.global_guidance!.path, 'utf8')).toBe('TRACE_NEW_INSTRUCTIONS');
