@@ -230,6 +230,18 @@ pub(crate) struct Operations {
     #[cfg(test)]
     start_holds:
         Mutex<BTreeMap<OperationId, rustx_process_supervisor::process_runner::RunnerStartHold>>,
+    #[cfg(test)]
+    capture_holds: Mutex<BTreeMap<OperationId, CaptureHold>>,
+}
+
+#[cfg(test)]
+type CaptureHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+
+// Keep the capture ahead of its worker guard in the drop order, including
+// when the runtime discards the START future before polling it.
+struct ActiveProcess {
+    capture: Option<Capture>,
+    _guard: WorkerGuard,
 }
 
 struct WorkerCount {
@@ -282,6 +294,8 @@ impl Operations {
             }),
             #[cfg(test)]
             start_holds: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            capture_holds: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -661,7 +675,10 @@ impl Operations {
         }
         // A cancel that already owns the signal settles the record — the
         // tombstone is written once, never resurrected by a later Start.
-        if operation.cancel.is_cancelled() {
+        let Some(active) = self
+            .admit_auxiliary()
+            .filter(|_| !operation.cancel.is_cancelled())
+        else {
             let snapshot = SettledSnapshot {
                 disposition: SettledDisposition::Cancelled,
                 exit_code: None,
@@ -677,7 +694,7 @@ impl Operations {
                 key: key.clone(),
                 state: operation.state,
             };
-        }
+        };
         // Verify the retained cwd descriptor right before the spawn is
         // admitted; the trusted workspace path it names is what the
         // supervisor chdir's into, and its dev/ino is the business-spawn
@@ -704,24 +721,25 @@ impl Operations {
         let signal = operation.cancel.clone();
         let revoke = self.revoke.clone();
         let inner_arc = Arc::clone(&self.inner);
-        let workers = Arc::clone(&self.workers);
         let workspace = self.workspace.clone();
         let control = self.run_control(&key);
-        let capture = matches!(&spec.program, ProcessProgram::Shell { .. })
-            .then(|| Capture::new(operation.bash_file.clone()));
+        let active = ActiveProcess {
+            capture: matches!(&spec.program, ProcessProgram::Shell { .. })
+                .then(|| Capture::new(operation.bash_file.clone())),
+            _guard: active,
+        };
         let captures = self.captures.clone();
         let cwd_fd = operation.cwd.descriptor().try_clone();
         let cwd_path = self.workspace.join(&spec.cwd);
         drop(inner);
+        #[cfg(test)]
+        self.hold_capture(&key);
         // A configured runtime may have loaded before its remote Client
         // connected. An authorized Shell START can request the same readiness
         // work again; it does not wait for it or affect argv-only commands.
         if matches!(&spec.program, ProcessProgram::Shell { .. }) {
             self.schedule_workspace_python();
         }
-        // The runtime handle comes first: a stopped runtime fails before
-        // the worker count ever reflects in-flight creation, so the
-        // count below always includes the worker it precedes.
         let Some(runtime) = self
             .runtime
             .lock()
@@ -742,20 +760,22 @@ impl Operations {
                 state: self.current_state(&key),
             };
         };
-        {
-            let mut live = self.workers.live.lock().expect("worker count");
-            *live += 1;
-        }
-        let worker_key = key.clone();
         let python = Arc::clone(&self.python);
-        runtime.spawn(async move {
-            let _count = WorkerGuard(workers);
-            run_operation(
-                inner_arc, cwd_fd, cwd_path, workspace, worker_key, spec, signal, revoke, input_rx,
-                control, capture, captures, python,
-            )
-            .await;
-        });
+        runtime.spawn(run_operation(
+            inner_arc,
+            cwd_fd,
+            cwd_path,
+            workspace,
+            key.clone(),
+            spec,
+            signal,
+            revoke,
+            input_rx,
+            control,
+            active,
+            captures,
+            python,
+        ));
         ProcessReply::State {
             key,
             state: OperationState::Starting,
@@ -1023,6 +1043,9 @@ impl Operations {
         if !self.own_key(&key) {
             return ProcessReply::Unknown { key };
         }
+        let Some(_active) = self.admit_auxiliary() else {
+            return ProcessReply::Unknown { key };
+        };
         let file = {
             let mut inner = self.inner.lock().expect("operation registry");
             match inner.records.get_mut(&key.operation) {
@@ -1031,8 +1054,19 @@ impl Operations {
                 None => return ProcessReply::Unknown { key },
             }
         };
+        #[cfg(test)]
+        self.hold_capture(&key);
         drop(file);
         ProcessReply::OutputReleased { key }
+    }
+
+    #[cfg(test)]
+    fn hold_capture(&self, key: &ProcessOperationKey) {
+        let hold = self.capture_holds.lock().unwrap().remove(&key.operation);
+        if let Some((entered, resume)) = hold {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+        }
     }
 
     fn bash_capture(&self, key: ProcessOperationKey) -> ProcessReply {
@@ -1269,7 +1303,7 @@ async fn run_operation(
     revoke: ProcessSignal,
     mut input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
     control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
-    mut capture: Option<Capture>,
+    mut active: ActiveProcess,
     captures: Arc<Captures>,
     python: Arc<rustx_execution_client::workspace_python::WorkspacePython>,
 ) {
@@ -1428,13 +1462,13 @@ async fn run_operation(
                 match result {
                     Ok(0) => {
                         stdout_done = true;
-                        if let Some(capture) = &mut capture {
+                        if let Some(capture) = &mut active.capture {
                             capture.push(ProcessStream::Stdout, None, &captures, key.operation).await;
                         }
                     }
                     Ok(n) => {
                         let bytes = &stdout_buf[..n];
-                        if let Some(capture) = &mut capture {
+                        if let Some(capture) = &mut active.capture {
                             capture.push(ProcessStream::Stdout, Some(bytes), &captures, key.operation).await;
                         }
                         push(&inner, &key, ProcessStream::Stdout, bytes);
@@ -1449,7 +1483,7 @@ async fn run_operation(
                 match result {
                     Ok(0) => {
                         stderr_done = true;
-                        if let Some(capture) = &mut capture {
+                        if let Some(capture) = &mut active.capture {
                             capture.push(ProcessStream::Stderr, None, &captures, key.operation).await;
                         }
                     }
@@ -1459,7 +1493,7 @@ async fn run_operation(
                     }
                     Ok(n) => {
                         let bytes = &stderr_buf[..n];
-                        if let Some(capture) = &mut capture {
+                        if let Some(capture) = &mut active.capture {
                             capture.push(ProcessStream::Stderr, Some(bytes), &captures, key.operation).await;
                         }
                         push(&inner, &key, ProcessStream::Stderr, bytes);
@@ -1592,7 +1626,7 @@ async fn run_operation(
         settle_outcome(&inner, &key, SettledDisposition::Unknown, None);
         return;
     };
-    if let Some(capture) = capture {
+    if let Some(capture) = active.capture.take() {
         use std::os::unix::process::ExitStatusExt as _;
         let signal = termination.exit_status.and_then(|status| status.signal());
         let (result, file, complete) =
@@ -2589,6 +2623,119 @@ mod tests {
             ));
         }
         assert!(ops.shutdown().is_ok());
+    }
+
+    fn revoke_during_capture_handoff(discard: bool) {
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc::channel;
+
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(&dir.path().canonicalize().unwrap());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let key = fresh_key(&adm);
+        let mut bash = spec(&[]);
+        bash.program = ProcessProgram::Shell {
+            command: "printf retained; touch did-start".into(),
+            conversation: "capture-handoff".into(),
+            live_output: true,
+        };
+        assert_eq!(
+            ops.dispatch(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: bash.fingerprint(),
+                spec: bash,
+            }),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        let capture = ops.captures.path().unwrap();
+        let request = if discard {
+            assert!(supervisor_staged());
+            ops.dispatch(ProcessRequest::Start { key: key.clone() });
+            let snapshot = await_settled(&ops, &key);
+            assert_eq!(snapshot.disposition, SettledDisposition::Known);
+            assert_eq!(ops.settle(Duration::from_secs(5)), 0);
+            assert_eq!(
+                ops.dispatch(ProcessRequest::ReleaseOutput {
+                    key: key.clone(),
+                    final_sequence: snapshot.final_sequence,
+                }),
+                ProcessReply::OutputReleased { key: key.clone() }
+            );
+            ProcessRequest::DiscardBashOutput { key: key.clone() }
+        } else {
+            ProcessRequest::Start { key: key.clone() }
+        };
+        let (entered, held) = channel();
+        let (resume, resume_rx) = channel();
+        ops.capture_holds
+            .lock()
+            .unwrap()
+            .insert(key.operation, (entered, resume_rx));
+        let data_request = std::thread::spawn({
+            let ops = ops.clone();
+            move || ops.dispatch(request)
+        });
+        held.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (control_client, mut control_server) = UnixStream::pair().unwrap();
+        let (data_client, _data_server) = UnixStream::pair().unwrap();
+        let data_client = RecordChannel::unix(data_client);
+        let worker = crate::client_control_worker(
+            RecordChannel::unix(control_client),
+            Arc::new(crate::mutation::Arbitration::new()),
+            data_client.shutdown_handle().unwrap(),
+            ops.clone(),
+            Arc::new(crate::watch::Watches::new()),
+        );
+        control_server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let poll: ControlPoll = read_record(&mut control_server).unwrap();
+        let revoke = ControlTurn {
+            sequence: poll.sequence,
+            health: poll.health,
+            request: Some(ControlRequest::Revoke),
+        };
+        write_record(&mut control_server, &revoke).unwrap();
+        let wait = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        wait.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), ops.revoke.cancelled())
+                .await
+                .unwrap();
+        });
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        assert!(capture.is_dir());
+        resume.send(()).unwrap();
+        let receipt: ControlPoll = read_record(&mut control_server).unwrap();
+        assert_eq!(receipt.receipt, Some(ControlReply::Revoked));
+        assert!(!capture.exists());
+        let result = data_request.join().unwrap();
+        if discard {
+            assert_eq!(result, ProcessReply::OutputReleased { key });
+        } else {
+            assert_eq!(
+                await_settled(&ops, &key).disposition,
+                SettledDisposition::Cancelled
+            );
+            assert!(!dir.path().join("did-start").exists());
+        }
+        worker.stop();
+    }
+
+    #[test]
+    fn revoke_waits_for_start_capture_before_worker_spawn() {
+        revoke_during_capture_handoff(false);
+    }
+
+    #[test]
+    fn revoke_waits_for_discard_to_drop_the_removed_capture() {
+        revoke_during_capture_handoff(true);
     }
 
     #[test]

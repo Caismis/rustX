@@ -181,3 +181,13 @@ async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
 async fn queued_capture_discard_hands_off_to_binding_revocation() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::queued_capture_discard_hands_off_to_binding_revocation()).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_preparation_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::cancelled_preparation_hands_off_to_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_relay_joins_the_physical_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::child_relay_joins_the_physical_binding_revocation()).await;
+}

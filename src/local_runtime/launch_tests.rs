@@ -2409,6 +2409,20 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
 }
 
 #[cfg(unix)]
+#[test]
+fn retained_authored_configuration_requires_a_workspace_directory() {
+    let fixture = Fixture::new();
+    let launch = fixture.resolve();
+    let workspace = &fixture.host.launch_directory;
+    std::fs::rename(workspace, fixture.root.path().join("previous-workspace")).unwrap();
+    std::fs::write(workspace, "a file at the former Workspace path").unwrap();
+    assert_eq!(
+        launch.validate_resource_authority().unwrap_err(),
+        "Workspace physical binding changed after capture"
+    );
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn cfg3_mcp_absolute_working_directory_is_captured_without_connection() {
     let f = Fixture::new();

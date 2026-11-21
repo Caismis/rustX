@@ -65,6 +65,8 @@ impl ChildExecutionGrant {
             connection_released: tokio::sync::Notify::new(),
             settlement: Mutex::new(super::Settlement::Open),
             settlement_changed: std::sync::Condvar::new(),
+            #[cfg(test)]
+            settlement_joined: tokio::sync::Notify::new(),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             workspace: workspace.to_path_buf(),
@@ -411,18 +413,12 @@ impl Authority {
             });
             if !matches!(reply, Ok(ClientReply::WriteAborted { ticket: echoed }) if ticket == echoed)
             {
-                owner.cut_pair();
-                return Err(io::Error::other(
-                    "child execution cleanup remains unconfirmed",
-                ));
+                return owner.finish_child_cleanup(deadline);
             }
         }
         for operation in operations.into_values() {
             if Self::release_operation(owner, &operation, deadline).is_err() {
-                owner.cut_pair();
-                return Err(io::Error::other(
-                    "child execution cleanup remains unconfirmed",
-                ));
+                return owner.finish_child_cleanup(deadline);
             }
         }
         Ok(())

@@ -804,3 +804,250 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
     bounded(data).await.unwrap();
     bounded(control).await.unwrap();
 }
+
+fn park_revoked_receipt(
+    (mut client, mut server): (UnixStream, UnixStream),
+) -> (
+    oneshot::Receiver<()>,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (seen, pending) = oneshot::channel();
+    let (resume, held) = oneshot::channel();
+    let relay = tokio::spawn(async move {
+        loop {
+            let poll: ControlPoll = receive(&mut client).await.unwrap();
+            if matches!(poll.receipt, Some(ControlReply::Revoked)) {
+                seen.send(()).unwrap();
+                held.await.unwrap();
+                send(&mut server, &poll).await.unwrap();
+                let _ = receive::<ControlTurn>(&mut server).await;
+                return;
+            }
+            send(&mut server, &poll).await.unwrap();
+            let turn: ControlTurn = receive(&mut server).await.unwrap();
+            send(&mut client, &turn).await.unwrap();
+        }
+    });
+    (pending, resume, relay)
+}
+
+async fn wait_for_data_capacity(
+    endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    available: usize,
+) {
+    bounded(async {
+        while endpoint.available_data_for_test() != available {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+}
+
+fn detached_cancellation(
+    signal: crate::runtime::CancellationSignal,
+) -> crate::runtime::ExecutionCancellation {
+    crate::runtime::ExecutionCancellation::detached(
+        signal,
+        crate::runtime::types::CancellationReason::UserRequested,
+    )
+}
+
+pub(crate) async fn cancelled_preparation_hands_off_to_binding_revocation() {
+    use rustx_execution_protocol::MAX_DATA_RECORDS_PER_CONNECTION;
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control,
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let (seen, prepared) = oneshot::channel();
+    let (reply, allow_reply) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        let request = receive::<ClientRequest>(&mut server_data).await.unwrap();
+        assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+        send(&mut client_data, &request).await.unwrap();
+        let response = receive::<ClientReply>(&mut client_data).await.unwrap();
+        assert!(matches!(response, ClientReply::WritePrepared { .. }));
+        seen.send(()).unwrap();
+        allow_reply.await.unwrap();
+        send(&mut server_data, &response).await.unwrap();
+        assert!(
+            receive::<ClientRequest>(&mut server_data).await.is_err(),
+            "terminal settlement owns the ticket without another data request"
+        );
+    });
+    let (revoke, release_revoke, control) = park_revoked_receipt(control);
+    let session = &fixture.sessions[0].id;
+    let scope = fixture.manager.execution_scope(session);
+    let signal = crate::runtime::CancellationSignal::new();
+    let prepare = tokio::spawn({
+        let cancellation = detached_cancellation(signal.clone());
+        async move {
+            scope
+                .prepare_write(
+                    std::path::Path::new("unpublished"),
+                    b"data".to_vec(),
+                    &cancellation,
+                )
+                .await
+        }
+    });
+    bounded(prepared).await.unwrap();
+    let mut writer = Box::pin(endpoint.writer_for_test().acquire_owned());
+    assert!(futures_util::poll!(&mut writer).is_pending());
+    signal.cancel();
+    reply.send(()).unwrap();
+    let writer = bounded(writer).await.unwrap();
+    assert_eq!(
+        bounded(prepare).await.unwrap().unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
+    wait_for_data_capacity(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION - 1).await;
+
+    let host = fixture.host.clone();
+    let drain = tokio::spawn(async move { host.drain().await });
+    bounded(revoke).await.unwrap();
+    drop(writer);
+    wait_for_data_capacity(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION).await;
+    assert!(!drain.is_finished(), "the real Client receipt is parked");
+    release_revoke.send(()).unwrap();
+    assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
+    assert!(!endpoint.workspace().join("unpublished").exists());
+}
+
+#[allow(clippy::too_many_lines)] // Keep delegated ticket and capture ownership in the same wire scenario.
+pub(crate) async fn child_relay_joins_the_physical_binding_revocation() {
+    use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
+    use crate::runtime::subagent::ResolvedSubagentTool;
+    use crate::tools::types::ToolInvocationPolicy;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control,
+        endpoint,
+        mut child,
+        _scratch: scratch,
+    } = proxied_client(&fixture).await;
+    let data = tokio::spawn(async move {
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            assert!(!matches!(
+                request,
+                ClientRequest::AbortWrite { .. }
+                    | ClientRequest::CommitWrite { .. }
+                    | ClientRequest::Process(ProcessRequest::DiscardBashOutput { .. })
+            ));
+            send(&mut client_data, &request).await.unwrap();
+            let response = receive::<ClientReply>(&mut client_data).await.unwrap();
+            send(&mut server_data, &response).await.unwrap();
+        }
+        let _ = client_data.shutdown().await;
+    });
+    let (revoke, release_revoke, control) = park_revoked_receipt(control);
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let tools = ["write", "bash"].map(|name| {
+        let definition =
+            crate::tools::native::subagent_child_definition(name, ToolInvocationPolicy::default())
+                .unwrap();
+        ResolvedSubagentTool::Builtin {
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            definition,
+        }
+    });
+    let relay = ChildExecutionRelay::create(
+        &fixture.manager.execution_scope(&session.id),
+        endpoint.workspace(),
+        conversation,
+        &tools,
+    )
+    .unwrap();
+    let grant = relay.grant();
+    let (parent_startup, child_startup) = UnixStream::pair().unwrap();
+    relay.transfer(&parent_startup).await.unwrap();
+    let scope = grant
+        .open(&session.id, endpoint.workspace(), &child_startup)
+        .await
+        .unwrap();
+    let reaped = relay.start().unwrap();
+    let cancellation = detached_cancellation(crate::runtime::CancellationSignal::new());
+    let _ticket = scope
+        .prepare_write(
+            std::path::Path::new("child-unpublished"),
+            b"data".to_vec(),
+            &cancellation,
+        )
+        .await
+        .unwrap();
+    let process = scope.endpoint().unwrap();
+    let operation = OperationId::new();
+    let key = process.process_key(operation).unwrap();
+    let spec = ProcessSpec {
+        cwd: std::path::PathBuf::new(),
+        program: ProcessProgram::Shell {
+            command: "touch child-started".into(),
+            conversation: conversation.as_str().into(),
+            live_output: true,
+        },
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 5000,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let registered = tokio::task::spawn_blocking({
+        let key = key.clone();
+        move || {
+            process.agent_process(
+                &ProcessRequest::RegisterAgentBash {
+                    key,
+                    fingerprint: spec.fingerprint(),
+                    spec,
+                },
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+                || Ok(()),
+            )
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(registered, ProcessReply::Registered { key });
+    let name = format!("{:032x}.output", operation.as_u128());
+    let capture = std::fs::read_dir(scratch.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join(&name))
+        .find(|path| path.is_file())
+        .expect("physical child-owned capture");
+
+    let host = fixture.host.clone();
+    let drain = tokio::spawn(async move { host.drain().await });
+    bounded(revoke).await.unwrap();
+    assert!(
+        !capture.exists(),
+        "the physical Client removed the child capture before replying"
+    );
+    let cleanup = tokio::spawn(reaped.after_child_reaped());
+    bounded(endpoint.settlement_joined.notified()).await;
+    assert!(!cleanup.is_finished());
+    release_revoke.send(()).unwrap();
+    assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+    bounded(cleanup).await.unwrap().unwrap();
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
+    assert!(!endpoint.workspace().join("child-unpublished").exists());
+    assert!(!endpoint.workspace().join("child-started").exists());
+}

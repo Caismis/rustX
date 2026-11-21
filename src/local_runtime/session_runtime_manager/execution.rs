@@ -63,6 +63,8 @@ pub struct LocalExecutionEndpoint {
     connection_released: tokio::sync::Notify,
     settlement: Mutex<Settlement>,
     settlement_changed: std::sync::Condvar,
+    #[cfg(test)]
+    pub(crate) settlement_joined: tokio::sync::Notify,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -209,6 +211,8 @@ impl LocalExecutionEndpoint {
             connection_released: tokio::sync::Notify::new(),
             settlement: Mutex::new(Settlement::Open),
             settlement_changed: std::sync::Condvar::new(),
+            #[cfg(test)]
+            settlement_joined: tokio::sync::Notify::new(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -260,6 +264,8 @@ impl LocalExecutionEndpoint {
             connection_released: tokio::sync::Notify::new(),
             settlement: Mutex::new(Settlement::Open),
             settlement_changed: std::sync::Condvar::new(),
+            #[cfg(test)]
+            settlement_joined: tokio::sync::Notify::new(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -1116,28 +1122,12 @@ impl LocalExecutionEndpoint {
     pub(super) fn fence_connection_by(&self, deadline: Instant) -> io::Result<()> {
         {
             let mut state = self.settlement.lock().expect("execution settlement");
-            loop {
-                match &*state {
-                    Settlement::Open | Settlement::Closing => {
-                        *state = Settlement::Revoking;
-                        break;
-                    }
-                    Settlement::Revoking => {
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        if remaining.is_zero() {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                "Client revocation is still in progress",
-                            ));
-                        }
-                        state = self
-                            .settlement_changed
-                            .wait_timeout(state, remaining)
-                            .expect("execution settlement")
-                            .0;
-                    }
-                    Settlement::Finished(result) => return settlement_result(result),
+            match &*state {
+                Settlement::Open | Settlement::Closing => {
+                    *state = Settlement::Revoking;
                 }
+                Settlement::Revoking => return self.wait_for_settlement(state, deadline),
+                Settlement::Finished(result) => return settlement_result(result),
             }
         }
         let result = self.revoke_and_close(deadline).map_err(Arc::new);
@@ -1145,6 +1135,32 @@ impl LocalExecutionEndpoint {
         *self.settlement.lock().expect("execution settlement") = Settlement::Finished(result);
         self.settlement_changed.notify_all();
         outcome
+    }
+
+    fn wait_for_settlement(
+        &self,
+        mut state: std::sync::MutexGuard<'_, Settlement>,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        loop {
+            if let Settlement::Finished(result) = &*state {
+                return settlement_result(result);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Client revocation is still in progress",
+                ));
+            }
+            #[cfg(test)]
+            self.settlement_joined.notify_one();
+            state = self
+                .settlement_changed
+                .wait_timeout(state, remaining)
+                .expect("execution settlement")
+                .0;
+        }
     }
 
     fn revoke_and_close(&self, deadline: Instant) -> io::Result<()> {
@@ -1243,6 +1259,30 @@ impl LocalExecutionEndpoint {
         }
     }
 
+    /// A child reports successful cleanup only after its own receipts or the
+    /// physical binding's terminal settlement. The decision to fence a live
+    /// pair is serialized with the terminal owner's claim.
+    fn finish_child_cleanup(&self, deadline: Instant) -> io::Result<()> {
+        let state = self.settlement.lock().expect("execution settlement");
+        if matches!(*state, Settlement::Open) {
+            self.cut_pair();
+            return Err(io::Error::other(
+                "child execution cleanup remains unconfirmed",
+            ));
+        }
+        self.wait_for_settlement(state, deadline)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn writer_for_test(&self) -> Arc<Semaphore> {
+        self.agent_writer.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn available_data_for_test(&self) -> usize {
+        self.data_slots.available_permits()
+    }
+
     /// Fences the binding and shuts its sockets without taking the data lock:
     /// a wedged exchange fails on its own read, and the pair cannot be reused.
     pub(crate) fn cut_pair(&self) {
@@ -1301,16 +1341,17 @@ impl Drop for OwnedPrepared {
         let prepared = self.prepared.clone();
         let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            endpoint.cut_pair();
+            endpoint.cut_pair_if_open();
             return;
         };
         runtime.spawn(async move {
-            if endpoint
-                .cleanup_prepared(&prepared, deadline)
-                .await
-                .is_err()
+            if endpoint.dispatch_open()
+                && endpoint
+                    .cleanup_prepared(&prepared, deadline)
+                    .await
+                    .is_err()
             {
-                endpoint.cut_pair();
+                endpoint.cut_pair_if_open();
             }
         });
     }
@@ -2093,7 +2134,7 @@ impl SessionExecutionScope {
             // The ticket may still be live on the Client: fail closed
             // rather than advertising freed capacity that was never
             // cleaned.
-            endpoint.retire_connection();
+            endpoint.cut_pair_if_open();
         }
         result
     }

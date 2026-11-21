@@ -550,7 +550,10 @@ impl ProspectiveSessionConfig {
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
         let workspace_valid = match self.workspace_resources {
             super::WorkspaceResourceAuthority::Authored(_) => {
-                std::fs::canonicalize(&self.workspace).as_ref().ok() == Some(&self.workspace)
+                super::capture::canonical_directory(&self.workspace)
+                    .as_ref()
+                    .ok()
+                    == Some(&self.workspace)
             }
             super::WorkspaceResourceAuthority::Bound(identity) => {
                 // A Client document and its Server resource root are separate

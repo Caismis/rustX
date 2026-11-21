@@ -12,6 +12,26 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `d03310bb8`
+
+- The cancelled preparation regression parks a real Client's prepared
+  write reply, then queues its Abort behind the Server writer permit.
+  While the actual `Revoked` receipt is parked, cleanup relinquishes its
+  data permit without an Abort frame. Drain succeeds and the file stays
+  absent after the Client exits.
+- The delegated relay retains a write ticket and a live Bash capture
+  through the production forwarding path. Revocation removes the capture
+  before the receipt. The relay joins settlement while the receipt is
+  held and reports its result after delivery, with zero publication or
+  business START.
+- Client control-worker tests park START just before worker scheduling
+  and Discard just before releasing the removed capture. Each reports one
+  outstanding owner during Revoke and receives `Revoked` only after the
+  capture directory is gone. The parked START creates no business marker.
+- Authored configuration rejects a regular file replacing the captured
+  Workspace directory at the same path. The existing MCP preparation
+  regression keeps coverage of a replacement directory.
+
 ## Review follow-up on `e162692ff`
 
 - Session deletion fences admission locally, then waits outside the

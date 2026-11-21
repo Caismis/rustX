@@ -51,6 +51,15 @@ impl Captures {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn path(&self) -> Option<std::path::PathBuf> {
+        self.directory
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|directory| directory.temporary.path().to_path_buf())
+    }
+
     pub(crate) fn create(&self, operation: OperationId) -> io::Result<Arc<CaptureFile>> {
         let slot = self
             .slots

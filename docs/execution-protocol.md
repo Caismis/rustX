@@ -1239,11 +1239,14 @@ ownership. A terminal START receipt drives the output and release state,
 including a cancelled operation with an empty journal. A failed cancel
 checks the most recent terminal evidence before fencing. Private Bash
 capture discard waits for bounded data admission and either confirms
-release or retires its owning binding. When terminal settlement already
-owns the binding, queued discard transfers to it. The Client removes
-the retained capture files before sending Revoke confirmation.
-Non-EOF PTY read errors preserve
-output loss in the terminal disposition.
+release or retires its owning binding. Once terminal settlement closes
+ordinary data admission, queued capture discard and prepared-ticket
+cleanup transfer to it. A child relay with unfinished cleanup waits for
+the same physical settlement result. The Client counts capture owners
+from START admission through worker exit, and from Discard admission
+through file release. It removes the retained capture files before sending
+Revoke confirmation. Non-EOF PTY read errors preserve output loss in the
+terminal disposition.
 
 ### Workspace Python readiness
 
