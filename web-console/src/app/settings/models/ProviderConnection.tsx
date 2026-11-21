@@ -70,8 +70,10 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const edit = (next: ProviderWrite) => { setAttempted(0); unit.edit(next); };
   useEffect(() => {
     // The footer's Save runs this veto: an invalid connection stays a draft
-    // and the attempt notice marks the failing field.
-    page?.setLocal(false, undefined, undefined, () => {
+    // and the attempt notice marks the failing field. Returning the
+    // unregistration releases the veto when this editor unmounts — a dead
+    // editor must not keep blocking the page's Save with no visible error.
+    return page?.setLocal(false, undefined, undefined, () => {
       if (endpointError || credentialError) { setAttempted(occurrence => occurrence + 1); return false; }
       return undefined;
     });

@@ -61,9 +61,7 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
     setEdits({});
   };
   cancelRef.current = () => setEdits({});
-  useEffect(() => {
-    page?.setLocal(dirty, () => saveRef.current?.(), () => cancelRef.current?.());
-  }, [page, dirty]);
+  useEffect(() => page?.setLocal(dirty, () => saveRef.current?.(), () => cancelRef.current?.()), [page, dirty]);
 
   return <SettingsPageShell title={tx('settings:general-page.general')} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={<PageTransactionFooter />}>
     <SettingsGroup title={tx('settings:general-page.appearance')}>

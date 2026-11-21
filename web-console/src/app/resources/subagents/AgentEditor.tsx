@@ -83,14 +83,12 @@ export function AgentEditor({
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
-  useEffect(() => {
-    page?.setLocal(
-      false,
-      undefined,
-      creating ? () => { discardRef.current(); closeRef.current(); } : undefined,
-      () => saveable,
-    );
-  }, [page, creating, saveable]);
+  useEffect(() => page?.setLocal(
+    false,
+    undefined,
+    creating ? () => { discardRef.current(); closeRef.current(); } : undefined,
+    () => saveable,
+  ), [page, creating, saveable]);
 
   const model = value.model ?? undefined;
   const modelChoices = [...new Set([...models, ...(model?.model ? [model.model] : [])])];

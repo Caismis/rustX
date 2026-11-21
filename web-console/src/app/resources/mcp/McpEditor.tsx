@@ -194,8 +194,10 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
   discardRef.current = discard;
   useEffect(() => {
     // Canceling a creation also leaves the detail: there is nothing left to
-    // discard to, and the list is where an aborted creation returns.
-    page?.setLocal(localDirty, undefined,
+    // discard to, and the list is where an aborted creation returns. The
+    // returned unregistration releases this editor's slot on unmount so a
+    // dead buffer cannot keep vetoing the page's Save.
+    return page?.setLocal(localDirty, undefined,
       () => { discardRef.current(); if (!focus.name) close(); },
       () => commitJsonRef.current());
   }, [page, localDirty, focus.name]);
