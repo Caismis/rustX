@@ -249,7 +249,7 @@ async fn thread_status_busy_metadata_lock_recovers_without_a_semantic_wake() {
         let held = tokio::task::spawn_blocking(move || match source {
             0=>native.tool_runtime().background().with_activity_lock_for_test(|| holding.enter()),
             1=>native.with_activity_coordinator_lock_for_test(|| holding.enter()),
-            2=>{let guard=resident.status_read.lock().unwrap();holding.enter();drop(guard);},
+            2=>{let guard=resident.status_read.blocking_lock();holding.enter();drop(guard);},
             3=>{let guard=resident.composition.lock().unwrap();holding.enter();drop(guard);},
             _=>unreachable!(),
         });
@@ -283,6 +283,57 @@ async fn thread_status_busy_metadata_lock_recovers_without_a_semantic_wake() {
         f.close().await;
     }).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unload_waits_for_native_status_recovery_to_release_the_writer() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        probe.status_before_wait.arm();
+        let managed = f.load(0).await.unwrap().unwrap();
+        probe.status_before_wait.entered().await;
+        probe.status_before_recovery.arm();
+        let weak = managed.inspect_runtime().unwrap().weak_inner();
+        let resident = managed.resident.upgrade().unwrap();
+        let status_read = resident.status_read.lock().await;
+
+        // A busy read wakes the actual observer. Force its capture to
+        // encounter the same contention before allowing recovery to proceed.
+        assert!(matches!(
+            f.manager.thread_statuses(vec![id.clone()]).await,
+            Err(
+                crate::local_runtime::session_runtime_manager::RuntimeManagerError::Client(
+                    crate::runtime_client::types::RuntimeClientError::ObservationUnavailable { .. }
+                )
+            )
+        ));
+        probe.status_before_wait.release();
+        probe.status_before_recovery.entered().await;
+
+        let recovery = &probe.status_recovery_holding_runtime;
+        let release = recovery.arm_scoped();
+        drop(status_read);
+        drop(resident);
+        probe.status_before_recovery.release();
+        super::super::gate_entered(recovery).await;
+
+        let mut draining = probe.draining_status.subscribe();
+        let manager = f.manager.clone();
+        let thread = id.clone();
+        let mut unloading = tokio::spawn(async move { manager.unload(&thread).await });
+        tokio::select! {
+            result = &mut unloading => panic!("retired with a native status owner: {result:?}"),
+            waiting = draining.wait_for(|waiting| *waiting) => { waiting.unwrap(); }
+        }
+        assert!(weak.upgrade().is_some());
+        drop(release);
+        unloading.await.unwrap().unwrap();
+        assert!(weak.upgrade().is_none());
+        f.close().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

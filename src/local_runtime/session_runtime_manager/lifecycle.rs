@@ -740,7 +740,7 @@ impl SessionRuntimeManager {
                 .expect("process incarnation identity exhausted"),
         );
         Ok(Arc::new_cyclic(|resident| ResidentRuntime {
-            status_read: Mutex::new(()),
+            status_read: tokio::sync::Mutex::new(()),
             status_wake: Arc::new(tokio::sync::Notify::new()),
             node: access.node.id.clone(),
             initialization: initialization.clone(),
@@ -999,11 +999,21 @@ impl SessionRuntimeManager {
             drop(host);
             // Writer-transfer boundary: shutdown has permanently closed native
             // admission and proved settlement. Stale handles cannot reopen it.
-            runtime
-                .composition
-                .lock()
-                .expect("composition mutex")
-                .take();
+            // A status capture or recovery can still hold a native reference
+            // after shutdown. Clear the composition under the same guard so
+            // neither can retain the writer past the retirement receipt.
+            {
+                #[cfg(test)]
+                if runtime.status_read.try_lock().is_err() {
+                    owner.probe(&id).draining_status.send_replace(true);
+                }
+                let _status_read = runtime.status_read.lock().await;
+                runtime
+                    .composition
+                    .lock()
+                    .expect("composition mutex")
+                    .take();
+            }
             terminal.writer = WriterCertainty::Absent;
             if let Err(error) = shutdown {
                 owner

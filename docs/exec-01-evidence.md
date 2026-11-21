@@ -629,6 +629,26 @@ telemetry remain unmeasured.
 
 ## Final-head gate
 
+The [FULL run on `a47bd44c1`](https://github.com/Caismis/rustX/actions/runs/44904383504)
+passed Linux Boundary after that job disabled test debug information.
+Both prior Boundary attempts on `d7ff97b57` lost the hosted runner during
+the compile and staging step. Locally the previous settings triggered a
+cgroup OOM at the runner's reported available-memory budget of about
+14.4 GiB with swap disabled. The new settings compiled and staged the
+same targets under that limit with zero OOM kills. The local Boundary
+retry passed 847 Rust tests and 55 provider-emulator tests, with nine
+existing Rust ignores, and passed the lane inventory check.
+
+Deterministic contracts on the same GitHub run failed the assertion
+that a completed Compaction's old Runtime is gone after unload while
+delivery of its receipt is parked. A status read or recovery could still
+hold the native Runtime across composition removal. Retirement now
+waits for the same status guard before releasing the composition. A
+finished Agent Attempt also drops its native Runtime reference before
+acknowledging its lifecycle admission. The status regression parks the
+actual recovery reader while it owns the native Runtime and checks
+that unload waits and releases the allocation before returning.
+
 The [FULL run on `ec9342c49692893eca14bba7c1b9d3ec32fae10f`](https://github.com/Caismis/rustX/actions/runs/44744451236)
 passed generated protocol, Format and lint, TUI, Web/Host/launcher, and
 Browser input build. Linux Boundary, Deterministic contracts, all three

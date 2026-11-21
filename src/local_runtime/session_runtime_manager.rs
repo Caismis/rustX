@@ -348,7 +348,7 @@ impl ManagedRuntime {
 /// Sole strong composition owner, retained only by registry/transition machinery.
 #[derive(Debug)]
 struct ResidentRuntime {
-    status_read: Mutex<()>,
+    status_read: tokio::sync::Mutex<()>,
     status_wake: Arc<tokio::sync::Notify>,
     node: SessionNodeId,
     initialization: Arc<Initialization>,

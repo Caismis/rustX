@@ -130,6 +130,8 @@ pub(super) struct Probe {
     pub(super) archive_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) status_before_recovery: AsyncGate,
     pub(super) status_before_wait: AsyncGate,
+    pub(super) status_recovery_holding_runtime: Arc<crate::runtime::conversation_runtime::Gate>,
+    pub(super) draining_status: watch::Sender<bool>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) catalog_observer_start:
         Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
@@ -182,6 +184,8 @@ impl Default for Probe {
             archive_before_claim: Arc::default(),
             status_before_recovery: AsyncGate::default(),
             status_before_wait: AsyncGate::default(),
+            status_recovery_holding_runtime: Arc::default(),
+            draining_status: watch::channel(false).0,
             activation: Mutex::new(None),
             catalog_observer_start: Mutex::new(None),
             initialization_admission: Mutex::new(None),

@@ -132,14 +132,9 @@ impl StatusPublisher {
             let capture_guard = candidate
                 .as_ref()
                 .and_then(|resident| resident.status_read.try_lock().ok());
-            let native = candidate
+            let activity = capture_guard
                 .as_ref()
-                .and_then(|resident| resident.try_observation_runtime());
-            let activity = capture_guard.as_ref().and_then(|_| {
-                native
-                    .as_ref()
-                    .and_then(crate::runtime::conversation_runtime::ConversationRuntime::activity)
-            });
+                .and_then(|_| candidate.as_ref()?.try_observation_runtime()?.activity());
             let registry = registry.0.lock().expect("registry mutex");
             let (status, incarnation) = match (registry.entries.get(id), candidate.as_ref()) {
                 (Some(Entry::Loaded(current)), Some(observed))
@@ -344,15 +339,14 @@ impl SessionRuntimeManager {
                         let Some(recovering) = resident.upgrade() else {
                             return;
                         };
+                        #[cfg(test)]
+                        let recovery_gate = probe.status_recovery_holding_runtime.clone();
                         if tokio::task::spawn_blocking(move || {
-                            drop(
-                                recovering
-                                    .status_read
-                                    .lock()
-                                    .expect("native status capture"),
-                            );
+                            let _status_read = recovering.status_read.blocking_lock();
                             if let Some(native) = recovering.shutdown_runtime() {
                                 native.wait_activity_ready();
+                                #[cfg(test)]
+                                recovery_gate.enter();
                             }
                         })
                         .await
