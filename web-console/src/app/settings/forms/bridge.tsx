@@ -100,6 +100,12 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   // snapshot, because `useUnitEditing` refreshes `handle.current` each render.
   const handles = useRef(new Map<string, PageUnitHandle>());
   const registered = useRef(new Set<string>());
+  // A unit unregistered while its draft was still live: the editor is gone
+  // but the transaction actor still owns intent this page's Save, Cancel and
+  // navigation guard must reach. The detached handle keeps submitting and
+  // discarding it; a subscription releases it once the draft resolves.
+  const detached = useRef(new Map<string, PageUnitHandle>());
+  const detachedSubs = useRef(new Map<string, { unsubscribe(): void }>());
   const [stagedRemovals, setStagedRemovals] = useState<ReadonlySet<string>>(new Set());
   const [queue, setQueue] = useState<{ id: string; remove: boolean }[]>([]);
   const [conflict, setConflict] = useState<PageTransaction['conflict']>();
@@ -128,7 +134,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const saving = queue.length > 0;
 
   const submitItem = useCallback((item: { id: string; remove: boolean }) => {
-    handles.current.get(item.id)?.current.submit(item.remove);
+    (handles.current.get(item.id) ?? detached.current.get(item.id))?.current.submit(item.remove);
   }, []);
 
   const finishSave = useCallback(() => {
@@ -179,7 +185,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       // One unit's failure is its own: the remaining independent units still
       // submit, and the failed one keeps its draft for the footer gesture.
       if (headStatus === 'conflict') {
-        const handle = handles.current.get(item.id);
+        const handle = handles.current.get(item.id) ?? detached.current.get(item.id);
         setConflict(handle ? {
           identity: item.id,
           adopt: () => { handle.current.review(); setConflict(undefined); },
@@ -198,7 +204,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     if (localBeforeSaveRef.current?.() === false) return;
     const units = actor.getSnapshot().context.units;
     const items: { id: string; remove: boolean }[] = [];
-    for (const identity of registered.current) {
+    for (const identity of new Set([...registered.current, ...detached.current.keys()])) {
       const ref = units[identity];
       const remove = stagedRemovals.has(identity);
       // A unit actor only exists once the target machine has seen intent for
@@ -216,7 +222,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   }, [actor, stagedRemovals, submitItem, finishSave]);
 
   const cancelPage = useCallback(() => {
-    for (const identity of registered.current) handles.current.get(identity)?.current.discard();
+    for (const handle of [...handles.current.values(), ...detached.current.values()]) handle.current.discard();
     setStagedRemovals(new Set());
     setQueue([]);
     setConflict(undefined);
@@ -250,9 +256,35 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   }, []);
 
   const register = useCallback((identity: string, handle: PageUnitHandle) => {
+    // A remounting editor takes back a detached registration for its unit.
+    detachedSubs.current.get(identity)?.unsubscribe();
+    detachedSubs.current.delete(identity);
+    detached.current.delete(identity);
     handles.current.set(identity, handle);
     registered.current.add(identity);
     return () => {
+      // Unmounting an editor cannot end intent the actor still owns: while a
+      // draft is live the unit detaches instead of unregistering, so the page
+      // still saves, cancels and guards on it. The subscription releases the
+      // registration when that draft resolves, whichever gesture resolves it.
+      const ref = actor.getSnapshot().context.units[identity];
+      if (ref && ref.getSnapshot().context.draft !== undefined) {
+        handles.current.delete(identity);
+        registered.current.delete(identity);
+        detached.current.set(identity, handle);
+        const sub = ref.subscribe(snapshot => {
+          if (snapshot.context.draft !== undefined) return;
+          sub.unsubscribe();
+          detachedSubs.current.delete(identity);
+          if (detached.current.get(identity) === handle) detached.current.delete(identity);
+          setDraftFlags(current => {
+            if (!current.get(identity)) return current;
+            const next = new Map(current); next.delete(identity); return next;
+          });
+        });
+        detachedSubs.current.set(identity, sub);
+        return;
+      }
       handles.current.delete(identity);
       registered.current.delete(identity);
       setDraftFlags(current => {
@@ -260,7 +292,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
         const next = new Map(current); next.delete(identity); return next;
       });
     };
-  }, []);
+  }, [actor]);
 
   const stageRemoval = useCallback((identity: string) => {
     setStagedRemovals(current => new Set(current).add(identity));
