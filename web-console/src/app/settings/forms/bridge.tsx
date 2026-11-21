@@ -856,15 +856,27 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
  * pause and gives a superseding gesture a chance to supersede the draft
  * before it is submitted. */
 function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
+  // The draft value this flush last submitted. A rejected, conflict or
+  // uncertain commit keeps its draft without entering review, and an
+  // unchanged draft must not resubmit every 400ms: only a further edit (a
+  // different value) or the review gesture re-arms the flush.
+  const submitted = useRef<{ value?: T; reviewNeeded: boolean }>({ reviewNeeded: false });
   useEffect(() => {
     if (!enabled || !unit.draft || unit.busy || unit.awaitingObservation) return;
+    const reviewCleared = submitted.current.reviewNeeded && !unit.reviewNeeded;
+    submitted.current.reviewNeeded = unit.reviewNeeded;
     // A draft pending review (external divergence or a failed commit) waits
     // for the explicit review gesture — auto-save never retries into it.
     // `review` clears reviewNeeded and the flush re-arms on the newer base.
     if (unit.reviewNeeded) return;
-    const timer = setTimeout(() => unit.commit(unit.displayed), 400);
+    const failed = unit.outcome.kind === 'rejected' || unit.outcome.kind === 'conflict' || unit.outcome.kind === 'uncertain';
+    if (failed && !reviewCleared && sameValue(submitted.current.value, unit.displayed)) return;
+    const timer = setTimeout(() => {
+      submitted.current.value = unit.displayed;
+      unit.commit(unit.displayed);
+    }, 400);
     return () => clearTimeout(timer);
-  }, [enabled, unit.draft, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.displayed, unit]);
+  }, [enabled, unit.draft, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.displayed, unit.outcome, unit]);
 }
 
 /** One native semantic unit's editing surface, with a plain value contract.
