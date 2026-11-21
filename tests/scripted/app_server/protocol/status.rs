@@ -320,9 +320,9 @@ async fn unload_waits_for_native_status_recovery_to_release_the_writer() {
         super::super::gate_entered(recovery).await;
 
         let mut draining = probe.draining_status.subscribe();
-        let manager = f.manager.clone();
+        let owner = f.manager.clone();
         let thread = id.clone();
-        let mut unloading = tokio::spawn(async move { manager.unload(&thread).await });
+        let mut unloading = tokio::spawn(async move { owner.unload(&thread).await });
         tokio::select! {
             result = &mut unloading => panic!("retired with a native status owner: {result:?}"),
             waiting = draining.wait_for(|waiting| *waiting) => { waiting.unwrap(); }

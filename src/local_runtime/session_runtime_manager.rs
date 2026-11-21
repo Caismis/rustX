@@ -437,6 +437,13 @@ impl ResidentRuntime {
             .expect("resident owns operation drain");
     }
 
+    async fn release_composition(&self) {
+        // Readers can still hold a native reference after shutdown. Take
+        // the composition under their guard before reporting writer absence.
+        let _status_read = self.status_read.lock().await;
+        self.composition.lock().expect("composition mutex").take();
+    }
+
     fn try_observation_runtime(&self) -> Option<ConversationRuntime> {
         self.composition
             .try_lock()
