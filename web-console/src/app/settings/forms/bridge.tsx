@@ -75,6 +75,11 @@ export interface PageTransaction {
    * becomes a unit draft (a JSON editor applying its text) commits through
    * the same queue; returning `false` vetoes the save. */
   readonly setLocal: (dirty: boolean, save?: () => void, cancel?: () => void, beforeSave?: () => boolean | void) => void;
+  /** Danger actions an editor publishes into the page footer's left slot.
+   * The footer is owned by whoever mounts it — a page shell or a test
+   * harness — so the editor never renders a second one. */
+  readonly footerLeading?: ReactNode;
+  readonly setFooterLeading: (leading: ReactNode | undefined) => void;
 }
 
 /** The page only ever submits, discards and reviews a unit — the handle
@@ -306,10 +311,12 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     localBeforeSaveRef.current = beforeSave;
     setLocalDirty(current => current === nextDirty ? current : nextDirty);
   }, []);
+  const [footerLeading, setFooterLeading] = useState<ReactNode>();
 
   const transaction: PageTransaction = {
     dirty, saving, generation, stagedRemovals, stageRemoval, unstageRemoval,
     savePage, cancelPage, conflict, register, reportDraft, setLocal: setLocalEntry,
+    footerLeading, setFooterLeading,
   };
   return <PageTransactionContext.Provider value={transaction}>{children}</PageTransactionContext.Provider>;
 }
@@ -322,7 +329,8 @@ export function PageTransactionFooter({ leading, status }: { leading?: ReactNode
   const page = usePageTransaction();
   if (!page) return null;
   const conflict = page.conflict;
-  return <SettingsPageFooter dirty={page.dirty} saving={page.saving} leading={leading}
+  const footerLeading = leading || page.footerLeading ? <>{leading}{page.footerLeading}</> : undefined;
+  return <SettingsPageFooter dirty={page.dirty} saving={page.saving} leading={footerLeading}
     status={conflict ? <span role="alert">
       {tx('settings:unsaved.save-conflict')}
       <Button variant="ghost" size="sm" onClick={conflict.adopt}>{tx('settings:unsaved.adopt-latest')}</Button>

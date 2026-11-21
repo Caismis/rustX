@@ -16,6 +16,7 @@ import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
 import { useNavigationGuard } from '../../settings/forms/guard';
+import { PageTransactionFooter } from '../../settings/forms/bridge';
 import { SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
 import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
 import css from './McpPage.module.css';
@@ -44,7 +45,7 @@ export function McpDetail({ source, scope, revision, focus, scopeControl, onClos
   const title = focus.name ?? tx('settings:mcp.new');
   return <SettingsPageShell title={title} className={`${settingsCss.settings} ${settingsCss.page}`} data-mcp-page=""
     breadcrumb={<Button variant="ghost" size="sm" onClick={() => guard.guard(onClose)}>{tx('settings:mcp.back')}</Button>}
-    toolbar={scopeControl} footer={null}>
+    toolbar={scopeControl} footer={<PageTransactionFooter/>}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
     <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
       scopeControl={scopeControl} close={onClose} />

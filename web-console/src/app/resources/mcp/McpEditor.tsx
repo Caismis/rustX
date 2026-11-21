@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
-import { DefinitionNotice, PageTransactionFooter, UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
+import { DefinitionNotice, UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
 import type { McpFieldBuffers, McpFocus } from '../types';
 import { McpPermissionDetail } from '../shared/McpPermissionDetail';
@@ -21,7 +21,7 @@ interface EditorProps {
 export function McpEditor(props: EditorProps) {
   const { source, scope, revision, focus, close } = props;
   const tx = useTranslation();
-  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/><PageTransactionFooter/></>;
+  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></>;
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
   if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
   return <Editor {...props} document={document}/>;
@@ -149,6 +149,24 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
   // A staged removal replaces the editable surface with its pending state:
   // the footer Save applies it and the banner's undo takes it back.
   const removalStaged = !!page?.stagedRemovals.has(unit.identity);
+  // The delete affordance belongs to the page footer's left slot, which
+  // whoever mounts the footer renders — the editor only publishes it. The
+  // stage call goes through a ref: the transaction object is a new identity
+  // every provider render, so depending on it would re-publish forever.
+  const stageRemovalRef = useRef<(() => void) | undefined>(undefined);
+  stageRemovalRef.current = canWrite ? () => page?.stageRemoval(unit.identity) : undefined;
+  const footerLeading = useMemo(() => focus.name && unit.authoredPresent && !removalStaged
+    ? <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction
+        label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')}
+        title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})}
+        description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')}
+        confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite}
+        onConfirm={() => stageRemovalRef.current?.()}/></span>
+    : undefined, [focus.name, unit.authoredPresent, removalStaged, restoresInherited, removalLabel, identityTitle, canWrite, tx]);
+  useEffect(() => {
+    page?.setFooterLeading(footerLeading);
+    return () => page?.setFooterLeading(undefined);
+  }, [page, footerLeading]);
   const resetBuffers = () => {
     setJsonEdit(undefined); setPendingImport(undefined); setImports({}); setError('');
     setInvalidFields({});
@@ -216,10 +234,5 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
       </fieldset>}
     </form>
     {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
-    <PageTransactionFooter leading={focus.name && unit.authoredPresent && !removalStaged ? <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite} onConfirm={() => {
-        if (!canWrite) return;
-        // Deletion stages into the page transaction; the footer commits it.
-        page?.stageRemoval(unit.identity);
-      }}/></span> : undefined}/>
   </>;
 }

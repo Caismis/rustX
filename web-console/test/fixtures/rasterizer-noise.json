@@ -59616,7 +59616,7 @@
   {
     "reference": "model-advanced-light-390-linux.png",
     "evidence": "Pinned Playwright 1.63.0 Linux captures under the restyled Settings baseline alternate which corner pixel of the context input's rounded border rasterizes lighter by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
-    "referenceSha256": "aba15300565aa82114b17c6cba2abfe48a6314a0e24d384eb8f891490feca331",
+    "referenceSha256": "4a32cb8b68691f5216cdfb945ba8d2f55153a29d583fb27996863ba27e10715d",
     "captureSha256": "69af01b53408bc1f03c4c446440d93bada71b5d96bfe799209289235e97dff88",
     "regions": [
       {
@@ -59643,15 +59643,15 @@
         33,
         236,
         [
-          222,
-          222,
-          222,
+          223,
+          223,
+          223,
           255
         ],
         [
-          223,
-          223,
-          223,
+          222,
+          222,
+          222,
           255
         ]
       ]
@@ -59660,7 +59660,7 @@
   {
     "reference": "model-advanced-dark-390-linux.png",
     "evidence": "Pinned Playwright 1.63.0 Linux captures under the restyled Settings baseline alternate which corner pixel of the context input's rounded border rasterizes darker by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
-    "referenceSha256": "2843b88c8a05c7a321e186a977f74cb7bd663713499aec52fb9c87977bce4eb7",
+    "referenceSha256": "a7ad3779efb7a34742101e871e946d33b2c442c7b12e416d84363d63a1c0fefb",
     "captureSha256": "027b4e2362fa0e7850238318d68d0ac2897e31d8aeafc1df4d55e21e59afd54b",
     "regions": [
       {
@@ -59687,15 +59687,15 @@
         33,
         236,
         [
-          78,
-          78,
-          80,
-          255
-        ],
-        [
           77,
           77,
           79,
+          255
+        ],
+        [
+          78,
+          78,
+          80,
           255
         ]
       ]
@@ -59704,7 +59704,7 @@
   {
     "reference": "model-profiles-dark-1440-linux.png",
     "evidence": "Pinned Playwright 1.63.0 Linux branch review observed a one-level variation at (26,360). CI run 44432316970, browser-evidence-shard-1, independently measured one changed pixel at (25,360) with channel delta 1 against the same baseline. Each measured site has its own one-pixel bound.",
-    "referenceSha256": "49b0f0fbb9c5087c4b57d1709005f56382aa1fba507f2161d96f23fe8c53acbf",
+    "referenceSha256": "c190906fb7cd8f537dd77729708f43620ff08dad770c7667993a0b81fdac01bb",
     "captureSha256": "2fddb0a1853a242c9017eae9c52ca2a2bd80714a25a86c2532c64677e21ab5fa",
     "regions": [
       {
@@ -59780,6 +59780,115 @@
           61,
           61,
           63,
+          255
+        ]
+      ]
+    ]
+  },
+  {
+    "reference": "model-advanced-light-1440-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 FULL CI capture: run 44885557261, job 136792530656 (Browser acceptance shard 2/2), artifact browser-evidence-shard-2 (14700711777) differs at 4 pixels, all at anti-aliased text edges, maximum channel delta 3. The report exposes per-pixel maximum deltas, not channel attribution; each recorded exemplar applies its observed delta to the red channel as a representative site. Each bound is the largest delta observed (3).",
+    "referenceSha256": "5359d32e9f61705b7a4781beaa8c153d54bcd14455b02534556e59bce847db2c",
+    "regions": [
+      {
+        "label": "Anti-aliased text edge coverage",
+        "x": 409,
+        "y": 321,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 3
+      },
+      {
+        "label": "Anti-aliased text edge coverage",
+        "x": 410,
+        "y": 321,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 3
+      },
+      {
+        "label": "Anti-aliased text edge coverage",
+        "x": 409,
+        "y": 322,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 3
+      },
+      {
+        "label": "Anti-aliased text edge coverage",
+        "x": 409,
+        "y": 420,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 3
+      }
+    ],
+    "pixels": [
+      [
+        409,
+        321,
+        [
+          251,
+          251,
+          251,
+          255
+        ],
+        [
+          252,
+          251,
+          251,
+          255
+        ]
+      ],
+      [
+        410,
+        321,
+        [
+          222,
+          222,
+          222,
+          255
+        ],
+        [
+          225,
+          222,
+          222,
+          255
+        ]
+      ],
+      [
+        409,
+        322,
+        [
+          222,
+          222,
+          222,
+          255
+        ],
+        [
+          223,
+          222,
+          222,
+          255
+        ]
+      ],
+      [
+        409,
+        420,
+        [
+          222,
+          222,
+          222,
+          255
+        ],
+        [
+          223,
+          222,
+          222,
           255
         ]
       ]
