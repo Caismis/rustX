@@ -5,7 +5,7 @@ use super::*;
 static SERVER_INCARNATION: std::sync::OnceLock<ServerIncarnation> = std::sync::OnceLock::new();
 
 /// The one process-wide Server incarnation — allocated once, never per
-/// runtime reload. Every [`Bootstrap`], [`Admission`], and process
+/// runtime reload. Every [`Bootstrap`](rustx_execution_protocol::Bootstrap), [`Admission`], and process
 /// operation identity is keyed under it.
 #[must_use]
 pub fn server_incarnation() -> ServerIncarnation {
