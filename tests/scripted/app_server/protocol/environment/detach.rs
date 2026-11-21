@@ -738,6 +738,10 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
                 let (seen, held) = gate.take().expect("a single Revoke owns settlement");
                 seen.send(()).unwrap();
                 held.await.unwrap();
+                send(&mut control_server, &poll).await.unwrap();
+                // The Client's final poll does not wait for another turn.
+                let _ = receive::<ControlTurn>(&mut control_server).await;
+                return;
             }
             if send(&mut control_server, &poll).await.is_err() {
                 return;
