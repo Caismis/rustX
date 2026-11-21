@@ -87,3 +87,5 @@ pub mod credentials;
 pub const CACHE_CANDIDATES_MARKER_3: u32 = 3;
 
 // cache-candidates warm repeat marker: comment-only commit for median sampling.
+
+// cache-candidates warm repeat marker 2: comment-only commit for median sample 3.
