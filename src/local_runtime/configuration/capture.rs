@@ -8,8 +8,8 @@ use super::{
     AdmittedSource, BTreeMap, Digest, IndependentPolicy, LaunchFailure, LayerCapture, ModelCatalog,
     Origin, OsStrExt, Path, PathBuf, ProspectiveSessionConfig, ResourceDefinition, ResourceFamily,
     RuntimeLayer, SessionConfigInput, SessionLocations, Sha256, SourceCapture, SourceReread,
-    SourceScope, UserConfigManager, UserConfigSources, WorkspaceResourceIdentity, application,
-    read_bounded, repair,
+    SourceScope, UserConfigManager, UserConfigSources, WorkspaceResourceAuthority,
+    WorkspaceResourceIdentity, application, read_bounded, repair,
 };
 use crate::local_runtime::session_runtime_manager::{
     LocalExecutionEndpoint, WorkspaceConfiguration,
@@ -1113,7 +1113,12 @@ impl UserConfigManager {
             agent_root,
             role_sources,
             locations,
-            authored_workspace: authored_identity,
+            workspace_resources: match resource_source {
+                ResourceSource::Authored => WorkspaceResourceAuthority::Authored(
+                    authored_identity.expect("authored configuration requires a Workspace"),
+                ),
+                ResourceSource::Bound(_) => WorkspaceResourceAuthority::Bound(authored_identity),
+            },
             config: std::sync::Arc::new(config),
             models,
             provenance,
@@ -1165,7 +1170,7 @@ pub(super) fn authored_workspace_identity(
     if !metadata.is_dir() || !std::fs::canonicalize(path).is_ok_and(|canonical| canonical == path) {
         return Err(workspace_resource_failure(
             path,
-            "expected the original canonical directory",
+            "Workspace directory was replaced or redirected",
         ));
     }
     Ok(Some(WorkspaceResourceIdentity {

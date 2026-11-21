@@ -678,7 +678,7 @@ impl SessionRuntimeManager {
                 (
                     session.clone(),
                     binding.input.clone(),
-                    binding.authored_workspace,
+                    binding.workspace_resources.identity(),
                 )
             })
             .collect();
@@ -762,9 +762,8 @@ impl SessionRuntimeManager {
             if let Ok(capture) = &mut capture
                 && let Ok(context) = &mut capture.context
             {
-                if retained.authored_workspace.is_some()
-                    && context.authored_workspace != retained.authored_workspace
-                {
+                let identity = retained.workspace_resources.identity();
+                if identity.is_some() && context.workspace_resources.identity() != identity {
                     capture.context = Err(
                         "Workspace authored resources unavailable: directory identity changed"
                             .into(),

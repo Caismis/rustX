@@ -27,6 +27,8 @@ Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79
   then replaces a previously admitted Server resource root. Independent
   policy continues to apply and the Workspace Agent remains adopted.
   Restoring the original root reopens resource adoption.
+  The existing authored configuration regressions still report a redirected
+  source and require fresh MCP preparation when a queued owner goes stale.
 - WorkspaceChanges tests a same-index retry against a completed result.
   The retained result remains claimable after its comparison source is
   removed. The original deadline is unchanged and a different index is
