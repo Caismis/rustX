@@ -197,6 +197,16 @@ async fn released_output_preserves_the_unclaimed_input_receipt() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::released_output_preserves_the_unclaimed_input_receipt()).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_input_cleanup_retires_an_open_binding() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::expired_input_cleanup_settles_the_binding(false)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_input_cleanup_preserves_the_terminal_revoke_receipt() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::expired_input_cleanup_settles_the_binding(true)).await;
+}
+
 #[cfg(feature = "mcp-fixture")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reconcile_waiting_for_client_does_not_retain_the_unloaded_writer() {

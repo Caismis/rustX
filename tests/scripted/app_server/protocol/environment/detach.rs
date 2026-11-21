@@ -853,6 +853,150 @@ fn detached_cancellation(
     )
 }
 
+pub(crate) async fn expired_input_cleanup_settles_the_binding(revoking: bool) {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control,
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = tokio::spawn(async move {
+        let mut accepted = 0;
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            assert!(
+                !matches!(
+                    request,
+                    ClientRequest::Process(ProcessRequest::InputReceipt { .. })
+                ),
+                "the expired cleanup must fail before sending a frame"
+            );
+            send(&mut client_data, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if matches!(
+                reply,
+                ClientReply::Process(ProcessReply::InputAccepted { .. })
+            ) {
+                accepted += 1;
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        accepted
+    });
+    let (revocation, control) = if revoking {
+        let (revoked, deliver_revoked, relay) = park_revoked_receipt(control);
+        (Some((revoked, deliver_revoked)), relay)
+    } else {
+        let (mut client, mut server) = control;
+        (
+            None,
+            tokio::spawn(async move {
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+            }),
+        )
+    };
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let process_id = if revoking {
+        "expired-input-during-revoke"
+    } else {
+        "expired-input-open-binding"
+    };
+    let (collector_parked, resume_collector) =
+        crate::app_server::command::hold_expired_input_cleanup(process_id);
+    let mut params = parameters(&fixture, &["/bin/cat"]);
+    params.process_id = Some(process_id.into());
+    params.stream_stdin = true;
+    let driver = connection.clone();
+    let mut command = tokio::spawn(async move {
+        driver
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(1),
+                call: Method::CommandExec(params),
+            })
+            .await
+    });
+    admit_or_fail(&connection, process_id, &mut command).await;
+    let input = tokio::spawn({
+        let connection = connection.clone();
+        async move {
+            rejected(
+                &connection,
+                2,
+                Method::CommandWrite(WriteParams {
+                    process_id: process_id.into(),
+                    delta_base64: Some(
+                        base64::engine::general_purpose::STANDARD.encode(b"accepted"),
+                    ),
+                    close_stdin: false,
+                }),
+            )
+            .await
+        }
+    });
+    bounded(collector_parked).await.unwrap();
+    let (data_held, holding_data) = oneshot::channel();
+    let (release_data, contested) = std::sync::mpsc::channel();
+    let lock = tokio::task::spawn_blocking({
+        let endpoint = endpoint.clone();
+        move || {
+            endpoint.hold_data_exchange_for_test(|| {
+                let _ = data_held.send(());
+                let _ = contested.recv();
+            })
+        }
+    });
+    bounded(holding_data).await.unwrap();
+    let terminal = if let Some((revoked, deliver_revoked)) = revocation {
+        let host = fixture.host.clone();
+        let drain = tokio::spawn(async move { host.drain().await });
+        bounded(revoked).await.unwrap();
+        Some((drain, deliver_revoked))
+    } else {
+        assert!(endpoint.control().is_some(), "the binding starts live");
+        None
+    };
+    resume_collector.send(()).unwrap();
+    assert_eq!(bounded(input).await.unwrap(), ErrorData::OperationFailed);
+    assert_eq!(
+        endpoint.control().is_some(),
+        revoking,
+        "cleanup must respect the terminal owner"
+    );
+    release_data.send(()).unwrap();
+    bounded(lock).await.unwrap().unwrap();
+    if let Some((drain, deliver_revoked)) = terminal {
+        assert!(
+            !drain.is_finished(),
+            "the actual Revoke receipt is still parked"
+        );
+        deliver_revoked.send(()).unwrap();
+        assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+        assert!(bounded(child.wait()).await.unwrap().success());
+    } else {
+        assert!(
+            bounded(fixture.host.drain())
+                .await
+                .iter()
+                .any(|error| error.contains("unconfirmed"))
+        );
+        bounded(child.wait()).await.unwrap();
+    }
+    assert!(matches!(
+        bounded(command).await.unwrap(),
+        Response::Failure(_)
+    ));
+    assert_eq!(
+        bounded(data).await.unwrap(),
+        1,
+        "one real Client input admission"
+    );
+    bounded(control).await.unwrap();
+}
+
 pub(crate) async fn queued_workspace_release_hands_off_to_binding_revocation() {
     use crate::runtime::identity::AttemptId;
     use crate::tools::workspace::Workspace;

@@ -1,30 +1,48 @@
 use super::*;
 
-type InputHold = (String, oneshot::Sender<()>, oneshot::Receiver<()>);
+struct InputHold {
+    process_id: String,
+    entered: oneshot::Sender<()>,
+    released: oneshot::Receiver<()>,
+    expire_cleanup: bool,
+}
 static INPUT_HOLDS: Mutex<Vec<InputHold>> = Mutex::new(Vec::new());
 
 pub(crate) fn hold_input_receipt(id: &str) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+    install_input_hold(id, false)
+}
+
+pub(crate) fn hold_expired_input_cleanup(id: &str) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+    install_input_hold(id, true)
+}
+
+fn install_input_hold(
+    id: &str,
+    expire_cleanup: bool,
+) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
     let (entered, arrived) = oneshot::channel();
     let (resume, released) = oneshot::channel();
-    INPUT_HOLDS
-        .lock()
-        .unwrap()
-        .push((id.to_owned(), entered, released));
+    INPUT_HOLDS.lock().unwrap().push(InputHold {
+        process_id: id.to_owned(),
+        entered,
+        released,
+        expire_cleanup,
+    });
     (arrived, resume)
 }
 
-pub(super) async fn pause_input_receipt(id: &str) {
+pub(super) async fn pause_input_receipt(id: &str) -> bool {
     let hold = {
         let mut holds = INPUT_HOLDS.lock().unwrap();
         holds
             .iter()
-            .position(|(process, _, _)| process == id)
+            .position(|hold| hold.process_id == id)
             .map(|index| holds.remove(index))
     };
-    if let Some((_, entered, released)) = hold {
-        let _ = entered.send(());
-        let _ = released.await;
-    }
+    let Some(hold) = hold else { return false };
+    let _ = hold.entered.send(());
+    let _ = hold.released.await;
+    hold.expire_cleanup
 }
 
 fn parameters() -> ExecParams {

@@ -1110,7 +1110,11 @@ envelope.
   may be outstanding per operation. The Client refuses admission before
   assigning the next sequence when that capacity is full. `ReleaseOutput`
   frees the journal while any unclaimed input receipts remain with the
-  same operation. A stale sequence is never reapplied and an ambiguous
+  same operation. The Server owns each accepted receipt through a terminal
+  claim, acknowledged abandonment, or binding teardown. If the final
+  exchange fails, the receipt owner fences an Open binding. An existing
+  terminal owner keeps the control lane to receive `Revoked`.
+  A stale sequence is never reapplied and an ambiguous
   write is never retried. The Client holds at most four
   concurrent operations per Session plus a bounded tombstone budget.
   Native Agent Bash uses a separate `RegisterAgentBash` message and

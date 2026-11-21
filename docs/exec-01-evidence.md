@@ -12,6 +12,18 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `bf38fcd00`
+
+- Each accepted input retains a Server receipt owner. An ordinary polling
+  failure leads to a final bounded claim or abandonment. If no reply proves
+  disposal, the owner fences an Open binding or leaves cleanup with the
+  terminal owner.
+- The real Client accepts one input in both regressions. The test holds the
+  data lock and expires the final exchange before send. An Open binding is
+  retired. During terminal settlement the original `Revoked` receipt stays
+  deliverable and Host drain succeeds. The proxy observes zero input receipt
+  frames in both cases.
+
 ## Review follow-up on `f4c0519b6`
 
 - Public configuration reconciliation parks before reading the authenticated

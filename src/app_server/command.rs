@@ -463,63 +463,94 @@ impl Commands {
     }
 }
 
+/// An accepted input keeps its receipt slot until collection or explicit
+/// abandonment is proven. A local failure hands it to binding teardown.
+struct InputReceiptOwner<'a>(
+    Option<&'a crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+);
+
+impl InputReceiptOwner<'_> {
+    fn confirm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for InputReceiptOwner<'_> {
+    fn drop(&mut self) {
+        if let Some(endpoint) = self.0 {
+            endpoint.cut_pair_if_open();
+        }
+    }
+}
+
 async fn collect_input(entry: &Entry, sequence: u64) -> Result<(), RpcError> {
+    use std::time::{Duration, Instant};
+    let owner = InputReceiptOwner(Some(&entry.endpoint));
+    let budgets = (
+        Duration::from_secs(10),
+        rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT,
+    );
     #[cfg(test)]
-    tests::pause_input_receipt(&entry.process_id).await;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let budgets = if tests::pause_input_receipt(&entry.process_id).await {
+        (Duration::ZERO, Duration::ZERO)
+    } else {
+        budgets
+    };
+    let (observation_budget, exchange_budget) = budgets;
+    let deadline = Instant::now() + observation_budget;
+    let mut finish_after_error = false;
     loop {
         let cancelled = entry.cancellation.is_cancelled();
-        let abandon_pending = cancelled || std::time::Instant::now() >= deadline;
-        match exchange(
+        let abandon_pending = finish_after_error || cancelled || Instant::now() >= deadline;
+        match exchange_until(
             &entry.endpoint,
             ProcessRequest::InputReceipt {
                 key: entry.key.clone(),
                 sequence: sequence.into(),
                 abandon_pending,
             },
+            Instant::now() + exchange_budget,
         )
         .await
         {
             Exchange::Reply(ProcessReply::InputReceipt {
-                status: InputOutcome::Applied,
-                ..
-            }) => {
-                return Ok(());
-            }
-            Exchange::Reply(ProcessReply::InputReceipt {
-                status: InputOutcome::Rejected,
-                ..
-            }) => {
-                return Err(domain(ErrorData::InvalidParams));
-            }
-            Exchange::Reply(
-                ProcessReply::InputReceipt {
-                    status: InputOutcome::Unknown,
-                    ..
-                }
-                | ProcessReply::Unknown { .. },
-            ) => return Err(domain(ErrorData::OutcomeUnknown)),
-            Exchange::Reply(ProcessReply::InputReceipt {
                 status: InputOutcome::Pending,
                 ..
             })
-            | Exchange::Busy => {}
+            | Exchange::Busy
+                if !abandon_pending => {}
+            Exchange::Reply(ProcessReply::InputReceipt { status, .. }) => {
+                owner.confirm();
+                return match status {
+                    InputOutcome::Applied => Ok(()),
+                    InputOutcome::Rejected => Err(domain(ErrorData::InvalidParams)),
+                    InputOutcome::Failed => Err(domain(ErrorData::OperationFailed)),
+                    InputOutcome::Pending if cancelled => Err(domain(ErrorData::ConnectionClosed)),
+                    InputOutcome::Pending | InputOutcome::Unknown => {
+                        Err(domain(ErrorData::OutcomeUnknown))
+                    }
+                };
+            }
+            Exchange::Reply(ProcessReply::Unknown { .. }) => {
+                owner.confirm();
+                return Err(domain(ErrorData::OutcomeUnknown));
+            }
+            _ if !abandon_pending => {
+                // Even an ordinary pre-wire timeout leaves the accepted
+                // slot owned. Make a bounded final claim or abandonment.
+                finish_after_error = true;
+                continue;
+            }
             Exchange::Reply(ProcessReply::Conflict { .. }) => {
                 return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
             }
             Exchange::Reply(_) => return Err(domain(ErrorData::OperationFailed)),
             Exchange::Failed(error) => return Err(error),
-        }
-        if abandon_pending {
-            return Err(domain(if cancelled {
-                ErrorData::ConnectionClosed
-            } else {
-                ErrorData::OutcomeUnknown
-            }));
+            Exchange::Busy => return Err(domain(ErrorData::OutcomeUnknown)),
         }
         tokio::select! {
             () = entry.cancellation.cancelled() => {}
-            () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+            () = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
     }
 }
@@ -1367,4 +1398,4 @@ fn result_from(
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::hold_input_receipt;
+pub(crate) use tests::{hold_expired_input_cleanup, hold_input_receipt};
