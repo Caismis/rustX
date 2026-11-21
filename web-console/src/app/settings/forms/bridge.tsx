@@ -703,7 +703,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           onClick={() => unit.edit(unit.displayed)}>{tx('settings:forms.customize')}</Button>}
         {/* A dialog's removal is an immediate mutation; a page's removal is
             staged and only written by the page footer. */}
-        {presentation === 'dialog' ? removal : <UnitResetControl unit={unit} />}
+        {presentation === 'dialog' ? removal : removable && <UnitResetControl unit={unit} />}
         {(unit.intent || presentation === 'dialog') && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{presentation === 'dialog' ? tx('settings:models.reset-form') : tx('settings:bridge.discard-draft')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
         {onCancel && <Button type="button" onClick={() => { unit.discard(); onCancel(); }}>{tx('settings:aria.cancel')}</Button>}
