@@ -1173,8 +1173,10 @@ envelope.
   still use Server-authored inputs. Cold loading and explicit Workspace
   reconciliation can use an authenticated binding when its logical path
   is absent on the Server. Workspace-authored resources remain a separate
-  discovery source. Explicit unavailable resource selections have their
-  own diagnostics, and reconciliation tracks each Client capture in its
+  discovery source. Once admitted, its directory identity stays part of
+  the Session's authority. Loss or replacement fails resource adoption
+  while independent policy can still apply. Explicit unavailable resource
+  selections have their own diagnostics, and reconciliation tracks each Client capture in its
   own Session scope. Host resource snapshots and remote
   resource discovery are tracked in [#578](https://github.com/Caismis/rustX/issues/578).
 - Agent tools resolve the binding through a non-owning
@@ -1226,7 +1228,10 @@ Revoke receipt resolves it even if the transport subsequently detaches.
 A reservation that never paired has no Client work to settle. Detachment
 without a receipt leaves settlement unconfirmed. After sending Revoke,
 the control worker waits for its receipt until the original command
-deadline. Streamed pipe stdin reports a close as applied
+deadline. Session deletion closes admission under the registry lock and
+settles the binding outside that lock. It shares the outcome with Host
+drain. An unconfirmed result prevents durable deletion and stays in the
+process inventory. Streamed pipe stdin reports a close as applied
 only once the physical input connection has been shut down. The argv
 contract accepts empty positional arguments and rejects empty program
 names and embedded NULs. An authoritative Register refusal ends cleanup
@@ -1234,7 +1239,10 @@ ownership. A terminal START receipt drives the output and release state,
 including a cancelled operation with an empty journal. A failed cancel
 checks the most recent terminal evidence before fencing. Private Bash
 capture discard waits for bounded data admission and either confirms
-release or retires its owning binding. Non-EOF PTY read errors preserve
+release or retires its owning binding. When terminal settlement already
+owns the binding, queued discard transfers to it. The Client removes
+the retained capture files before sending Revoke confirmation.
+Non-EOF PTY read errors preserve
 output loss in the terminal disposition.
 
 ### Workspace Python readiness
@@ -1273,6 +1281,8 @@ candidate and preserves the previous index and existing observations.
 A completed Finish owns its first Summary delivery. A completed Compare
 owns its indexed Comparison delivery. The pending delivery protects the
 record until a matching poll claims it or 60 seconds pass after completion.
+A duplicate Compare for the same index joins its pending or ready result
+within this window. It does not start another worker or renew the deadline.
 A new Begin at capacity may reclaim delivered or expired history.
 The quota covers retained data. A single serialized Git attempt may
 temporarily use additional scratch before the quota check. A rename that crosses the

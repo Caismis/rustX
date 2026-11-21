@@ -175,6 +175,13 @@ pub(crate) struct SourceCapture {
     scoped_workflows: [Vec<crate::runtime::workflow::WorkflowId>; 2],
 }
 
+/// Physical identity of the Server-side authored Workspace resource root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WorkspaceResourceIdentity {
+    device: u64,
+    inode: u64,
+}
+
 /// Immutable prospective Session settings and statically resolved resources.
 /// Admission adds credentials; native composition owns external preparation.
 #[derive(Clone)]
@@ -195,7 +202,7 @@ pub struct ProspectiveSessionConfig {
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub(crate) locations: SessionLocations,
-    has_authored_workspace: bool,
+    pub(crate) authored_workspace: Option<WorkspaceResourceIdentity>,
     pub(crate) config: std::sync::Arc<CurrentRuntimeConfig>,
     pub(crate) models: ModelCatalog,
     pub(crate) provenance: BTreeMap<String, Origin>,

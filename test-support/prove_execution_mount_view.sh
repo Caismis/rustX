@@ -83,3 +83,6 @@ cargo test -p rustx --all-features --locked --test subagent \
 cargo test -p rustx --all-features --locked --lib \
     bound_configuration_load_and_reconcile_without_any_server_workspace_directory \
     -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_lost \
+    -- --ignored --nocapture

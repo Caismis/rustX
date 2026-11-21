@@ -497,7 +497,10 @@ fn client_control_worker(
                         // containment actually settled — bounded so the
                         // Server's own revoke budget still fences.
                         operations.revoke();
-                        if !watches.shutdown() || operations.settle(REVOKE_SETTLE_BUDGET) != 0 {
+                        if !watches.shutdown()
+                            || operations.settle(REVOKE_SETTLE_BUDGET) != 0
+                            || operations.release_bash_captures().is_err()
+                        {
                             return;
                         }
                         ControlReply::Revoked
@@ -707,10 +710,10 @@ fn serve(
                 offset,
                 limit,
             } => operations
-                .bash_file(&key, &conversation)
-                .and_then(|file| {
+                .with_bash_file(&key, &conversation, |file| {
                     file.read(|root, name| read_lines(root, name, offset, limit, None))
                 })
+                .flatten()
                 .unwrap_or(ClientReply::Error {
                     kind: ReadError::NotFound,
                 }),
@@ -721,8 +724,7 @@ fn serve(
             } => {
                 if matches!(spec, rustx_execution_protocol::SearchSpec::Grep { .. }) {
                     operations
-                        .bash_file(&key, &conversation)
-                        .and_then(|file| {
+                        .with_bash_file(&key, &conversation, |file| {
                             file.read(|root, name| {
                                 search::search(
                                     root,
@@ -732,6 +734,7 @@ fn serve(
                                 )
                             })
                         })
+                        .flatten()
                         .unwrap_or(ClientReply::Error {
                             kind: ReadError::NotFound,
                         })

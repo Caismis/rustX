@@ -42,6 +42,15 @@ impl Captures {
         }
     }
 
+    pub(crate) fn close(&self) -> io::Result<()> {
+        if let Some(directory) = self.directory.lock().expect("capture directory").take() {
+            let directory = Arc::try_unwrap(directory)
+                .map_err(|_| io::Error::other("Bash capture files still have an owner"))?;
+            directory.temporary.close()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn create(&self, operation: OperationId) -> io::Result<Arc<CaptureFile>> {
         let slot = self
             .slots

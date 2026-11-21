@@ -12,6 +12,26 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `e162692ff`
+
+- Session deletion fences admission locally, then waits outside the
+  residency mutex. A paused Client proves a different Session can still
+  admit operations. If revocation is unconfirmed, durable deletion stops
+  and Host drain reports the retained failure.
+- The Bash discard race parks Revoke on a paired Client's control lane.
+  The queued discard joins terminal settlement, sends no Discard frame,
+  and leaves the control lane open. The real Client removes the capture
+  before its Revoke acknowledgement.
+- The Client-only configuration case continues to cover a Workspace
+  absent at initial admission. A separate overlay regression removes
+  then replaces a previously admitted Server resource root. Independent
+  policy continues to apply and the Workspace Agent remains adopted.
+  Restoring the original root reopens resource adoption.
+- WorkspaceChanges tests a same-index retry against a completed result.
+  The retained result remains claimable after its comparison source is
+  removed. The original deadline is unchanged and a different index is
+  refused while the first result awaits delivery.
+
 ## Review follow-up on `26d3458ba`
 
 - The Client-only Workspace regression exercises cold load and explicit

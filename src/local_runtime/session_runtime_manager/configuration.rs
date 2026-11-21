@@ -14,6 +14,7 @@ pub(super) struct BoundCapture {
     input: super::super::configuration::SessionConfigInput,
     endpoint: Arc<super::LocalExecutionEndpoint>,
     ticket: Arc<()>,
+    authored_workspace: Option<super::super::configuration::WorkspaceResourceIdentity>,
 }
 
 impl SessionRuntimeManager {
@@ -673,10 +674,16 @@ impl SessionRuntimeManager {
                     .workspace()
                     .is_none_or(|directory| directory.as_os_str() == binding.input.cwd.as_os_str())
             })
-            .map(|(session, binding)| (session.clone(), binding.input.clone()))
+            .map(|(session, binding)| {
+                (
+                    session.clone(),
+                    binding.input.clone(),
+                    binding.authored_workspace,
+                )
+            })
             .collect();
         let mut bound = Vec::new();
-        for (session, input) in inputs {
+        for (session, input, authored_workspace) in inputs {
             application.cancel_bound_capture(&session);
             match self.execution.configuration_endpoint(&session) {
                 Ok(None) if authored => {
@@ -698,6 +705,7 @@ impl SessionRuntimeManager {
                         input,
                         endpoint,
                         ticket,
+                        authored_workspace,
                     });
                 }
                 Err(error) => {
@@ -718,6 +726,7 @@ impl SessionRuntimeManager {
             input,
             endpoint,
             ticket,
+            authored_workspace,
         } in bound
         {
             #[cfg(test)]
@@ -727,7 +736,7 @@ impl SessionRuntimeManager {
             let mut capture = self.configuration.capture_session_application(
                 &input,
                 &self.credentials,
-                Some(&endpoint),
+                Some((&endpoint, authored_workspace)),
             );
             let mut application = self.applications.lock();
             if !application.finish_bound_capture(&session, &ticket) {
@@ -753,7 +762,16 @@ impl SessionRuntimeManager {
             if let Ok(capture) = &mut capture
                 && let Ok(context) = &mut capture.context
             {
-                context.input.model.clone_from(&retained.input.model);
+                if retained.authored_workspace.is_some()
+                    && context.authored_workspace != retained.authored_workspace
+                {
+                    capture.context = Err(
+                        "Workspace authored resources unavailable: directory identity changed"
+                            .into(),
+                    );
+                } else {
+                    context.input.model.clone_from(&retained.input.model);
+                }
             }
             drop(binding);
             application.capture_bound_source(session.to_string(), &input.cwd, capture);

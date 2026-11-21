@@ -171,3 +171,13 @@ async fn drain_reports_an_admitted_client_with_lost_control_as_unconfirmed() {
 async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::refused_register_does_not_allocate_a_cancellation_tombstone()).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::delete_revoke_does_not_pin_residency_or_forget_failure()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_capture_discard_hands_off_to_binding_revocation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::queued_capture_discard_hands_off_to_binding_revocation()).await;
+}

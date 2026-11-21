@@ -52,6 +52,12 @@ enum Comparison {
 }
 
 impl Comparison {
+    fn index(&self) -> usize {
+        match *self {
+            Self::Pending { index } | Self::Ready { index, .. } => index,
+        }
+    }
+
     fn owns_delivery(&self, now: Instant) -> bool {
         match self {
             Self::Pending { .. } => true,
@@ -315,11 +321,14 @@ impl Changes {
         }
         {
             let mut pending = record.comparison.lock().expect("Workspace comparison");
-            if pending
-                .as_ref()
-                .is_some_and(|comparison| comparison.owns_delivery(Instant::now()))
+            if let Some(comparison) = pending.as_ref()
+                && comparison.owns_delivery(Instant::now())
             {
-                return ChangeReply::Unavailable;
+                return if comparison.index() == index {
+                    ChangeReply::Accepted
+                } else {
+                    ChangeReply::Unavailable
+                };
             }
             *pending = Some(Comparison::Pending { index });
         }
@@ -373,7 +382,10 @@ mod tests {
             format!("{:032x}", finished.as_u128()),
             Arc::new(super::super::Recorded {
                 summary: summary.clone(),
-                sources: Vec::new(),
+                sources: vec![super::super::FileSource::Captured(
+                    super::super::capture::Capture::Missing,
+                    super::super::capture::Capture::Missing,
+                )],
                 repository: None,
                 trees: None,
                 _directory: Arc::new(super::super::SnapshotDirectory::create(scratch).unwrap()),
@@ -479,5 +491,78 @@ mod tests {
         assert_eq!(records.keys().copied().collect::<Vec<_>>(), [live]);
         assert_eq!(changes.slots.available_permits(), 2);
         drop(competing_begin);
+    }
+    #[test]
+    fn comparison_retry_claims_the_ready_result_without_a_new_worker() {
+        use rustx_execution_protocol::process::ServerIncarnation;
+        use rustx_execution_protocol::{
+            Admission, ClientInstanceId, EnvironmentId, Generation, PROTOCOL_VERSION, SessionId,
+        };
+
+        let workspace = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let admission = Admission {
+            version: PROTOCOL_VERSION,
+            server_incarnation: ServerIncarnation::generate(),
+            session: SessionId::new("session"),
+            environment: EnvironmentId::new("environment"),
+            instance: ClientInstanceId::new("client"),
+            generation: Generation::try_from(1_u64).unwrap(),
+            workspace: workspace.path().canonicalize().unwrap(),
+        };
+        let operations = Operations::new(admission).unwrap();
+        let changes = Changes::default();
+        let id = OperationId::new();
+        let record = Arc::new(Record {
+            phase: Mutex::new(Phase::Complete {
+                summary_claim_until: None,
+            }),
+            scope: Arc::clone(&changes.scope),
+            comparison: Mutex::new(None),
+            signal: operations.auxiliary_signal(),
+            created: Instant::now(),
+            _slot: Arc::clone(&changes.slots).try_acquire_owned().unwrap(),
+        });
+        retain_summary(&changes, id, scratch.path());
+
+        assert_eq!(
+            Changes::compare(&operations, &record, 0, id),
+            ChangeReply::Accepted
+        );
+        assert_eq!(operations.settle(Duration::from_secs(5)), 0);
+        let Some(Comparison::Ready {
+            claim_until: original_deadline,
+            ..
+        }) = *record.comparison.lock().unwrap()
+        else {
+            panic!("the original worker already completed before the caller retries")
+        };
+        // Any additional worker would now produce an empty result. The
+        // registered delivery must return the original populated result.
+        changes.scope.release(&format!("{:032x}", id.as_u128()));
+        assert_eq!(
+            Changes::compare(&operations, &record, 1, id),
+            ChangeReply::Unavailable
+        );
+        assert_eq!(
+            Changes::compare(&operations, &record, 0, id),
+            ChangeReply::Accepted
+        );
+        assert_eq!(operations.settle(Duration::from_secs(5)), 0);
+        assert!(matches!(*record.comparison.lock().unwrap(),
+            Some(Comparison::Ready { claim_until, .. }) if claim_until == original_deadline
+        ));
+        assert_eq!(
+            record.claim_comparison(0),
+            ChangeReply::Comparison {
+                index: 0,
+                comparison: Some(rustx_execution_protocol::changes::FileComparison {
+                    hunks: Vec::new(),
+                    binary: true,
+                    oversized: false,
+                    truncated: false,
+                }),
+            }
+        );
     }
 }

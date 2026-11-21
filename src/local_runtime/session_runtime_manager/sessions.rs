@@ -289,17 +289,17 @@ impl SessionRuntimeManager {
             }
             _ => {}
         }
-        let residents = {
+        let (residents, endpoint) = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             if !registry.retiring_sessions.insert(session.clone()) {
                 return Err(error("Session retirement already owns admission"));
             }
-            self.execution.fence(session);
+            let endpoint = self.execution.close_session_admission(session);
             registry.failed_submissions.retain(|_, flight| {
                 let (owner, _) = flight.target.get().expect("failed initialization target");
                 owner != session
             });
-            registry.session_entries(session)
+            (registry.session_entries(session), endpoint)
         };
         #[cfg(test)]
         if let Ok(snapshot) = self.sessions.read_session(session).await {
@@ -307,6 +307,12 @@ impl SessionRuntimeManager {
                 .after_delete_fence
                 .park()
                 .await;
+        }
+        if let Some(endpoint) = endpoint {
+            endpoint
+                .settle()
+                .await
+                .map_err(|failure| error(format!("Client revocation is unconfirmed: {failure}")))?;
         }
         for id in residents {
             match self.retire(&id).await {
@@ -384,6 +390,12 @@ impl SessionRuntimeManager {
             return Err(error(
                 "writer retirement must be proven before deletion recovery",
             ));
+        }
+        if let Some(endpoint) = self.execution.close_session_admission(session) {
+            endpoint
+                .settle()
+                .await
+                .map_err(|failure| error(format!("Client revocation is unconfirmed: {failure}")))?;
         }
         let result = if matches!(observed, SessionDeleteResult::NotFound { .. }) {
             self.sessions.confirm_deletion_absence(session).await

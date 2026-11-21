@@ -233,6 +233,7 @@ async fn proxied_client(fixture: &Fixture) -> ProxiedClient {
         .arg("--workspace")
         .arg(endpoint.workspace())
         .env_clear()
+        .env("TMPDIR", scratch.path())
         .kill_on_drop(true)
         .spawn()
         .unwrap();
@@ -564,4 +565,251 @@ pub(crate) async fn refused_register_does_not_allocate_a_cancellation_tombstone(
     assert!(bounded(child.wait()).await.unwrap().success());
     data.abort();
     control.abort();
+}
+
+pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+
+    let fixture = Fixture::with_session_count(None, 2).await;
+    let sibling = fixture.load(1).await.unwrap().unwrap().client();
+    let ProxiedClient {
+        data: (mut data_peer, mut data_server),
+        control: (mut control_peer, mut control_server),
+        endpoint: _endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut data_peer, &mut data_server).await;
+    });
+    let (seen, pending) = oneshot::channel();
+    let (fail, release) = oneshot::channel();
+    let control = tokio::spawn(async move {
+        while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
+            send(&mut control_server, &poll).await.unwrap();
+            let turn = receive::<ControlTurn>(&mut control_server).await.unwrap();
+            if matches!(
+                turn.request,
+                Some(rustx_execution_protocol::ControlRequest::Revoke)
+            ) {
+                seen.send(()).unwrap();
+                release.await.unwrap();
+                return;
+            }
+            send(&mut control_peer, &turn).await.unwrap();
+        }
+        panic!("the live Session must receive Revoke");
+    });
+    let session = fixture.sessions[0].id.clone();
+    let SessionDeleteResult::Preview { preview } =
+        fixture.manager.sessions.delete_preview(&session).await
+    else {
+        panic!("expected a deletable Session")
+    };
+    let deleted = tokio::spawn({
+        let manager = fixture.manager.clone();
+        let session = session.clone();
+        async move {
+            manager
+                .delete_session(&session, &preview.target_revision)
+                .await
+        }
+    });
+    bounded(pending).await.unwrap();
+    let admitted = tokio::task::spawn_blocking(move || sibling.admit_operation().map(|_| ()));
+    // The peer remains parked while a different Session takes the same
+    // global registry mutex to admit a native operation.
+    tokio::time::timeout(std::time::Duration::from_secs(2), admitted)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(!deleted.is_finished());
+    fail.send(()).unwrap();
+    bounded(control).await.unwrap();
+    let failure = bounded(deleted).await.unwrap().unwrap_err().to_string();
+    assert!(
+        failure.contains("Client revocation is unconfirmed"),
+        "{failure}"
+    );
+    assert!(
+        fixture
+            .manager
+            .sessions
+            .read_session(&session)
+            .await
+            .is_ok()
+    );
+
+    let failures = bounded(fixture.host.drain()).await;
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("Client revocation is unconfirmed"),
+        "{failures:?}"
+    );
+    let _ = bounded(child.wait()).await.unwrap();
+    bounded(data).await.unwrap();
+}
+
+#[allow(clippy::too_many_lines)] // Keep the capture and Revoke barriers in one scenario.
+pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
+    use rustx_execution_protocol::ControlRequest;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut data_peer, mut data_server),
+        control: (mut control_peer, mut control_server),
+        endpoint,
+        mut child,
+        _scratch: scratch,
+    } = proxied_client(&fixture).await;
+    let data = tokio::spawn(async move {
+        while let Ok(request) = receive::<ClientRequest>(&mut data_server).await {
+            assert!(!matches!(
+                request,
+                ClientRequest::Process(ProcessRequest::DiscardBashOutput { .. })
+            ));
+            send(&mut data_peer, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut data_peer).await.unwrap();
+            send(&mut data_server, &reply).await.unwrap();
+        }
+        let _ = data_peer.shutdown().await;
+    });
+    let operation = OperationId::new();
+    let key = endpoint.process_key(operation).unwrap();
+    let spec = ProcessSpec {
+        cwd: std::path::PathBuf::new(),
+        program: ProcessProgram::Shell {
+            command: "printf retained".into(),
+            conversation: fixture.sessions[0].active_conversation_id.as_str().into(),
+            live_output: true,
+        },
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 5000,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let registered = tokio::task::spawn_blocking({
+        let endpoint = endpoint.clone();
+        let key = key.clone();
+        move || {
+            let request = ProcessRequest::RegisterAgentBash {
+                key,
+                fingerprint: spec.fingerprint(),
+                spec,
+            };
+            endpoint.agent_process(
+                &request,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+                || Ok(()),
+            )
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(registered, ProcessReply::Registered { key: key.clone() });
+    let name = format!("{:032x}.output", operation.as_u128());
+    let capture = std::fs::read_dir(scratch.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join(&name))
+        .find(|path| path.is_file())
+        .expect("registered private capture");
+    let (resume_discard, discard_gate) = oneshot::channel();
+    let discard = tokio::spawn({
+        let endpoint = endpoint.clone();
+        let key = key.clone();
+        async move {
+            discard_gate.await.unwrap();
+            endpoint.discard_bash_capture(key).await;
+        }
+    });
+    let (seen, pending) = oneshot::channel();
+    let (resume, held) = oneshot::channel();
+    let (ack, acknowledged) = oneshot::channel();
+    let capture_path = capture.clone();
+    let control = tokio::spawn(async move {
+        let mut gate = Some((seen, held));
+        let mut ack = Some(ack);
+        while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
+            if matches!(poll.receipt, Some(ControlReply::Revoked)) {
+                assert!(
+                    !capture.exists(),
+                    "physical capture must be gone before Revoke is acknowledged"
+                );
+                ack.take().unwrap().send(()).unwrap();
+            }
+            if send(&mut control_server, &poll).await.is_err() {
+                return;
+            }
+            let Ok(turn) = receive::<ControlTurn>(&mut control_server).await else {
+                return;
+            };
+            if matches!(turn.request, Some(ControlRequest::Revoke)) {
+                let (seen, held) = gate.take().expect("a single Revoke owns settlement");
+                seen.send(()).unwrap();
+                held.await.unwrap();
+                assert!(
+                    capture.is_file(),
+                    "the held Revoke has not reached the Client"
+                );
+            }
+            send(&mut control_peer, &turn).await.unwrap();
+        }
+    });
+    let exchange = |request| {
+        let endpoint = endpoint.clone();
+        async move {
+            tokio::task::spawn_blocking(move || endpoint.process(&request))
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    };
+    assert!(matches!(
+        exchange(ProcessRequest::Start { key: key.clone() }).await,
+        ProcessReply::State { .. }
+    ));
+    let snapshot = bounded(async {
+        loop {
+            let ProcessReply::State { state, .. } =
+                exchange(ProcessRequest::Query { key: key.clone() }).await
+            else {
+                panic!("the registered Bash operation must have state")
+            };
+            if let OperationState::Settled(snapshot) = state {
+                break snapshot;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(snapshot.disposition, SettledDisposition::Known);
+    assert_eq!(
+        exchange(ProcessRequest::ReleaseOutput {
+            key: key.clone(),
+            final_sequence: snapshot.final_sequence,
+        })
+        .await,
+        ProcessReply::OutputReleased { key }
+    );
+    assert_eq!(std::fs::read(capture_path).unwrap(), b"retained");
+
+    let drain = tokio::spawn({
+        let host = fixture.host.clone();
+        async move { host.drain().await }
+    });
+    bounded(pending).await.unwrap();
+    resume_discard.send(()).unwrap();
+    bounded(discard).await.unwrap();
+    resume.send(()).unwrap();
+    bounded(acknowledged).await.unwrap();
+    assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
 }

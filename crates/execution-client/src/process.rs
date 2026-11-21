@@ -461,8 +461,8 @@ impl Operations {
             ProcessRequest::BashCapture { key } => self.bash_capture(key),
             ProcessRequest::BashOutputTail { key, conversation } => {
                 match self
-                    .bash_file(&key, &conversation)
-                    .and_then(|file| file.tail().ok())
+                    .with_bash_file(&key, &conversation, |file| file.tail().ok())
+                    .flatten()
                 {
                     Some((text, truncated)) => ProcessReply::BashOutputTail {
                         key,
@@ -532,6 +532,9 @@ impl Operations {
                 key,
                 reason: SpecRefusal::InvalidCwd,
             };
+        };
+        let Some(_active) = self.admit_auxiliary() else {
+            return ProcessReply::Unknown { key };
         };
         let mut inner = self.inner.lock().expect("operation registry");
         match inner.records.get(&key.operation) {
@@ -1052,11 +1055,17 @@ impl Operations {
         }
     }
 
-    pub(crate) fn bash_file(
+    pub(crate) fn with_bash_file<T>(
         &self,
         key: &ProcessOperationKey,
         owner: &str,
-    ) -> Option<Arc<CaptureFile>> {
+        read: impl FnOnce(&CaptureFile) -> T,
+    ) -> Option<T> {
+        let _active = self.admit_auxiliary()?;
+        self.bash_file(key, owner).map(|file| read(&file))
+    }
+
+    fn bash_file(&self, key: &ProcessOperationKey, owner: &str) -> Option<Arc<CaptureFile>> {
         if !self.own_key(key) {
             return None;
         }
@@ -1109,6 +1118,19 @@ impl Operations {
                 .0;
         }
         *live
+    }
+
+    /// Revoke has closed admission and settled the capture writers and
+    /// readers. Release their retained files before attesting settlement.
+    pub(crate) fn release_bash_captures(&self) -> io::Result<()> {
+        let mut inner = self.inner.lock().expect("operation registry");
+        for record in inner.records.values_mut() {
+            match record {
+                Record::Full(operation) => operation.bash_file = None,
+                Record::Minimal(operation) => operation.bash_file = None,
+            }
+        }
+        self.captures.close()
     }
 
     /// Signal every worker and await physical completion — including

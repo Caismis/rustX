@@ -61,7 +61,8 @@ pub struct LocalExecutionEndpoint {
     /// slot for the binding's whole life.
     connection: Mutex<Option<LocalConnection>>,
     connection_released: tokio::sync::Notify,
-    dispatch_closed: std::sync::atomic::AtomicBool,
+    settlement: Mutex<Settlement>,
+    settlement_changed: std::sync::Condvar,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -85,6 +86,13 @@ pub struct LocalExecutionEndpoint {
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
 }
 
+enum Settlement {
+    Open,
+    Closing,
+    Revoking,
+    Finished(Result<(), Arc<io::Error>>),
+}
+
 enum EndpointAuthority {
     Reserved(Box<ReservedExecutionEndpoint>),
     Delegated {
@@ -106,6 +114,13 @@ struct ReservedExecutionEndpoint {
     /// bootstrap. A remote-mode endpoint publishes its bundle into an
     /// operator-owned `0700` directory instead, so this is `None` there.
     _private: Option<tempfile::TempDir>,
+}
+
+fn settlement_result(result: &Result<(), Arc<io::Error>>) -> io::Result<()> {
+    result
+        .as_ref()
+        .copied()
+        .map_err(|error| io::Error::new(error.kind(), Arc::clone(error)))
 }
 
 /// The transport a Session's execution endpoint was reserved with. It is
@@ -192,7 +207,8 @@ impl LocalExecutionEndpoint {
             })),
             connection: Mutex::new(None),
             connection_released: tokio::sync::Notify::new(),
-            dispatch_closed: std::sync::atomic::AtomicBool::new(false),
+            settlement: Mutex::new(Settlement::Open),
+            settlement_changed: std::sync::Condvar::new(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -242,7 +258,8 @@ impl LocalExecutionEndpoint {
             })),
             connection: Mutex::new(None),
             connection_released: tokio::sync::Notify::new(),
-            dispatch_closed: std::sync::atomic::AtomicBool::new(false),
+            settlement: Mutex::new(Settlement::Open),
+            settlement_changed: std::sync::Condvar::new(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -1034,15 +1051,7 @@ impl LocalExecutionEndpoint {
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
             }
         };
-        let result = if self
-            .dispatch_closed
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "execution dispatch admission is closed",
-            ))
-        } else {
+        let result = if self.dispatch_open() {
             guard.as_mut().map_or_else(
                 || {
                     Err(io::Error::new(
@@ -1052,6 +1061,11 @@ impl LocalExecutionEndpoint {
                 },
                 dispatch,
             )
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "execution dispatch admission is closed",
+            ))
         };
         drop(guard);
         self.connection_released.notify_waiters();
@@ -1073,23 +1087,67 @@ impl LocalExecutionEndpoint {
         &self.reservation().binding
     }
 
-    /// Fences the endpoint: a live pair is first asked to revoke — the
-    /// Client fences its commits and proves physical process containment
-    /// before `Revoked` returns, and the local fence lands after that
-    /// bounded wait — then the binding is marked `Revoked` and its
-    /// shutdown handle seized in one atomic step — new admissions die
-    /// at the gate immediately — and, only for an idle stored
-    /// connection, the bounded orderly Close. A busy exchange or a
-    /// handshake still in flight is interrupted by the seized handle's
-    /// raw shutdown instead; this never waits on the connection's data
-    /// lock, so a stuck peer can never stall a fence or a drain.
-    fn fence_connection(&self) {
-        let deadline =
-            Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
-        let _ = self.fence_connection_by(deadline);
+    fn dispatch_open(&self) -> bool {
+        matches!(
+            *self.settlement.lock().expect("execution settlement"),
+            Settlement::Open
+        )
     }
 
+    fn close_dispatch(&self) {
+        let mut settlement = self.settlement.lock().expect("execution settlement");
+        if matches!(*settlement, Settlement::Open) {
+            *settlement = Settlement::Closing;
+        }
+        self.connection_released.notify_waiters();
+    }
+
+    pub(super) async fn settle(self: Arc<Self>) -> io::Result<()> {
+        let deadline =
+            Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+        tokio::task::spawn_blocking(move || self.fence_connection_by(deadline))
+            .await
+            .map_err(io::Error::other)?
+    }
+
+    /// Own or join this incarnation's terminal settlement. The result
+    /// survives deletion cancellation and remains available to Host drain.
+    /// No caller holds a registry lock while waiting for this receipt.
     pub(super) fn fence_connection_by(&self, deadline: Instant) -> io::Result<()> {
+        {
+            let mut state = self.settlement.lock().expect("execution settlement");
+            loop {
+                match &*state {
+                    Settlement::Open | Settlement::Closing => {
+                        *state = Settlement::Revoking;
+                        break;
+                    }
+                    Settlement::Revoking => {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "Client revocation is still in progress",
+                            ));
+                        }
+                        state = self
+                            .settlement_changed
+                            .wait_timeout(state, remaining)
+                            .expect("execution settlement")
+                            .0;
+                    }
+                    Settlement::Finished(result) => return settlement_result(result),
+                }
+            }
+        }
+        let result = self.revoke_and_close(deadline).map_err(Arc::new);
+        let outcome = settlement_result(&result);
+        *self.settlement.lock().expect("execution settlement") = Settlement::Finished(result);
+        self.settlement_changed.notify_all();
+        outcome
+    }
+
+    fn revoke_and_close(&self, deadline: Instant) -> io::Result<()> {
         let binding = &self.reservation().binding;
         let result = binding.settle_revocation_by(deadline);
         let fenced = binding.fence();
@@ -1142,7 +1200,7 @@ impl LocalExecutionEndpoint {
             Ok(disposition) if !matches!(disposition, rustx_execution_protocol::ProcessCancelDisposition::Unknown)
         );
         if !proven && !reconciled() {
-            self.cut_pair();
+            self.cut_pair_if_open();
         }
     }
 
@@ -1164,11 +1222,23 @@ impl LocalExecutionEndpoint {
         deadline: Instant,
     ) {
         use rustx_execution_protocol::process::{ProcessReply, ProcessRequest};
+        if !self.dispatch_open() {
+            return;
+        }
         let request = ProcessRequest::DiscardBashOutput { key };
         let result = self.with_bounded_data_connection(deadline, |connection| {
             connection.process_until(&request, deadline)
         });
         if !matches!(result, Ok(ProcessReply::OutputReleased { .. })) {
+            self.cut_pair_if_open();
+        }
+    }
+
+    /// A local cleanup failure can retire an active pair. Once terminal
+    /// settlement owns it, that owner needs the control lane for Revoke.
+    pub(crate) fn cut_pair_if_open(&self) {
+        let state = self.settlement.lock().expect("execution settlement");
+        if matches!(*state, Settlement::Open) {
             self.cut_pair();
         }
     }
@@ -2309,18 +2379,12 @@ enum Phase {
     Preparing,
     /// The one published endpoint; every later claim returns this value.
     Published(Arc<LocalExecutionEndpoint>),
-    /// Fenced by delete/drain or a failed preparation. A published endpoint
-    /// is kept inside the slot so its teardown never happens under the
-    /// phase or registry mutex — it is released when the slot itself is
-    /// dropped outside all locks. The value is deliberately never read.
-    #[allow(dead_code)]
+    /// Admission is terminally closed. Keep any published endpoint for
+    /// settlement until a successful durable deletion can remove it.
     Closed(Option<Arc<LocalExecutionEndpoint>>),
 }
 
 impl Slot {
-    /// Publishes the prepared endpoint while the slot is still open. On
-    /// refusal the caller still owns `endpoint` and drops it outside all
-    /// locks.
     fn publish(&self, endpoint: &Arc<LocalExecutionEndpoint>) -> bool {
         let mut phase = self.phase.lock().expect("execution slot phase");
         if matches!(*phase, Phase::Preparing) {
@@ -2328,20 +2392,6 @@ impl Slot {
             return true;
         }
         false
-    }
-
-    /// Terminally closes the slot: an in-flight publication is refused, a
-    /// published binding is revoked under its own mutex, and its endpoint
-    /// stays owned by the slot until the slot drops outside locks. The
-    /// phase transition happens under the slot's own lock *before* any
-    /// I/O; the fence itself — bounded network work at worst — always
-    /// runs after that lock is released, so neither the phase lock nor
-    /// any caller's registry/residency lock is ever held while a peer
-    /// is closed.
-    fn close(&self) {
-        if let Some(endpoint) = self.close_admission() {
-            endpoint.fence_connection();
-        }
     }
 
     fn close_admission(&self) -> Option<Arc<LocalExecutionEndpoint>> {
@@ -2353,13 +2403,11 @@ impl Slot {
             }
             Phase::Published(endpoint) => {
                 let endpoint = endpoint.clone();
-                endpoint
-                    .dispatch_closed
-                    .store(true, std::sync::atomic::Ordering::Release);
+                endpoint.close_dispatch();
                 *phase = Phase::Closed(Some(endpoint.clone()));
                 Some(endpoint)
             }
-            Phase::Closed(_) => None,
+            Phase::Closed(endpoint) => endpoint.clone(),
         }
     }
 }
@@ -2384,7 +2432,7 @@ fn spawn_preparation(
         impl Drop for CloseOnFailure<'_> {
             fn drop(&mut self) {
                 if let Some(slot) = self.0 {
-                    slot.close();
+                    slot.close_admission();
                 }
             }
         }
@@ -2445,10 +2493,12 @@ impl StandaloneExecution {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        let registry = self.registry.clone();
-        tokio::task::spawn_blocking(move || registry.fence_all())
-            .await
-            .map_err(|error| error.to_string())?;
+        let endpoint = self.registry.close_session_admission(&self.session);
+        let settlement = if let Some(endpoint) = endpoint {
+            endpoint.settle().await
+        } else {
+            Ok(())
+        };
         let mut child = self.child.lock().await;
         let status = tokio::time::timeout(
             rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT,
@@ -2458,7 +2508,7 @@ impl StandaloneExecution {
         .map_err(|_| "local Execution Client did not exit after Session drain".to_owned())?
         .map_err(|error| error.to_string())?;
         if status.success() {
-            Ok(())
+            settlement.map_err(|error| format!("Client revocation is unconfirmed: {error}"))
         } else {
             Err(format!("local Execution Client exited with {status}"))
         }
@@ -2535,26 +2585,17 @@ impl SessionExecutionRegistry {
         }
     }
 
-    /// Fences the Session's existing claim. An absent Session gains no
-    /// state: fencing never creates a slot.
-    pub(super) fn fence(&self, session: &SessionId) {
-        let slot = self
-            .0
+    /// Close a Session's admission and return its settlement owner without
+    /// doing IPC. A concurrent Host drain can take the same owner.
+    pub(super) fn close_session_admission(
+        &self,
+        session: &SessionId,
+    ) -> Option<Arc<LocalExecutionEndpoint>> {
+        self.0
             .lock()
             .expect("execution registry mutex")
-            .get(session)
-            .cloned();
-        if let Some(slot) = slot {
-            slot.close();
-        }
-    }
-
-    /// Fences every existing claim. Later claims are refused by the
-    /// manager's permanent `draining` admission gate.
-    pub(super) fn fence_all(&self) {
-        for endpoint in self.close_admission() {
-            endpoint.fence_connection();
-        }
+            .get(session)?
+            .close_admission()
     }
 
     pub(super) fn close_admission(&self) -> Vec<Arc<LocalExecutionEndpoint>> {
@@ -2566,20 +2607,28 @@ impl SessionExecutionRegistry {
             .collect()
     }
 
-    /// Removes the Session's claim so its endpoint teardown runs outside
-    /// the registry and residency mutexes. The slot closes first in case a
-    /// publication is still in flight; the last `Arc` owner drops the
-    /// endpoint.
+    /// Remove only a closed, settled claim after durable absence. A
+    /// failed revocation stays in the inventory for Host drain.
     pub(super) fn retire(&self, session: &SessionId) {
-        let slot = self
-            .0
-            .lock()
-            .expect("execution registry mutex")
-            .remove(session);
-        if let Some(slot) = slot {
-            slot.close();
-            drop(slot);
-        }
+        let retired = {
+            let mut slots = self.0.lock().expect("execution registry mutex");
+            if slots.get(session).is_some_and(|slot| {
+                let phase = slot.phase.lock().expect("execution slot phase");
+                match &*phase {
+                    Phase::Closed(None) => true,
+                    Phase::Closed(Some(endpoint)) => matches!(
+                        *endpoint.settlement.lock().expect("execution settlement"),
+                        Settlement::Finished(Ok(()))
+                    ),
+                    _ => false,
+                }
+            }) {
+                slots.remove(session)
+            } else {
+                None
+            }
+        };
+        drop(retired);
     }
 }
 
@@ -2905,7 +2954,7 @@ mod tests {
         let session = SessionId::generate();
         let (_dir, workspace) = workspace();
         let slot = create(&registry, &session, &workspace);
-        registry.fence(&session);
+        assert!(registry.close_session_admission(&session).is_none());
         let endpoint = Arc::new(LocalExecutionEndpoint::new(&session, workspace.clone()).unwrap());
         // The prepared endpoint is real but its binding is still Reserved;
         // publication is refused, and the stale endpoint never goes live.
@@ -3437,7 +3486,13 @@ mod tests {
         let mut client = std::os::unix::net::UnixStream::connect(socket_path(&published)).unwrap();
         admit(&endpoint, &mut client);
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
-        manager.execution.fence(&sessions[0]);
+        manager
+            .execution
+            .close_session_admission(&sessions[0])
+            .unwrap()
+            .settle()
+            .await
+            .unwrap();
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
         // The typed gate denies before the wire: the client socket carries
         // only the earlier admission reply — and then EOF, because the
@@ -4025,7 +4080,12 @@ mod tests {
         // park for the whole 60-second exchange deadline.
         let (fenced_tx, fenced_rx) = std::sync::mpsc::channel::<()>();
         let fencer = std::thread::spawn(move || {
-            slot.close();
+            slot.close_admission()
+                .unwrap()
+                .fence_connection_by(
+                    Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT,
+                )
+                .unwrap();
             fenced_tx.send(()).unwrap();
         });
         fenced_rx

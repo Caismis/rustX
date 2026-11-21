@@ -1289,11 +1289,30 @@ async fn disabled_workflow_external_sources_do_not_block_session_creation_or_rel
 }
 
 #[cfg(target_os = "linux")]
+fn workspace_overlay_launcher(mount: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let launcher = mount.join("client");
+    let staged = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    std::os::unix::fs::symlink(staged, mount.join("client-real")).unwrap();
+    std::fs::write(
+        &launcher,
+        r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}" --bind "$bin/physical" "$4" -- "$bin/client-real" "$@"
+"#,
+    ).unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    launcher
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn bound_configuration_load_and_reconcile_without_any_server_workspace_directory() {
     use crate::local_runtime::configuration::settings::SourceTarget;
-    use std::os::unix::fs::PermissionsExt as _;
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
@@ -1303,19 +1322,7 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         std::fs::rename(workspace, &physical).unwrap();
         let document = physical.join("rustx.toml");
         std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 23456\n").unwrap();
-        let launcher = mount.path().join("client");
-        let staged = std::env::current_exe().unwrap().with_file_name("rustx-execution-client");
-        std::os::unix::fs::symlink(staged, mount.path().join("client-real")).unwrap();
-        std::fs::write(
-            &launcher,
-            r#"#!/bin/sh
-set -eu
-test ! -e "$4"
-bin=${0%/*}
-exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}" --bind "$bin/physical" "$4" -- "$bin/client-real" "$@"
-"#,
-        ).unwrap();
-        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let launcher = workspace_overlay_launcher(mount.path());
         assert!(!workspace.exists());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
         fixture.load(0).await.unwrap().unwrap();
@@ -1353,4 +1360,72 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}"
         assert!(client.wait().await.unwrap().success());
     }))
     .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_lost() {
+    use crate::local_runtime::configuration::settings::{EffectiveConfiguration, SourceTarget};
+    use crate::runtime::subagent::SubagentName;
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::create_dir(&physical).unwrap();
+        let document = physical.join("rustx.toml");
+        let write_policy = |deadline| {
+            std::fs::write(&document, format!(
+                "[agent]\nagents=['reviewer']\nskills=[]\n[tool_deadline_policy]\nhard_deadline_ms={deadline}\n"
+            )).unwrap();
+        };
+        write_policy(23_456);
+        let user_agents = fixture.manager.configuration.source_bindings().home_directory.join("rustx/.agents/agents");
+        let workspace_agents = workspace.join(".agents/agents");
+        let write_role = |root: &std::path::Path, label| {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join("reviewer.toml"), format!("description='Review'\ninstructions='{label}'\nskills=[]\n")).unwrap();
+        };
+        write_role(&user_agents, "User reviewer");
+        write_role(&workspace_agents, "Workspace reviewer");
+        let launcher = workspace_overlay_launcher(mount.path());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let reviewer = SubagentName::parse("reviewer").unwrap();
+        let instructions = || runtime.runtime_resources().subagents().get(&reviewer).unwrap().instructions().to_owned();
+        assert_eq!(instructions(), "Workspace reviewer");
+
+        let original_root = workspace.with_extension("retained");
+        std::fs::rename(workspace, &original_root).unwrap();
+        let target = SourceTarget::Workspace { directory: workspace.clone() };
+        for (deadline, replace) in [(34_567, false), (45_678, true)] {
+            if replace {
+                // Still canonical, but independently owned and has no Agent
+                // collection. It must not grant the lower User definition.
+                std::fs::create_dir(workspace).unwrap();
+            }
+            write_policy(deadline);
+            fixture.manager.reconcile_configuration(&target).await.unwrap();
+            let application = applied(&fixture, 0).await;
+            assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
+            assert!(matches!(&application.units[&ApplyUnit::Capabilities],
+                UnitApplication::Failed { diagnostic } if diagnostic.contains("Workspace authored resources unavailable")
+            ), "{application:?}");
+            assert_eq!(EffectiveConfiguration::adopted(&runtime).unwrap().tool_deadline.hard_deadline_ms, deadline);
+            assert_eq!(instructions(), "Workspace reviewer");
+        }
+
+        std::fs::remove_dir(workspace).unwrap();
+        std::fs::rename(original_root, workspace).unwrap();
+        write_role(&workspace_agents, "Restored Workspace reviewer");
+        fixture.manager.reconcile_configuration(&target).await.unwrap();
+        let application = applied(&fixture, 0).await;
+        assert_eq!(application.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
+        assert_eq!(instructions(), "Restored Workspace reviewer");
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    })).await;
 }

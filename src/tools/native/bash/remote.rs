@@ -401,12 +401,12 @@ impl RemoteBash {
         if let Some(stdout) = &context.stdout_capture
             && self.receive_raw_stdout(stdout, &snapshot).await.is_err()
         {
-            self.endpoint.cut_pair();
+            self.endpoint.cut_pair_if_open();
         }
         if !self.release(&snapshot).await {
             // Release does not rewrite the known business outcome. Retiring
             // the pair does make the continuation unavailable.
-            self.endpoint.cut_pair();
+            self.endpoint.cut_pair_if_open();
             if let Some(projection) = capture.as_mut() {
                 if projection.output != BashCaptureState::None {
                     projection.output = BashCaptureState::Unavailable;
@@ -541,11 +541,11 @@ impl Drop for RemoteBash {
                     .await;
                     endpoint.discard_bash_capture(key).await;
                 } else {
-                    endpoint.cut_pair();
+                    endpoint.cut_pair_if_open();
                 }
             });
         } else {
-            endpoint.cut_pair();
+            endpoint.cut_pair_if_open();
         }
     }
 }
