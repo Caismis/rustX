@@ -76,7 +76,11 @@ export function WorkspaceFollowGlobal({
     () => false,
   );
 
-  const [customized, setCustomized] = useState(hasOverrides || hasUnitDraft);
+  // A staged reset is page-level intent: it survives this row's unmount and
+  // remount (e.g. an Extensions filter switch) exactly like a detached draft,
+  // so a remount with one pending starts back on the pending-following view.
+  const stagedReset = scope === 'workspace' && (page?.moduleReset?.length ?? 0) > 0;
+  const [customized, setCustomized] = useState((hasOverrides || hasUnitDraft) && !stagedReset);
   const prevContext = useRef({ actor, hasOverrides });
 
   useEffect(() => {
@@ -88,7 +92,13 @@ export function WorkspaceFollowGlobal({
     if (hasUnitDraft) setCustomized(true);
   }, [actor, hasOverrides, hasUnitDraft]);
 
-  useEffect(() => () => setModuleReset?.(undefined), [setModuleReset]);
+  // On remount the pending reset's Cancel callback still points at the dead
+  // instance's setter — re-arm it with the staged mutations, not a fresh set.
+  useEffect(() => {
+    const pending = page?.moduleReset;
+    if (pending?.length) setModuleReset?.(pending, () => setCustomized(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (scope !== 'workspace') return <>{children}</>;
 
