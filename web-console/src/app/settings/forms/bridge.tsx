@@ -12,8 +12,8 @@ import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
 import { awaitingCommitObservation, committed as unitCommitted, discardable, editingCompletion, requiresReview, unsavedIntent } from '../machines/unit-transaction';
 import {
-  revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
-  type ShadowedDefinition,
+  revisionSelector, selectedRevision, shadowedDefinition, unitFacts, unitOwnership,
+  type RevisionSelector, type ShadowedDefinition,
 } from '../projection';
 import { ConfirmAction } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
@@ -55,16 +55,14 @@ export interface PageTransaction {
   /** Bumps when Cancel restores every unit — buffered field editors
    * (unparsed JSON text) resynchronize on it like `UnitReset`. */
   readonly generation: number;
-  /** Unit identities whose removal is staged but not yet submitted. */
-  readonly stagedRemovals: ReadonlySet<string>;
-  /** True when the only pending change is a staged removal — the footer's
-   * Save switches to a danger treatment so committing a deletion reads
-   * differently from committing an edit. */
-  readonly removalOnly: boolean;
-  readonly stageRemoval: (identity: string) => void;
-  readonly unstageRemoval: (identity: string) => void;
   readonly savePage: () => void;
   readonly cancelPage: () => void;
+  /** Stages or clears a batch of module-level reset mutations (for the
+   * Workspace "Follow global" switch) inside the enclosing page transaction. */
+  readonly setModuleReset: (mutations: readonly SourceMutation[] | undefined, onCancel?: () => void) => void;
+  /** Discards all unit drafts and page-local drafts without invoking
+   * `setModuleReset`'s cancellation callback. */
+  readonly discardDrafts: () => void;
   /** A paused save: this unit's submission was refused. `adopt` accepts the
    * authoritative revision (discarding the draft); `retry` resubmits it. */
   readonly conflict?: { identity: string; adopt(): void; retry(): void };
@@ -115,8 +113,12 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   // discarding it; a subscription releases it once the draft resolves.
   const detached = useRef(new Map<string, PageUnitHandle>());
   const detachedSubs = useRef(new Map<string, { unsubscribe(): void }>());
-  const [stagedRemovals, setStagedRemovals] = useState<ReadonlySet<string>>(new Set());
-  const [queue, setQueue] = useState<{ id: string; remove: boolean }[]>([]);
+  const [moduleReset, setModuleResetState] = useState<readonly SourceMutation[]>();
+  const moduleResetCancelRef = useRef<(() => void) | undefined>(undefined);
+  const [queue, setQueue] = useState<
+    ({ kind: 'unit'; id: string } | { kind: 'mutation'; id: string; mutation: SourceMutation; selector: RevisionSelector })[]
+  >([]);
+  const dispatchedRef = useRef(new Set<string>());
   const [conflict, setConflict] = useState<PageTransaction['conflict']>();
   const [generation, setGeneration] = useState(0);
   // Page-local drafts (client preferences, unsaved imports) carry only their
@@ -143,14 +145,25 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     setDraftFlags(current => current.get(identity) === hasDraft ? current : new Map(current).set(identity, hasDraft));
   }, []);
   const anyDraft = [...draftFlags.values()].some(Boolean);
-  const dirty = anyDraft || stagedRemovals.size > 0 || localDirty;
+  const dirty = anyDraft || !!moduleReset?.length || localDirty;
   const saving = queue.length > 0;
 
-  const submitItem = useCallback((item: { id: string; remove: boolean }) => {
-    (handles.current.get(item.id) ?? detached.current.get(item.id))?.current.submit(item.remove);
-  }, []);
+  const submitItem = useCallback((item: (typeof queue)[number]) => {
+    const ctx = actor.getSnapshot().context;
+    if (!admitsSourceMutation(ctx)) return;
+    dispatchedRef.current.add(item.id);
+    if (item.kind === 'unit') {
+      (handles.current.get(item.id) ?? detached.current.get(item.id))?.current.submit(false);
+      return;
+    }
+    const obs = ctx.observation ?? ctx.staleObservation;
+    const rev = obs ? selectedRevision(obs, item.selector) : '';
+    actor.send({ type: 'UNIT.SUBMIT', identity: item.id, selector: item.selector, revision: rev, mutation: item.mutation });
+  }, [actor]);
 
   const finishSave = useCallback(() => {
+    moduleResetCancelRef.current = undefined;
+    dispatchedRef.current.clear();
     localSaveRef.current?.();
     onAllSavedRef.current?.();
   }, []);
@@ -161,6 +174,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const head = queue[0];
   const headStatus = useSelector(actor, target => {
     if (!head) return 'idle' as const;
+    if (!dispatchedRef.current.has(head.id)) return 'waiting' as const;
     const ref = target.context.units[head.id];
     // A queued submission refused by admission spawns no unit actor —
     // `ensureUnit` only runs on the accepted transition — so an absent ref
@@ -188,27 +202,41 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   useEffect(() => {
     const [item, ...rest] = queueRef.current;
     if (!item) return;
-    
+
     if (headStatus === 'settled') {
+      dispatchedRef.current.delete(item.id);
       setQueue(rest);
       if (rest.length) submitItem(rest[0]); else finishSave();
     } else if (headStatus === 'waiting' && barrierFree) {
       submitItem(item);
     } else if (headStatus === 'conflict' || headStatus === 'rejected' || headStatus === 'uncertain') {
+      dispatchedRef.current.delete(item.id);
       // One unit's failure is its own: the remaining independent units still
       // submit, and the failed one keeps its draft for the footer gesture.
       if (headStatus === 'conflict') {
-        const handle = handles.current.get(item.id) ?? detached.current.get(item.id);
-        setConflict(handle ? {
-          identity: item.id,
-          adopt: () => { handle.current.review(); setConflict(undefined); },
-          retry: () => { handle.current.submit(item.remove); setConflict(undefined); },
-        } : undefined);
+        if (item.kind === 'unit') {
+          const handle = handles.current.get(item.id) ?? detached.current.get(item.id);
+          setConflict(handle ? {
+            identity: item.id,
+            adopt: () => { handle.current.review(); setConflict(undefined); },
+            retry: () => { handle.current.submit(false); setConflict(undefined); },
+          } : undefined);
+        } else {
+          setConflict({
+            identity: item.id,
+            adopt: () => { actor.send({ type: 'UNIT.REVIEW', identity: item.id }); setConflict(undefined); },
+            retry: () => {
+              setConflict(undefined);
+              setQueue(current => [item, ...current]);
+              submitItem(item);
+            },
+          });
+        }
       }
       setQueue(rest);
       if (rest.length) submitItem(rest[0]); else finishSave();
     }
-  }, [headStatus, barrierFree, submitItem, finishSave]);
+  }, [actor, headStatus, barrierFree, submitItem, finishSave]);
 
   const savePage = useCallback(() => {
     // A local `beforeSave` may veto (invalid buffers stay on the page) or
@@ -216,32 +244,41 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     // snapshots captured before it ran.
     if (localBeforeSaveRef.current?.() === false) return;
     const units = actor.getSnapshot().context.units;
-    const items: { id: string; remove: boolean }[] = [];
+    const items: (typeof queue)[number][] = [];
     for (const identity of new Set([...registered.current, ...detached.current.keys()])) {
       const ref = units[identity];
-      const remove = stagedRemovals.has(identity);
-      // A unit actor only exists once the target machine has seen intent for
-      // it; a staged removal of an otherwise untouched unit has none yet —
-      // `UNIT.SUBMIT` spawns it — so absence of a ref skips only drafts.
-      if (remove) { items.push({ id: identity, remove }); continue; }
-      if (ref && ref.getSnapshot().context.draft !== undefined) items.push({ id: identity, remove: false });
+      if (ref && ref.getSnapshot().context.draft !== undefined) items.push({ kind: 'unit', id: identity });
     }
-    setStagedRemovals(new Set());
+    if (moduleReset?.length) {
+      moduleReset.forEach((mutation, index) => {
+        items.push({ kind: 'mutation', id: `module-reset:${index}`, mutation, selector: revisionSelector(mutation) });
+      });
+      setModuleResetState(undefined);
+    }
+    dispatchedRef.current.clear();
     setConflict(undefined);
-    
+
     if (!items.length) { finishSave(); return; }
     setQueue(items);
     submitItem(items[0]);
-  }, [actor, stagedRemovals, submitItem, finishSave]);
+  }, [actor, moduleReset, submitItem, finishSave]);
 
-  const cancelPage = useCallback(() => {
+  const discardDrafts = useCallback(() => {
     for (const handle of [...handles.current.values(), ...detached.current.values()]) handle.current.discard();
-    setStagedRemovals(new Set());
-    setQueue([]);
-    setConflict(undefined);
     localCancelRef.current?.();
     setGeneration(generation => generation + 1);
   }, []);
+
+  const cancelPage = useCallback(() => {
+    discardDrafts();
+    dispatchedRef.current.clear();
+    setQueue([]);
+    setConflict(undefined);
+    const onCancel = moduleResetCancelRef.current;
+    moduleResetCancelRef.current = undefined;
+    setModuleResetState(undefined);
+    onCancel?.();
+  }, [discardDrafts]);
 
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -313,11 +350,9 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     };
   }, [actor]);
 
-  const stageRemoval = useCallback((identity: string) => {
-    setStagedRemovals(current => new Set(current).add(identity));
-  }, []);
-  const unstageRemoval = useCallback((identity: string) => {
-    setStagedRemovals(current => { const next = new Set(current); next.delete(identity); return next; });
+  const setModuleReset = useCallback((mutations: readonly SourceMutation[] | undefined, onCancel?: () => void) => {
+    moduleResetCancelRef.current = onCancel;
+    setModuleResetState(mutations && mutations.length > 0 ? mutations : undefined);
   }, []);
   const setLocalEntry = useCallback((nextDirty: boolean, save?: () => void, cancel?: () => void, beforeSave?: () => boolean | void) => {
     localSaveRef.current = save;
@@ -328,8 +363,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const [footerLeading, setFooterLeading] = useState<ReactNode>();
 
   const transaction: PageTransaction = {
-    dirty, saving, generation, stagedRemovals, stageRemoval, unstageRemoval,
-    removalOnly: stagedRemovals.size > 0 && !anyDraft && !localDirty,
+    dirty, saving, generation, setModuleReset, discardDrafts,
     savePage, cancelPage, conflict, register, reportDraft, setLocal: setLocalEntry,
     footerLeading, setFooterLeading,
   };
@@ -339,34 +373,21 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
 /** The page footer's default content: status/conflict on the left,
  * [取消] [保存] on the right, both greying out at `opacity 0.4` while the
  * page is clean. */
-export function PageTransactionFooter({ leading, status }: { leading?: ReactNode; status?: ReactNode }) {
+export function PageTransactionFooter({ leading, status, cancelAlwaysEnabled = false }: {
+  leading?: ReactNode; status?: ReactNode; cancelAlwaysEnabled?: boolean;
+}) {
   const tx = useTranslation();
   const page = usePageTransaction();
   if (!page) return null;
   const conflict = page.conflict;
   const footerLeading = leading || page.footerLeading ? <>{leading}{page.footerLeading}</> : undefined;
-  return <SettingsPageFooter dirty={page.dirty} saving={page.saving} removalOnly={page.removalOnly} leading={footerLeading}
+  return <SettingsPageFooter dirty={page.dirty} cancelEnabled={cancelAlwaysEnabled} saving={page.saving} leading={footerLeading}
     status={conflict ? <span role="alert">
       {tx('settings:unsaved.save-conflict')}
       <Button variant="ghost" size="sm" onClick={conflict.adopt}>{tx('settings:unsaved.adopt-latest')}</Button>
       <Button variant="ghost" size="sm" onClick={conflict.retry}>{tx('settings:bridge.use-reviewed-revision')}</Button>
     </span> : status}
     onCancel={page.cancelPage} onSave={page.savePage} />;
-}
-
-/** The inline per-row reset affordance. It never sends a request: it stages
- * the unit's removal into the page transaction, which only submits it on
- * Save. Click again to unstage. */
-export function UnitResetControl({ unit }: { unit: UnitEditing<any> }) {
-  const tx = useTranslation();
-  const page = usePageTransaction();
-  if (!page || !unit.authoredPresent || unit.busy || unit.awaitingObservation) return null;
-  const staged = page.stagedRemovals.has(unit.identity);
-  const restores = unit.scope === 'workspace' && (unit.definition === undefined || unit.shadowed !== undefined);
-  const label = staged ? tx(restores ? 'settings:unsaved.undo-reset' : 'settings:unsaved.undo-removal')
-    : restores ? tx('settings:models.restore') : tx('settings:forms.reset-default');
-  return <button type="button" className={css.resetLink} data-staged={staged || undefined}
-    onClick={() => staged ? page.unstageRemoval(unit.identity) : page.stageRemoval(unit.identity)}>{label}</button>;
 }
 
 /** Structural equality of two authored values.
@@ -606,9 +627,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // inherited one, or the neutral seed — and sends nothing until the page
   // saves. Editing again silently unstages it.
   const page = useContext(PageTransactionContext);
-  const stagedRemoval = !!page?.stagedRemovals.has(identity);
-  const displayed: T = stagedRemoval ? (inheritedValue ?? blank)
-    : draft ? draft.value
+  const displayed: T = draft ? draft.value
     : redacted ? blank
       : authored !== undefined ? authored
         : inheritedValue !== undefined ? inheritedValue
@@ -629,13 +648,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
     overriding: draft !== undefined || authoredPresent, inheritance, committed, settled, submission, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, awaitingObservation, writable,
-    // For a value-inherited unit an edit is an unambiguous override
-    // transition: it starts from whatever this control displays and becomes
-    // this browser's authored intent. An inherited whole definition is only
-    // inspected, so an edit of it is refused: viewing is never authoring. The
-    // value goes to the transaction actor, never to component or form state
-    // that a remount could lose.
-    edit: (value: T) => { if (writable) { if (stagedRemoval) page?.unstageRemoval(identity); begin(value); } },
+    edit: (value: T) => { if (writable) begin(value); },
     apply: (value: T) => {
       if (!writable || !admitted || busy || draft || (snapshot && requiresReview(snapshot))) return;
       begin(value);
@@ -680,9 +693,9 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, allowUnchangedDraft = true, saveLabel, children, presentation, legendHidden = false, onCancel, onSubmit }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, saveLabel, children, presentation, legendHidden = false, onCancel, onSubmit }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
-  removalNotice?: ReactNode; allowUnchangedDraft?: boolean; saveLabel?: string | undefined; children: ReactNode;
+  removalNotice?: ReactNode; saveLabel?: string | undefined; children: ReactNode;
   presentation?: 'resource' | 'dialog'; legendHidden?: boolean; onCancel?: () => void;
   onSubmit?: () => void;
 }) {
@@ -717,7 +730,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             description={tx('settings:forms.restore-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>
           // Otherwise the removal really removes this scope's authored unit.
-          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={tx('settings:bridge.remove-value', { p0: title })} triggerText={unit.configUnit && !presentation ? tx('settings:forms.reset-default') : tx('settings:copy.delete')} disabled={!unit.admitted}
+          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={unit.configUnit && !presentation ? tx('settings:forms.reset-default') : tx('settings:bridge.remove-value', { p0: title })} triggerText={unit.configUnit && !presentation ? tx('settings:forms.reset-default') : tx('settings:copy.delete')} disabled={!unit.admitted}
             title={tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: owner })} confirm={tx('settings:bridge.remove-value', { p0: title })}
             description={removalNotice ?? tx(unit.configUnit && !presentation ? 'settings:forms.reset-help' : 'settings:forms.delete-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>);
@@ -744,31 +757,20 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         fallback={<div className={css.review}><p role="status">{tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere')}</p></div>}/>
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       </div>
-      <div className={css.actions}>
+      {(presentation === 'dialog' || !!unit.override || (removable && (!presentation ? !workspace && unit.authoredPresent : false)) || unit.reviewNeeded || !!onCancel) && <div className={css.actions}>
         {/* Only a dialog commits itself; a page commits through its footer. */}
         {presentation === 'dialog' && <Button variant="primary" type="submit" aria-label={saveLabel ?? `${tx('settings:bridge.save')} ${title}`} aria-busy={saving} disabled={!unit.draft || !unit.admitted}>
           {saving ? tx('settings:catalog.saving') : saveLabel ?? tx('settings:bridge.save')}
         </Button>}
-        {/* Authoring an absent unit is always an explicit gesture, never
-            something rendering it does. For a Workspace it is an override of
-            the inherited value; for User it starts this scope's own authored
-            value from the neutral seed. It is what makes an explicit empty
-            selection authorable without an incidental edit. */}
         {unit.override && <Button type="button" variant="primary"
           aria-label={`${tx('settings:bridge.override')} ${title} ${tx('settings:bridge.in-this-workspace')}`}
           title={tx('settings:bridge.begin-a-workspace-definition-of-value-from-the-inherited-one-not', { p0: title })}
           disabled={unit.awaitingObservation} onClick={unit.override}>{tx('settings:forms.customize')}</Button>}
-        {allowUnchangedDraft && unit.configUnit && !unit.authoredPresent && !unit.intent && !unit.overriding && (!presentation || unit.inheritance) && <Button type="button" disabled={unit.awaitingObservation}
-          aria-label={`${workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')} ${title}`}
-          title={workspace ? tx('settings:bridge.author-this-unit-in-this-workspace-nothing-is-written-until-you') : tx('settings:bridge.author-this-unit-in-this-source-nothing-is-written-until-you-sav')}
-          onClick={() => unit.edit(unit.displayed)}>{tx('settings:forms.customize')}</Button>}
-        {/* A dialog's removal is an immediate mutation; a page's removal is
-            staged and only written by the page footer. */}
-        {presentation === 'dialog' ? removal : removable && <UnitResetControl unit={unit} />}
-        {(unit.intent || presentation === 'dialog') && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{presentation === 'dialog' ? tx('settings:models.reset-form') : tx('settings:bridge.discard-draft')}</Button>}
+        {presentation === 'dialog' ? removal : !presentation && removable && !workspace ? removal : null}
+        {presentation === 'dialog' && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{tx('settings:models.reset-form')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
         {onCancel && <Button type="button" onClick={() => { unit.discard(); onCancel(); }}>{tx('settings:aria.cancel')}</Button>}
-      </div>
+      </div>}
     </fieldset>
   </form></UnitReset.Provider>;
 }
@@ -800,15 +802,15 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
  *
  * Used where the unit is a single scalar or a small closed choice, so a typed
  * form layer would add mechanics without removing any. */
-export function UnitForm<T>({ title, children, removable = true, removalNotice, allowUnchangedDraft = true, saveLabel, legendHidden, ...options }: UnitOptions<T> & {
+export function UnitForm<T>({ title, children, removable = true, removalNotice, saveLabel, legendHidden, ...options }: UnitOptions<T> & {
   title: string; children: (value: T, change: (value: T) => void) => ReactNode;
-  removable?: boolean; removalNotice?: ReactNode; allowUnchangedDraft?: boolean; saveLabel?: string;
+  removable?: boolean; removalNotice?: ReactNode; saveLabel?: string;
   /** Inside a `SettingsGroup` the group's own title is the visible heading;
    * the legend stays as the fieldset's accessible name only. */
   legendHidden?: boolean;
 }) {
   const unit = useUnitEditing(options);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} allowUnchangedDraft={allowUnchangedDraft} saveLabel={saveLabel} legendHidden={legendHidden}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} saveLabel={saveLabel} legendHidden={legendHidden}>
     {children(unit.displayed, unit.edit)}
   </UnitShell>;
 }

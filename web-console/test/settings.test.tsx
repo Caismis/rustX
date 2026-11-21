@@ -15,8 +15,8 @@ import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
-  chooseOption, openResourceRow, openSettingsPage, renderEditor, sameRevision,
-  settingsReady, SettingsSurface, newSubagent, settingsActor,
+  chooseOption, confirmation, enableWorkspaceCustomization, followGlobalSettings, openResourceRow,
+  openSettingsPage, renderEditor, sameRevision, settingsReady, SettingsSurface, newSubagent, settingsActor,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { composerPreferences, COMPOSER_PREFERENCE_KEY } from '../src/app/composer/preferences';
@@ -39,16 +39,20 @@ it('C09 Workspace A/B drafts survive navigation and Session focus without retarg
  const nativeTools = () => within(screen.getByRole('form', { name: 'Built-in tools' }));
  const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await settingsReady(); await openSettingsPage('Tools & Permissions');
+ enableWorkspaceCustomization();
  fireEvent.click(nativeTools().getByRole('switch', { name: 'read' }));
  // A different Workspace Settings instance is a different target and must not
  // receive Workspace A's draft.
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('B', 'B')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
+ expect(screen.getByRole('switch', { name: 'Follow global settings' }).getAttribute('aria-checked')).toBe('true');
+ enableWorkspaceCustomization();
  await waitFor(() => expect(nativeTools().getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('false'));
  fireEvent.click(nativeTools().getByRole('switch', { name: 'write' }));
- // Returning to A restores A's own draft and excludes B's.
+ // Returning to A restores A's own draft and Follow global OFF state automatically.
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
+ expect(screen.getByRole('switch', { name: 'Follow global settings' }).getAttribute('aria-checked')).toBe('false');
  await waitFor(() => expect(nativeTools().getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true'));
  expect(nativeTools().getByRole('switch', { name: 'write' }).getAttribute('aria-checked')).toBe('false');
  s.state.views = {}; ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -75,6 +79,7 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
  let revoked = false; host.configureWorkspace = (...args) => revoked ? Promise.reject(new Error('Workspace revoked')) : configure(...args);
  render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await settingsReady(); await openSettingsPage('Tools & Permissions');
+ enableWorkspaceCustomization();
  fireEvent.click(screen.getByRole('switch', { name: 'read' })); revoked = true;
  act(() => settingsActor().send({ type: 'REFRESH' }));
  await screen.findByRole('alert');
@@ -196,6 +201,7 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   });
   subject.source.resolved = { providers: subject.source.user.authored!.providers };
   await open(subject, 'Models');
+  enableWorkspaceCustomization();
   await openResourceRow('transport');
   await providerAction('Customize');
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://user.invalid');
@@ -214,6 +220,7 @@ it('preserves stale drafts and exact revision until a separate explicit review g
     if (operation.method === 'configuration/sourceWrite') { source.workspace!.revision = 'external-edit'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: operation.params.expected_revision, actual: 'external-edit' } }); }
   });
   await open(subject, 'Tools & Permissions');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' })); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await screen.findByRole('alert'); await screen.findAllByRole('button', { name: 'Use latest setting' });
   expect(screen.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
@@ -226,7 +233,7 @@ it('preserves stale drafts and exact revision until a separate explicit review g
 
 it('repairs uncertain writes by rereading and never replays the mutation', async () => {
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') throw new OutcomeUncertain(); });
-  await open(subject, 'Tools & Permissions'); fireEvent.click(screen.getByRole('switch', { name: 'read' })); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await open(subject, 'Tools & Permissions'); enableWorkspaceCustomization(); fireEvent.click(screen.getByRole('switch', { name: 'read' })); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   // The target reports the unknown outcome and the unit reports its own; both
   // say the write is never replayed, and neither claims it was saved.
   await waitFor(() => expect(screen.getAllByRole('alert').map(node => node.textContent).join(' ')).toMatch(/result is unknown/));
@@ -269,6 +276,7 @@ it('retains a Workspace draft and its original CAS revision across page navigati
   const subject = cfg3Client(); const host = cfg3Host(subject);
   const workspace = render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await settingsReady(); await openSettingsPage('Tools & Permissions');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   // A separate User Settings instance cannot receive the Workspace draft.
   workspace.rerender(<SettingsSurface client={subject.client} target={userSettingsTarget} host={host} />);
@@ -293,7 +301,7 @@ it('replaces against the newer revision only after an explicit review gesture', 
   const subject = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourceWrite' && first) { first = false; source.workspace!.revision = 'reviewed'; throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'reviewed' } }); }
   });
-  await open(subject, 'Tools & Permissions'); fireEvent.click(screen.getByRole('switch', { name: 'read' }));
+  await open(subject, 'Tools & Permissions'); enableWorkspaceCustomization(); fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   fireEvent.click(await within(screen.getByRole('form', { name: 'Built-in tools' })).findByRole('button', { name: 'Use latest setting' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -308,13 +316,15 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
   // intents, so each starts from the authored state it actually applies to.
   if (mode === 'omit') subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
   await open(subject, 'Tools & Permissions');
-  // The empty one has to be authored first: rendering an inherited unit never
-  // produces it.
+  // The empty one has to be authored intentionally: toggling on then off
+  // stages [] while Follow global OFF alone writes nothing.
   if (mode === 'empty') {
-    fireEvent.click(screen.getByRole('button', { name: 'Override Built-in tools' }));
+    enableWorkspaceCustomization();
+    fireEvent.click(screen.getByRole('switch', { name: 'read' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'read' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   } else {
-    fireEvent.click(screen.getByRole('button', { name: 'Use global default' }));
+    followGlobalSettings();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   }
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
@@ -350,6 +360,7 @@ it('does not equate invalid resource existence with readiness or Root authority'
 it('keeps contributor default intent unspecified when enabling the closed Agent Status extension', async () => {
   const subject = cfg3Client(); await open(subject, 'Extensions');
   fireEvent.click(screen.getByRole('tab', { name: 'Built-in' }));
+  enableWorkspaceCustomization();
   fireEvent.click(await screen.findByRole('switch', { name: 'Enable Agent Status' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'agent_status', authored: { enabled: true } } } } }));
@@ -360,6 +371,7 @@ it('keeps contributor default intent unspecified when enabling the closed Agent 
 it('reconnect rereads native sources without replaying a dirty draft', async () => {
   const subject = cfg3Client(); render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
   await settingsReady(); await openSettingsPage('Tools & Permissions');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   act(() => subject.publish({ generation: 2 }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(2));
@@ -391,6 +403,7 @@ it('removes literal credentials from a successful Provider draft using the redac
     }
   });
   await open(subject, 'Models');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
@@ -399,7 +412,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   await waitForSettingsSave();
   await waitFor(() => expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe(''));
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
-  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   await openResourceRow('secret');
   expect((screen.getByLabelText('API Key') as HTMLInputElement).placeholder).toContain('API Key saved');
 });
@@ -418,6 +431,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
   subject.source.resolved = structuredClone(subject.effective.document);
   subject.source.resolved.providers = subject.source.user.authored!.providers;
   await open(subject, 'Models');
+  enableWorkspaceCustomization();
   await openResourceRow('transport');
   fireEvent.click(within(await screen.findByRole('listitem', { name: 'main' })).getByRole('button', { name: 'Edit Model' }));
   // The capability switches sit inside the collapsed Advanced disclosure.
@@ -447,6 +461,7 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
  const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32602, message: 'Invalid provider reference', data: { kind: 'invalid_params' } }); });
  subject.source.resolved = { providers: subject.source.user.authored!.providers };
  await open(subject, 'Models');
+ enableWorkspaceCustomization();
  await openResourceRow('transport');
  fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
  fireEvent.change(await screen.findByLabelText('Model ID'), { target: { value: 'wire' } });
@@ -460,36 +475,37 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
 it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
   const subject = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourceWrite') {
-      source.workspace!.revision = 'external-removal-conflict';
-      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace!.revision } });
+      source.user.revision = 'external-removal-conflict';
+      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: op.params.expected_revision, actual: source.user.revision } });
     }
   });
-  subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
-  await open(subject, 'Tools & Permissions');
-  fireEvent.click(screen.getByRole('button', { name: 'Use global default' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  subject.source.user.authored = { agent: { tools: { builtin: ['bash'] } } };
+  await open(subject, 'Tools & Permissions', 'User');
+  const nativeTools = () => within(screen.getByRole('form', { name: 'Built-in tools' }));
+  fireEvent.click(nativeTools().getByRole('button', { name: 'Reset to default' }));
+  fireEvent.click(within(await confirmation('Remove Built-in tools')).getByRole('button', { name: 'Remove Built-in tools' }));
   await screen.findAllByRole('button', { name: 'Use latest setting' });
-  fireEvent.click(screen.getByRole('button', { name: 'Use global default' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  fireEvent.click(nativeTools().getByRole('button', { name: 'Reset to default' }));
+  fireEvent.click(within(await confirmation('Remove Built-in tools')).getByRole('button', { name: 'Remove Built-in tools' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'user-1', mutation: { mutation: { authored: null } } } });
 });
 
 it('preserves a clean removal\'s frozen CAS base across an editor remount and advances it only through explicit review', async () => {
   const subject = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourceWrite') {
-      source.workspace!.revision = 'external-removal-conflict';
-      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: op.params.expected_revision, actual: source.workspace!.revision } });
+      source.user.revision = 'external-removal-conflict';
+      throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: op.params.expected_revision, actual: source.user.revision } });
     }
   });
-  subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
-  await open(subject, 'Tools & Permissions');
+  subject.source.user.authored = { agent: { tools: { builtin: ['bash'] } } };
+  await open(subject, 'Tools & Permissions', 'User');
   // The transaction belongs to this semantic unit. Scoping queries avoids
   // recomputing every unrelated editor's accessible names on each retry.
   const nativeTools = () => within(screen.getByRole('form', { name: 'Built-in tools' }));
   const remove = async () => {
-    fireEvent.click(nativeTools().getByRole('button', { name: 'Use global default' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(nativeTools().getByRole('button', { name: 'Reset to default' }));
+    fireEvent.click(within(await confirmation('Remove Built-in tools')).getByRole('button', { name: 'Remove Built-in tools' }));
   };
   await remove();
   await nativeTools().findByRole('button', { name: 'Use latest setting' });
@@ -497,14 +513,14 @@ it('preserves a clean removal\'s frozen CAS base across an editor remount and ad
   // base is durable transaction state, not component-local state.
   await openSettingsPage('Agent');
   await openSettingsPage('Tools & Permissions');
-  await nativeTools().findByRole('button', { name: 'Use global default' });
+  await nativeTools().findByRole('button', { name: 'Reset to default' });
   expect(nativeTools().getByRole('button', { name: 'Use latest setting' })).toBeTruthy();
   await remove();
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
-  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'user-1', mutation: { mutation: { authored: null } } } });
   // Submission alone does not settle its conflict and authoritative reread.
   // Wait for the unit to admit another removal before reviewing that revision.
-  await waitFor(() => expect((nativeTools().getByRole('button', { name: 'Use global default' }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect((nativeTools().getByRole('button', { name: 'Reset to default' }) as HTMLButtonElement).disabled).toBe(false));
   // Only the explicit reviewed-revision gesture advances the operation to R2.
   fireEvent.click(nativeTools().getByRole('button', { name: 'Use latest setting' }));
   await remove();
@@ -532,6 +548,7 @@ it.each([
     act(() => settingsActor().send({ type: 'REFRESH' }));
     await openSettingsPage('Advanced');
   } else {
+    enableWorkspaceCustomization();
     fireEvent.click(screen.getByRole('switch', { name: 'read' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitForSettingsSave();
@@ -599,6 +616,7 @@ it('retires a confirmed Provider save, including its literal credential, after t
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await settingsReady(); await openSettingsPage('Models');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -636,6 +654,7 @@ it('a late acknowledgement advances the CAS base without erasing a newer draft s
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await settingsReady(); await openSettingsPage('Tools & Permissions');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
@@ -657,6 +676,7 @@ it('keeps a confirmed Workspace save when the post-write authoritative reread fa
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await settingsReady(); await openSettingsPage('Tools & Permissions');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -694,4 +714,71 @@ it('authors read_image through the native selection, rereads it, and excludes fi
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').at(-1)?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: [] } } } }));
   act(() => settingsActor().send({ type: 'REFRESH' }));
   await waitFor(() => expect(selected()).toBe('false'));
+});
+
+it('WorkspaceFollowGlobal hides clean module controls, reveals without writes on toggle OFF, and hides without writes on toggle ON', async () => {
+  const subject = cfg3Client();
+  await open(subject, 'Tools & Permissions');
+  const toggle = () => screen.getByRole('switch', { name: 'Follow global settings' });
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'Approval mode' })).toBeNull();
+
+  enableWorkspaceCustomization();
+  expect(toggle().getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Approval mode' })).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+
+  followGlobalSettings();
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+});
+
+it('WorkspaceFollowGlobal stages clearing multiple overrides, restores on Cancel, and commits all removals sequentially on Save', async () => {
+  let rev = 1;
+  const subject = cfg3Client(async (op, source) => {
+    if (op.method !== 'configuration/sourceWrite' || op.params.mutation.kind !== 'config') return;
+    const m = op.params.mutation.mutation;
+    const ws = source.workspace!;
+    if (m.unit === 'approval' && m.authored === null) delete ws.authored!.approval_mode;
+    if (m.unit === 'native_tools' && m.authored === null && ws.authored?.agent?.tools) delete ws.authored.agent.tools.builtin;
+    ws.revision = `workspace-${++rev}`;
+    return { type: 'sources_written', revision: ws.revision, configuration_revision: '1' };
+  });
+  subject.source.workspace!.authored = {
+    approval_mode: 'automatic',
+    agent: { tools: { builtin: ['bash'] } },
+  };
+  await open(subject, 'Tools & Permissions');
+  const toggle = () => screen.getByRole('switch', { name: 'Follow global settings' });
+  expect(toggle().getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByRole('form', { name: 'Approval mode' })).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
+
+  // Flipping ON hides fields and stages Cancel/Save without writing yet.
+  followGlobalSettings();
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+
+  // Cancel restores the customized Workspace view with zero writes.
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(toggle().getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+
+  // Flipping ON + Save commits both removals sequentially via exact CAS and settles ON.
+  followGlobalSettings();
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
+  const writes = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').map(([op]) => op);
+  expect(writes[0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'approval', authored: null } } } });
+  expect(writes[1]).toMatchObject({ params: { expected_revision: 'workspace-2', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: null } } } });
+  await waitForSettingsSave();
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
 });

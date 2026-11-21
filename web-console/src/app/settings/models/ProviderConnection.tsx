@@ -70,10 +70,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const edit = (next: ProviderWrite) => { setAttempted(0); unit.edit(next); };
   useEffect(() => {
     // The footer's Save runs this veto: an invalid connection stays a draft
-    // and the attempt notice marks the failing field. A staged removal needs
-    // no valid fields — the footer writes the removal itself.
+    // and the attempt notice marks the failing field.
     page?.setLocal(false, undefined, undefined, () => {
-      if (page.stagedRemovals.has(unit.identity)) return undefined;
       if (endpointError || credentialError) { setAttempted(occurrence => occurrence + 1); return false; }
       return undefined;
     });
@@ -126,9 +124,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         description={tx(restores ? 'settings:forms.restore-help' : hasModels ? 'settings:models.delete-provider-and-models' : 'settings:forms.delete-help')}
         tone={restores ? 'restore' : 'destructive'} settle={form} onConfirm={() => {
           if (!unit.admitted || locked) return;
-          // Deletion stages as a removal in the page transaction; the footer
-          // commits it together with any staged edits.
-          page?.stageRemoval(unit.identity);
+          unit.submit(true);
         }}
         renderTrigger={(open, ref) => <Menu open={menu} align="end" compact autoFocus onClose={() => setMenu(false)}
           anchor={<button type="button" ref={ref} className={cards.iconButton} aria-label={tx('settings:models.provider-actions')} aria-haspopup="menu" aria-expanded={menu}

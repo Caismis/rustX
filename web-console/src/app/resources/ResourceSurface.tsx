@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
-import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import type { SkillDescriptor, SourceMutation, SourceScope, SourceSettings } from '../../../../protocol/app-server/v80';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
 import type { AppServerClient } from '../../client/app-server';
@@ -14,8 +13,10 @@ import { CatalogSearch } from '../../presentation/catalog/CatalogControls';
 import catalogCss from '../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../presentation/primitives/Button';
 import { Menu } from '../../presentation/primitives/Menu';
+import { CatalogListSkeleton, DetailFormSkeleton } from '../../presentation/primitives/Skeleton';
 import { IconChevronDownOutline14, IconFolderClose16, IconPlusOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
-import settings from '../../presentation/settings/SettingsContent.module.css';
+import { SettingsBackButton, SettingsPageShell } from '../../presentation/settings/SettingsPageShell';
+import shellCss from '../../presentation/settings/SettingsPageShell.module.css';
 import { SettingsActorContext, useSettingsTarget } from '../settings/machines/react';
 import { SourceContext } from '../settings/source-context';
 import { catalogIdentities, catalogProfiles, configAuthoring, settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../settings/projection';
@@ -82,6 +83,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
   const [resourceFocus, setResourceFocus] = useState<string>();
   const [newAgent, setNewAgent] = useState<AgentDraft>();
+  const [skillFocused, setSkillFocused] = useState(false);
   const owner = `${transport.endpoint}|${transport.authorityRevision}`;
   const directory = observation?.target.kind === 'workspace' ? observation.target.directory : undefined;
   const lifetime = JSON.stringify([owner, settingsTargetKey(target), showingWorkspace ? hostOwner : undefined, showingWorkspace ? workspace?.location : undefined]);
@@ -102,6 +104,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setTransferIntent(undefined);
     setResourceFocus(undefined);
     setNewAgent(undefined);
+    setSkillFocused(false);
     setQuery('');
   };
   if (owner !== presentedOwner) {
@@ -131,11 +134,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);
   useEffect(() => {
-    if (!agentEditor && !detail && returnFocus.current) {
+    if (!agentEditor && !detail && !skillFocused && returnFocus.current) {
       returnFocus.current = false;
       listTitle.current?.focus({ preventScroll: true });
     }
-  }, [agentEditor, detail]);
+  }, [agentEditor, detail, skillFocused]);
   const editingGlobal = showingWorkspace && detailScope === 'user';
   const editorSource = editingGlobal ? globalSource : source;
   const editorActor = editingGlobal ? globalActor : actor;
@@ -239,76 +242,106 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         canOverride={canOverride} onTransfer={transfer} transferDisabled={transferDisabled} workspaceAvailability={workspaceAvailability} />;
   };
 
+  const detailErrors = [editorError, maintenanceError, convergenceError].filter(Boolean);
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}
     data-lifecycle={available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading'} hidden={!visible} inert={!visible}>
-    {agentEditor ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}><SettingsFeedback active={visible}>
-      {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
+    {agentEditor ? <div className={css.detailSurface} key={lifetime}><SettingsFeedback active={visible}>
+      {!!detailErrors.length && <div className={css.detailNotices}>{detailErrors.map((error, index) => <SettingsNotice text={error} key={index} />)}</div>}
       {editorAvailable && editorSource ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
         <PageTransactionProvider>
         <AgentEditor source={editorSource} target={editorTarget} host={host} name={resourceFocus} initialDraft={newAgent} editable={editorEditable}
           client={client} discover={visible && editorEditable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
           models={catalogIdentities(editorSource, editorTarget.kind, 'models')} profiles={catalogProfiles(editorSource, editorTarget.kind)} />
         </PageTransactionProvider>
-      </SourceContext></SettingsActorContext> : <>
-        <Button size="sm" onClick={closeAgent}>{tx('resources:cancel')}</Button>
-        <p className={catalogCss.state} role="status">{tx(editorAvailable ? 'resources:loading' : 'resources:scope.unavailable')}</p>
-      </>}
-    </SettingsFeedback></div> : detail ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}>
-      <div className={clsx(settings.settings, css.mcpDetail)}>
-        {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
-        {editorSource && mcpFocus && <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
-          <fieldset className={css.editor} disabled={!editorEditable}>
-            <PageTransactionProvider>
-            <McpDetail source={editorSource} scope={editorTarget.kind} revision={editorConfig.state === 'structured' ? editorConfig.revision : undefined}
-              focus={mcpFocus} onClose={() => focusMcp(undefined)} scopeControl={<span>{editorScopeLabel}</span>} />
-            </PageTransactionProvider>
-          </fieldset>
-        </SourceContext></SettingsActorContext>}
-      </div>
-    </div> : <div className={catalogCss.library}>
-      <header className={clsx(catalogCss.pageHead, css.heading)}>
+      </SourceContext></SettingsActorContext> : <SettingsPageShell
+        title={tx(newAgent !== undefined ? 'resources:subagents.new' : 'resources:subagents.edit')}
+        breadcrumb={<SettingsBackButton label={tx('resources:subagents.title')} onClick={closeAgent} />}
+        footer={null}
+      >
+        <div className={css.detailLoadingBody}>
+          {editorAvailable ? <DetailFormSkeleton label={tx('resources:loading')} />
+            : <p className={catalogCss.state} role="status">{tx('resources:scope.unavailable')}</p>}
+        </div>
+      </SettingsPageShell>}
+    </SettingsFeedback></div> : detail ? <div className={css.detailSurface} key={lifetime}>
+      {!!detailErrors.length && <div className={css.detailNotices}>{detailErrors.map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}</div>}
+      {editorSource && mcpFocus ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
+        <PageTransactionProvider>
+        <McpDetail source={editorSource} scope={editorTarget.kind} revision={editorConfig.state === 'structured' ? editorConfig.revision : undefined}
+          focus={mcpFocus} bodyDisabled={!editorEditable} onClose={() => focusMcp(undefined)} scopeControl={<span>{editorScopeLabel}</span>} />
+        </PageTransactionProvider>
+      </SourceContext></SettingsActorContext> : <SettingsPageShell
+        title={mcpFocus?.name ?? tx('settings:mcp.new')}
+        breadcrumb={<SettingsBackButton label={tx('settings:mcp.back')} onClick={() => focusMcp(undefined)} />}
+        footer={null}
+      >
+        <div className={css.detailLoadingBody}><DetailFormSkeleton label={tx('resources:loading')} /></div>
+      </SettingsPageShell>}
+    </div> : <div className={skillFocused ? css.detailSurface : catalogCss.library}>
+      {!skillFocused && <header className={clsx(catalogCss.pageHead, css.heading)}>
         <div><h1 ref={listTitle} tabIndex={-1}>{title}</h1><p className={catalogCss.muted}>{tx(`resources:${module}.description`)}</p></div>
         {module === 'mcp' && <McpActions disabled={!editable || !(scope === 'user' ? source?.user_mcp : source?.workspace_mcp)?.authored} onFocus={focusMcp} />}
         {module === 'subagents' && <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!editable} onClick={() => setNewAgent({})}>{tx('resources:subagents.new')}</Button>}
-      </header>
-      <Tabs selectedKey={tab} onSelectionChange={key => { resetScope(); setTab(key as typeof tab); }}>
-        <TabList className={catalogCss.tabs} aria-label={tx('resources:scope.label')}>
-          {(['workspace', 'global'] as const).map(value => <Tab key={value} id={value} className={clsx(catalogCss.tab, css.tab)}>{tx(`resources:scope.${value}`)}</Tab>)}
-        </TabList>
-        <TabPanel id={tab}>
-          <div className={clsx(catalogCss.controls, css.controls, !showingWorkspace && catalogCss.globalControls)}>
-            {showingWorkspace ? <div className={catalogCss.controlsLeft}>
-              <span className={catalogCss.subtle}>{tx('workflows:scope.choose-workspace')}</span>
-              <Menu open={workspaceMenu} autoFocus onClose={() => setWorkspaceMenu(false)} selectedId={workspaceId}
-                items={workspaces.map(row => ({ id: row.id, label: row.displayName, icon: <IconFolderClose16 /> }))}
-                onSelect={id => { chosen.current = true; resetScope(); setWorkspace(id); setWorkspaceMenu(false); }}
-                anchor={<button type="button" className={catalogCss.chooser} aria-label={tx('resources:scope.choose')}
-                  aria-haspopup="menu" aria-expanded={workspaceMenu} onClick={() => setWorkspaceMenu(value => !value)}>
-                  <span className={catalogCss.chooserValue}><IconFolderClose16 size={14} /><span className={css.workspaceName}>{workspace?.displayName ?? tx('resources:scope.choose')}</span></span><IconChevronDownOutline14 />
-                </button>} />
-            </div> : <p className={catalogCss.context}>{scopeLabel}</p>}
-            <div className={clsx(catalogCss.controlsRight, css.tools)}>
-              <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
-              <Button size="sm" variant="outline" className={css.refresh} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
-                disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></Button>
+      </header>}
+      <div className={skillFocused ? css.detailSurface : undefined}>
+        <div className={clsx(catalogCss.controls, css.controls)} hidden={skillFocused}>
+          <div className={catalogCss.controlsLeft}>
+            <div className={catalogCss.tabs} role="tablist" aria-label={tx('resources:scope.label')}>
+              {(['workspace', 'global'] as const).map(value => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === value}
+                  tabIndex={tab === value ? 0 : -1}
+                  className={clsx(catalogCss.tab, css.tab, tab === value && catalogCss.tabActive)}
+                  onClick={() => { resetScope(); setTab(value); }}
+                  onKeyDown={event => {
+                    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+                    event.preventDefault();
+                    const next = event.key === 'Home' ? 'workspace' : event.key === 'End' ? 'global' : value === 'workspace' ? 'global' : 'workspace';
+                    resetScope();
+                    setTab(next);
+                    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+                    tabs?.[next === 'workspace' ? 0 : 1]?.focus();
+                  }}
+                >
+                  {tx(`resources:scope.${value}`)}
+                </button>
+              ))}
             </div>
+            {showingWorkspace && <Menu open={workspaceMenu} autoFocus onClose={() => setWorkspaceMenu(false)} selectedId={workspaceId}
+              items={workspaces.map(row => ({ id: row.id, label: row.displayName, icon: <IconFolderClose16 /> }))}
+              onSelect={id => { chosen.current = true; resetScope(); setWorkspace(id); setWorkspaceMenu(false); }}
+              anchor={<button type="button" className={catalogCss.chooser} aria-label={tx('resources:scope.choose')}
+                aria-haspopup="menu" aria-expanded={workspaceMenu} onClick={() => setWorkspaceMenu(value => !value)}>
+                <span className={catalogCss.chooserValue}><IconFolderClose16 size={14} /><span className={css.workspaceName}>{workspace?.displayName ?? tx('resources:scope.choose')}</span></span><IconChevronDownOutline14 />
+              </button>} />}
           </div>
+          <div className={clsx(catalogCss.controlsRight, css.tools)}>
+            <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
+            <button type="button" className={shellCss.refreshButton} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
+              disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></button>
+          </div>
+        </div>
+        <div role="tabpanel" aria-label={tx(`resources:scope.${tab}`)} className={skillFocused ? css.detailSurface : undefined}>
+          {!skillFocused && !showingWorkspace && <p className={catalogCss.context}>{scopeLabel}</p>}
           {!available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>
-            {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
-            {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
-              <fieldset className={css.editor} disabled={!editable} key={lifetime}>
-                {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                  query={query} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
-                  bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
-              </fieldset>
+            {!skillFocused && [readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
+            {!source ? <CatalogListSkeleton label={tx('resources:loading')} /> : <SettingsActorContext value={actor}><SourceContext value={source}>
+              {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
+                query={query} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
+                bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled}
+                onFocusChange={setSkillFocused} bodyDisabled={!editable} />
+                : <fieldset className={css.editor} disabled={!editable} key={lifetime}>{renderResources(source, scope)}</fieldset>}
             </SourceContext></SettingsActorContext>}
           </>}
           {showingWorkspace && module !== 'skills' && (globalError ? <p className={catalogCss.banner} role="alert">{globalError}</p>
             : globalSource ? <SettingsActorContext value={globalActor}><SourceContext value={globalSource}>
               <fieldset className={clsx(css.editor, catalogCss.scopeGroup)} disabled={!globalEditable}>{renderResources(globalSource, 'user', true)}</fieldset>
-            </SourceContext></SettingsActorContext> : <p className={catalogCss.state} role="status">{tx('resources:loading')}</p>)}
-        </TabPanel>
-      </Tabs>
+            </SourceContext></SettingsActorContext> : <CatalogListSkeleton label={tx('resources:loading')} />)}
+        </div>
+      </div>
     </div>}
     {transferIntent && <TransferDialog intent={transferIntent} close={() => setTransferIntent(undefined)} refresh={refresh} />}
   </section>;

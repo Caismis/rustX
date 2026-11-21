@@ -5,7 +5,7 @@ import { useTranslation } from '../../../locale/react';
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
 import { Button as AriaButton } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
@@ -13,7 +13,8 @@ import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
 import { IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { PageTransactionFooter, TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
-import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
+import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
+import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
 import { providerMutation } from './ProviderTemplates';
 import { JsonObjectEditor } from '../forms/fields';
 import { Advanced, Choice, ConfirmAction, Search } from '../primitives/aria';
@@ -38,6 +39,7 @@ export interface ModelsPageProps {
   focus?: PageFocus['models'];
   onFocus: (focus?: PageFocus['models']) => void;
   onRefresh?: () => void;
+  bodyDisabled?: boolean;
 }
 
 const compactContext = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
@@ -49,7 +51,7 @@ const emptyModel = (provider = '', id = ''): Model => ({
 
 /** Provider and model settings backed by rustX's native semantic units.
  * Each model inherits its provider's connection protocol. */
-export function ModelsPage({ client, host, target, source, scope, revision, models, profiles, focus, onFocus, onRefresh }: ModelsPageProps) {
+export function ModelsPage({ client, host, target, source, scope, revision, models, profiles, focus, onFocus, onRefresh, bodyDisabled = false }: ModelsPageProps) {
   const tx = useTranslation();
   const landing = useRef<HTMLElement>(null);
   const previousProvider = useRef<string>(undefined);
@@ -113,9 +115,21 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
   const providerName = selected ? (providerEntry?.authored ?? providerEntry?.effective)?.display_name ?? selected : undefined;
   const listToolbar = <><PageScopeToolbar />{onRefresh && <PageRefreshButton />}</>;
+  const wsAuthored = scope === 'workspace' ? sourceView(source, 'workspace')?.authored : undefined;
+  const wsModels = Object.keys(wsAuthored?.models ?? {});
+  const wsProviders = Object.keys(wsAuthored?.providers ?? {});
+  const hasWorkspaceOverrides = scope === 'workspace' && (
+    wsAuthored?.agent?.model != null || wsModels.length > 0 || wsProviders.length > 0
+  );
+  const workspaceRemovals: SourceMutation[] = scope === 'workspace' ? [
+    ...(wsAuthored?.agent?.model != null ? [{ kind: 'config', mutation: { unit: 'root_model', authored: null } } as const] : []),
+    ...wsModels.map(id => ({ kind: 'config', mutation: { unit: 'model', id, authored: null } } as const)),
+    ...wsProviders.map(id => providerMutation(id, null, !!source.user.authored?.providers?.[id])),
+  ] : [];
 
   if (focus?.kind === 'provider' && providerEntry) return <SettingsPageShell className={`${css.settings} ${css.page}`} title={providerName ?? ''}
-    breadcrumb={<Button variant="ghost" size="sm" onClick={() => onFocus(undefined)}>← {tx('settings:models-page.models')}</Button>}
+    bodyDisabled={bodyDisabled}
+    breadcrumb={<SettingsBackButton label={tx('settings:models-page.models')} current={providerName} onClick={() => onFocus(undefined)} />}
     toolbar={listToolbar} footer={<PageTransactionFooter leading={undefined}/>}>
     <section ref={landing} tabIndex={-1} aria-label={providerName} className={cards.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
@@ -131,32 +145,36 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
             scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
             onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected! })}/>)}
-        </div> : <p className={css.hint}>{tx('settings:models.empty-models')}</p>}
+        </div> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
       </SettingsGroup>
     </section>
     {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
   </SettingsPageShell>;
 
   return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:models-page.models')}
-    description={tx('settings:models.description')} toolbar={listToolbar} footer={<PageTransactionFooter/>}>
+    description={tx('settings:models.description')} bodyDisabled={bodyDisabled} toolbar={listToolbar} footer={<PageTransactionFooter/>}>
     <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
-      <SettingsGroup title={tx('settings:models-page.default-model-for-new-sessions')}>
-        <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} legendHidden authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
-          blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
-          removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
-          {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
-            <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
-        </UnitForm>
-      </SettingsGroup>
-      <SettingsGroup title={tx('settings:models.custom-providers')}
-        action={<Button size="sm" variant="outline" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>}>
-        <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
-        {navigation.map(entry => <ProviderCard key={entry.id} entry={entry} revision={revision} scope={scope}
-          modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
-          onOpen={() => onFocus({ kind: 'provider', id: entry.id })}/>)}
-        {!navigation.length && <p className={css.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
-      </SettingsGroup>
+      <WorkspaceFollowGlobal scope={scope} hasOverrides={hasWorkspaceOverrides} authoredRemovals={workspaceRemovals} units={['root_model', 'model', 'provider']}>
+        <SettingsGroup title={tx('settings:models-page.default-model-for-new-sessions')}>
+          <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} legendHidden authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
+            blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
+            removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
+            {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
+              <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
+          </UnitForm>
+        </SettingsGroup>
+        <SettingsGroup plain title={tx('settings:models.custom-providers')}
+          action={<Button size="sm" variant="outline" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>}>
+          <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
+          <div className={cards.providerList}>
+            {navigation.map(entry => <ProviderCard key={entry.id} entry={entry} revision={revision} scope={scope}
+              modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
+              onOpen={() => onFocus({ kind: 'provider', id: entry.id })}/>)}
+          </div>
+          {!navigation.length && <p className={css.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
+        </SettingsGroup>
+      </WorkspaceFollowGlobal>
     </section>
     {adding === 'provider' && <ProviderNameDialog revision={revision} exists={[...providers.map(entry => entry.id), ...draftedProviders]} onClose={() => setAdding(undefined)}
       onCreate={id => { setAdding(undefined); onFocus({ kind: 'provider', id }); }} />}

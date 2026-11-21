@@ -57,7 +57,7 @@ test('skill cards render, edit and upload package display information from the w
     await expect(pdf.locator('img')).toHaveAttribute('src', /^data:image\/svg\+xml;base64,/);
     await expect.poll(() => pdf.locator('img').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     await skills.getByRole('searchbox').clear();
-    const backToList = skills.getByRole('button', {name: '← Skills', exact: true});
+    const backToList = skills.getByRole('button', {name: 'Skills', exact: true});
     const save = async (editor: Locator) => {
       const saveButton = editor.getByRole('button', {name: 'Save', exact: true});
       await saveButton.click();
@@ -394,7 +394,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(detail.getByRole('textbox')).toHaveCount(0);await expect(detail.locator('.cm-editor')).toHaveCount(0);
   await expect(detail.getByRole('button',{name:'Save',exact:true})).toHaveCount(0);
   await captureEvidence(detail,`skill-read-only-${width}`);
-  await detail.getByRole('button',{name:'← Skills',exact:true}).click();
+  await detail.getByRole('button',{name:'Skills',exact:true}).click();
   await expect(globalSkill).toBeVisible();
   await workspace(page,skills);
   const manual=skills.getByRole('listitem',{name:'manual-guide',exact:true});
@@ -403,7 +403,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await manual.getByRole('button',{name:'manual-guide',exact:true}).click();
   await expect(skills.getByRole('heading',{name:'manual-guide',exact:true})).toBeVisible();
   await expect(skills).toContainText('Instructions in a standalone file.');
-  await skills.getByRole('button',{name:'← Skills',exact:true}).click();
+  await skills.getByRole('button',{name:'Skills',exact:true}).click();
   const inheritedSkill=skills.getByRole('listitem',{name:'global-guide',exact:true});
   await expect(inheritedSkill.getByRole('switch')).toBeChecked();
   await inheritedSkill.getByRole('switch').click();
@@ -470,7 +470,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await naming.getByLabel('Description', { exact: true }).fill('Reviews code');
   await naming.getByLabel('System prompt', { exact: true }).fill('Check the changes carefully.');
   await captureEvidence(agents, `subagent-profile-${width}`);
-  await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
+  await agents.getByRole('button', { name: 'Configuration scope', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
   await expect(naming.getByLabel('Name', { exact: true })).toHaveValue('auditor');
   await expect(naming.getByLabel('System prompt', { exact: true })).toHaveValue('Check the changes carefully.');
@@ -487,7 +487,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(draftSkills.getByRole('region', { name: 'Global' }).getByRole('checkbox', { name: 'catalog-33' })).toBeVisible();
   await draftSkills.getByRole('region', { name: 'Workspace' }).getByRole('checkbox', { name: 'local-guide' }).check();
   await expect(draftSkills.getByRole('checkbox', { name: 'manual-guide' })).toHaveCount(0);
-  await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
+  await agents.getByRole('button', { name: 'Configuration scope', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Global', exact: true }).click();
   await expect(naming.getByLabel('Description', { exact: true })).toHaveValue('Reviews code');
   await expect(naming.getByRole('checkbox', { name: 'read', exact: true })).toBeChecked();
@@ -531,7 +531,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   const editor = agents.getByRole('form', { name: 'Agent auditor', exact: true });
   await expect(editor.getByLabel('Name', { exact: true })).toHaveAttribute('readonly', '');
   await editor.getByLabel('Description', { exact: true }).fill('Unsaved description');
-  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await agents.getByRole('button', { name: 'Cancel', exact: true }).click();
   // Page-level Cancel discards the staged edit; the detail view stays open and
   // the breadcrumb is the way back to the catalog.
   await agents.getByRole('button', { name: 'Subagents', exact: true }).click();

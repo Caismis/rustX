@@ -15,37 +15,37 @@
 .editorHeader { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
 .editorHeader h3 { margin:0 0 4px; }
 .page .editorHeader p { margin:0; font-size:13px; line-height:20px; color:var(--dsw-alias-label-secondary); }
-.modes { display:flex; align-items:center; flex:none; padding:3px; border-radius:var(--dsw-radius-lg); background:var(--dsw-alias-bg-module-platform); }
-.modes button { border-radius:var(--dsw-radius-md); }
-/* Flat like the subagent editor: the page canvas already frames the detail,
-   so the form is a plain column — no card-in-card. */
-.form { --inset:20px; border:0; padding:0; min-width:0; }
+.modes { display:flex; align-items:center; flex:none; padding:2px; gap:2px; border:1px solid var(--dsw-alias-border-l3); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
+.modes button { border-radius:8px; height:28px; }
+/* Clean DSH card framing for the MCP form inside SettingsPageShell canvas. */
+.form {
+  padding: 18px 20px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xl, 16px);
+  background: var(--settings-card-bg, var(--dsw-alias-bg-layer-1));
+  min-width: 0;
+}
 .page .form fieldset { border:0; padding:0; margin:0; min-width:0; }
 .page .form fieldset[disabled] { opacity:1; }
 .formBody { display:flex; flex-direction:column; gap:14px; }
 .page .form label { display:flex; flex-direction:column; gap:6px; padding:0; font-size:13px; line-height:20px; color:var(--dsw-alias-label-secondary); }
 .form input:not([type=checkbox]) { width:100%; box-sizing:border-box; }
-.page .form input:not([type=checkbox]), .form button[aria-haspopup=listbox] { background:var(--dsw-alias-bg-layer-2); }
+.page .form input:not([type=checkbox]), .form button[aria-haspopup=listbox] { background:var(--settings-input-bg, var(--dsw-alias-bg-layer-3)); }
 .page .form input:not([type=checkbox]) { height:36px; padding:0 12px; font-size:13px; }
 .page .form input:focus-visible { outline:2px solid var(--dsw-alias-state-business-primary); outline-offset:1px; }
 .sectionHead { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
-.page .sectionHead h4 { margin:0; font-size:14px; line-height:22px; font-weight: 500; }
+.page .sectionHead h4 { margin:0; font-size:14px; line-height:22px; font-weight: 600; }
 .top { display:flex; flex-wrap:wrap; align-items:flex-start; gap:12px; }
 .top > label { width:240px; max-width:100%; min-width:0; }
 .scope { display:flex; align-items:center; gap:8px; min-width:0; font-size:12px; color:var(--dsw-alias-label-secondary); }
-.scope span { padding:2px 8px; border:.5px solid var(--dsw-alias-border-l3); border-radius:var(--dsw-radius-md); overflow-wrap:anywhere; }
+.scope span { padding:2px 8px; border:1px solid var(--dsw-alias-border-l3); border-radius:var(--dsw-radius-md); overflow-wrap:anywhere; }
 .form .short { width:240px; max-width:100%; }
 .form .short > div { padding:0; }
 .form .short button { min-height:36px; height:36px; font-size:13px; }
-.form .footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px; position:sticky; bottom:0; z-index:1; margin:16px calc(-1 * var(--inset)) 0; padding:10px var(--inset); border-top:.5px solid var(--dsw-alias-border-l2); border-radius: 0 0 var(--dsw-radius-lg) var(--dsw-radius-lg); background:var(--dsw-alias-bg-module-platform); }
-.footerButtons { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; margin-inline-start:auto; }
-.optionalMap { border-top:.5px solid var(--dsw-alias-border-l2); padding-top:12px; }
+.optionalMap { border-top:1px solid var(--dsw-alias-border-l2); padding-top:12px; }
 .page .hint { margin:0; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
 .error { color:var(--dsw-alias-state-error-primary); font-size:13px; }
 .notice { display:flex; flex-direction:column; gap:8px; }
-.noticeWarn { padding:10px 12px; border-left:2px solid var(--dsw-alias-state-warn-primary); border-radius:6px; background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent); }
-.noticeWarn p { margin:0; color:var(--dsw-alias-label-primary); }
-.noticeWarn button { align-self:flex-start; }
 .page .form summary { padding:2px 4px; margin-left:-4px; border-radius: var(--dsw-radius-xs); list-style:none; display:flex; align-items:center; gap:6px; width:fit-content; cursor:pointer; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
 @media (hover: hover) {
   .page .form summary:hover {

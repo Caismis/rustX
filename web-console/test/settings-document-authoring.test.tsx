@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v80';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { waitForSettingsRevision, openResourceRow, SettingsSurface } from './settings-harness';
+import { waitForSettingsRevision, openResourceRow, enableWorkspaceCustomization, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
 
@@ -86,6 +86,7 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   await waitForSettingsRevision('saved-2');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   open('Tools & Permissions');
+  if (scope === 'workspace') enableWorkspaceCustomization();
   const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
   fireEvent.click(tools.getByLabelText('read'));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -162,7 +163,7 @@ const providerModels = () => { fireEvent.click(screen.getByRole('button', { name
 async function reachableModels() {
   open('Models');
   const catalog = providerModels().queryAllByRole('listitem').map(row => row.getAttribute('aria-label')!);
-  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
   open('Extensions');
   open('Extensions');

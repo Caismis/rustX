@@ -32,7 +32,7 @@ it('scope menu preserves the resource category, and leaving a definition draft t
   await catalog(s);
   await openResourceRow('search');
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'unsaved-server' } });
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^(Extensions|MCP servers|Back to list)$/ }));
   fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard and leave' }));
   fireEvent.click(screen.getByRole('tab',{name:'Workspace'}));
   fireEvent.click(screen.getByRole('button',{name:'Choose Workspace'}));

@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import { chooseOption, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
+import { chooseOption, enableWorkspaceCustomization, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { ModelsPage } from '../src/app/settings/models/ModelsPage';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
@@ -182,7 +182,7 @@ it('invalid token integers are rejected before serialization to native quantitie
 it('an untouched required field is validated on submission, and a new provider cannot add models before saving', async () => {
   const subject = cfg3Client();
   await openModels(subject);
-  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'new-provider' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -255,6 +255,7 @@ it('requires a new workspace credential for an inherited provider override and r
   render(<SettingsSurface client={subject.client} host={cfg3Host(subject)} target={workspaceSettingsTarget('A', 'A')} />);
   await settingsReady();
   await openSettingsPage('Models');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('button', { name: 'transport →' }));
   const form = within(screen.getByRole('form', { name: 'Provider transport' }));
   expect((form.getByLabelText('Environment variable') as HTMLInputElement).value).toBe('USER_KEY');
@@ -286,8 +287,6 @@ it('requires a new workspace credential for an inherited provider override and r
   await waitFor(() => expect(form.getByRole('button', { name: 'Provider actions' }).getAttribute('aria-disabled')).toBe('false'));
   await providerAction('Use global default', form);
   fireEvent.click(screen.getByRole('button', { name: 'Use global default Provider transport' }));
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await screen.findByText('Using global settings.');
   expect((form.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://user.invalid');
   expect((form.getByLabelText('Environment variable') as HTMLInputElement).value).toBe('USER_KEY');
@@ -333,22 +332,22 @@ it('tests the saved model and revision without opening its editor or writing con
 it('keeps a new provider template as a draft across provider and settings page changes', async () => {
   const subject = cfg3Client();
   await openModels(subject);
-  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Provider' })).getByRole('button', { name: 'DeepSeek' }));
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
   // The unguarded breadcrumb returns to the list and keeps the draft.
-  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(await screen.findByRole('button', { name: 'DeepSeek →' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
   // Leaving the Settings page asks first; staying keeps the draft.
-  fireEvent.click(screen.getByRole('button', { name: '← Model Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(screen.getByRole('tab', { name: 'Agent' }));
   fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   fireEvent.click(screen.getByRole('button', { name: 'DeepSeek →' }));
   await providerAction('Delete', within(screen.getByRole('form', { name: 'Provider DeepSeek' })));
-  const crumb = screen.queryByRole('button', { name: '← Model Settings' });
+  const crumb = screen.queryByRole('button', { name: 'Model Settings' });
   if (crumb) fireEvent.click(crumb);
   expect(screen.queryByRole('button', { name: 'DeepSeek →' })).toBeNull();
   expect(writes(subject)).toHaveLength(0);

@@ -634,6 +634,7 @@
         "../../../workspaces/host",
         "../ScopeToolbar",
         "../SettingsFeedback",
+        "../WorkspaceFollowGlobal",
         "../forms/bridge",
         "../forms/fields",
         "../machines/navigation",
@@ -676,7 +677,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3723a9e4e8e23042b224daa524492a9a8a4f01b3dc60ba9119108f0aea131fa2"
+      "local_sha256": "f6b1fbb34b98ddfe1e287ffdea69c04afa6de7bee3b23ebf61457033227fe4ea"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -686,7 +687,6 @@
       "retained_dependencies": [
         "../../../../../protocol/app-server/v80",
         "../../../locale/react",
-        "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent.module.css",
         "../../../presentation/settings/SettingsPageShell",
         "../../resources/shared/AvailabilityDetail",
@@ -734,7 +734,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6aaa2bd6ff3bb5544ff95b3906e8c9febcd718f7ff2c1b4756fd734e98046529"
+      "local_sha256": "4b625a7ebdd2aa9fd8e183250d80e753fd5a4ff7c84747393ca64c386476e5ce"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -747,6 +747,7 @@
         "../../connection/controller",
         "../../locale/react",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Skeleton",
         "../../presentation/primitives/icons",
         "../../presentation/settings/SettingsContent.module.css",
         "../../presentation/settings/SettingsPageShell",
@@ -788,7 +789,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "41b38cd4355d44d46a53376463fdb0f5c620733dba9e715ae8c787816fe65142"
+      "local_sha256": "015ca4d0ee30a83c82164dfcc78e16f7673094382b280d238a4f52acca20ebb1"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2192,7 +2193,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "07e74b2f6e790e5ede30a896e8e905d77e61953294aae7ba3053a6263c9109b3",
+      "local_sha256": "989534ec8437c625a9e6a1ba385f231fde980416762eaeb1bb4e43ce995d6e5e",
       "classification": "A"
     },
     {
@@ -2213,7 +2214,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "8f554e5614012e3fb2c16ab99ef26bada2d5b2488b5b35e15941a52c9f72aeb5",
+      "local_sha256": "d4ff83704542c2af808b9fdd074977487ea9440aaa98ed977f78e31e2d70e7f3",
       "classification": "A"
     },
     {
@@ -2344,7 +2345,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ff7eabf53b32c73e23bf58082cbf3851ea4c701430b56887f4a9de2261a146f4",
+      "local_sha256": "4612773a1e54d290f91ec5581c1fd6fb0bdc98f72fb340506a04bb99b7bb4b3f",
       "classification": "A"
     },
     {
@@ -2365,7 +2366,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f0a215537e96d4a520e8d79bd22d258f7d6126fc885a2b94b7ba75756c82252f",
+      "local_sha256": "7a1a4a888164a6a43eb9e7afdbee4582c74fa6342ab3302d08e44f5c18ed4ffd",
       "classification": "A"
     },
     {
@@ -2484,7 +2485,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "af5ae86537bda57bf012c6d6cbe964f0dc658187b5eb857134dfb4f7da2abaa6",
+      "local_sha256": "2ed15ca4d391a1ea7e8e5562c059c57d608d6ce34a4d1bdb8a9196878a06fc1a",
       "classification": "A"
     },
     {
@@ -2843,7 +2844,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "7b5853f2c19f69cb88f55b782b0d4fad1599cb90edcab0a37c7c1731be89c402",
+      "local_sha256": "7accc907db09473ef20d51b7ac241af1f3323eb28cda5cc55f8c5cfdd1936692",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2885,7 +2886,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "fea9c7c9c15a90d42c586e7a181a80a02e429acd4774137952f8c9d4576dc288",
+      "local_sha256": "a5135e3df8799e80efbedd120328f2ac954732a5fa4fae695d1409a5fe063435",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -4176,7 +4177,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "fc70910a6d3ade34ff2253c3a6046da9c96d87b8a54487e88da81ff955517129"
+      "local_sha256": "e53f24ce66bb1f0f7fc97d81bb7290cb3084cfcbae9bc06eabab36e603f956f7"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6626,7 +6627,7 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/resources/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "d888ab9c25461a66004951727a55d02b00667043a43e16360424a934877035eb",
+      "local_sha256": "3814745e3f54e4b8946a08b000b2e911765fadb40fb61fb57296fc55e3c0a71d",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Issue #499: wrap native connecting/catalog-hint provenance in the existing MCP list row; upstream baseline unchanged. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Centered editor with Harness setting-row spacing and persistent form actions.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
@@ -8399,8 +8400,8 @@
         "../../../locale/react",
         "../../../presentation/primitives/Button",
         "../../../presentation/primitives/Switch",
-        "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../../workspaces/host",
         "../../settings/SettingsFeedback",
         "../../settings/SettingsScopeMenu",
@@ -8413,6 +8414,7 @@
         "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
+        "clsx",
         "react"
       ],
       "excluded_dependencies": [
@@ -8454,7 +8456,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d68f7b720f135d499fe77f42ffaf97a199aa75aad362cc25dda3b0d05d279ca3"
+      "local_sha256": "cc2064a0d5bb1515a17c3fb5ed82ab6430d90ab9d55b9d0177b349e22360ac33"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

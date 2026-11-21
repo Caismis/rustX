@@ -267,3 +267,13 @@ export async function cancelAction(label: string) {
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(dialog.isConnected).toBe(false));
 }
+
+export function enableWorkspaceCustomization() {
+  const toggle = screen.getByRole('switch', { name: 'Follow global settings' });
+  if (toggle.getAttribute('aria-checked') === 'true') fireEvent.click(toggle);
+}
+
+export function followGlobalSettings() {
+  const toggle = screen.getByRole('switch', { name: 'Follow global settings' });
+  if (toggle.getAttribute('aria-checked') === 'false') fireEvent.click(toggle);
+}

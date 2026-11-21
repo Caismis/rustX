@@ -5,8 +5,8 @@ import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
-import { SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
-import { SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
+import { DocumentLinesSkeleton } from '../../../presentation/primitives/Skeleton';
+import { SettingsBackButton, SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import { splitFrontmatter } from '../../components/workbench-documents/frontmatter';
 import { PageTransactionFooter, usePageTransaction } from '../../settings/forms/bridge';
@@ -25,11 +25,11 @@ const IMAGE_TYPES: Readonly<Record<string, SkillIconMediaType>> = {
 /** In-page skill detail: native instructions are read-only, while the display
  * metadata (name, short description, icon) stages into the page transaction
  * and commits through the shared page footer. */
-export function SkillDetail({ client, target, name, display, owner, write, onDelete, close }: {
+export function SkillDetail({ client, target, name, display, owner, write, onDelete, close, bodyDisabled = false }: {
   client: AppServerClient; target: SourceTarget; name: string;
   display?: SkillDisplay | null; owner: SourceScope;
   write?: (authored: SkillDisplayWrite, upload?: SkillIconUpload) => Promise<void>;
-  onDelete?: () => void; close: () => void;
+  onDelete?: () => void; close: () => void; bodyDisabled?: boolean;
 }) {
   const tx = useTranslation();
   const guard = useNavigationGuard();
@@ -152,8 +152,9 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
   const title = display?.authored.display_name ?? name;
   const editable = !!write && !!display?.revision;
   return <SettingsPageShell title={title} className={`${settings.settings} ${settings.page} ${css.detail}`}
-    breadcrumb={<Button variant="ghost" size="sm" onClick={() => guard.guard(close)}>← {tx('resources:skills.title')}</Button>}
-    footer={editable ? <PageTransactionFooter /> : undefined}>
+    bodyDisabled={bodyDisabled}
+    breadcrumb={<SettingsBackButton label={tx('resources:skills.title')} current={title} onClick={() => guard.guard(close)} />}
+    footer={editable ? <PageTransactionFooter /> : null}>
     <div className={css.detailTop}>
       <SkillIcon icon={preview ?? display?.icon} size={48} />
       <div className={css.detailMeta}>
@@ -198,10 +199,12 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
       {failure && <p role="alert" className={css.error}>{failure}</p>}
     </SettingsGroup>}
     <SettingsGroup title={tx('resources:skills.instructions')}>
-      {error ? <p role="alert">{error}</p> : content ? <>
-        {!!content.description && <p className={css.description}>{content.description}</p>}
-        {content.text.trim() ? <MarkdownText text={content.text} /> : <p>{tx('resources:skills.empty-instructions')}</p>}
-      </> : <p role="status">{tx('resources:loading')}</p>}
+      <div className={css.instructionsBody}>
+        {error ? <p role="alert">{error}</p> : content ? <>
+          {!!content.description && <p className={css.description}>{content.description}</p>}
+          {content.text.trim() ? <MarkdownText text={content.text} /> : <p>{tx('resources:skills.empty-instructions')}</p>}
+        </> : <DocumentLinesSkeleton label={tx('resources:loading')} />}
+      </div>
     </SettingsGroup>
   </SettingsPageShell>;
 }

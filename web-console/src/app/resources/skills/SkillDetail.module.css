@@ -41,3 +41,5 @@
 .pathFields label { display: grid; gap: 4px; font-size: 13px; }
 
 .error { color: var(--dsw-alias-state-error-primary); font-size: 13px; }
+.instructionsBody { padding: 14px 16px; }
+.detail input:not([type=checkbox]) { min-width: 180px; }

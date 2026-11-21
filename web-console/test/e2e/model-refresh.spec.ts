@@ -37,7 +37,7 @@ for (const width of [1440, 390]) test(`provider single-click navigation and work
     await second.getByLabel('API Key', {exact:true}).fill('fixture-only');
     // Edits stage as drafts; the page footer's Save is the only commit, and
     // provider details swap through the '← Model Settings' breadcrumb.
-    const backToList = settings.getByRole('button', {name:'← Model Settings', exact:true});
+    const backToList = settings.getByRole('button', {name:'Model Settings', exact:true});
     const save = () => settings.getByRole('button', {name:'Save', exact:true}).click();
     await save();
     await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('[providers.second]');
@@ -103,7 +103,7 @@ test('provider rename saves the display name without changing its models', async
       await expect(input).toBeFocused();
     };
     const settings = page.getByRole('region', {name:'Settings', exact:true});
-    const backToList = settings.getByRole('button', {name:'← Model Settings', exact:true});
+    const backToList = settings.getByRole('button', {name:'Model Settings', exact:true});
     await leaveRetainedDetail(backToList, settings.getByRole('button', {name:'fixture →', exact:true}));
     await settings.getByRole('button', {name:'fixture →', exact:true}).click();
     const provider = (name: string) => page.getByRole('button', {name:`${name} →`, exact:true});
@@ -168,7 +168,7 @@ test('model connection tests identify an App Server without the probe method', a
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openSettingsPage(page, 'Models');
     const settings = page.getByRole('region', {name:'Settings', exact:true});
-    const back0 = settings.getByRole('button', {name:'← Model Settings', exact:true});
+    const back0 = settings.getByRole('button', {name:'Model Settings', exact:true});
     await leaveRetainedDetail(back0, settings.getByRole('button', {name:'fixture →', exact:true}));
     await settings.getByRole('button', {name:'fixture →', exact:true}).click();
     await page.getByRole('button', {name:'Test connection for console-model', exact:true}).click();
@@ -200,7 +200,7 @@ compat = { chat_reasoning_replay = "omit" }
     await openSettingsPage(page, 'Models');
     {
       const settings0 = page.getByRole('region', {name:'Settings', exact:true});
-      const back0 = settings0.getByRole('button', {name:'← Model Settings', exact:true});
+      const back0 = settings0.getByRole('button', {name:'Model Settings', exact:true});
       await leaveRetainedDetail(back0, settings0.getByRole('button', {name:'fixture →', exact:true}));
       await settings0.getByRole('button', {name:'fixture →', exact:true}).click();
     }
@@ -215,7 +215,7 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(toast).toHaveCount(0, { timeout: 8000 });
 
     const settings = page.getByRole('region', {name:'Settings', exact:true});
-    const back = settings.getByRole('button', {name:'← Model Settings', exact:true});
+    const back = settings.getByRole('button', {name:'Model Settings', exact:true});
     const other = settings.getByRole('button', {name:'other →', exact:true});
     const primary = settings.getByRole('button', {name:'fixture →', exact:true});
     const unavailable = settings.getByRole('button', {name:'Test connection for unconfigured', exact:true});
@@ -287,7 +287,7 @@ test('deleting the default and then the last model preserves old conversations a
     const remove = async (model: string) => {
       await openSettingsPage(page, 'Models');
       const settings = page.getByRole('region', {name:'Settings', exact:true});
-      const back = settings.getByRole('button', {name:'← Model Settings', exact:true});
+      const back = settings.getByRole('button', {name:'Model Settings', exact:true});
       await leaveRetainedDetail(back, settings.getByRole('button', {name:'fixture →', exact:true}));
       await settings.getByRole('button', {name:'fixture →', exact:true}).click();
       await confirmSettingsAction(page, `Remove Model ${model}`);
@@ -405,7 +405,7 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(history).toBeVisible();
     await openSettingsPage(page, 'Models');
     const settings = page.getByRole('region', {name:'Settings', exact:true});
-    const backToList = settings.getByRole('button', {name:'← Model Settings', exact:true});
+    const backToList = settings.getByRole('button', {name:'Model Settings', exact:true});
     await leaveRetainedDetail(backToList, settings.getByRole('button', {name:'fixture →', exact:true}));
     const provider = settings.getByRole('button', {name:'fixture →', exact:true});
     await provider.click();
@@ -416,8 +416,6 @@ compat = { chat_reasoning_replay = "omit" }
     const confirm = page.getByRole('alertdialog', {name:'Remove Provider fixture from User configuration?', exact:true});
     await expect(confirm).toContainText('This also removes this provider’s models');
     await confirm.getByRole('button', {name:'Remove Provider fixture', exact:true}).click();
-    // Deletion stages as a removal; the page footer's Save commits it.
-    await settings.getByRole('button', {name:'Save', exact:true}).click();
     await expect(provider).toHaveCount(0);
     const config = readFileSync(fixture.settings, 'utf8');
     expect(config).not.toContain('[providers.fixture]');

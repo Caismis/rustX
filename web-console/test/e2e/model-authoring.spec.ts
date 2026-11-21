@@ -19,7 +19,7 @@ test('new sessions receive independently configured title and compaction models'
     await openSettingsPage(page, 'Models');
     const settingsPage = page.getByRole('region', {name:'Settings', exact:true});
     // A previously focused provider detail is retained; step back to the list.
-    const backToList = settingsPage.getByRole('button', {name:'← Model Settings', exact:true});
+    const backToList = settingsPage.getByRole('button', {name:'Model Settings', exact:true});
     await leaveRetainedDetail(backToList, settingsPage.getByRole('form', {name:'Default model', exact:true}));
     const defaults = settingsPage.getByRole('form', {name:'Default model', exact:true});
     const auxiliary = defaults.getByRole('button', {name:'Auxiliary models', exact:true});
@@ -68,7 +68,7 @@ request_params = '{}'
     await page.getByRole('button', {name:'Settings',exact:true}).click();
     await openSettingsPage(page, 'Models');
     const settings = page.getByRole('region', {name:'Settings',exact:true});
-    const backToList = settings.getByRole('button', {name:'← Model Settings', exact:true});
+    const backToList = settings.getByRole('button', {name:'Model Settings', exact:true});
     await leaveRetainedDetail(backToList, settings.getByRole('button', {name:'OpenAI →',exact:true}));
     await settings.getByRole('button', {name:'OpenAI →',exact:true}).click();
     await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).click();
@@ -209,7 +209,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await confirmation.getByRole('button', { name: 'Remove Model custom/disposable-model', exact: true }).click();
     await expect(disposable).toHaveCount(0);
     await expect(settings.getByRole('listitem', { name: 'custom/first-model', exact: true })).toBeVisible();
-    await settings.getByRole('button', { name: '← Model Settings', exact: true }).click();
+    await settings.getByRole('button', { name: 'Model Settings', exact: true }).click();
     const defaults = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaults, 'Model', 'custom/first-model');
     await settings.getByRole('button', { name: 'Save', exact: true }).click();

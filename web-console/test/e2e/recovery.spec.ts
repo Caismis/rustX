@@ -48,7 +48,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
         // from — reopen the row edit in that case.
         const heading = model.getByRole('heading', { name: 'Edit Model', exact: true });
         if (!(await heading.waitFor({ timeout: 5000 }).then(() => true).catch(() => false))) {
-          await leaveRetainedDetail(settings.getByRole('button', { name: '← Model Settings', exact: true }), settings.getByRole('button', { name: 'fixture →', exact: true }));
+          await leaveRetainedDetail(settings.getByRole('button', { name: 'Model Settings', exact: true }), settings.getByRole('button', { name: 'fixture →', exact: true }));
           const card = settings.getByRole('button', { name: 'fixture →', exact: true });
           if (await card.isVisible()) await card.click();
           await settings.getByRole('listitem', { name: 'fixture/console-model', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
@@ -59,7 +59,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       await expandModelAuthoring(page);
       // Model rows live on the provider's in-page detail; a retained detail
       // must be left before the landing cards are visible.
-      await leaveRetainedDetail(settings.getByRole('button', { name: '← Model Settings', exact: true }), settings.getByRole('button', { name: 'fixture →', exact: true }));
+      await leaveRetainedDetail(settings.getByRole('button', { name: 'Model Settings', exact: true }), settings.getByRole('button', { name: 'fixture →', exact: true }));
       await settings.getByRole('button', { name: 'fixture →', exact: true }).click();
       await settings.getByRole('listitem', { name: 'fixture/console-model', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
       await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
@@ -75,7 +75,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       if (await leave.isVisible()) await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
       await expect(mcp).toBeVisible();
       await expect(mcp).toHaveAttribute('data-lifecycle', 'ready');
-      const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });
+      const back = mcp.getByRole('button', { name: 'MCP servers', exact: true });
       const create = mcp.getByRole('button', { name: '＋ New MCP server', exact: true });
       // Reconnecting can restore the retained editor after the tabpanel mounts.
       // Wait for its actual surface before deciding whether to return to the list.

@@ -148,7 +148,7 @@ it('retained raw JSON cannot overwrite a newly observed MCP source revision', as
  fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
  const draft = '{"docs":{"command":"stale-draft"}}';
  changeJson(await screen.findByLabelText('Complete configuration'), draft);
- fireEvent.click(screen.getByRole('button', { name: '← MCP servers' }));
+ fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }));
  // Leaving with an unsaved buffer asks first; discarding drops it.
  fireEvent.click(await screen.findByRole('button', { name: 'Discard and leave' }));
  s.source.user_mcp.revision = 'external-mcp';

@@ -1,11 +1,9 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import { createContext, useContext, useEffect, useState } from 'react';
 import type { ProductHostWorkspace, ProductHostWorkspaces } from '../../workspaces/host';
 import { useTranslation } from '../../locale/react';
 import { Menu } from '../../presentation/primitives/Menu';
 import { IconChevronDownOutline14, IconFolderClose16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
 import { useSelector } from '@xstate/react';
-import { Button } from '../../presentation/primitives/Button';
 import { useSettingsActor } from './machines/react';
 import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './projection';
 import css from '../../presentation/settings/SettingsPageShell.module.css';
@@ -17,20 +15,10 @@ export const ScopeNavContext = createContext<{
   target: SettingsTarget; host?: ProductHostWorkspaces; open: (target: SettingsTarget) => void;
 } | null>(null);
 
-/** An outlet rendered OUTSIDE the page's disabled fieldset. Scope switching
- * and the authoritative reread stay usable while the target is unread,
- * disconnected or revoked — they are the escape hatch, never edit state. */
-export const ScopeToolbarOutlet = createContext<HTMLElement | null>(null);
-
-function ToolbarPortal({ children }: { children: ReactNode }) {
-  const outlet = useContext(ScopeToolbarOutlet);
-  return outlet ? createPortal(children, outlet) : <>{children}</>;
-}
-
 export function PageScopeToolbar({ userLabel, disabled }: { userLabel?: string; disabled?: boolean }) {
   const nav = useContext(ScopeNavContext);
   if (!nav) return null;
-  return <ToolbarPortal><ScopeToolbar target={nav.target} host={nav.host} onSelect={nav.open} userLabel={userLabel} disabled={disabled} /></ToolbarPortal>;
+  return <ScopeToolbar target={nav.target} host={nav.host} onSelect={nav.open} userLabel={userLabel} disabled={disabled} />;
 }
 
 /** The page's authoritative reread, staged through the target actor so the
@@ -39,8 +27,18 @@ export function PageRefreshButton({ disabled = false }: { disabled?: boolean }) 
   const tx = useTranslation();
   const actor = useSettingsActor();
   const busy = useSelector(actor, snapshot => snapshot.matches({ mutation: 'submitting' }));
-  return <ToolbarPortal><Button size="sm" variant="toolbar" aria-label={tx('settings:settings.reload-configuration')} title={tx('settings:settings.reload-configuration')}
-    disabled={disabled || busy} onClick={() => actor.send({ type: 'REFRESH' })}><IconRefreshOutline16 /></Button></ToolbarPortal>;
+  return (
+    <button
+      type="button"
+      className={css.refreshButton}
+      aria-label={tx('settings:settings.reload-configuration')}
+      title={tx('settings:settings.reload-configuration')}
+      disabled={disabled || busy}
+      onClick={() => actor.send({ type: 'REFRESH' })}
+    >
+      <IconRefreshOutline16 />
+    </button>
+  );
 }
 
 /** The DSH scope toolbar: a [工作区|全局] capsule plus a workspace chooser

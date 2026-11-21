@@ -15,7 +15,7 @@ test('MCP Back guards unsaved JSON and footer Cancel resets the JSON and form to
   const json = surface.getByLabel('Complete configuration', { exact: true });
   await json.fill('{unfinished');
   // Staged edits guard the detail's back gesture; keeping them stays put.
-  await surface.getByRole('button', { name: '← MCP servers', exact: true }).click();
+  await surface.getByRole('button', { name: 'MCP servers', exact: true }).click();
   const modal = page.getByRole('dialog');
   await expect(modal).toBeVisible();
   await modal.getByRole('button', { name: 'Keep editing', exact: true }).click();
@@ -118,7 +118,7 @@ test('Chinese MCP reference states contain only the intended controls', async ({
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html?scenario=mcp`);
   await page.getByRole('button',{name:'MCP 服务器',exact:true}).click();
   const surface=page.getByRole('region',{name:'MCP 服务器',exact:true});
-  const listBack=surface.getByRole('button',{name:'← MCP 服务器',exact:true});
+  const listBack=surface.getByRole('button',{name:'MCP 服务器',exact:true});
   if (await listBack.isVisible()) await listBack.click();
   await page.getByRole('tab',{name:'全局',exact:true}).click();
   await expect(surface.getByText('尚未安装 MCP 服务器',{exact:true})).toBeVisible();
@@ -136,7 +136,7 @@ test('Chinese MCP reference states contain only the intended controls', async ({
   await expect(form.getByLabel('名称',{exact:true})).toHaveCount(0);
   await expect(form.getByLabel('完整配置',{exact:true})).toHaveText(JSON.stringify({'my-mcp-server':{type:'stdio',command:'',args:[]}},null,2), {useInnerText:true});
   await surface.screenshot({path:'/tmp/rustx-mcp-json-zh.png'});
-  await surface.getByRole('button',{name:'← MCP 服务器',exact:true}).click();
+  await surface.getByRole('button',{name:'MCP 服务器',exact:true}).click();
   const guardDialog=page.getByRole('dialog');
   if (await guardDialog.isVisible()) await guardDialog.getByRole('button',{name:'放弃并离开',exact:true}).click();
   await expect(surface.getByText('尚未安装 MCP 服务器',{exact:true})).toBeVisible();

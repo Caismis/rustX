@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import type { SkillDescriptor, SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import { CardMenu, type CardMenuItems } from '../../../presentation/catalog/CardMenu';
+import { CatalogListSkeleton } from '../../../presentation/primitives/Skeleton';
 import { IconEditOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { SkillIcon } from '../skills/SkillIcon';
 import { SkillDeleteDialog } from '../skills/SkillDeleteDialog';
@@ -28,17 +29,22 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
 }
 
 export function ResourceBrowser({ client, source, scope, revision, query, refresh, onRefresh, workspaceLabel,
-  bindDisplayWrite, bindDelete, onTransfer, transferDisabled }: {
+  bindDisplayWrite, bindDelete, onTransfer, transferDisabled, onFocusChange, bodyDisabled = false }: {
   client: AppServerClient; source: SourceSettings; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
   transferDisabled: boolean; workspaceLabel?: string;
   query: string; refresh: number; onRefresh: () => void;
+  onFocusChange?: (focused: boolean) => void; bodyDisabled?: boolean;
 }) {
   const tx = useTranslation();
   const [localRefresh, setLocalRefresh] = useState(0);
   const [focus, setFocus] = useState<{ name: string; owner: SourceScope; write?: SkillDisplayWriter }>();
+  useEffect(() => {
+    onFocusChange?.(!!focus);
+  }, [focus, onFocusChange]);
+  useEffect(() => () => onFocusChange?.(false), [onFocusChange]);
   const [deleting, setDeleting] = useState<{ title: string; owner: SourceScope; path: string; remove: () => Promise<void> }>();
   const settings = useSettingsActor();
   const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
@@ -128,6 +134,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, refres
         <SkillDetail key={rowKey(focus.owner, focus.name)} client={client}
           target={focus.owner === 'user' ? userTarget : source.target}
           name={focus.name} display={skill?.display} owner={focus.owner}
+          bodyDisabled={bodyDisabled}
           write={focus.write ? async (authored, upload) => {
             try { await focus.write!(authored, upload); }
             finally { setLocalRefresh(value => value + 1); }
@@ -140,16 +147,22 @@ export function ResourceBrowser({ client, source, scope, revision, query, refres
     </>;
   }
 
-  return <>
+  return <fieldset disabled={bodyDisabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     {revision !== undefined && <SkillSelectionPolicy source={source} scope={scope} revision={revision} skillNames={skillNames} />}
     {catalogError && <p role="alert">{catalogError}</p>}
-    <ResourceGroup label={tx('resources:scope.owned')} count={owned.length}
-      empty={<p role="status">{tx(needle ? 'resources:no-results' : !effective ? 'resources:loading' : 'resources:empty')}</p>}>
-      {owned.map(renderCard)}
-    </ResourceGroup>
-    {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} empty={null}>
-      {inherited.map(renderCard)}
-    </ResourceGroup>}
+    {!effective && !catalogError && !matches.length ? (
+      <CatalogListSkeleton label={tx('resources:loading')} />
+    ) : (
+      <>
+        <ResourceGroup label={tx('resources:scope.owned')} count={owned.length}
+          empty={<p role="status">{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>}>
+          {owned.map(renderCard)}
+        </ResourceGroup>
+        {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} empty={null}>
+          {inherited.map(renderCard)}
+        </ResourceGroup>}
+      </>
+    )}
     {deleteDialog}
-  </>;
+  </fieldset>;
 }

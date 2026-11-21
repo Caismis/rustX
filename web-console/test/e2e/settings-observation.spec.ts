@@ -69,7 +69,7 @@ test('publications and an acknowledgement during outstanding convergence reads c
     // Context limits live on the Advanced landing itself; a retained detail
     // (e.g. Connection) can greet the page instead — step back to the list.
     await openSettingsPage(page, 'Advanced');
-    const backToAdvanced = settings.getByRole('button', { name: '← Back to Advanced', exact: true });
+    const backToAdvanced = settings.getByRole('button', { name: 'Back to Advanced', exact: true });
     await leaveRetainedDetail(backToAdvanced, settings.getByLabel('Reserved tokens', { exact: true }));
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     const field = settings.getByLabel('Reserved tokens', { exact: true });
@@ -129,7 +129,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
-    const backToAdvanced = settings.getByRole('button', { name: '← Back to Advanced', exact: true });
+    const backToAdvanced = settings.getByRole('button', { name: 'Back to Advanced', exact: true });
     await leaveRetainedDetail(backToAdvanced, settings.getByLabel('Reserved tokens', { exact: true }));
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
 

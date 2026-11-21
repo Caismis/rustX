@@ -9,6 +9,7 @@ import { TransferDialog, transferActions, type TransferIntent } from '../../../r
 import { CatalogSearch } from '../../../../presentation/catalog/CatalogControls';
 import css from '../../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../../presentation/primitives/Button';
+import { CatalogListSkeleton } from '../../../../presentation/primitives/Skeleton';
 import { Switch } from '../../../../presentation/primitives/Switch';
 import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
@@ -97,22 +98,20 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!settled || !listing || (showingWorkspace && (!workspace || revoked))}
         onClick={() => library.send({ type: 'CONFIRM', kind: 'create' })}>{tx('workflows:library.new')}</Button>
     </header>
-    <div className={css.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
-      {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.tab, tab === name && css.tabActive)} onClick={() => chooseTab(name)}>
-        {tx(name === 'workspace' ? 'workflows:scope.workspace' : 'workflows:scope.global')}
-      </button>)}
-    </div>
     <div className={clsx(css.controls, !showingWorkspace && css.globalControls)}>
-      {showingWorkspace && <div className={css.controlsLeft}>
-        <span className={css.subtle}>{tx('workflows:scope.choose-workspace')}</span>
-        <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
-      </div>}
-      {!showingWorkspace && context}
+      <div className={css.controlsLeft}>
+        <div className={css.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
+          {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.tab, tab === name && css.tabActive)} onClick={() => chooseTab(name)}>
+            {tx(name === 'workspace' ? 'workflows:scope.workspace' : 'workflows:scope.global')}
+          </button>)}
+        </div>
+        {showingWorkspace && <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />}
+      </div>
       <div className={css.controlsRight}>
         <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
       </div>
     </div>
-    {showingWorkspace && context}
+    {context}
     {showingWorkspace && catalog && !workspaces.length ? <p className={css.state}>{tx('workflows:library.no-workspaces')}</p>
       : <WorkflowFiles library={library} state={state} scopeLabel={scopeLabel} query={query} revoked={revoked}
         onTransfer={onTransfer} transferDisabled={transferDisabled} />}
@@ -176,7 +175,7 @@ function WorkflowFiles({ library, state, scopeLabel, query, revoked, onTransfer,
   let body;
   if (revoked || listFailure?.kind === 'unavailable') body = <div className={css.state} role="alert"><p>{tx('workflows:library.unavailable')}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
   else if (state.matches('failed') && listFailure) body = <div className={css.state} role="alert"><p>{tx('workflows:library.read-failed', { p0: listFailure.kind === 'failed' ? listFailure.message : listFailure.kind })}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
-  else if (!listing) body = <p className={css.state} role="status">{tx('workflows:library.loading')}</p>;
+  else if (!listing) body = <CatalogListSkeleton label={tx('workflows:library.loading')} />;
   else if (listing.diagnostic) body = <p className={css.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
   else if (!files.length) body = <p className={css.state}>{query.trim() ? tx('workflows:library.empty-search') : tx('workflows:library.empty')}</p>;
   else body = <ul className={css.list} aria-label={tx('workflows:library.title')}>

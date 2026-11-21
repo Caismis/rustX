@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, connectionAction, enableWorkspaceCustomization, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
@@ -38,6 +38,8 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
+   await expect(settings.getByRole('switch', { name: 'Follow global settings', exact: true })).toBeChecked();
+   await enableWorkspaceCustomization(page);
    // The User source authors every Native Tool, so this Workspace displays the
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
@@ -48,14 +50,17 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await discardLeave();
    await openWorkspaceSettings(page, b.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
-   // Workspace B is a different target: it still shows the inherited value and
-   // never receives Workspace A's draft.
+   // Workspace B is a different target: Follow global settings starts checked
+   // and never receives Workspace A's draft.
+   await expect(settings.getByRole('switch', { name: 'Follow global settings', exact: true })).toBeChecked();
+   await enableWorkspaceCustomization(page);
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
    await settings.getByLabel('write', { exact: true }).uncheck();
    await discardLeave();
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
+   await enableWorkspaceCustomization(page);
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
    await settings.getByLabel('read', { exact: true }).uncheck();

@@ -8,7 +8,7 @@ import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
-import { waitForSettingsRevision, observedRevision, openResourceRow, openSettingsPage, renderEditor, settingsReady, showSettings, SettingsSurface } from './settings-harness';
+import { waitForSettingsRevision, observedRevision, openResourceRow, openSettingsPage, renderEditor, settingsReady, showSettings, enableWorkspaceCustomization, followGlobalSettings, SettingsSurface } from './settings-harness';
 import { UnitForm } from '../src/app/settings/forms/bridge';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
@@ -42,6 +42,7 @@ it('S1-02 Workspace Settings stays bound to its exact target across Session focu
   await waitForSettingsRevision('workspace-1');
   expect(screen.getByRole('button', { name: /^A$/ })).toBeTruthy();
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByLabelText('read'));
   // Session focus changes elsewhere cannot retarget this editor.
   s.state.views = {};
@@ -68,6 +69,7 @@ async function inheritedTools(s: ReturnType<typeof cfg3Client>) {
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await waitForSettingsRevision('workspace-1');
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  enableWorkspaceCustomization();
   return within(screen.getByRole('form', { name: 'Built-in tools' }));
 }
 
@@ -104,10 +106,9 @@ it('S1-04 an explicit edit authors exactly the edited unit', async () => {
   expect(writes(s)).toHaveLength(1);
 });
 
-it('S1-04 an explicit Override then an explicit empty selection writes [] and never null', async () => {
+it('S1-04 turning Follow global settings off then authoring an explicit empty selection writes [] and never null', async () => {
   const s = cfg3Client(); const form = await inheritedTools(s);
-  fireEvent.click(form.getByRole('button', { name: 'Override Built-in tools' }));
-  // Override is an explicit authoring action; it starts from what is displayed.
+  // Revealing workspace options starts from what is displayed without writing.
   expect(form.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
   fireEvent.click(form.getByLabelText('read'));
   expect(form.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('false');
@@ -122,14 +123,14 @@ it('S1-04 an inherited unit offers no Use global default, because there is no Wo
   const s = cfg3Client(); const form = await inheritedTools(s);
   // "Use global default" means "remove the Workspace-authored unit through
   // exact CAS". With no override authored, that mutation has no meaning and is
-  // not offered; Override is the action that exists here.
+  // not offered.
   expect(form.queryByRole('button', { name: /Use global default/ })).toBeNull();
   expect(form.queryByRole('button', { name: /^Remove Built-in tools/ })).toBeNull();
-  expect(form.getByRole('button', { name: 'Override Built-in tools' })).toBeTruthy();
+  expect(screen.getByRole('switch', { name: 'Follow global settings' }).getAttribute('aria-checked')).toBe('false');
   expect(writes(s)).toHaveLength(0);
 });
 
-it('S1-04 Use global default removes a real Workspace override through exact CAS and returns to the native inherited value', async () => {
+it('S1-04 Follow global settings removes a real Workspace override through exact CAS and returns to the native inherited value', async () => {
   // The Workspace really overrides the unit: User resolves ["read"], this
   // Workspace authors ["bash"].
   const s = cfg3Client(async (op, source) => {
@@ -151,23 +152,24 @@ it('S1-04 Use global default removes a real Workspace override through exact CAS
   // The Workspace override is what is displayed and reported.
   expect(before.getByRole('switch', { name: 'bash' }).getAttribute('aria-checked')).toBe('true');
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.authored).toBe('present');
-  // Use global default is a staged removal committed by the page footer Save.
-  fireEvent.click(before.getByRole('button', { name: 'Use global default' }));
+  // Flipping Follow global settings ON hides overrides and stages removal for footer Save.
+  followGlobalSettings();
+  expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
+  expect(writes(s)).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   // The outgoing mutation is the exact revision-fenced removal of this unit.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: null } } } }));
   await waitForSettingsRevision('saved-2');
-  // The authoritative reread is what decides the resulting presentation: the
-  // Workspace authors nothing, and the native inherited value is effective.
+  // The authoritative reread settles back to Follow global settings ON cleanly.
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole('switch', { name: 'Follow global settings' }).getAttribute('aria-checked')).toBe('true');
+  expect(writes(s)).toHaveLength(1);
+  // Revealing controls shows the native inherited value with absent workspace authoring.
+  enableWorkspaceCustomization();
   const after = within(screen.getByRole('form', { name: 'Built-in tools' }));
   await waitFor(() => expect(after.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true'));
   expect(after.getByRole('switch', { name: 'bash' }).getAttribute('aria-checked')).toBe('false');
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.authored).toBe('absent');
-  // No pending draft, no residual removal action, and exactly one write.
-  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(after.queryByRole('button', { name: /Use global default/ })).toBeNull();
-  expect(after.queryByRole('button', { name: 'Use latest setting' })).toBeNull();
-  expect(writes(s)).toHaveLength(1);
 });
 
 it.each([
@@ -177,16 +179,14 @@ it.each([
 ] as const)('S1-04 %s is an authored Workspace override, never an absent one', async (_label, authored, section, unit) => {
   const s = cfg3Client();
   // `[]`, `false` and `{}` are authored values. Presence is the native
-  // projection fact, never a truthiness test, so each is reported as an
-  // override and each offers the removal that really applies to it.
+  // projection fact, never a truthiness test, so each starts with Follow
+  // global settings OFF and its section expanded cleanly.
   s.source.workspace!.authored = authored as never;
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await waitForSettingsRevision('workspace-1');
   for (const tab of section) fireEvent.click(screen.getByRole('tab', { name: tab }));
-  const form = within(screen.getByRole('form', { name: unit }));
+  expect(screen.getByRole('switch', { name: 'Follow global settings' }).getAttribute('aria-checked')).toBe('false');
   expect(screen.getByRole('form', { name: unit }).dataset.authored).toBe('present');
-  expect(form.getByRole('button', { name: 'Use global default' })).toBeTruthy();
-  expect(form.queryByRole('button', { name: `Override ${unit}` })).toBeNull();
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -214,18 +214,17 @@ it('S1-04 an invalid Workspace document offers no unit editor and no removal, be
   expect(writes(s)).toHaveLength(0);
 });
 
-it('S1-04 Discard returns to the inherited presentation without authoring anything', async () => {
+it('S1-04 Cancel returns to the inherited presentation without authoring anything', async () => {
   const s = cfg3Client(); const form = await inheritedTools(s);
   fireEvent.click(form.getByLabelText('write'));
   expect(form.getByRole('switch', { name: 'write' }).getAttribute('aria-checked')).toBe('true');
-  fireEvent.click(form.getByRole('button', { name: 'Discard' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   // Back to the native effective value, not to a client-side empty default.
   expect(form.getByRole('switch', { name: 'read' }).getAttribute('aria-checked')).toBe('true');
   expect(form.getByRole('switch', { name: 'write' }).getAttribute('aria-checked')).toBe('false');
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.authored).toBe('absent');
   expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
-  // Nothing browser-authored is left, so nothing is offered for discarding.
-  expect(form.queryByRole('button', { name: 'Discard' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.submit(screen.getByRole('form', { name: 'Built-in tools' }));
   await waitFor(() => expect(sourcesReads(s).length).toBeGreaterThanOrEqual(1));
   expect(writes(s)).toHaveLength(0);
@@ -258,6 +257,7 @@ it('S1-13 an unresolvable configuration never presents the effective value as Un
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await waitForSettingsRevision('workspace-1');
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  enableWorkspaceCustomization();
   const form = within(screen.getByRole('form', { name: 'Built-in tools' }));
   // Authored presence and effective resolution are reported independently.
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.effective).toBe('invalid');
@@ -278,6 +278,7 @@ it('S1-06 a successful read clears only the relevant read error, never a distinc
   const host = cfg3Host(s);
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await waitForSettingsRevision('workspace-1'); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByLabelText('read'));
   // A distinct write failure.
   failWrites = true;
@@ -301,6 +302,7 @@ it('S1-07 a committed save followed by a failed reread is saved plus uncertain, 
   const host = cfg3Host(s);
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await waitForSettingsRevision('workspace-1'); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByLabelText('read'));
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -319,6 +321,7 @@ it('S1-09 a lost write reply rereads authority once and never replays or leaks a
   const host = cfg3Host(s);
   const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await waitForSettingsRevision('workspace-1'); fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByLabelText('read'));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await screen.findByText(/The save result is unknown/);
@@ -440,6 +443,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await waitForSettingsRevision('workspace-1');
   await openSettingsPage('Models');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -530,6 +534,7 @@ function inheritedCatalog(s: ReturnType<typeof cfg3Client>) {
 it('S1-15 an inherited User Provider and Model are discoverable in the Workspace catalog with native provenance', async () => {
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
+  enableWorkspaceCustomization();
   expect(screen.getByRole('button', { name: 'transport →' })).toBeTruthy();
   // An identity that is already reachable is not offered as a new one.
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
@@ -549,6 +554,7 @@ it('S1-15 an inherited User Provider and Model are discoverable in the Workspace
 it('S1-15 viewing an inherited identity authors nothing and writes nothing', async () => {
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
+  enableWorkspaceCustomization();
   await openResourceRow('transport');
   fireEvent.click(within(screen.getByRole('listitem', { name: 'main' })).getByRole('button', { name: 'Edit Model' }));
   // The inherited Model is displayed from the native effective projection while
@@ -556,7 +562,6 @@ it('S1-15 viewing an inherited identity authors nothing and writes nothing', asy
   const model = within(await screen.findByRole('form', { name: 'Model main' }));
   expect((screen.getByLabelText('Model ID') as HTMLInputElement).value).toBe('wire');
   expect(screen.getByRole('form', { name: 'Model main' }).dataset.authored).toBe('absent');
-  expect(model.getByRole('button', { name: 'Override Model main' })).toBeTruthy();
   expect((model.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
   expect(model.queryByRole('button', { name: /Use global default/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -574,6 +579,7 @@ it('S1-15 viewing an inherited identity authors nothing and writes nothing', asy
 it('S1-15 an explicit Workspace Provider override authors only that unit and never copies the inherited credential', async () => {
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
+  enableWorkspaceCustomization();
   await openResourceRow('transport');
   await providerAction('Customize');
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
@@ -635,6 +641,7 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
   const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={host} />);
   await waitForSettingsRevision('workspace-1');
   await openSettingsPage('Models');
+  enableWorkspaceCustomization();
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));

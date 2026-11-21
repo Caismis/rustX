@@ -53,7 +53,7 @@ export async function connectionAction(page: Page, action: 'Disconnect' | 'Recon
   await page.getByRole('region', { name: 'Connection Settings', exact: true }).getByRole('button', { name: action, exact: true }).click();
   if (action === 'Reconnect') await expect(page.locator('.connection-status')).toHaveText('Connected');
   if (previous) {
-    await settings.getByRole('button', { name: '← Back to Advanced', exact: true }).click();
+    await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
     await openSettingsPage(page, previous);
   } else await returnHome(page);
 }
@@ -138,7 +138,7 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   // Fixture setup leaves both the section and its retained detail at known
   // roots. Later primary-page navigation is free to resume its exact detail.
-  const back = page.getByRole('button', { name: '← Back to Advanced', exact: true });
+  const back = page.getByRole('button', { name: 'Back to Advanced', exact: true });
   await leaveRetainedDetail(back, page.getByRole('tablist', { name: 'Settings pages', exact: true }));
   await openSettingsPage(page, 'General');
   await returnHome(page);
@@ -212,6 +212,12 @@ export async function expandModelAuthoring(page: Page) {
     const toggle = page.getByRole('button', { name, exact: true, expanded: false });
     if (await toggle.isVisible()) await toggle.click();
   }
+}
+
+export async function enableWorkspaceCustomization(page: Page) {
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  const toggle = settings.getByRole('switch', { name: 'Follow global settings', exact: true });
+  if (await toggle.isVisible() && await toggle.isChecked()) await toggle.click();
 }
 
 /** Enter a resource module and select the exact native source scope. */

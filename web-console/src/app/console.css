@@ -17,7 +17,6 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .status { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 8px; }
 .status small { margin-left: auto; }
-.connection-form { display: grid; gap: 10px; padding-bottom: 20px; border-bottom: 0.5px solid var(--dsw-alias-border-l3); }
 /* Harness scrollBody geometry on the actual chat scroll owner. Reserve the
    themed bar so arriving content does not shift the conversation sideways. */
 .conversation-scroll { flex: 1; min-height: 150px; overflow: auto; padding-bottom: 18px; margin-right: 2px; scrollbar-gutter: stable; }

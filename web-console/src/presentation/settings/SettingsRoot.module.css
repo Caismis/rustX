@@ -33,6 +33,7 @@
 /* Nav rail (DSH .nav-rail 188px): pad (22,12,0), gap 18, no own fill
    — the panel white shows through. */
 .nav {
+  border-right: 1px solid var(--dsw-alias-border-l3);
   flex: none;
   display: flex;
   flex-direction: column;

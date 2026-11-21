@@ -40,7 +40,7 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(repair).toHaveCount(0);
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    const back = settings.getByRole('button', { name: '← Model Settings', exact: true });
+    const back = settings.getByRole('button', { name: 'Model Settings', exact: true });
     await leaveRetainedDetail(back, settings.getByRole('button', { name: 'fixture →', exact: true }));
     await settings.getByRole('button', { name: 'fixture →', exact: true }).click();
     await settings.getByRole('listitem', { name: 'b', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
@@ -86,7 +86,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await openWorkspaceSettings(page, 'Workspace A');
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const open = async () => {
-      const back = settings.getByRole('button', { name: '← Model Settings', exact: true });
+      const back = settings.getByRole('button', { name: 'Model Settings', exact: true });
       await leaveRetainedDetail(back, settings.getByRole('button', { name: 'fixture →', exact: true }));
       await settings.getByRole('button', { name: 'fixture →', exact: true }).click();
       await settings.getByRole('listitem', { name: 'ordered', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();

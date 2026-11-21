@@ -17,7 +17,7 @@ import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
 import { useNavigationGuard } from '../../settings/forms/guard';
 import { PageTransactionFooter } from '../../settings/forms/bridge';
-import { SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
+import { SettingsBackButton, SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
 import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
 import css from './McpPage.module.css';
 
@@ -35,17 +35,18 @@ export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: 
   </div>;
 }
 
-export function McpDetail({ source, scope, revision, focus, scopeControl, onClose }: {
+export function McpDetail({ source, scope, revision, focus, scopeControl, bodyDisabled = false, onClose }: {
   source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus;
-  scopeControl: ReactNode; onClose: () => void;
+  scopeControl: ReactNode; bodyDisabled?: boolean; onClose: () => void;
 }) {
   const tx = useTranslation();
   const guard = useNavigationGuard();
   const entry = extensionEntries(source, scope, 'mcp', 'owned').find(entry => entry.name === focus.name);
   const title = focus.name ?? tx('settings:mcp.new');
   return <SettingsPageShell title={title} className={`${settingsCss.settings} ${settingsCss.page}`} data-mcp-page=""
-    breadcrumb={<Button variant="ghost" size="sm" onClick={() => guard.guard(onClose)}>{tx('settings:mcp.back')}</Button>}
-    toolbar={scopeControl} footer={<PageTransactionFooter/>}>
+    bodyDisabled={bodyDisabled}
+    breadcrumb={<SettingsBackButton label={tx('settings:mcp.back')} current={title} onClick={() => guard.guard(onClose)} />}
+    toolbar={scopeControl} footer={<PageTransactionFooter cancelAlwaysEnabled={!focus.name} />}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
     <div className={css.page}>
     <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}

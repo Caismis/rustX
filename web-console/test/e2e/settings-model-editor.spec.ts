@@ -125,7 +125,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await openSettingsPage(page, 'Models');
     // The page may reopen on the provider detail it last showed.
     const providerCard = settings(page).getByRole('button', {name:`${provider} →`, exact:true});
-    const listBack = settings(page).getByRole('button', { name: '← Model Settings', exact: true });
+    const listBack = settings(page).getByRole('button', { name: 'Model Settings', exact: true });
     await Promise.race([providerCard.waitFor({state:'visible'}), listBack.waitFor({state:'visible'})]).catch(() => {});
     if (await listBack.isVisible()) await listBack.click();
     await providerCard.click();

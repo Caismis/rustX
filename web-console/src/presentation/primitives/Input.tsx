@@ -18,7 +18,7 @@ export function Input({ icon, className, ...rest }: {
   return (
     <span className={clsx(css.wrap, className)}>
       {icon != null && <span className={css.icon}>{icon}</span>}
-      <input className={css.input} {...rest} />
+      <input data-primitive-input="" className={css.input} {...rest} />
     </span>
   )
 }

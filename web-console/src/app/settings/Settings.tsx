@@ -2,10 +2,11 @@ import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
-import { PageScopeToolbar, PageRefreshButton, ScopeNavContext, ScopeToolbarOutlet } from './ScopeToolbar';
+import { PageScopeToolbar, PageRefreshButton, ScopeNavContext } from './ScopeToolbar';
 import { PageTransactionFooter, PageTransactionProvider } from './forms/bridge';
 import { useNavigationGuard } from './forms/guard';
-import { SettingsPageShell, SettingsGroup } from '../../presentation/settings/SettingsPageShell';
+import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../presentation/settings/SettingsPageShell';
+import { SettingsPageSkeleton } from '../../presentation/primitives/Skeleton';
 import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../client/app-server';
@@ -100,9 +101,11 @@ export function Settings(props: SettingsProps) {
     targetReady: snapshot.context.targetReady, resolving: snapshot.matches('resolvingOwner'),
   }), shallowEqual);
   if (!view.targetReady) return <section aria-label={tx('settings:settings.settings')} data-settings-owner-pending aria-busy={view.resolving}>
-    <p role="status">{tx(view.resolving ? 'settings:navigation.resolving' : 'settings:navigation.unavailable')}</p>
+    {view.resolving
+      ? <SettingsPageSkeleton label={tx('settings:navigation.resolving')} />
+      : <p role="status">{tx('settings:navigation.unavailable')}</p>}
   </section>;
-  return (visited || visible) && <SettingsPageContent key={settingsTargetKey(view.target)} {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
+  return (visited || visible) && <SettingsPageContent {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
 }
 
 
@@ -175,30 +178,25 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   // target-wide admission fact, which each unit form reads.
   const editable = !!selected && !!observed && targetValid && transport.connection === 'connected';
   const structured = config.state === 'structured';
-  const [scopeOutlet, setScopeOutlet] = useState<HTMLElement | null>(null);
-  // The scope toolbar and the authoritative reread port into the outlet so
-  // they stay usable while the page's fieldset is disabled: leaving a revoked
-  // workspace or re-reading an absent source must never be gated on `editable`.
+  const bodyDisabled = !editable;
   const body = !source || !selected ? null : <>
-    <div ref={setScopeOutlet} className={css.scopeOutlet} />
-    <ScopeToolbarOutlet.Provider value={scopeOutlet}><fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} />
-      : <MalformedPage title={tx('settings:page.models')} config={config} />)}
+      ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} bodyDisabled={bodyDisabled} />
+      : <MalformedPage title={tx('settings:page.models')} config={config} bodyDisabled={bodyDisabled} />)}
     {current === 'agent' && (structured || scope === 'user' && source.global_guidance
-      ? <AgentPage config={structured ? config : undefined}
+      ? <AgentPage scope={scope} config={structured ? config : undefined}
         closed={!structured && config.state === 'malformed' ? <><MalformedNotice config={config} /><RepairSourceForm revision={config.revision} /></> : undefined}
-        globalGuidance={scope === 'user' ? source.global_guidance : undefined} />
-      : <MalformedPage title={tx('settings:page.agent')} config={config} />)}
+        globalGuidance={scope === 'user' ? source.global_guidance : undefined} bodyDisabled={bodyDisabled} />
+      : <MalformedPage title={tx('settings:page.agent')} config={config} bodyDisabled={bodyDisabled} />)}
     {current === 'tools' && (structured
-      ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} />
-      : <MalformedPage title={tx('settings:page.tools')} config={config} />)}
+      ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} bodyDisabled={bodyDisabled} />
+      : <MalformedPage title={tx('settings:page.tools')} config={config} bodyDisabled={bodyDisabled} />)}
     {/* A malformed configuration closes extension grants, while the native
         managed-Python inventory remains available for inspection. */}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
-      scopeControl={<PageScopeToolbar />} />}
+      scopeControl={<PageScopeToolbar />} bodyDisabled={bodyDisabled} />}
     {current === 'advanced' && (structured
       ? <AdvancedPage source={source} scope={scope}
         config={{ document: config.document, revision: config.revision }}
@@ -207,7 +205,7 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
         repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
         closed={<MalformedNotice config={config} />}
         openConnection={connectionReachable ? () => onFocus(connectionFocus) : undefined}
-        busy={busy} targetValid={targetValid} />
+        busy={busy} targetValid={targetValid} bodyDisabled={bodyDisabled} />
       : config.state === 'malformed'
         ? <AdvancedPage source={source} scope={scope}
           config={undefined}
@@ -215,9 +213,8 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
           inspection={inspection}
           repairPresented={undefined}
           closed={<><MalformedNotice config={config} /><RepairSourceForm revision={config.revision} /></>}
-          busy={busy} targetValid={targetValid} />
-        : <MalformedPage title={tx('settings:page.advanced')} config={config} />)}
-  </fieldset></ScopeToolbarOutlet.Provider>
+          busy={busy} targetValid={targetValid} bodyDisabled={bodyDisabled} />
+        : <MalformedPage title={tx('settings:page.advanced')} config={config} bodyDisabled={bodyDisabled} />)}
   </>;
 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
@@ -240,7 +237,19 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
         {current === 'general'
           ? <PageTransactionProvider><GeneralPage theme={theme} setTheme={setTheme} /></PageTransactionProvider>
           : connectionFocused
-            ? <SettingsPageShell className={`${css.settings} ${css.page}`} title={pageTitle} breadcrumb={<Button variant="ghost" size="sm" onClick={() => onFocus(undefined)}>← {tx('settings:settings.back-to-advanced')}</Button>} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
+            ? <SettingsPageShell
+                className={`${css.settings} ${css.page}`}
+                title={tx('settings:connection-settings.connection')}
+                breadcrumb={
+                  <SettingsBackButton
+                    label={tx('settings:settings.back-to-advanced')}
+                    current={tx('settings:connection-settings.connection')}
+                    onClick={() => onFocus(undefined)}
+                  />
+                }
+                toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}
+                footer={null}
+              >
                 <ConnectionSettings connection={connection} client={client} />
               </SettingsPageShell>
             : !source ? <SettingsPageShell className={`${css.settings} ${css.page}`} title={pageTitle} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
@@ -249,7 +258,10 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
                 {connectionReachable && <SettingsGroup title={tx('settings:connection-settings.connection')}>
                   <div><Button variant="outline" size="sm" onClick={() => onFocus(connectionFocus)}>{tx('settings:connection-settings.connection')}</Button></div>
                 </SettingsGroup>}
-                <SourcePending lifecycle={lifecycle} retry={lifecycle === 'failed' ? () => actor.send({ type: 'REFRESH' }) : undefined} /></SettingsPageShell>
+                {lifecycle === 'loading' || lifecycle === 'connecting'
+                  ? <SettingsPageSkeleton bodyOnly lifecycle={lifecycle} label={tx(lifecycle === 'connecting' ? 'settings:copy.configuration-is-shown-once-the-app-server-connection-is-established' : 'settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers')} />
+                  : <SourcePending lifecycle={lifecycle} retry={lifecycle === 'failed' ? () => actor.send({ type: 'REFRESH' }) : undefined} />}
+              </SettingsPageShell>
             : <div key={editorKey} className={css.editorFrame}><PageTransactionProvider>{body}</PageTransactionProvider>
             </div>}
         <div className={css.surfaceNotices}>
@@ -279,12 +291,13 @@ function SourcePending({ lifecycle, retry }: { lifecycle: ReturnType<typeof sett
 /** The malformed-`rustx.toml` page: the diagnostic plus the single
  * `repair_config` mutation the source contract admits, committed by the
  * shared page footer like any other staged edit. */
-function MalformedPage({ title, config }: {
+function MalformedPage({ title, config, bodyDisabled = false }: {
   title: string;
+  bodyDisabled?: boolean;
   config: { state: 'malformed'; path: string; diagnostic?: string; revision: string } | { state: 'structured' } | { state: 'unavailable' };
 }) {
   if (config.state !== 'malformed') return null;
-  return <SettingsPageShell title={title} footer={<PageTransactionFooter />}>
+  return <SettingsPageShell title={title} bodyDisabled={bodyDisabled} footer={<PageTransactionFooter />}>
     <div className={css.page}>
       <MalformedNotice config={config} />
       <RepairSourceForm revision={config.revision} />
