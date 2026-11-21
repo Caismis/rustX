@@ -202,3 +202,5 @@ pub mod scheduler {
 pub mod workspace_changes {
     pub mod capture;
 }
+// cache-candidates round-3 marker 1: rustx-types edit — measures warm restore +
+// types-crate invalidation cost across cand-a (deps-only) and cand-b (sccache).
