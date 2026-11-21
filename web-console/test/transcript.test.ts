@@ -19,9 +19,12 @@ it('ordinary live refresh retains provable overlap; a forward head slide retains
   expect(live.page.entries?.map(item => item.cursor)).toEqual(['8', '9', '10']);
   // Every held row is strictly older than the delivered head: an atomic burst
   // slid the bounded window past them. Loaded committed rows stay retained.
-  const slid = refreshTranscript(live, { entries: [entry(20)], next_cursor: '20' });
+  const slid = refreshTranscript(live, { entries: [entry(20)], next_cursor: '19' });
   expect(slid.epoch).toBe(live.epoch);
   expect(slid.page.entries?.map(item => item.cursor)).toEqual(['8', '9', '10', '20']);
+  // Pagination resumes at the fresh block's own cursor so the skipped rows
+  // stay reachable, instead of stranding the gap below held history.
+  expect(slid.page.next_cursor).toBe('19');
   // A backward or interleaved replacement is a genuine discontinuity.
   const divergent = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `other-${n}`, role: 'assistant', content: [{ type: 'text', text: `Other ${n}` }] } } });
   const rewritten = refreshTranscript(slid, { entries: [divergent(9), divergent(20)], next_cursor: '20' });

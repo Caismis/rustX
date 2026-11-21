@@ -90,7 +90,9 @@ it('retains committed rows when a settlement burst slides the native head past t
   const next = refreshTranscript(cache, { entries: [row(4), row(5), row(6)], next_cursor: '3' });
   expect(next.page.entries!.map(entry => entry.cursor)).toEqual(['1', '2', '4', '5', '6']);
   expect(next.page.entries![1].response_pending).toBe(true);
-  expect(next.page.next_cursor).toBe('0');
+  // Pagination continues from the fresh block downward so the skipped rows
+  // (cursor 3) stay reachable through loadEarlier.
+  expect(next.page.next_cursor).toBe('3');
 });
 it('still replaces when cursors interleave but identities diverge', () => {
   const cache = replaceTranscript({ entries: [row(1), row(2)] });

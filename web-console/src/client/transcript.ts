@@ -104,7 +104,10 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
       const newest = positions(held).reduce((a, b) => a > b ? a : b);
       const oldest = positions(fresh).reduce((a, b) => a < b ? a : b);
       if (newest < oldest) {
-        return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor } };
+        // Continue pagination from the fresh block downward so the rows the
+        // slide skipped stay reachable through loadEarlier; dedup in
+        // mergePages handles the refetched held rows.
+        return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: page.next_cursor ?? previous.page.next_cursor } };
       }
     }
     return replaceTranscript(page, previous);
