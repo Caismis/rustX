@@ -505,8 +505,8 @@ pub enum OperationState {
         /// The observed exit code, when the platform reported one.
         exit_code: Option<i32>,
     },
-    /// Fully settled: retained bytes finalized and physical settlement
-    /// actual — never synthesized on data loss.
+    /// The operation driver finalized its outcome and journal. Physical
+    /// settlement is independently reported by the snapshot.
     Settled(SettledSnapshot),
 }
 
@@ -518,7 +518,11 @@ pub enum OperationState {
 pub struct SettledSnapshot {
     /// The terminal disposition.
     pub disposition: SettledDisposition,
-    /// The observed exit code, present only when `Known` reported one.
+    /// The process never started, or its containment and reap were proven.
+    /// This remains available after output is released. An unconfirmed
+    /// snapshot carries `Unknown` and no exit code.
+    pub physical_settlement_proven: bool,
+    /// The observed exit code, absent for an `Unknown` outcome.
     pub exit_code: Option<i32>,
     /// Total bytes the process emitted on stdout (cap-independent).
     pub stdout_total: DecimalU64,
@@ -539,7 +543,8 @@ pub struct SettledSnapshot {
 pub enum SettledDisposition {
     /// Exited with an observed status — `exit_code` is authoritative.
     Known,
-    /// The physical outcome could not be witnessed honestly.
+    /// The business outcome could not be witnessed honestly. Containment
+    /// may still be proven independently.
     Unknown,
     /// The spec's timeout elapsed; distinct from an external cancel.
     TimedOut,

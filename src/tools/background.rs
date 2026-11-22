@@ -6107,6 +6107,163 @@ mod tests {
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     }
 
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // The acceptance, cancellation and Read all share the same identity.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn accepted_bash_cancelled_before_start_keeps_the_empty_output_readable() {
+        use crate::tools::mcp::McpRuntimeLeaseSet;
+        use crate::tools::types::ManagedOutputContinuation;
+        use rustx_execution_protocol::process::{
+            OperationState, ProcessReply, ProcessRequest, SettledDisposition,
+        };
+
+        let mut fixture = registry("conv_a4f701da-4b9e-7f7d-a716-960562cb59f0");
+        let workspace = fixture.registry.resources().workspace.root().to_path_buf();
+        let execution =
+            crate::session_execution_support::ExecutionFixture::with_mount_view(&workspace, None);
+        fixture
+            .registry
+            .resources
+            .workspace
+            .bind_execution_scope(Some(execution.scope.clone()));
+        let signal = crate::runtime::CancellationSignal::new();
+        let cancellation = crate::runtime::ExecutionCancellation::detached(
+            signal.clone(),
+            CancellationReason::UserRequested,
+        );
+        let invocation = ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("cancel-after-accept"),
+            },
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".into(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({"command": "printf start >> started"}),
+        };
+        let bash = crate::tools::native::PreparedBash::register(
+            &invocation,
+            &fixture.registry.resources.workspace,
+            fixture.registry.conversation_id(),
+            &ToolEnvironment::new(),
+            &cancellation,
+        )
+        .await
+        .unwrap();
+        let (running_driver, resume) = bash.hold_before_start();
+        let path = bash.output().to_path_buf();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(bash);
+        let prepared = fixture
+            .registry
+            .prepare_with_output(
+                &invocation,
+                &executor,
+                ToolEnvironment::new(),
+                McpRuntimeLeaseSet::default(),
+                Some(path.clone()),
+            )
+            .unwrap();
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = fixture.registry.commit_dispatch(prepared, &signal).unwrap()
+        else {
+            panic!("the Job must first expose the Client locator");
+        };
+        let crate::tools::types::ToolResultContent::Json { value } = &result.content[0] else {
+            panic!("accepted job envelope")
+        };
+        assert_eq!(value["output_path"].as_str(), path.to_str());
+        tokio::time::timeout(TEST_LIVENESS_GUARD, running_driver)
+            .await
+            .unwrap()
+            .unwrap();
+        fixture
+            .registry
+            .cancel(&execution_id)
+            .expect("accepted job is cancellable");
+        let output = crate::tools::native::bash_operation_at(&path).unwrap();
+        let endpoint = execution.scope.endpoint().unwrap();
+        let key = output.key_for(&endpoint).unwrap();
+        let snapshot = tokio::time::timeout(TEST_LIVENESS_GUARD, async {
+            loop {
+                let endpoint = endpoint.clone();
+                let request = ProcessRequest::Query { key: key.clone() };
+                let reply = tokio::task::spawn_blocking(move || {
+                    endpoint
+                        .process_until(&request, std::time::Instant::now() + TEST_LIVENESS_GUARD)
+                })
+                .await
+                .unwrap();
+                match reply {
+                    Ok(ProcessReply::State {
+                        state: OperationState::Settled(snapshot),
+                        ..
+                    }) => break snapshot,
+                    Ok(ProcessReply::State {
+                        state: OperationState::Registered,
+                        ..
+                    }) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    other => panic!("unexpected pre-START state: {other:?}"),
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(snapshot.disposition, SettledDisposition::Cancelled);
+        assert!(snapshot.physical_settlement_proven);
+        assert_eq!(snapshot.final_sequence.get(), 0);
+        resume.send(()).unwrap();
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+        let result = terminal.result.unwrap();
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+            }
+        );
+        assert_eq!(
+            result.managed_output.as_deref(),
+            Some(&ManagedOutputContinuation::Complete {
+                locator: path.clone()
+            })
+        );
+        let resources = fixture.registry.resources();
+        let environment = ToolEnvironment::new();
+        let read = crate::tools::native::ReadTool
+            .start(
+                ToolInvocation {
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("read-after-cancel"),
+                    },
+                    tool_id: ToolId::new("tool-read"),
+                    tool_name: "read".into(),
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({"path": path}),
+                },
+                ToolExecutionContext::new(
+                    fixture.registry.conversation_id(),
+                    None,
+                    cancellation,
+                    &resources.workspace,
+                    &NoopProgress,
+                    &resources.artifacts,
+                    &resources.tool_output,
+                    &environment,
+                ),
+            )
+            .completion
+            .await;
+        assert_eq!(read.status, ToolExecutionStatus::Success);
+        assert!(
+            matches!(&read.content[..], [crate::tools::types::ToolResultContent::Text(text)] if text.text.is_empty())
+        );
+        assert!(!workspace.join("started").exists());
+    }
+
     /// The deterministic Issue #86 end-to-end regression: a background Bash
     /// execution advertises its absolute live-output path in the accepted
     /// result, the committed output is observable through the ordinary

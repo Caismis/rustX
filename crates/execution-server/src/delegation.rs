@@ -164,6 +164,11 @@ impl LocalConnection {
                 },
             };
         }
+        if let ClientRequest::Process(request) = request {
+            return self
+                .process_admitted(request, deadline, permit)
+                .map(ClientReply::Process);
+        }
         self.exchange_admitted(request, Some(deadline), permit, || ())
     }
 }

@@ -938,7 +938,7 @@ pub enum ProcessCancelDisposition {
     CancellationRequested,
     /// The operation had already settled — cancellation had no target.
     AlreadySettled,
-    /// No record matches the exact supplied key.
+    /// The key had no matching record or its physical settlement is unconfirmed.
     Unknown,
 }
 

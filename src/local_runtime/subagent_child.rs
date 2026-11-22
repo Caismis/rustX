@@ -335,6 +335,7 @@ async fn run_child(
     physical_lease: &crate::runtime::subagent::physical_recovery::ChildPhysicalLease,
     execution_scope: Option<super::session_runtime_manager::SessionExecutionScope>,
 ) -> Result<(), ChildExit> {
+    let delegated = execution_scope.is_some();
     let mut lifetime = ChildPhysicalLifetime::new(handle);
     lifetime.preparation.execution_scope = execution_scope;
     let result = Box::pin(run_child_inner(dispatcher, handle, spec, &mut lifetime)).await;
@@ -343,9 +344,11 @@ async fn run_child(
     // emits no proof. A failed drain retains uncertainty regardless of the
     // logical result or whether any process happens to remain observable.
     match lifetime.settle(handle.parent_lost()).await {
-        Ok(()) => physical_lease.publish_quiescent().map_err(|error| {
+        Ok(()) if !delegated => physical_lease.publish_quiescent().map_err(|error| {
             ChildExit::Protocol(format!("publish physical settlement receipt: {error}"))
         })?,
+        // Only the parent owns the physical relay and can attest its drain.
+        Ok(()) => {}
         Err(failures) => {
             eprintln!(
                 "subagent child: physical settlement unproven: {}",
@@ -2110,7 +2113,12 @@ pub(crate) mod tests {
         .unwrap();
         // Duplicate the real pre-admission authority, then enter the same
         // Running transition as fd2 acquisition in a child process.
-        ChildPhysicalLease::acquire_from_parent(spec, &parent).unwrap()
+        ChildPhysicalLease::acquire_from_parent(
+            &parent,
+            &spec.subagent_id,
+            &spec.child_conversation_id,
+        )
+        .unwrap()
     }
 
     #[tokio::test]

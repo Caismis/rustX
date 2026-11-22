@@ -134,6 +134,19 @@ impl PreparedBash {
     pub(crate) fn output(&self) -> &Path {
         &self.output
     }
+
+    #[cfg(test)]
+    pub(crate) fn hold_before_start(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (release, parked) = tokio::sync::oneshot::channel();
+        self.operation.lock().unwrap().as_mut().unwrap().start_hold = Some((entered, parked));
+        (observed, release)
+    }
 }
 
 impl ToolExecutor for PreparedBash {
@@ -193,6 +206,11 @@ struct RemoteBash {
     live_output: bool,
     cleanup: bool,
     start_gate: Option<StartGate>,
+    #[cfg(test)]
+    start_hold: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
 }
 
 impl RemoteBash {
@@ -263,6 +281,8 @@ impl RemoteBash {
             live_output,
             cleanup: true,
             start_gate: None,
+            #[cfg(test)]
+            start_hold: None,
         };
         match operation
             .exchange(
@@ -313,6 +333,11 @@ impl RemoteBash {
                 }
             }
         });
+        #[cfg(test)]
+        if let Some((entered, parked)) = self.start_hold.take() {
+            let _ = entered.send(());
+            let _ = parked.await;
+        }
         let outcome = self.run_to_settlement(context, settled.as_ref()).await;
         stop.cancel();
         let _ = relay.await;
@@ -378,7 +403,10 @@ impl RemoteBash {
                 }
             };
         };
-        settled.store(true, std::sync::atomic::Ordering::Release);
+        settled.store(
+            snapshot.physical_settlement_proven,
+            std::sync::atomic::Ordering::Release,
+        );
         let mut capture = match self
             .exchange(
                 ProcessRequest::BashCapture {
@@ -687,7 +715,7 @@ fn project(
     let path = locator(key);
     let output = capture.as_ref().map_or(
         if live_output {
-            BashCaptureState::Complete
+            BashCaptureState::Unavailable
         } else {
             BashCaptureState::None
         },

@@ -4143,6 +4143,7 @@ mod tests {
             key: key.clone(),
             state: OperationState::Settled(SettledSnapshot {
                 disposition: SettledDisposition::Known,
+                physical_settlement_proven: true,
                 exit_code: Some(0),
                 stdout_total: DecimalU64::new(0),
                 stderr_total: DecimalU64::new(0),

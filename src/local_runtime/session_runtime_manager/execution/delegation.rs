@@ -123,6 +123,7 @@ struct Authority {
 
 struct ChildOperation {
     key: ProcessOperationKey,
+    physically_settled: bool,
     journal_released: bool,
     capture_disposed: bool,
 }
@@ -302,54 +303,8 @@ impl Authority {
 
     fn retain_reply(&self, request: &ClientRequest, reply: &ClientReply) {
         match (request, reply) {
-            (
-                ClientRequest::Process(ProcessRequest::RegisterAgentBash { key, .. }),
-                ClientReply::Process(ProcessReply::Registered { key: echoed }),
-            ) if key == echoed => {
-                self.operations
-                    .lock()
-                    .expect("child process keys")
-                    .entry(key.operation)
-                    .or_insert_with(|| ChildOperation {
-                        key: key.clone(),
-                        journal_released: false,
-                        capture_disposed: false,
-                    });
-            }
-            (
-                ClientRequest::Process(
-                    request @ (ProcessRequest::ReleaseOutput { key, .. }
-                    | ProcessRequest::DiscardBashOutput { key }),
-                ),
-                ClientReply::Process(ProcessReply::OutputReleased { key: echoed }),
-            ) if key == echoed => {
-                let mut operations = self.operations.lock().expect("child process keys");
-                if let Some(operation) = operations.get_mut(&key.operation) {
-                    operation.journal_released = true;
-                    operation.capture_disposed |=
-                        matches!(request, ProcessRequest::DiscardBashOutput { .. });
-                }
-            }
-            (
-                ClientRequest::Process(ProcessRequest::BashCapture { key }),
-                ClientReply::Process(ProcessReply::BashCapture {
-                    key: echoed,
-                    capture: Some(capture),
-                }),
-            ) if key == echoed
-                && matches!(
-                    capture.output,
-                    BashCaptureState::None | BashCaptureState::Unavailable
-                ) =>
-            {
-                if let Some(operation) = self
-                    .operations
-                    .lock()
-                    .expect("child process keys")
-                    .get_mut(&key.operation)
-                {
-                    operation.capture_disposed = true;
-                }
+            (ClientRequest::Process(request), ClientReply::Process(reply)) => {
+                self.retain_process_reply(request, reply);
             }
             (
                 ClientRequest::PrepareWrite { data_base64, .. },
@@ -398,6 +353,77 @@ impl Authority {
         }
     }
 
+    fn retain_process_reply(&self, request: &ProcessRequest, reply: &ProcessReply) {
+        match (request, reply) {
+            (
+                ProcessRequest::RegisterAgentBash { key, .. },
+                ProcessReply::Registered { key: echoed },
+            ) if key == echoed => {
+                self.operations
+                    .lock()
+                    .expect("child process keys")
+                    .entry(key.operation)
+                    .or_insert_with(|| ChildOperation {
+                        key: key.clone(),
+                        physically_settled: false,
+                        journal_released: false,
+                        capture_disposed: false,
+                    });
+            }
+            (
+                request,
+                ProcessReply::State {
+                    key,
+                    state: OperationState::Settled(snapshot),
+                },
+            ) if request.key() == key && snapshot.physical_settlement_proven => {
+                if let Some(operation) = self
+                    .operations
+                    .lock()
+                    .expect("child process keys")
+                    .get_mut(&key.operation)
+                {
+                    operation.physically_settled = true;
+                }
+            }
+            (
+                request @ (ProcessRequest::ReleaseOutput { key, .. }
+                | ProcessRequest::DiscardBashOutput { key }),
+                ProcessReply::OutputReleased { key: echoed },
+            ) if key == echoed => {
+                let mut operations = self.operations.lock().expect("child process keys");
+                if let Some(operation) = operations.get_mut(&key.operation) {
+                    operation.journal_released |=
+                        matches!(request, ProcessRequest::ReleaseOutput { .. });
+                    operation.capture_disposed |=
+                        matches!(request, ProcessRequest::DiscardBashOutput { .. });
+                }
+            }
+            (
+                ProcessRequest::BashCapture { key },
+                ProcessReply::BashCapture {
+                    key: echoed,
+                    capture: Some(capture),
+                },
+            ) if key == echoed
+                && matches!(
+                    capture.output,
+                    BashCaptureState::None | BashCaptureState::Unavailable
+                ) =>
+            {
+                if let Some(operation) = self
+                    .operations
+                    .lock()
+                    .expect("child process keys")
+                    .get_mut(&key.operation)
+                {
+                    operation.capture_disposed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn release(&self, owner: &LocalExecutionEndpoint) -> io::Result<()> {
         let tickets = std::mem::take(&mut *self.tickets.lock().expect("child mutation tickets"));
         let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
@@ -430,9 +456,7 @@ impl Authority {
         operation: &ChildOperation,
         deadline: Instant,
     ) -> io::Result<()> {
-        if !operation.journal_released {
-            Self::release_journal(owner, &operation.key, deadline)?;
-        }
+        Self::settle_process(owner, operation, deadline)?;
         if !operation.capture_disposed {
             let key = &operation.key;
             let discarded = owner.with_bounded_data_connection(deadline, |connection| {
@@ -449,11 +473,15 @@ impl Authority {
         Ok(())
     }
 
-    fn release_journal(
+    fn settle_process(
         owner: &LocalExecutionEndpoint,
-        key: &ProcessOperationKey,
+        operation: &ChildOperation,
         deadline: Instant,
     ) -> io::Result<()> {
+        if operation.physically_settled && operation.journal_released {
+            return Ok(());
+        }
+        let key = &operation.key;
         let exchange = |request| {
             owner.with_bounded_data_connection(deadline, |connection| {
                 connection.process_until(&request, deadline)
@@ -495,12 +523,19 @@ impl Authority {
         else {
             unreachable!();
         };
-        let released = exchange(ProcessRequest::ReleaseOutput {
-            key: key.clone(),
-            final_sequence: snapshot.final_sequence,
-        })?;
-        if !matches!(released, ProcessReply::OutputReleased { key: echoed } if echoed == *key) {
-            return Err(io::ErrorKind::InvalidData.into());
+        if !operation.journal_released {
+            let released = exchange(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: snapshot.final_sequence,
+            })?;
+            if !matches!(released, ProcessReply::OutputReleased { key: echoed } if echoed == *key) {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+        }
+        if !snapshot.physical_settlement_proven {
+            return Err(io::Error::other(
+                "the child process has no physical settlement proof",
+            ));
         }
         Ok(())
     }
@@ -742,6 +777,7 @@ mod tests {
                 key.operation,
                 ChildOperation {
                     key: key.clone(),
+                    physically_settled: false,
                     journal_released: false,
                     capture_disposed: false,
                 },

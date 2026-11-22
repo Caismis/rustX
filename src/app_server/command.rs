@@ -750,9 +750,10 @@ async fn run(
                 // bytes were consumed by the earlier attempt and are not
                 // available here. Only an output-free outcome can be
                 // reported exactly; anything else is honestly unknown.
-                entry
-                    .reconciled
-                    .store(true, std::sync::atomic::Ordering::Release);
+                entry.reconciled.store(
+                    snapshot.physical_settlement_proven,
+                    std::sync::atomic::Ordering::Release,
+                );
                 if snapshot.final_sequence.get() != 0
                     || snapshot.stdout_total.get() != 0
                     || snapshot.stderr_total.get() != 0
@@ -826,9 +827,10 @@ async fn run(
         return Err(contradicted(&endpoint).await);
     }
     let mut settled = if let OperationState::Settled(snapshot) = start_state {
-        entry
-            .reconciled
-            .store(true, std::sync::atomic::Ordering::Release);
+        entry.reconciled.store(
+            snapshot.physical_settlement_proven,
+            std::sync::atomic::Ordering::Release,
+        );
         Some(snapshot)
     } else {
         None
@@ -1031,9 +1033,10 @@ async fn run(
                         return Err(contradicted(&endpoint).await);
                     }
                     if let OperationState::Settled(snapshot) = state {
-                        entry
-                            .reconciled
-                            .store(true, std::sync::atomic::Ordering::Release);
+                        entry.reconciled.store(
+                            snapshot.physical_settlement_proven,
+                            std::sync::atomic::Ordering::Release,
+                        );
                         settled = Some(snapshot);
                     }
                 }

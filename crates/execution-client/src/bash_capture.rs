@@ -94,6 +94,19 @@ impl Captures {
 }
 
 impl CaptureFile {
+    pub(crate) fn proves_empty(&self) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        self.read(|root, name| {
+            let owned = self.file.as_file().metadata()?;
+            let named = root.file(name)?.metadata()?;
+            Ok::<_, io::Error>(
+                named.len() == 0 && owned.dev() == named.dev() && owned.ino() == named.ino(),
+            )
+        })
+        .is_some_and(|result| matches!(result, Ok(true)))
+    }
+
     pub(crate) fn tail(&self) -> io::Result<(String, bool)> {
         use std::os::unix::fs::FileExt as _;
         self.read(|root, name| {

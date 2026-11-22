@@ -301,14 +301,15 @@ impl ChildPhysicalLease {
 
     #[cfg(test)]
     pub(crate) fn acquire_from_parent(
-        spec: &SubagentChildSpec,
         parent: &ParentPhysicalLease,
+        activation: &SubagentId,
+        conversation: &ConversationId,
     ) -> std::io::Result<Self> {
         Self::acquire_inherited(
             parent.0.path.clone(),
             parent.inherited_file()?,
-            spec.subagent_id.clone(),
-            spec.child_conversation_id.clone(),
+            activation.clone(),
+            conversation.clone(),
         )
     }
 

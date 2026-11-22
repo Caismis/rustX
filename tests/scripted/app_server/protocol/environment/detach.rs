@@ -1642,3 +1642,259 @@ pub(crate) async fn child_relay_joins_the_physical_binding_revocation() {
     assert!(!endpoint.workspace().join("child-unpublished").exists());
     assert!(!endpoint.workspace().join("child-started").exists());
 }
+
+#[derive(Debug, PartialEq, Eq)]
+enum SettlementExchange {
+    Query,
+    ReleaseOutput,
+}
+
+fn with_unproven_process_snapshot(
+    (mut client_data, mut server_data): (UnixStream, UnixStream),
+) -> tokio::task::JoinHandle<Vec<SettlementExchange>> {
+    // The Client tests inject the supervisor wait failure itself. This proxy
+    // injects the resulting typed snapshot at the Server's real wire boundary.
+    tokio::spawn(async move {
+        let mut selected = None;
+        let mut trace = Vec::new();
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            if let ClientRequest::Process(process) = &request {
+                if matches!(
+                    process,
+                    ProcessRequest::Register { .. } | ProcessRequest::RegisterAgentBash { .. }
+                ) {
+                    selected.get_or_insert_with(|| process.key().clone());
+                }
+                if selected.as_ref() == Some(process.key()) {
+                    match process {
+                        ProcessRequest::Query { .. } => trace.push(SettlementExchange::Query),
+                        ProcessRequest::ReleaseOutput { .. } => {
+                            trace.push(SettlementExchange::ReleaseOutput);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            send(&mut client_data, &request).await.unwrap();
+            let mut reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if let ClientReply::Process(ProcessReply::State {
+                key,
+                state: OperationState::Settled(snapshot),
+            }) = &mut reply
+                && selected.as_ref() == Some(key)
+            {
+                assert!(snapshot.physical_settlement_proven);
+                assert_eq!(snapshot.exit_code, Some(0));
+                snapshot.disposition = SettledDisposition::Unknown;
+                snapshot.exit_code = None;
+                snapshot.physical_settlement_proven = false;
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        let _ = client_data.shutdown().await;
+        trace
+    })
+}
+
+#[allow(clippy::too_many_lines)] // Both cleanup orders use the same real Client and relay fixture.
+async fn unproven_child_settlement(journal_released: bool) {
+    use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
+    use crate::runtime::subagent::ResolvedSubagentTool;
+    use crate::tools::types::ToolInvocationPolicy;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data,
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = with_unproven_process_snapshot(data);
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let definition =
+        crate::tools::native::subagent_child_definition("bash", ToolInvocationPolicy::default())
+            .unwrap();
+    let relay = ChildExecutionRelay::create(
+        &fixture.manager.execution_scope(&session.id),
+        endpoint.workspace(),
+        conversation,
+        &[ResolvedSubagentTool::Builtin {
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            definition,
+        }],
+    )
+    .unwrap();
+    let (parent, child_startup) = UnixStream::pair().unwrap();
+    relay.transfer(&parent).await.unwrap();
+    let scope = relay
+        .grant()
+        .open(&session.id, endpoint.workspace(), &child_startup)
+        .await
+        .unwrap();
+    let owner = relay.start().unwrap();
+    let process = scope.endpoint().unwrap();
+    let key = process.process_key(OperationId::new()).unwrap();
+    let spec = ProcessSpec {
+        cwd: std::path::PathBuf::new(),
+        program: ProcessProgram::Shell {
+            command: "printf settled; exit 0".into(),
+            conversation: conversation.as_str().into(),
+            live_output: false,
+        },
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 5_000,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let state = bounded(tokio::task::spawn_blocking(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let exchange = |request| {
+            process
+                .agent_process(&request, deadline, || Ok(()))
+                .unwrap()
+        };
+        assert_eq!(
+            exchange(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: spec.fingerprint(),
+                spec,
+            }),
+            ProcessReply::Registered { key: key.clone() },
+        );
+        let mut reply = exchange(ProcessRequest::Start { key: key.clone() });
+        loop {
+            if let ProcessReply::State {
+                state: OperationState::Settled(snapshot),
+                ..
+            } = reply
+            {
+                assert_eq!(snapshot.disposition, SettledDisposition::Unknown);
+                assert!(!snapshot.physical_settlement_proven);
+                if journal_released {
+                    assert_eq!(
+                        exchange(ProcessRequest::ReleaseOutput {
+                            key: key.clone(),
+                            final_sequence: snapshot.final_sequence,
+                        }),
+                        ProcessReply::OutputReleased { key: key.clone() },
+                    );
+                }
+                break;
+            }
+            assert!(matches!(
+                reply,
+                ProcessReply::State {
+                    state: OperationState::Starting
+                        | OperationState::Running
+                        | OperationState::Exited { .. },
+                    ..
+                }
+            ));
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+            reply = exchange(ProcessRequest::Query { key: key.clone() });
+        }
+    }))
+    .await;
+    state.unwrap();
+
+    bounded(crate::runtime::subagent::process::assert_unproven_relay_retains_child_root(owner))
+        .await;
+    assert!(
+        endpoint.control().is_none(),
+        "unconfirmed Open binding retires"
+    );
+    let failures = bounded(fixture.host.drain()).await;
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    let trace = bounded(data).await.unwrap();
+    let releases: Vec<_> = trace
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| (*step == SettlementExchange::ReleaseOutput).then_some(index))
+        .collect();
+    let [released_at] = releases[..] else {
+        panic!("expected exactly one acknowledged journal release, got {trace:?}");
+    };
+    if journal_released {
+        assert_eq!(trace[released_at + 1..], [SettlementExchange::Query]);
+    } else {
+        assert_eq!(trace.last(), Some(&SettlementExchange::ReleaseOutput));
+        assert_eq!(trace.get(released_at - 1), Some(&SettlementExchange::Query));
+    }
+    bounded(child.wait()).await.unwrap();
+    bounded(control).await.unwrap();
+}
+
+pub(crate) async fn child_cleanup_requires_physical_settlement_before_and_after_journal_release() {
+    unproven_child_settlement(false).await;
+    unproven_child_settlement(true).await;
+}
+
+pub(crate) async fn unknown_command_settlement_preserves_the_binding_and_output() {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data,
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = with_unproven_process_snapshot(data);
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let MethodResult::CommandExec { result } = bounded(call(
+        &connection,
+        1,
+        Method::CommandExec(parameters(
+            &fixture,
+            &["/bin/sh", "-c", "printf done; exit 0"],
+        )),
+    ))
+    .await
+    else {
+        panic!("expected a domain result for unconfirmed physical settlement");
+    };
+    assert_eq!(result.status, ExecStatus::ProcessControlFailed);
+    assert_eq!(result.exit_code, None);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result.stdout_base64)
+            .unwrap(),
+        b"done"
+    );
+    assert!(endpoint.control().is_some());
+    let result = bounded(call(
+        &connection,
+        2,
+        Method::CommandExec(parameters(&fixture, &["/bin/true"])),
+    ))
+    .await;
+    assert!(
+        matches!(result, MethodResult::CommandExec { result } if result.status == ExecStatus::Completed && result.exit_code == Some(0))
+    );
+    connection.close();
+    // Only the wire snapshot was fault-injected. The real Client can prove
+    // binding-wide settlement and returns an authentic Revoke receipt.
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    let trace = bounded(data).await.unwrap();
+    assert_eq!(trace.last(), Some(&SettlementExchange::ReleaseOutput));
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(control).await.unwrap();
+}
