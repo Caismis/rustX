@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { BoxGeometry, SphereGeometry, Triangle, Vector3 } from 'three';
 import { PNG } from 'pngjs';
@@ -66,9 +66,12 @@ test('single Pan toggle preserves real drag semantics, pressed styles and geomet
   await isolate.click(); await expect(isolate).toHaveAttribute('aria-pressed', 'true');
   await expect(outlines).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.move(0, 0); await canvas.focus(); await painted(page);
-  const pressedStyle = await pan.evaluate(button => { const style = getComputedStyle(button); return { backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow }; });
+  const computedStyle = (button: Locator) => button.evaluate(element => { const style = getComputedStyle(element); return { backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow }; });
+  const pressedStyle = await computedStyle(pan);
   expect(pressedStyle.backgroundColor).not.toBe(inactiveStyle.backgroundColor);
-  for (const button of [outlines, isolate]) expect(await button.evaluate(button => { const style = getComputedStyle(button); return { backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow }; })).toEqual(pressedStyle);
+  // Isolate is a Button primitive whose 140ms color/background transition can
+  // still be settling at this point; poll until it converges on the rail style.
+  for (const button of [outlines, isolate]) await expect.poll(() => computedStyle(button)).toEqual(pressedStyle);
   await expect(page.getByRole('button', { name: /Exit isolation|Restore isolation/ })).toHaveCount(0);
   await isolate.click(); await expect(isolate).toHaveAttribute('aria-pressed', 'false');
   await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).toBeChecked();
