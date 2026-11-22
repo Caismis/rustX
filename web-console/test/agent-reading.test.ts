@@ -111,6 +111,15 @@ it('parent detachment rejects pending child outline adoption', async () => {
 
 it('resident child conversations keep their historical location across hide and show', async () => {
   await setup(); installTurnNavigatorObserver(600);
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript') throw Error('method');
+    if (request.params.at.type === 'older') {
+      const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+      return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+    }
+    if (request.params.at.type !== 'turn_ordinal') throw Error('turn window');
+    return window(request.params.at.ordinal);
+  });
   const props = { client: server.client, sessionId: 'A', admission: server.client.getSnapshot().views.A.attachmentObservation,
     agent: { title: 'Worker', agent: 'Worker', agent_id: 'agent-worker', parent_agent_id: 'root', child_conversation_id: child,
       activation_id: 'activation', state: 'inactive' as const, activation_state: 'succeeded' as const, started_at: '2026-10-10T00:00:00Z', definition_digest: 'd', profile_digest: 'p',
@@ -125,9 +134,12 @@ it('resident child conversations keep their historical location across hide and 
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: false })); });
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: true })); });
   expect(ui.getByText('Report 1')).toBeTruthy();
-  // Remounting continues the bounded hydration into the unfetched gap the
-  // initial page left (positions 2..129) — retained history is never refetched.
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(2);
+  // Three reads: the bounded hydration pages below the live head (exclusive
+  // before continuation 130 → 98 makes real progress through the unfetched gap),
+  // then the explicit turn window. The remount refetches nothing — hydration
+  // retained its pages and the windowed turn stays installed across hide/show.
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: unknown }).at))
+    .toEqual([{ type: 'older', before: '130', cut: null }, { type: 'older', before: '98', cut }, { type: 'turn_ordinal', ordinal: 1, cut }]);
 });
 
 it('T14 a replaced child activation cannot adopt a late outline from the prior view', async () => {

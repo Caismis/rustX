@@ -171,14 +171,14 @@ test('native child live cuts, independent title, active and file-only resume upl
     console.error('observe-responses', JSON.stringify(wire.responses.filter(row => row.method === 'agent/observe').map(row => ({
       type: row.result?.type, cursor: row.result?.cursor, source: row.result?.source,
       transcript: summarizePage(row.result?.checkpoint?.snapshot?.transcript),
-      events: (row.result?.events ?? []).map((event: any) => event.type ?? Object.keys(event)[0]), resync: row.result?.reason,
+      events: (row.result?.events ?? []).map((record: any) => ({ cursor: record.cursor, type: record.event?.type })), resync: row.result?.reason,
     }))));
     const notificationTypes = wire.notifications.reduce((counts: Record<string, number>, note) => {
       counts[note.method] = (counts[note.method] ?? 0) + 1; return counts; }, {});
     console.error('notifications', JSON.stringify(notificationTypes));
     console.error('child-events', JSON.stringify(wire.notifications.filter(note => note.method !== 'session/event').map(note => ({
       method: note.method, cursor: note.params?.cursor,
-      types: (note.params?.events ?? []).map((event: any) => event.type ?? Object.keys(event)[0]),
+      types: (note.params?.events ?? []).map((record: any) => ({ cursor: record.cursor, type: record.event?.type })),
     }))));
     console.error('transcript-reads', JSON.stringify(wire.responses.filter(row => row.method === 'agent/transcript').map(row => ({
       target_cursor: row.result?.window?.target_cursor, entries: (row.result?.window?.page?.entries ?? []).map(summarizeEntry),
