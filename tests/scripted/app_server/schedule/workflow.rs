@@ -66,7 +66,11 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
         assert_eq!(events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowStarted{run_id,tool_call_id:None,..} if run_id==&start.run_id)).count(),1);
         assert!(events.iter().all(|event|!matches!(event.event,RuntimeEvent::AttemptStarted{..})));
         assert_eq!(store.load_pending().unwrap(), [] as [crate::durable::inbox::PendingInboundItem; 0]);
-        assert!(matches!(f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap(),ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced{..})));
+        // The settled run's committed return may already have advanced the node to a new
+        // conversation head; the schedule id bound to the superseded conversation then
+        // resolves to NotFound. Both outcomes prove readmission cannot execute the run twice.
+        let readmit=f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap();
+        assert!(matches!(readmit,ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced{..}|ScheduleAdmission::NotFound)),"unexpected readmission {readmit:?}");
         f.close().await;
     }).await;
 }
