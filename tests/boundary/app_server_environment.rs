@@ -198,6 +198,11 @@ async fn released_output_preserves_the_unclaimed_input_receipt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lost_input_acceptance_reports_unknown_and_retires_the_binding() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_input_acceptance_reports_unknown_and_retires_the_binding()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn expired_input_cleanup_retires_an_open_binding() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::expired_input_cleanup_settles_the_binding(false)).await;
 }

@@ -64,8 +64,8 @@ pub use binding::{
 pub use bootstrap::PublishedBundle;
 pub use connection::{
     BashOutputPage, CommitCancelled, DirectoryListing, DocumentPage, LinesPage, LocalConnection,
-    PhysicalError, PreparedMutation, RangeRead, RefusedEdit, SearchResult, WatchOutcomeUnknown,
-    WriteOutcomeUnknown,
+    PhysicalError, PreparedMutation, ProcessOutcomeUnknown, RangeRead, RefusedEdit, SearchResult,
+    WatchOutcomeUnknown, WriteOutcomeUnknown,
 };
 pub use control::ControlHandle;
 

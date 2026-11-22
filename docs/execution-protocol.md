@@ -1114,9 +1114,12 @@ envelope.
   claim, acknowledged abandonment, or binding teardown. If the final
   exchange fails, the receipt owner fences an Open binding. An existing
   terminal owner keeps the control lane to receive `Revoked`.
-  Public input results report `outcome_unknown` after admission when the
-  final receipt is unavailable or reports `Failed`. A collected `Failed`
-  receipt releases its slot and may describe an already-applied prefix.
+  A process exchange whose request may have reached the Client without a
+  verified reply retires the binding. Public input reports `outcome_unknown`
+  if this happens while waiting for `InputAccepted`, if the final receipt
+  is unavailable, or if it reports `Failed`. Pre-dispatch refusals keep
+  their original result. A collected `Failed` receipt releases its slot
+  and may describe an already-applied prefix.
   A stale sequence is never reapplied and an ambiguous write is never
   retried. The Client holds at most four
   concurrent operations per Session plus a bounded tombstone budget.

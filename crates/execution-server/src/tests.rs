@@ -1134,6 +1134,7 @@ fn a_contradictory_process_reply_retires_the_pair() {
     });
     let error = connection.process(&request).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(ProcessOutcomeUnknown::is(&error));
     answer.join().unwrap();
 
     assert_eq!(binding.status().phase, BindingPhase::Detached);
@@ -1157,6 +1158,7 @@ fn a_prewire_invalid_output_bound_leaves_the_pair_healthy() {
     };
     let error = connection.process(&request).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(!ProcessOutcomeUnknown::is(&error));
 
     let answer = thread::spawn(move || {
         let request: ClientRequest = read_record(&mut peer).unwrap();

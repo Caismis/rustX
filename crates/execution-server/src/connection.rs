@@ -259,14 +259,29 @@ impl LocalConnection {
         admit: impl FnOnce() -> io::Result<()>,
         sent: impl FnOnce(),
     ) -> io::Result<ClientReply> {
-        let (encoded, deadline) = self.encode_exchange(request, deadline)?;
-        self.gate()?;
-        admit()?;
-        match self.exchange_encoded(&encoded, deadline, sent) {
-            Ok(reply) => Ok(reply),
-            Err(ExchangeFailure::Refused(error)) => Err(error),
-            Err(ExchangeFailure::Unknown(error)) => Err(self.retire(error)),
-        }
+        self.exchange_classified(request, deadline, admit, sent)
+            .map_err(|failure| match failure {
+                ExchangeFailure::Refused(error) | ExchangeFailure::Unknown(error) => error,
+            })
+    }
+
+    fn exchange_classified(
+        &mut self,
+        request: &ClientRequest,
+        deadline: Option<Instant>,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> Result<ClientReply, ExchangeFailure> {
+        let (encoded, deadline) = self
+            .encode_exchange(request, deadline)
+            .map_err(ExchangeFailure::Refused)?;
+        self.gate().map_err(ExchangeFailure::Refused)?;
+        admit().map_err(ExchangeFailure::Refused)?;
+        self.exchange_encoded(&encoded, deadline, sent)
+            .map_err(|failure| match failure {
+                ExchangeFailure::Unknown(error) => ExchangeFailure::Unknown(self.retire(error)),
+                refusal @ ExchangeFailure::Refused(_) => refusal,
+            })
     }
 
     fn encode_exchange(
@@ -527,7 +542,9 @@ impl LocalConnection {
     /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
     /// process capability, [`io::ErrorKind::InvalidData`] for a reply
     /// that fails the key echo or the bounded-shape checks — which
-    /// retires the stream — or the transport's own errors.
+    /// retires the stream — or the transport's own errors. When the
+    /// request may have reached the Client without a verified reply,
+    /// the error carries [`ProcessOutcomeUnknown`].
     pub fn process(
         &mut self,
         request: &rustx_execution_protocol::process::ProcessRequest,
@@ -585,21 +602,27 @@ impl LocalConnection {
         }
         process_reply::validate_request(request)
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
-        let ClientReply::Process(reply) = self.exchange_admitted(
-            &ClientRequest::Process(request.clone()),
-            Some(deadline),
-            admit,
-            || (),
-        )?
-        else {
-            return Err(self.retire(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unexpected reply to process request",
-            )));
+        let reply = self
+            .exchange_classified(
+                &ClientRequest::Process(request.clone()),
+                Some(deadline),
+                admit,
+                || (),
+            )
+            .map_err(|failure| match failure {
+                ExchangeFailure::Refused(error) => error,
+                ExchangeFailure::Unknown(error) => ProcessOutcomeUnknown::wrap(error),
+            })?;
+        let verified = match reply {
+            ClientReply::Process(reply) => process_reply::validate(request, &reply).map(|()| reply),
+            _ => Err("unexpected reply to process request"),
         };
-        process_reply::validate(request, &reply)
-            .map_err(|message| self.retire(io::Error::new(io::ErrorKind::InvalidData, message)))?;
-        Ok(reply)
+        verified.map_err(|message| {
+            self.retire(ProcessOutcomeUnknown::wrap(io::Error::new(
+                io::ErrorKind::InvalidData,
+                message,
+            )))
+        })
     }
 
     /// Run one bounded Read or Grep over the authorized Bash continuation.
@@ -2356,6 +2379,42 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 }
 
 impl std::error::Error for WriteOutcomeUnknown {}
+
+/// A process request may have reached the Client without a verified reply.
+/// The exchange retires the connection. Callers must not replay the request.
+#[derive(Debug)]
+pub struct ProcessOutcomeUnknown(io::Error);
+
+impl ProcessOutcomeUnknown {
+    /// Whether this exchange error carries an unknown process outcome.
+    #[must_use]
+    pub fn is(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Self>)
+    }
+
+    fn wrap(error: io::Error) -> io::Error {
+        let kind = match error.kind() {
+            // These kinds signal a pre-dispatch refusal to process callers.
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted => io::ErrorKind::Other,
+            kind => kind,
+        };
+        io::Error::new(kind, Self(error))
+    }
+}
+
+impl std::fmt::Display for ProcessOutcomeUnknown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "process request outcome unknown: {}", self.0)
+    }
+}
+
+impl std::error::Error for ProcessOutcomeUnknown {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
 
 /// The peer did not confirm the physical watch registration outcome.
 #[derive(Debug)]

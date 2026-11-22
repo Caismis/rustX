@@ -12,6 +12,15 @@ and the FULL jobs were skipped.
 
 Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79d9f39`, reviewed branch head `a24cbf6e6059490c8337c34bcbfc2829e5287d6a`, fetched main `15d95ec1ba5f5a19c3975c52633b6bfec8a08135`. #571 merged into the branch of #570, not into this main. Do not infer an accepted workspace layout from its merged badge.
 
+## Review follow-up on `98bb34197`
+
+- The proxy holds the real Client's first `InputAccepted` while `cat`
+  echoes the complete input over a separate socket. Closing the proxy's
+  return path gives the public API `outcome_unknown`. The binding retires
+  after one admission, with no replay, no additional echoed bytes, and
+  no final receipt request. A preceding malformed input returns
+  `invalid_params` before dispatch and leaves sequence one available.
+
 ## Review follow-up on `3939bf702`
 
 - Before expiring the final input receipt request, both cleanup regressions

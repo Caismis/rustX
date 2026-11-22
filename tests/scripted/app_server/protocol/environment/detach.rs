@@ -853,6 +853,121 @@ fn detached_cancellation(
     )
 }
 
+pub(crate) async fn lost_input_acceptance_reports_unknown_and_retires_the_binding() {
+    const INPUT: &[u8; 15] = b"already written";
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let (accepted, acceptance_parked) = oneshot::channel();
+    let (disconnect, cut) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        loop {
+            let request = receive::<ClientRequest>(&mut server_data).await.unwrap();
+            send(&mut client_data, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if let ClientRequest::Process(ProcessRequest::WriteStdin {
+                key,
+                sequence,
+                delta_base64,
+                close,
+            }) = request
+            {
+                assert_eq!(sequence.get(), 1);
+                assert!(!close);
+                assert_eq!(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(delta_base64)
+                        .unwrap(),
+                    INPUT
+                );
+                assert_eq!(
+                    reply,
+                    ClientReply::Process(ProcessReply::InputAccepted { key, sequence })
+                );
+                break;
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        accepted.send(()).unwrap();
+        cut.await.unwrap();
+
+        server_data.shutdown().await.unwrap();
+        assert_eq!(
+            receive::<ClientRequest>(&mut server_data)
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::UnexpectedEof,
+            "the Server retires the pair without replay or receipt polling"
+        );
+    });
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    // Cat echoes on an independent socket while the Server's data lane
+    // is blocked waiting for InputAccepted.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let script = format!("exec > /dev/tcp/127.0.0.1/{port}; exec /bin/cat");
+    let id = "lost-initial-input-acceptance";
+    let mut params = parameters(&fixture, &["/bin/bash", "-c", &script]);
+    params.process_id = Some(id.into());
+    params.stream_stdin = true;
+    let command = tokio::spawn({
+        let connection = connection.clone();
+        async move { rejected(&connection, 1, Method::CommandExec(params)).await }
+    });
+    let (mut business, _) = bounded(listener.accept()).await.unwrap();
+
+    let write = |delta_base64| {
+        Method::CommandWrite(WriteParams {
+            process_id: id.into(),
+            delta_base64: Some(delta_base64),
+            close_stdin: false,
+        })
+    };
+    assert_eq!(
+        rejected(&connection, 2, write("!".into())).await,
+        ErrorData::InvalidParams,
+        "local validation proves this input never reached the Client"
+    );
+    let input = tokio::spawn({
+        let connection = connection.clone();
+        let request = write(base64::engine::general_purpose::STANDARD.encode(INPUT));
+        async move { rejected(&connection, 3, request).await }
+    });
+    bounded(acceptance_parked).await.unwrap();
+    let mut echoed = [0; INPUT.len()];
+    bounded(business.read_exact(&mut echoed)).await.unwrap();
+    assert_eq!(&echoed, INPUT);
+    assert!(!input.is_finished());
+    assert!(endpoint.control().is_some());
+    disconnect.send(()).unwrap();
+    assert_eq!(bounded(input).await.unwrap(), ErrorData::OutcomeUnknown);
+    bounded(data).await.unwrap();
+    assert!(endpoint.control().is_none());
+    bounded(command).await.unwrap();
+    assert!(
+        bounded(fixture.host.drain())
+            .await
+            .iter()
+            .any(|error| error.contains("unconfirmed"))
+    );
+    bounded(control).await.unwrap();
+    bounded(child.wait()).await.unwrap();
+    let mut extra = Vec::new();
+    assert_eq!(bounded(business.read_to_end(&mut extra)).await.unwrap(), 0);
+}
+
 pub(crate) async fn expired_input_cleanup_settles_the_binding(revoking: bool) {
     let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);

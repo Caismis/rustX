@@ -22,6 +22,7 @@ use rustx_execution_protocol::process::{
     ProcessRequest, ProcessSpec, ProcessStdin, ProcessStream, PtySpec, SettledDisposition,
     SettledSnapshot, SpecRefusal,
 };
+use rustx_execution_server::ProcessOutcomeUnknown;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -646,6 +647,9 @@ async fn exchange_until(
     .await;
     match result {
         Ok(Ok(reply)) => Exchange::Reply(reply),
+        Ok(Err(error)) if ProcessOutcomeUnknown::is(&error) => {
+            Exchange::Failed(domain(ErrorData::OutcomeUnknown))
+        }
         Ok(Err(io)) if io.kind() == std::io::ErrorKind::WouldBlock => Exchange::Busy,
         Ok(Err(io)) => Exchange::Failed(match io.kind() {
             // A dead or revoked execution binding — the liveness gate's
@@ -654,9 +658,6 @@ async fn exchange_until(
             std::io::ErrorKind::NotConnected
             | std::io::ErrorKind::BrokenPipe
             | std::io::ErrorKind::PermissionDenied => domain(ErrorData::ExecutionUnavailable),
-            // A reply that contradicts the contract retired its pair: what
-            // the Client did with the request is no longer knowable.
-            std::io::ErrorKind::InvalidData => domain(ErrorData::OutcomeUnknown),
             _ => super::connection::environment_error(io),
         }),
         Err(_) => Exchange::Failed(domain(ErrorData::OutcomeUnknown)),
