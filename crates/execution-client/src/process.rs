@@ -231,6 +231,27 @@ enum Record {
     Minimal(Minimal),
 }
 
+impl Record {
+    fn capture_file(&self) -> Option<&Arc<CaptureFile>> {
+        match self {
+            Self::Full(operation) => operation.bash_file.as_ref(),
+            Self::Minimal(operation) => operation.bash_file.as_ref().map(|(_, file)| file),
+        }
+    }
+
+    fn forget_capture(&mut self, file: &Arc<CaptureFile>) {
+        if self
+            .capture_file()
+            .is_some_and(|retained| Arc::ptr_eq(retained, file))
+        {
+            match self {
+                Self::Full(operation) => operation.bash_file = None,
+                Self::Minimal(operation) => operation.bash_file = None,
+            }
+        }
+    }
+}
+
 struct Inner {
     #[cfg(test)]
     fail_pty_read: bool,
@@ -323,6 +344,16 @@ struct ActiveProcess {
 struct WorkerCount {
     state: Mutex<WorkerState>,
     drained: Condvar,
+}
+
+impl WorkerCount {
+    fn retain_work(self: &Arc<Self>) -> WorkerGuard {
+        self.state.lock().expect("worker count").live += 1;
+        WorkerGuard {
+            workers: self.clone(),
+            unconfirmed: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1144,6 +1175,9 @@ impl Operations {
         };
         let file = {
             let inner = self.inner.lock().expect("operation registry");
+            if self.revoke.is_cancelled() {
+                return ProcessReply::Unknown { key };
+            }
             match inner.records.get(&key.operation) {
                 Some(Record::Minimal(minimal)) => {
                     minimal.bash_file.as_ref().map(|(_, file)| file.clone())
@@ -1160,8 +1194,8 @@ impl Operations {
                 return ProcessReply::Conflict { key };
             }
             let mut inner = self.inner.lock().expect("operation registry");
-            if let Some(Record::Minimal(minimal)) = inner.records.get_mut(&key.operation) {
-                minimal.bash_file = None;
+            if let Some(record) = inner.records.get_mut(&key.operation) {
+                record.forget_capture(&file);
             }
         }
         ProcessReply::OutputReleased { key }
@@ -1185,6 +1219,9 @@ impl Operations {
         };
         let (snapshot, capture, empty_file) = {
             let inner = self.inner.lock().expect("operation registry");
+            if self.revoke.is_cancelled() {
+                return ProcessReply::Unknown { key };
+            }
             match inner.records.get(&key.operation) {
                 Some(Record::Full(op))
                     if matches!(op.spec.program, ProcessProgram::Shell { .. }) =>
@@ -1241,6 +1278,9 @@ impl Operations {
             return None;
         }
         let inner = self.inner.lock().expect("operation registry");
+        if self.revoke.is_cancelled() {
+            return None;
+        }
         let (conversation, file) = match inner.records.get(&key.operation)? {
             Record::Full(op) => {
                 let ProcessProgram::Shell { conversation, .. } = &op.spec.program else {
@@ -1290,27 +1330,67 @@ impl Operations {
         state.live + state.unconfirmed
     }
 
-    /// Revoke has closed admission and settled the capture writers and
-    /// readers. Release their retained files before attesting settlement.
-    pub(crate) fn release_bash_captures(&self) -> io::Result<()> {
-        let mut inner = self.inner.lock().expect("operation registry");
-        for record in inner.records.values_mut() {
-            let file = match record {
-                Record::Full(operation) => {
-                    if let Some(file) = &operation.bash_file {
-                        file.discard()?;
-                        operation.bash_file = None;
+    /// After revocation, each idle capture can be reclaimed even if an
+    /// unrelated process has no settlement proof. A worker or reader
+    /// retaining a reference still owns its capture.
+    fn release_bash_captures(&self) -> io::Result<()> {
+        let mut failures = Vec::new();
+        let owned = {
+            let inner = self.inner.lock().expect("operation registry");
+            inner
+                .records
+                .iter()
+                .filter_map(|(id, record)| {
+                    let file = record.capture_file()?;
+                    if Arc::strong_count(file) == 1 {
+                        Some((*id, file.clone()))
+                    } else {
+                        failures.push(format!("Bash capture {id:?} still has a reader or writer"));
+                        None
                     }
-                    continue;
+                })
+                .collect::<Vec<_>>()
+        };
+        for (id, capture) in owned {
+            match capture.discard() {
+                Ok(()) => {
+                    let mut inner = self.inner.lock().expect("operation registry");
+                    if let Some(record) = inner.records.get_mut(&id) {
+                        record.forget_capture(&capture);
+                    }
                 }
-                Record::Minimal(operation) => &mut operation.bash_file,
-            };
-            if let Some((_, capture)) = file {
-                capture.discard()?;
-                *file = None;
+                Err(error) => failures.push(format!("Bash capture {id:?}: {error}")),
             }
         }
-        self.captures.close()
+        // An already admitted allocation might still be opening a file
+        // outside the registry. It can attach after this sweep, so keep
+        // the directory until the live owners are finished.
+        let workers_idle = self.workers.state.lock().expect("worker count").live == 0;
+        if workers_idle && let Err(error) = self.captures.close() {
+            failures.push(format!("Bash capture directory: {error}"));
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::other(failures.join(". ")))
+        }
+    }
+
+    pub(crate) fn finish_revocation(&self, budget: Duration) -> io::Result<()> {
+        self.finish_settlement(self.settle(budget))
+    }
+
+    fn finish_settlement(&self, unresolved: usize) -> io::Result<()> {
+        let cleanup = self.release_bash_captures();
+        if unresolved == 0 {
+            return cleanup;
+        }
+        let mut detail = format!("{unresolved} process workers unresolved");
+        if let Err(error) = cleanup {
+            use std::fmt::Write as _;
+            let _ = write!(detail, ". {error}");
+        }
+        Err(io::Error::new(io::ErrorKind::TimedOut, detail))
     }
 
     /// Signal every worker and await physical completion — including
@@ -1324,14 +1404,7 @@ impl Operations {
         if let Some(runtime) = self.runtime.lock().expect("runtime").take() {
             runtime.shutdown_timeout(Duration::from_secs(10));
         }
-        if unresolved == 0 {
-            self.release_bash_captures()
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("{unresolved} process workers unresolved at shutdown"),
-            ))
-        }
+        self.finish_settlement(unresolved)
     }
 }
 
@@ -1561,14 +1634,27 @@ async fn run_operation(
     // A read error is physical loss, never EOF: the outcome must be
     // honestly Failed/Unknown rather than a clean completion.
     let mut output_failed = false;
+    let workers = active.worker.workers.clone();
     let allocate_capture = || {
-        let mut guard = inner.lock().expect("operation registry");
-        let Some(Record::Full(operation)) = guard.records.get_mut(&key.operation) else {
-            return Err(io::ErrorKind::NotConnected.into());
-        };
-        let file = captures.create(key.operation)?;
-        operation.bash_file = Some(file.clone());
-        Ok(file)
+        let inner = inner.clone();
+        let captures = captures.clone();
+        let id = key.operation;
+        let owner = workers.retain_work();
+        tokio::task::spawn_blocking(move || {
+            // The blocking task retains physical ownership even if its
+            // async waiter is dropped. Register the file before returning
+            // it to the writer or handing it to binding teardown.
+            let _owner = owner;
+            let file = captures.create(id)?;
+            let mut guard = inner.lock().expect("operation registry");
+            let Some(Record::Full(operation)) = guard.records.get_mut(&id) else {
+                unreachable!(
+                    "an operation cannot be retired while its output worker is allocating"
+                );
+            };
+            operation.bash_file = Some(file.clone());
+            Ok(file)
+        })
     };
     let mut running_published = false;
     let mut exit_published = false;
@@ -1973,6 +2059,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
+    use rustx_execution_protocol::process::{BashCaptureState, MAX_BASH_CAPTURES};
     use rustx_execution_protocol::{
         Admission, ClientInstanceId, EnvironmentId, Generation, PROTOCOL_VERSION, SessionId,
     };
@@ -2371,6 +2458,22 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let admission = admission(directory.path());
         let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let retained = register_bash_capture(&ops, &admission, "printf retained", true);
+        ops.dispatch(ProcessRequest::Start {
+            key: retained.clone(),
+        });
+        let output = await_settled(&ops, &retained);
+        assert_eq!(output.disposition, SettledDisposition::Known);
+        let captures = ops.captures.path().unwrap();
+        let file = capture_path(&ops, &retained);
+        assert_eq!(std::fs::read(&file).unwrap(), b"retained");
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: retained.clone(),
+                final_sequence: output.final_sequence,
+            }),
+            ProcessReply::OutputReleased { key: retained }
+        );
         let key = fresh_key(&admission);
         assert_eq!(
             register(&ops, &key, &spec(&["/bin/sh", "-c", "printf done; exit 0"])),
@@ -2406,7 +2509,193 @@ mod tests {
         );
         ops.revoke();
         assert_eq!(ops.settle(Duration::from_secs(5)), 1);
-        assert!(ops.shutdown().is_err());
+        assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(!file.exists());
+        assert!(!captures.exists());
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+    }
+
+    fn register_bash_capture(
+        ops: &Arc<Operations>,
+        admission: &Admission,
+        command: &str,
+        live_output: bool,
+    ) -> ProcessOperationKey {
+        let key = fresh_key(admission);
+        let mut bash = spec(&[]);
+        bash.program = ProcessProgram::Shell {
+            command: command.into(),
+            conversation: "capture-fixture".into(),
+            live_output,
+        };
+        assert_eq!(
+            ops.dispatch(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: bash.fingerprint(),
+                spec: bash,
+            }),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        key
+    }
+
+    fn capture_path(ops: &Operations, key: &ProcessOperationKey) -> std::path::PathBuf {
+        ops.captures
+            .path()
+            .unwrap()
+            .join(format!("{:032x}.output", key.operation.as_u128()))
+    }
+
+    fn fail_capture_unlink(ops: &Arc<Operations>, key: &ProcessOperationKey) {
+        ops.with_bash_file(key, "capture-fixture", |file| {
+            file.fail_next_unlink
+                .store(true, std::sync::atomic::Ordering::Release);
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn revocation_reclaims_other_captures_after_an_unlink_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let failed = register_bash_capture(&ops, &admission, ":", true);
+        let other = register_bash_capture(&ops, &admission, ":", true);
+        fail_capture_unlink(&ops, &failed);
+        let failed = capture_path(&ops, &failed);
+        let other = capture_path(&ops, &other);
+        let captures = ops.captures.path().unwrap();
+        ops.revoke();
+        assert!(ops.finish_revocation(Duration::ZERO).is_err());
+        assert!(failed.is_file());
+        assert!(!other.exists());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        ops.shutdown().unwrap();
+        assert!(!captures.exists());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+    }
+
+    #[test]
+    fn unreadable_foreground_capture_keeps_its_owner_until_discard_succeeds() {
+        assert!(supervisor_staged());
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, "printf '%65536s' ''", false);
+        ops.captures.fail_append_and_rollback_for(key.operation);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert!(snapshot.physical_settlement_proven);
+        assert_eq!(snapshot.disposition, SettledDisposition::Failed);
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::BashCapture { key: key.clone() }),
+            ProcessReply::BashCapture {
+                capture: Some(BashCaptureResult {
+                    output: BashCaptureState::Unavailable,
+                    started: true,
+                    ..
+                }),
+                ..
+            }
+        ));
+        let path = capture_path(&ops, &key);
+        assert_eq!(std::fs::read(&path).unwrap(), b" ");
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: snapshot.final_sequence,
+            }),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        fail_capture_unlink(&ops, &key);
+        let discard = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert!(path.is_file());
+        assert!(ops.bash_file(&key, "capture-fixture").is_some());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert!(!path.exists());
+        assert!(ops.bash_file(&key, "capture-fixture").is_none());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn discard_retains_quota_until_the_last_capture_link_is_gone() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, ":", true);
+        let path = capture_path(&ops, &key);
+        let alias = path.with_extension("link");
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        std::fs::hard_link(&path, &alias).unwrap();
+        let discard = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert!(!path.exists());
+        assert!(alias.is_file());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        std::fs::remove_file(alias).unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key }
+        );
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn discard_proves_a_missing_capture_is_unlinked_and_preserves_replacements() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, ":", true);
+        let path = capture_path(&ops, &key);
+        let moved = path.with_extension("moved");
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        let discard = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        std::fs::rename(&path, &moved).unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert!(moved.is_file());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        std::fs::write(&path, b"replacement").unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert!(moved.is_file());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        std::fs::rename(&moved, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key }
+        );
+        ops.shutdown().unwrap();
     }
 
     #[test]
@@ -2476,8 +2765,6 @@ mod tests {
 
     #[test]
     fn failed_bash_capture_unlink_retains_its_owner_and_quota_for_retry() {
-        use rustx_execution_protocol::process::MAX_BASH_CAPTURES;
-
         let directory = tempfile::tempdir().unwrap();
         let admission = admission(&directory.path().canonicalize().unwrap());
         let ops = Arc::new(Operations::new(admission.clone()).unwrap());
@@ -3363,6 +3650,103 @@ mod tests {
             ));
         }
         assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    fn lazy_foreground_allocation_does_not_block_cancel_or_health() {
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc::channel;
+
+        assert!(supervisor_staged());
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let overflow = register_bash_capture(&ops, &adm, "printf '%65536s' ''", false);
+        let other = fresh_key(&adm);
+        assert_eq!(
+            register(&ops, &other, &spec(&["/bin/touch", "other-started"])),
+            ProcessReply::Registered { key: other.clone() }
+        );
+        let (entered, paused) = channel();
+        let (resume, resume_rx) = channel();
+        ops.captures
+            .hold_allocation(overflow.operation, entered, resume_rx);
+        ops.dispatch(ProcessRequest::Start {
+            key: overflow.clone(),
+        });
+        paused.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let (data, _server_data) = UnixStream::pair().unwrap();
+        let worker = crate::client_control_worker(
+            RecordChannel::unix(client),
+            Arc::new(crate::mutation::Arbitration::new()),
+            RecordChannel::unix(data).shutdown_handle().unwrap(),
+            ops.clone(),
+            Arc::new(crate::watch::Watches::new()),
+        );
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut poll: ControlPoll = read_record(&mut server).unwrap();
+        for (request, receipt) in [
+            (
+                ControlRequest::CancelProcess { key: other.clone() },
+                ControlReply::ProcessCancelled {
+                    key: other,
+                    disposition: ProcessCancelDisposition::CancelledBeforeStart,
+                },
+            ),
+            (
+                ControlRequest::Health { nonce: 7.into() },
+                ControlReply::Healthy { nonce: 7.into() },
+            ),
+        ] {
+            write_record(
+                &mut server,
+                &ControlTurn {
+                    sequence: poll.sequence,
+                    health: poll.health,
+                    request: Some(request),
+                },
+            )
+            .unwrap();
+            poll = read_record(&mut server).unwrap();
+            assert_eq!(poll.receipt, Some(receipt));
+        }
+        assert!(ops.captures.path().is_none());
+        assert!(!dir.path().join("other-started").exists());
+        write_record(
+            &mut server,
+            &ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request: Some(ControlRequest::Revoke),
+            },
+        )
+        .unwrap();
+        let wait = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        wait.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), ops.revoke.cancelled())
+                .await
+                .unwrap();
+        });
+        assert!(ops.settle(Duration::ZERO) >= 1);
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        resume.send(()).unwrap();
+        let receipt: ControlPoll = read_record(&mut server).unwrap();
+        assert_eq!(receipt.receipt, Some(ControlReply::Revoked));
+        assert!(await_settled(&ops, &overflow).physical_settlement_proven);
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        assert!(ops.captures.path().is_none());
+        worker.stop();
+        ops.shutdown().unwrap();
     }
 
     fn revoke_during_capture_handoff(discard: bool) {

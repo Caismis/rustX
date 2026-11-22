@@ -1156,7 +1156,10 @@ envelope.
 - Agent Bash registers its Client-owned capture before accepting a
   background job. A promoted invocation keeps the same operation and
   locator. Direct foreground capture allocates on the first combined
-  preview overflow. Capture produces separate 16 KiB stdout, stderr
+  preview overflow. The blocking allocation owns its work through
+  registration and performs filesystem calls outside the operation
+  registry lock, so cancellation and health can proceed during creation.
+  Capture produces separate 16 KiB stdout, stderr
   and combined previews. Each stream is decoded incrementally before
   multiplexing. Complete native captures have a 64 MiB file bound
   and at most 32 live/published files occupy a binding at once, so the
@@ -1169,9 +1172,13 @@ envelope.
   or its operation has not been polled. The START gate still refuses
   dispatch after cancellation. Client settlement reports complete empty
   output only after verifying the retained file. Unaccepted preparations
-  can explicitly discard their capture. Discard acknowledges release
-  after verified unlink, and its owner and quota remain available for
-  retry if unlink fails. Binding settlement also confirms capture deletion.
+  can explicitly discard their capture. After the journal is released,
+  the Server also discards a capture that the Client reports as
+  unavailable. Discard checks the named object's identity before unlinking
+  and confirms removal only when the retained descriptor has no directory
+  links. A renamed capture still has an owner, and a replacement file is
+  left alone. An explicit unlink conflict leaves the Client's owner and
+  quota in place for retry.
 - The absolute Bash continuation identifier is scoped to the owning
   Conversation and Client binding. Native Read and Grep send a typed
   query to that Client, and the Client opens its own retained capture.
@@ -1297,14 +1304,18 @@ checks the most recent terminal evidence before fencing. When terminal
 settlement already owns a binding, a failed mutation cancel leaves the
 control lane available for Revoke. The original commit receipt still
 determines the mutation outcome. Private Bash
-capture discard waits for bounded data admission and either confirms
-release or retires its owning binding. Once terminal settlement closes
+capture discard waits for bounded data admission and retries an explicit
+unlink conflict once within the original deadline. If release is still
+unconfirmed, the open binding is retired. Once terminal settlement closes
 ordinary data admission, queued capture discard and prepared-ticket
 cleanup transfer to it. A child relay with unfinished cleanup waits for
 the same physical settlement result. The Client counts capture owners
-from START admission through worker exit, and from Discard admission
-through file release. It removes the retained capture files before sending
-Revoke confirmation. Non-EOF PTY read errors preserve output loss in the
+from START admission through worker exit, including blocking allocation,
+and from Discard admission through file release. It tries every idle
+capture during teardown even if a different process lacks settlement
+proof or a different capture could not be removed. Unconfirmed physical
+work or capture removal still prevents a Revoke confirmation. Non-EOF
+PTY read errors preserve output loss in the
 terminal disposition.
 
 ### Workspace Python readiness

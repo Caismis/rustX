@@ -805,6 +805,184 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
     bounded(control).await.unwrap();
 }
 
+#[allow(clippy::too_many_lines)] // Keep the native invocation and its physical cleanup trace together.
+pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_release() {
+    use crate::runtime::identity::ToolCallId;
+    use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolRegistry};
+    use crate::tools::managed_output::ManagedToolOutput;
+    use crate::tools::types::{
+        ManagedOutputContinuation, ToolInvocation, ToolInvocationId, ToolInvocationMode,
+        ToolInvocationPolicy, ToolProgress,
+    };
+    use crate::tools::workspace::Workspace;
+    use rustx_execution_protocol::process::{BashCaptureState, ProcessProgram};
+
+    struct NoProgress;
+    impl ProgressReporter for NoProgress {
+        fn report(&self, _progress: ToolProgress) {}
+    }
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch: scratch,
+    } = proxied_client(&fixture).await;
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+    // The Client still uses its scratch root while shutting down.
+    let client_scratch = scratch.path().to_path_buf();
+    let data = tokio::spawn(async move {
+        let mut trace = Vec::new();
+        let mut path = None;
+        let mut operation = None;
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            if let ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }) = &request {
+                assert_eq!(Some(key), operation.as_ref());
+                if trace == ["capture", "release"] {
+                    assert!(path.as_deref().is_some_and(Path::is_file));
+                    trace.push("discard refused");
+                    let reply = ClientReply::Process(ProcessReply::Conflict { key: key.clone() });
+                    send(&mut server_data, &reply).await.unwrap();
+                    continue;
+                }
+            }
+            send(&mut client_data, &request).await.unwrap();
+            let mut reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            match (&request, &mut reply) {
+                (
+                    ClientRequest::Process(ProcessRequest::RegisterAgentBash { key, spec, .. }),
+                    ClientReply::Process(ProcessReply::Registered { key: admitted }),
+                ) => {
+                    assert_eq!(key, admitted);
+                    assert!(matches!(
+                        spec.program,
+                        ProcessProgram::Shell {
+                            live_output: false,
+                            ..
+                        }
+                    ));
+                    assert!(operation.replace(key.clone()).is_none());
+                }
+                (
+                    _,
+                    ClientReply::Process(ProcessReply::BashCapture {
+                        key,
+                        capture: Some(capture),
+                    }),
+                ) => {
+                    assert_eq!(Some(&*key), operation.as_ref());
+                    assert_eq!(capture.output, BashCaptureState::Complete);
+                    let name = format!("{:032x}.output", key.operation.as_u128());
+                    path = std::fs::read_dir(&client_scratch)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path().join(&name))
+                        .find(|path| path.is_file());
+                    assert_eq!(
+                        std::fs::read(path.as_ref().unwrap()).unwrap(),
+                        vec![b' '; 65_536]
+                    );
+                    // The Client's own regression injects the append/rollback fault.
+                    capture.output = BashCaptureState::Unavailable;
+                    capture.total = None;
+                    capture.truncated = true;
+                    trace.push("capture");
+                }
+                (
+                    ClientRequest::Process(ProcessRequest::ReleaseOutput { key, .. }),
+                    ClientReply::Process(ProcessReply::OutputReleased { key: released }),
+                ) => {
+                    assert_eq!(key, released);
+                    assert_eq!(Some(key), operation.as_ref());
+                    assert!(path.as_deref().is_some_and(Path::is_file));
+                    trace.push("release");
+                }
+                (
+                    ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }),
+                    ClientReply::Process(ProcessReply::OutputReleased { key: released }),
+                ) => {
+                    assert_eq!(key, released);
+                    assert!(!path.as_deref().unwrap().exists());
+                    trace.push("discard confirmed");
+                }
+                _ => {}
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        let _ = client_data.shutdown().await;
+        trace
+    });
+
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let mut workspace = Workspace::new(endpoint.workspace()).unwrap();
+    workspace.bind_execution_scope(Some(fixture.manager.execution_scope(&session.id)));
+    let output = tempfile::tempdir().unwrap();
+    let artifacts = ArtifactStore::new(conversation.clone(), output.path()).unwrap();
+    let managed =
+        ManagedToolOutput::new(conversation.clone(), output.path().join("managed")).unwrap();
+    let environment = crate::tools::environment::ToolEnvironment::new();
+    let context = ToolExecutionContext::new(
+        conversation,
+        None,
+        detached_cancellation(crate::runtime::CancellationSignal::new()),
+        &workspace,
+        &NoProgress,
+        &artifacts,
+        &managed,
+        &environment,
+    );
+    let mut registry = ToolRegistry::new();
+    let bash =
+        crate::tools::native::subagent_child_definition("bash", ToolInvocationPolicy::default())
+            .unwrap();
+    crate::tools::native::register_subagent_child_tools(&mut registry, std::slice::from_ref(&bash))
+        .unwrap();
+    let executor = registry.executor(&bash.id);
+    let result = bounded(
+        executor
+            .start(
+                ToolInvocation {
+                    id: ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("foreground-capture-cleanup"),
+                    },
+                    tool_id: bash.id,
+                    tool_name: bash.name,
+                    mode: ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({
+                        "description": "Generate foreground output",
+                        "command": "printf '%65536s' ''",
+                    }),
+                },
+                context,
+            )
+            .completion,
+    )
+    .await;
+    assert!(matches!(
+        result.managed_output.as_deref(),
+        Some(ManagedOutputContinuation::Unavailable { .. })
+    ));
+    let handle = endpoint
+        .control()
+        .expect("the binding should survive a confirmed discard retry");
+    bounded(tokio::task::spawn_blocking(move || handle.health()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    assert!(bounded(child.wait()).await.unwrap().success());
+    assert_eq!(
+        bounded(data).await.unwrap(),
+        ["capture", "release", "discard refused", "discard confirmed"]
+    );
+    bounded(control).await.unwrap();
+}
+
 fn park_revoked_receipt(
     (mut client, mut server): (UnixStream, UnixStream),
 ) -> (

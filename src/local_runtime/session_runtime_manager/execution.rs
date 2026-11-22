@@ -1287,10 +1287,18 @@ impl LocalExecutionEndpoint {
             return;
         }
         let request = ProcessRequest::DiscardBashOutput { key };
-        let result = self.with_bounded_data_connection(deadline, |connection| {
-            connection.process_until(&request, deadline)
-        });
-        if !matches!(result, Ok(ProcessReply::OutputReleased { .. })) {
+        let exchange = || {
+            self.with_bounded_data_connection(deadline, |connection| {
+                connection.process_until(&request, deadline)
+            })
+        };
+        let mut reply = exchange();
+        // Conflict confirms the Client retained the file for this identity.
+        // Keep the original deadline and never retry an uncertain exchange.
+        if matches!(reply, Ok(ProcessReply::Conflict { .. })) {
+            reply = exchange();
+        }
+        if !matches!(reply, Ok(ProcessReply::OutputReleased { .. })) {
             self.cut_pair_if_open();
         }
     }

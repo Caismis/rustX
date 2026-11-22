@@ -1,6 +1,7 @@
 //! Physical capture for Agent Bash. Only the Client ever opens these files.
 
 use std::io;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,9 +15,20 @@ use rustx_process_supervisor::output_text::{IncrementalUtf8Decoder, TextPreviewC
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+#[cfg(test)]
+type AllocationHold = (
+    OperationId,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
 pub(crate) struct Captures {
     directory: Mutex<Option<Arc<Directory>>>,
     slots: Arc<Semaphore>,
+    #[cfg(test)]
+    allocation_hold: Mutex<Option<AllocationHold>>,
+    #[cfg(test)]
+    append_failure: Mutex<Option<OperationId>>,
 }
 
 struct Directory {
@@ -35,6 +47,8 @@ pub(crate) struct CaptureFile {
     readable: AtomicBool,
     #[cfg(test)]
     pub(crate) fail_next_unlink: AtomicBool,
+    #[cfg(test)]
+    fail_append_and_rollback: AtomicBool,
 }
 
 impl Captures {
@@ -42,6 +56,10 @@ impl Captures {
         Self {
             directory: Mutex::new(None),
             slots: Arc::new(Semaphore::new(MAX_BASH_CAPTURES)),
+            #[cfg(test)]
+            allocation_hold: Mutex::new(None),
+            #[cfg(test)]
+            append_failure: Mutex::new(None),
         }
     }
 
@@ -72,22 +90,59 @@ impl Captures {
         self.slots.available_permits()
     }
 
+    #[cfg(test)]
+    pub(crate) fn hold_allocation(
+        &self,
+        operation: OperationId,
+        entered: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) {
+        *self.allocation_hold.lock().unwrap() = Some((operation, entered, resume));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_append_and_rollback_for(&self, operation: OperationId) {
+        *self.append_failure.lock().unwrap() = Some(operation);
+    }
+
     pub(crate) fn create(&self, operation: OperationId) -> io::Result<Arc<CaptureFile>> {
         let slot = self
             .slots
             .clone()
             .try_acquire_owned()
             .map_err(|_| io::Error::other("Bash capture file capacity exhausted"))?;
-        let mut directory = self.directory.lock().expect("capture directory");
-        let directory = if let Some(directory) = directory.as_ref() {
-            directory.clone()
+        #[cfg(test)]
+        {
+            let hold = {
+                let mut armed = self.allocation_hold.lock().unwrap();
+                if armed.as_ref().is_some_and(|(key, ..)| *key == operation) {
+                    armed.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, entered, resume)) = hold {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+            }
+        }
+        let retained = self.directory.lock().expect("capture directory").clone();
+        let directory = if let Some(retained) = retained {
+            retained
         } else {
-            let mut temporary = tempfile::tempdir()?;
+            let mut temporary = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()?;
             let root = PackageDirectory::open(&temporary.path().canonicalize()?)?;
-            temporary.disable_cleanup(true);
-            let directory_value = Arc::new(Directory { root, temporary });
-            *directory = Some(directory_value.clone());
-            directory_value
+            let mut directory = self.directory.lock().expect("capture directory");
+            if let Some(retained) = directory.as_ref() {
+                retained.clone()
+            } else {
+                temporary.disable_cleanup(true);
+                directory
+                    .insert(Arc::new(Directory { root, temporary }))
+                    .clone()
+            }
         };
         let file = tempfile::Builder::new()
             .prefix(&format!("{:032x}", operation.as_u128()))
@@ -108,6 +163,16 @@ impl Captures {
             readable: AtomicBool::new(true),
             #[cfg(test)]
             fail_next_unlink: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_append_and_rollback: AtomicBool::new({
+                let mut armed = self.append_failure.lock().unwrap();
+                if *armed == Some(operation) {
+                    *armed = None;
+                    true
+                } else {
+                    false
+                }
+            }),
         }))
     }
 }
@@ -136,16 +201,27 @@ impl CaptureFile {
         let name = self.name.as_os_str();
         let root = &self.directory.root;
         root.verify()?;
-        let named = statat(root.descriptor(), name, AtFlags::SYMLINK_NOFOLLOW)?;
-        let retained = fstat(&self.file)?;
-        if (named.st_dev, named.st_ino) != (retained.st_dev, retained.st_ino) {
-            return Err(io::ErrorKind::PermissionDenied.into());
+        match statat(root.descriptor(), name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(named) => {
+                let retained = fstat(&self.file)?;
+                if (named.st_dev, named.st_ino) != (retained.st_dev, retained.st_ino) {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                #[cfg(test)]
+                if self.fail_next_unlink.swap(false, Ordering::AcqRel) {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                match unlinkat(root.descriptor(), name, AtFlags::empty()) {
+                    Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(rustix::io::Errno::NOENT) => {}
+            Err(error) => return Err(error.into()),
         }
-        #[cfg(test)]
-        if self.fail_next_unlink.swap(false, Ordering::AcqRel) {
-            return Err(io::ErrorKind::PermissionDenied.into());
+        if fstat(&self.file)?.st_nlink != 0 {
+            return Err(io::Error::other("Bash capture still has directory links"));
         }
-        unlinkat(root.descriptor(), name, AtFlags::empty())?;
         *removed = true;
         Ok(())
     }
@@ -220,7 +296,7 @@ impl Capture {
         &mut self,
         stream: ProcessStream,
         bytes: Option<&[u8]>,
-        allocate: impl FnOnce() -> io::Result<Arc<CaptureFile>>,
+        allocate: impl FnOnce() -> tokio::task::JoinHandle<io::Result<Arc<CaptureFile>>>,
     ) {
         let lane = match stream {
             ProcessStream::Stdout | ProcessStream::Pty => &mut self.stdout,
@@ -245,7 +321,7 @@ impl Capture {
                 return;
             }
             previous = self.prefix.take().expect("retained prefix");
-            self.file = allocate().ok();
+            self.file = allocate().await.ok().and_then(Result::ok);
         }
         if self.append(&previous, &text).await.is_err() {
             self.failed = true;
@@ -271,15 +347,25 @@ impl Capture {
             self.writer
                 .insert(tokio::fs::File::from_std(file.file.try_clone()?))
         };
+        #[cfg(test)]
+        let fail = file.fail_append_and_rollback.swap(false, Ordering::AcqRel);
+        #[cfg(not(test))]
+        let fail = false;
         let result = async {
+            if fail {
+                let first = prefix.as_bytes().first().unwrap_or(&text.as_bytes()[0]);
+                writer.write_all(std::slice::from_ref(first)).await?;
+                writer.flush().await?;
+                return Err(io::Error::other("injected Bash capture append failure"));
+            }
             writer.write_all(prefix.as_bytes()).await?;
             writer.write_all(text.as_bytes()).await?;
             writer.flush().await
         }
         .await;
         if result.is_err() {
-            file.readable
-                .store(writer.set_len(self.stored).await.is_ok(), Ordering::Release);
+            let rolled_back = !fail && writer.set_len(self.stored).await.is_ok();
+            file.readable.store(rolled_back, Ordering::Release);
         } else {
             self.stored += size;
         }

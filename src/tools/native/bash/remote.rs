@@ -405,25 +405,7 @@ impl RemoteBash {
             snapshot.physical_settlement_proven,
             std::sync::atomic::Ordering::Release,
         );
-        let mut capture = match self
-            .exchange(
-                ProcessRequest::BashCapture {
-                    key: self.key.clone(),
-                },
-                None,
-            )
-            .await
-        {
-            Ok(ProcessReply::BashCapture { capture, .. }) => capture,
-            Ok(ProcessReply::Unknown { .. })
-                if snapshot.disposition == SettledDisposition::Cancelled
-                    && snapshot.stdout_total.get() == 0
-                    && snapshot.stderr_total.get() == 0 =>
-            {
-                None
-            }
-            _ => Some(unavailable_capture()),
-        };
+        let (mut capture, discard_unavailable) = self.collect_capture(&snapshot).await;
         if let Some(stdout) = &context.stdout_capture
             && self.receive_raw_stdout(stdout, &snapshot).await.is_err()
         {
@@ -442,6 +424,13 @@ impl RemoteBash {
             } else if self.live_output {
                 capture = Some(unavailable_capture());
             }
+        } else if discard_unavailable {
+            // An unavailable capture can still own a Client file and quota.
+            // There is no continuation to take over that ownership.
+            self.endpoint
+                .clone()
+                .discard_bash_capture(self.key.clone())
+                .await;
         }
         Ok(project(
             snapshot,
@@ -451,6 +440,36 @@ impl RemoteBash {
             &self.key,
             &context.cancellation,
         ))
+    }
+
+    async fn collect_capture(
+        &self,
+        snapshot: &SettledSnapshot,
+    ) -> (Option<BashCaptureResult>, bool) {
+        match self
+            .exchange(
+                ProcessRequest::BashCapture {
+                    key: self.key.clone(),
+                },
+                None,
+            )
+            .await
+        {
+            Ok(ProcessReply::BashCapture { capture, .. }) => {
+                let discard = capture
+                    .as_ref()
+                    .is_some_and(|result| result.output == BashCaptureState::Unavailable);
+                (capture, discard)
+            }
+            Ok(ProcessReply::Unknown { .. })
+                if snapshot.disposition == SettledDisposition::Cancelled
+                    && snapshot.stdout_total.get() == 0
+                    && snapshot.stderr_total.get() == 0 =>
+            {
+                (None, false)
+            }
+            _ => (Some(unavailable_capture()), false),
+        }
     }
 
     async fn receive_raw_stdout(

@@ -183,6 +183,11 @@ async fn queued_capture_discard_hands_off_to_binding_revocation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn foreground_bash_discards_unavailable_capture_after_journal_release() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::foreground_bash_discards_unavailable_capture_after_journal_release()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelled_preparation_hands_off_to_binding_revocation() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::cancelled_preparation_hands_off_to_binding_revocation()).await;
 }

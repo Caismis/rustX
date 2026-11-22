@@ -497,10 +497,9 @@ fn client_control_worker(
                         // containment actually settled — bounded so the
                         // Server's own revoke budget still fences.
                         operations.revoke();
-                        if !watches.shutdown()
-                            || operations.settle(REVOKE_SETTLE_BUDGET) != 0
-                            || operations.release_bash_captures().is_err()
-                        {
+                        let watches_settled = watches.shutdown();
+                        let processes_settled = operations.finish_revocation(REVOKE_SETTLE_BUDGET);
+                        if !watches_settled || processes_settled.is_err() {
                             return;
                         }
                         ControlReply::Revoked
