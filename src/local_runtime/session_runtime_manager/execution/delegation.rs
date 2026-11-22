@@ -396,6 +396,24 @@ impl Authority {
                 }
             }
             (
+                ProcessRequest::BashCapture { key },
+                ProcessReply::BashCapture {
+                    key: echoed,
+                    capture: Some(capture),
+                },
+            ) if key == echoed && capture.output == BashCaptureState::None => {
+                // None proves no capture was allocated. Unavailable
+                // describes a read outcome and may still retain a file.
+                if let Some(operation) = self
+                    .operations
+                    .lock()
+                    .expect("child process keys")
+                    .get_mut(&key.operation)
+                {
+                    operation.capture_disposed = true;
+                }
+            }
+            (
                 request,
                 ProcessReply::State {
                     key,
@@ -422,27 +440,6 @@ impl Authority {
                         matches!(request, ProcessRequest::ReleaseOutput { .. });
                     operation.capture_disposed |=
                         matches!(request, ProcessRequest::DiscardBashOutput { .. });
-                }
-            }
-            (
-                ProcessRequest::BashCapture { key },
-                ProcessReply::BashCapture {
-                    key: echoed,
-                    capture: Some(capture),
-                },
-            ) if key == echoed
-                && matches!(
-                    capture.output,
-                    BashCaptureState::None | BashCaptureState::Unavailable
-                ) =>
-            {
-                if let Some(operation) = self
-                    .operations
-                    .lock()
-                    .expect("child process keys")
-                    .get_mut(&key.operation)
-                {
-                    operation.capture_disposed = true;
                 }
             }
             _ => {}
@@ -876,22 +873,36 @@ mod tests {
                         stdout: String::new(),
                         stderr: String::new(),
                         combined: String::new(),
-                        truncated: false,
-                        total: Some(0.into()),
-                        output: BashCaptureState::None,
+                        truncated: true,
+                        total: None,
+                        output: BashCaptureState::Unavailable,
                         started: true,
                         signal: None,
                     }),
                 }),
             )
             .unwrap();
-        assert_eq!(state(), (false, true));
+        assert_eq!(state(), (false, false));
         authority
             .retain_reply(
                 &command(ProcessRequest::ReleaseOutput {
                     key: key.clone(),
                     final_sequence: 0.into(),
                 }),
+                &output_released,
+            )
+            .unwrap();
+        assert_eq!(state(), (true, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+                &receipt(ProcessReply::Conflict { key: key.clone() }),
+            )
+            .unwrap();
+        assert_eq!(state(), (true, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::DiscardBashOutput { key: key.clone() }),
                 &output_released,
             )
             .unwrap();

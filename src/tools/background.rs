@@ -923,6 +923,7 @@ struct PreparedRecord {
     record: BackgroundRecord,
     gate: Arc<Notify>,
     runner: tokio::task::JoinHandle<()>,
+    output_publication: Option<Arc<AtomicBool>>,
     /// A foreground Bash stage. The process may run before ownership commit,
     /// but the record stays out of listing and publishes no terminal inbound
     /// until [`ConversationBackgroundRegistry::commit_dispatch_owned`].
@@ -930,6 +931,26 @@ struct PreparedRecord {
     settled: Arc<Notify>,
     private_result: Option<ToolExecutionResult>,
     progress_tx: Option<tokio::sync::mpsc::Sender<ToolProgress>>,
+}
+
+enum BackgroundExecutor {
+    Tool(Arc<dyn ToolExecutor>),
+    Bash(Arc<crate::tools::native::PreparedBash>),
+}
+
+impl BackgroundExecutor {
+    fn start<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        match self {
+            Self::Tool(executor) => {
+                crate::tools::executor::start_tool_execution(&**executor, invocation, context)
+            }
+            Self::Bash(bash) => bash.start(context),
+        }
+    }
 }
 
 /// The synchronized registry state.
@@ -969,6 +990,8 @@ struct BackgroundRegistryState {
     /// authority arbitration; never present outside `#[cfg(test)]`.
     #[cfg(test)]
     first_poll_hook: Option<Arc<test_sync::FirstPollGate>>,
+    #[cfg(test)]
+    operation_poll_hook: Option<Arc<test_sync::FirstPollGate>>,
 }
 
 /// The conversation-owned authoritative background registry.
@@ -1040,6 +1063,8 @@ impl ConversationBackgroundRegistry {
                 ownership_wait: None,
                 #[cfg(test)]
                 first_poll_hook: None,
+                #[cfg(test)]
+                operation_poll_hook: None,
             })),
             resources,
             state_version,
@@ -1320,7 +1345,12 @@ impl ConversationBackgroundRegistry {
         environment: ToolEnvironment,
         mcp_leases: McpRuntimeLeaseSet,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
-        self.prepare_with_output(invocation, executor, environment, mcp_leases, None)
+        self.prepare_runner(
+            invocation,
+            BackgroundExecutor::Tool(executor.clone()),
+            environment,
+            mcp_leases,
+        )
     }
 
     /// Prepares a native Bash job on the Session's bound Execution Client.
@@ -1370,18 +1400,20 @@ impl ConversationBackgroundRegistry {
         .map_err(|error| BackgroundDispatchError::Output {
             detail: error.to_string(),
         })?;
-        let path = prepared.output().to_path_buf();
-        let executor: Arc<dyn ToolExecutor> = Arc::new(prepared);
-        self.prepare_with_output(invocation, &executor, environment, leases, Some(path))
+        self.prepare_runner(
+            invocation,
+            BackgroundExecutor::Bash(Arc::new(prepared)),
+            environment,
+            leases,
+        )
     }
 
-    pub(crate) fn prepare_with_output(
+    fn prepare_runner(
         &self,
         invocation: &ToolInvocation,
-        executor: &Arc<dyn ToolExecutor>,
+        executor: BackgroundExecutor,
         environment: ToolEnvironment,
         mcp_leases: McpRuntimeLeaseSet,
-        client_output: Option<std::path::PathBuf>,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
@@ -1417,6 +1449,13 @@ impl ConversationBackgroundRegistry {
                 detail: "execution identity already reserved".into(),
             });
         }
+        let (client_output, output_publication) = match &executor {
+            BackgroundExecutor::Bash(prepared) => (
+                Some(prepared.output().to_path_buf()),
+                Some(prepared.output_publication()),
+            ),
+            BackgroundExecutor::Tool(_) => (None, None),
+        };
         // create_new reserves the locator before acceptance. Any collision
         // refuses admission and leaves the existing execution/output untouched.
         if client_output.is_none() {
@@ -1437,7 +1476,7 @@ impl ConversationBackgroundRegistry {
         let runner = self.spawn_runner(
             execution_id.clone(),
             invocation.clone(),
-            executor.clone(),
+            executor,
             cancellation.clone(),
             gate.clone(),
             environment,
@@ -1472,6 +1511,7 @@ impl ConversationBackgroundRegistry {
             },
             gate,
             runner,
+            output_publication,
             private_owner: None,
             settled: Arc::new(Notify::new()),
             private_result: None,
@@ -1755,6 +1795,9 @@ impl ConversationBackgroundRegistry {
             if let Some(hook) = state.publication_hook.take() {
                 hook.enter();
             }
+            if let Some(publication) = prepared_record.output_publication {
+                publication.store(true, Ordering::Release);
+            }
             let output = prepared_record
                 .record
                 .client_output
@@ -1827,6 +1870,7 @@ impl ConversationBackgroundRegistry {
     /// and no terminal inbound. [`PrivateBashStage::adopt`] is the only path
     /// that publishes the job, and only while the process is still running.
     #[cfg(test)]
+    #[cfg(test)]
     pub(crate) fn stage_private(
         &self,
         invocation: &ToolInvocation,
@@ -1835,21 +1879,45 @@ impl ConversationBackgroundRegistry {
         mcp_leases: McpRuntimeLeaseSet,
         owner: ExecutionCancellation,
     ) -> Result<PrivateBashStage, BackgroundDispatchError> {
-        self.stage_private_with_output(invocation, executor, environment, mcp_leases, owner, None)
+        self.stage_private_executor(
+            invocation,
+            BackgroundExecutor::Tool(executor.clone()),
+            environment,
+            mcp_leases,
+            owner,
+        )
     }
 
-    pub(crate) fn stage_private_with_output(
+    pub(crate) fn stage_private_bash(
         &self,
         invocation: &ToolInvocation,
-        executor: &Arc<dyn ToolExecutor>,
+        bash: Arc<crate::tools::native::PreparedBash>,
         environment: ToolEnvironment,
         mcp_leases: McpRuntimeLeaseSet,
         owner: ExecutionCancellation,
-        bash: Option<&crate::tools::native::PreparedBash>,
     ) -> Result<PrivateBashStage, BackgroundDispatchError> {
-        let output = bash.map(|bash| bash.output().to_path_buf());
-        let dispatch =
-            self.prepare_with_output(invocation, executor, environment, mcp_leases, output)?;
+        self.stage_private_executor(
+            invocation,
+            BackgroundExecutor::Bash(bash),
+            environment,
+            mcp_leases,
+            owner,
+        )
+    }
+
+    fn stage_private_executor(
+        &self,
+        invocation: &ToolInvocation,
+        executor: BackgroundExecutor,
+        environment: ToolEnvironment,
+        mcp_leases: McpRuntimeLeaseSet,
+        owner: ExecutionCancellation,
+    ) -> Result<PrivateBashStage, BackgroundDispatchError> {
+        let bash = match &executor {
+            BackgroundExecutor::Bash(bash) => Some(bash.clone()),
+            BackgroundExecutor::Tool(_) => None,
+        };
+        let dispatch = self.prepare_runner(invocation, executor, environment, mcp_leases)?;
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(32);
         let settled = {
             let mut state = self.state();
@@ -2932,7 +3000,7 @@ impl ConversationBackgroundRegistry {
         &self,
         execution_id: ToolExecutionId,
         invocation: ToolInvocation,
-        executor: Arc<dyn ToolExecutor>,
+        executor: BackgroundExecutor,
         cancellation: CancellationSignal,
         gate: Arc<Notify>,
         environment: ToolEnvironment,
@@ -2974,34 +3042,17 @@ impl ConversationBackgroundRegistry {
                 registry: registry.clone(),
                 execution_id: execution_id.clone(),
             });
-            let context = ToolExecutionContext {
-                stdout_capture: None,
-                #[cfg(test)]
-                workspace_changes: None,
-                model_invocation: None,
-                attempt_id: None,
-                goal: None,
-                schedule: None,
-                conversation_id: &registry.conversation_id,
-                execution_id: Some(&execution_id),
-                cancellation: ExecutionCancellation::new(cancellation.clone(), cause),
-                workspace: &resources.workspace,
-                progress: &reporter,
-                artifacts: &resources.artifacts,
-                tool_output: &resources.tool_output,
-                environment: &environment,
-                questionnaire_requester: None,
-                // A detached execution belongs to no `ToolResult` batch, so
-                // it carries no task-list authority: it cannot stage a list
-                // that some later batch would commit as its own.
-                todos: None,
-                // A detached execution belongs to no attempt either, so it
-                // owns no runtime resource generation to resolve a named
-                // subagent against. `subagent` is foreground-only, so this
-                // is structural rather than a policy decision.
-                subagent: None,
-                bound_mutation: None,
-            };
+            // Detached work has no attempt or ToolResult-batch authority.
+            let context = ToolExecutionContext::new(
+                &registry.conversation_id,
+                Some(&execution_id),
+                ExecutionCancellation::new(cancellation.clone(), cause),
+                &resources.workspace,
+                &reporter,
+                &resources.artifacts,
+                &resources.tool_output,
+                &environment,
+            );
             // The registry remains the detached lifecycle owner. Cancellation
             // transfers physical ownership to the same settlement plane used
             // by foreground execution; foreground deadline policy is absent.
@@ -3009,7 +3060,14 @@ impl ConversationBackgroundRegistry {
                 let crate::tools::executor::ToolExecutionHandle {
                     completion,
                     settlement,
-                } = crate::tools::executor::start_tool_execution(&*executor, invocation, context);
+                } = executor.start(invocation, context);
+                #[cfg(test)]
+                {
+                    let operation_poll_hook = registry.state().operation_poll_hook.clone();
+                    if let Some(gate) = operation_poll_hook {
+                        gate.enter().await;
+                    }
+                }
                 tokio::pin!(completion);
                 tokio::pin!(settlement);
                 let drive_completion = std::future::poll_fn(|cx| {
@@ -3644,8 +3702,8 @@ mod tests {
     use super::test_sync::{CommitBoundaryHook, FirstPollGate};
     use super::{
         BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundExecutionListing,
-        BackgroundLifecycle, BackgroundRecord, BackgroundResources, ConversationBackgroundRegistry,
-        NotificationState,
+        BackgroundExecutor, BackgroundLifecycle, BackgroundRecord, BackgroundResources,
+        ConversationBackgroundRegistry, NotificationState,
     };
     use crate::events::{RecordingEventSink, RuntimeEvent};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
@@ -6108,16 +6166,23 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum BashCancellationWindow {
+        ExecutorConstruction,
+        OperationPoll,
+        ClientStart,
+    }
+
+    #[cfg(unix)]
     #[allow(clippy::too_many_lines)] // The acceptance, cancellation and Read all share the same identity.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn accepted_bash_cancelled_before_start_keeps_the_empty_output_readable() {
-        use crate::tools::mcp::McpRuntimeLeaseSet;
+    async fn cancel_accepted_bash(window: BashCancellationWindow) {
         use crate::tools::types::ManagedOutputContinuation;
         use rustx_execution_protocol::process::{
-            OperationState, ProcessReply, ProcessRequest, SettledDisposition,
+            BashCaptureResult, BashCaptureState, OperationState, ProcessReply, ProcessRequest,
+            SettledDisposition,
         };
 
-        let mut fixture = registry("conv_a4f701da-4b9e-7f7d-a716-960562cb59f0");
+        let mut fixture = file_registry("conv_a4f701da-4b9e-7f7d-a716-960562cb59f0");
         let workspace = fixture.registry.resources().workspace.root().to_path_buf();
         let execution =
             crate::session_execution_support::ExecutionFixture::with_mount_view(&workspace, None);
@@ -6140,50 +6205,99 @@ mod tests {
             mode: ToolInvocationMode::Background,
             arguments: serde_json::json!({"command": "printf start >> started"}),
         };
-        let bash = crate::tools::native::PreparedBash::register(
-            &invocation,
-            &fixture.registry.resources.workspace,
-            fixture.registry.conversation_id(),
-            &ToolEnvironment::new(),
-            &cancellation,
-        )
-        .await
-        .unwrap();
-        let (running_driver, resume) = bash.hold_before_start();
-        let path = bash.output().to_path_buf();
-        let executor: Arc<dyn ToolExecutor> = Arc::new(bash);
-        let prepared = fixture
-            .registry
-            .prepare_with_output(
+        let early_gate = Arc::new(FirstPollGate::default());
+        let (prepared, driver_hold) = if matches!(window, BashCancellationWindow::ClientStart) {
+            let bash = crate::tools::native::PreparedBash::register(
                 &invocation,
-                &executor,
-                ToolEnvironment::new(),
-                McpRuntimeLeaseSet::default(),
-                Some(path.clone()),
+                &fixture.registry.resources.workspace,
+                fixture.registry.conversation_id(),
+                &ToolEnvironment::new(),
+                &cancellation,
             )
+            .await
             .unwrap();
+            let hold = bash.hold_before_start();
+            let prepared = fixture
+                .registry
+                .prepare_runner(
+                    &invocation,
+                    BackgroundExecutor::Bash(Arc::new(bash)),
+                    ToolEnvironment::new(),
+                    crate::tools::mcp::McpRuntimeLeaseSet::default(),
+                )
+                .unwrap();
+            (prepared, Some(hold))
+        } else {
+            match window {
+                BashCancellationWindow::ExecutorConstruction => {
+                    fixture.registry.install_first_poll_hook(early_gate.clone());
+                }
+                BashCancellationWindow::OperationPoll => {
+                    fixture.registry.state().operation_poll_hook = Some(early_gate.clone());
+                }
+                BashCancellationWindow::ClientStart => unreachable!(),
+            }
+            let prepared = fixture
+                .registry
+                .prepare_native_bash(&invocation, ToolEnvironment::new(), &cancellation)
+                .await
+                .unwrap();
+            (prepared, None)
+        };
         let BackgroundDispatchOutcome::Accepted {
             execution_id,
             result,
-        } = fixture.registry.commit_dispatch(prepared, &signal).unwrap()
+        } = fixture
+            .registry
+            .commit_dispatch_owned(prepared, &signal)
+            .await
+            .unwrap()
         else {
             panic!("the Job must first expose the Client locator");
         };
         let crate::tools::types::ToolResultContent::Json { value } = &result.content[0] else {
             panic!("accepted job envelope")
         };
-        assert_eq!(value["output_path"].as_str(), path.to_str());
-        tokio::time::timeout(TEST_LIVENESS_GUARD, running_driver)
-            .await
-            .unwrap()
-            .unwrap();
+        let path = std::path::PathBuf::from(value["output_path"].as_str().unwrap());
+        let release_driver = if let Some((entered, parked)) = driver_hold {
+            tokio::time::timeout(TEST_LIVENESS_GUARD, entered)
+                .await
+                .unwrap()
+                .unwrap();
+            Some(parked)
+        } else {
+            tokio::time::timeout(TEST_LIVENESS_GUARD, early_gate.wait_entered())
+                .await
+                .unwrap();
+            None
+        };
+        let output = crate::tools::native::bash_operation_at(&path).unwrap();
+        let endpoint = execution.scope.endpoint().unwrap();
+        let key = output.key_for(&endpoint).unwrap();
+        let request = ProcessRequest::Query { key: key.clone() };
+        let before_cancel = tokio::task::spawn_blocking({
+            let endpoint = endpoint.clone();
+            move || {
+                endpoint.process_until(&request, std::time::Instant::now() + TEST_LIVENESS_GUARD)
+            }
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            before_cancel,
+            ProcessReply::State {
+                state: OperationState::Registered,
+                ..
+            }
+        ));
         fixture
             .registry
             .cancel(&execution_id)
             .expect("accepted job is cancellable");
-        let output = crate::tools::native::bash_operation_at(&path).unwrap();
-        let endpoint = execution.scope.endpoint().unwrap();
-        let key = output.key_for(&endpoint).unwrap();
+        if release_driver.is_none() {
+            early_gate.resume();
+        }
         let snapshot = tokio::time::timeout(TEST_LIVENESS_GUARD, async {
             loop {
                 let endpoint = endpoint.clone();
@@ -6214,15 +6328,27 @@ mod tests {
         assert_eq!(snapshot.disposition, SettledDisposition::Cancelled);
         assert!(snapshot.physical_settlement_proven);
         assert_eq!(snapshot.final_sequence.get(), 0);
-        resume.send(()).unwrap();
-        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        if let Some(release) = release_driver {
+            release.send(()).unwrap();
+        }
+        let terminal = tokio::time::timeout(
+            TEST_LIVENESS_GUARD,
+            fixture.registry.wait_until_terminal(&execution_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
         let result = terminal.result.unwrap();
         assert_eq!(
             result.status,
             ToolExecutionStatus::Cancelled {
                 reason: CancellationReason::UserRequested,
-                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                phase: if matches!(window, BashCancellationWindow::ExecutorConstruction) {
+                    crate::tools::types::ToolCancellationPhase::BeforeStart
+                } else {
+                    crate::tools::types::ToolCancellationPhase::DuringExecution
+                },
             }
         );
         assert_eq!(
@@ -6230,6 +6356,38 @@ mod tests {
             Some(&ManagedOutputContinuation::Complete {
                 locator: path.clone()
             })
+        );
+        let capture = tokio::task::spawn_blocking(move || {
+            endpoint.process_until(
+                &ProcessRequest::BashCapture { key },
+                std::time::Instant::now() + TEST_LIVENESS_GUARD,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            capture,
+            ProcessReply::BashCapture {
+                capture: Some(BashCaptureResult {
+                    output: BashCaptureState::Complete,
+                    started: false,
+                    ..
+                }),
+                ..
+            }
+        ));
+        let events = fixture.store.read_events(None, 16).unwrap().events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    &event.event,
+                    RuntimeEvent::BackgroundTerminalPublished { execution_id: owner, .. }
+                        if owner.as_str() == execution_id.as_str()
+                ))
+                .count(),
+            1,
         );
         let resources = fixture.registry.resources();
         let environment = ToolEnvironment::new();
@@ -6262,6 +6420,24 @@ mod tests {
             matches!(&read.content[..], [crate::tools::types::ToolResultContent::Text(text)] if text.text.is_empty())
         );
         assert!(!workspace.join("started").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn accepted_bash_cancelled_before_executor_construction_settles_output() {
+        cancel_accepted_bash(BashCancellationWindow::ExecutorConstruction).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn accepted_bash_cancelled_before_first_operation_poll_settles_output() {
+        cancel_accepted_bash(BashCancellationWindow::OperationPoll).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn accepted_bash_cancelled_before_start_keeps_the_empty_output_readable() {
+        cancel_accepted_bash(BashCancellationWindow::ClientStart).await;
     }
 
     /// The deterministic Issue #86 end-to-end regression: a background Bash

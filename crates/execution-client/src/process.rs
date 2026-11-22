@@ -1143,16 +1143,27 @@ impl Operations {
             return ProcessReply::Unknown { key };
         };
         let file = {
-            let mut inner = self.inner.lock().expect("operation registry");
-            match inner.records.get_mut(&key.operation) {
-                Some(Record::Minimal(minimal)) => minimal.bash_file.take(),
+            let inner = self.inner.lock().expect("operation registry");
+            match inner.records.get(&key.operation) {
+                Some(Record::Minimal(minimal)) => {
+                    minimal.bash_file.as_ref().map(|(_, file)| file.clone())
+                }
                 Some(Record::Full(_)) => return ProcessReply::Conflict { key },
                 None => return ProcessReply::Unknown { key },
             }
         };
         #[cfg(test)]
         self.hold_capture(&key);
-        drop(file);
+        if let Some(file) = file {
+            if let Err(error) = file.discard() {
+                tracing::warn!(%error, "Bash capture unlink failed");
+                return ProcessReply::Conflict { key };
+            }
+            let mut inner = self.inner.lock().expect("operation registry");
+            if let Some(Record::Minimal(minimal)) = inner.records.get_mut(&key.operation) {
+                minimal.bash_file = None;
+            }
+        }
         ProcessReply::OutputReleased { key }
     }
 
@@ -1284,9 +1295,19 @@ impl Operations {
     pub(crate) fn release_bash_captures(&self) -> io::Result<()> {
         let mut inner = self.inner.lock().expect("operation registry");
         for record in inner.records.values_mut() {
-            match record {
-                Record::Full(operation) => operation.bash_file = None,
-                Record::Minimal(operation) => operation.bash_file = None,
+            let file = match record {
+                Record::Full(operation) => {
+                    if let Some(file) = &operation.bash_file {
+                        file.discard()?;
+                        operation.bash_file = None;
+                    }
+                    continue;
+                }
+                Record::Minimal(operation) => &mut operation.bash_file,
+            };
+            if let Some((_, capture)) = file {
+                capture.discard()?;
+                *file = None;
             }
         }
         self.captures.close()
@@ -1304,7 +1325,7 @@ impl Operations {
             runtime.shutdown_timeout(Duration::from_secs(10));
         }
         if unresolved == 0 {
-            Ok(())
+            self.release_bash_captures()
         } else {
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -1540,6 +1561,15 @@ async fn run_operation(
     // A read error is physical loss, never EOF: the outcome must be
     // honestly Failed/Unknown rather than a clean completion.
     let mut output_failed = false;
+    let allocate_capture = || {
+        let mut guard = inner.lock().expect("operation registry");
+        let Some(Record::Full(operation)) = guard.records.get_mut(&key.operation) else {
+            return Err(io::ErrorKind::NotConnected.into());
+        };
+        let file = captures.create(key.operation)?;
+        operation.bash_file = Some(file.clone());
+        Ok(file)
+    };
     let mut running_published = false;
     let mut exit_published = false;
     let settlement = tokio::spawn(async move { runner.settle().await });
@@ -1605,13 +1635,13 @@ async fn run_operation(
                     Ok(0) => {
                         stdout_done = true;
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stdout, None, &captures, key.operation).await;
+                            capture.push(ProcessStream::Stdout, None, allocate_capture).await;
                         }
                     }
                     Ok(n) => {
                         let bytes = &stdout_buf[..n];
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stdout, Some(bytes), &captures, key.operation).await;
+                            capture.push(ProcessStream::Stdout, Some(bytes), allocate_capture).await;
                         }
                         push(&inner, &key, ProcessStream::Stdout, bytes);
                     }
@@ -1626,7 +1656,7 @@ async fn run_operation(
                     Ok(0) => {
                         stderr_done = true;
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stderr, None, &captures, key.operation).await;
+                            capture.push(ProcessStream::Stderr, None, allocate_capture).await;
                         }
                     }
                     Err(_) => {
@@ -1636,7 +1666,7 @@ async fn run_operation(
                     Ok(n) => {
                         let bytes = &stderr_buf[..n];
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stderr, Some(bytes), &captures, key.operation).await;
+                            capture.push(ProcessStream::Stderr, Some(bytes), allocate_capture).await;
                         }
                         push(&inner, &key, ProcessStream::Stderr, bytes);
                     }
@@ -1784,12 +1814,10 @@ async fn run_operation(
     if let Some(capture) = active.capture.take() {
         use std::os::unix::process::ExitStatusExt as _;
         let signal = termination.exit_status.and_then(|status| status.signal());
-        let (result, file, complete) =
-            capture.finish(!output_failed, witness.start_crossed(), signal);
+        let (result, complete) = capture.finish(!output_failed, witness.start_crossed(), signal);
         output_failed |= !complete;
         let mut guard = inner.lock().expect("operation registry");
         if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
-            op.bash_file = file;
             op.bash_result = Some(result);
         }
     }
@@ -2436,11 +2464,77 @@ mod tests {
             ProcessReply::OutputReleased { key }
         );
         assert_eq!(std::fs::read_dir(captures).unwrap().count(), 0);
-        let _full_capture_quota = (0..rustx_execution_protocol::process::MAX_BASH_CAPTURES)
+        let full_capture_quota = (0..rustx_execution_protocol::process::MAX_BASH_CAPTURES)
             .map(|_| ops.captures.create(OperationId::new()).unwrap())
             .collect::<Vec<_>>();
+        for file in full_capture_quota {
+            file.discard().unwrap();
+        }
         ops.shutdown().unwrap();
         assert!(!directory.path().join("revived").exists());
+    }
+
+    #[test]
+    fn failed_bash_capture_unlink_retains_its_owner_and_quota_for_retry() {
+        use rustx_execution_protocol::process::MAX_BASH_CAPTURES;
+
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(&directory.path().canonicalize().unwrap());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut bash = spec(&[]);
+        bash.program = ProcessProgram::Shell {
+            command: "touch unexpected-start".into(),
+            conversation: "unlink-retry".into(),
+            live_output: true,
+        };
+        assert_eq!(
+            ops.dispatch(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: bash.fingerprint(),
+                spec: bash,
+            }),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        let path = ops
+            .captures
+            .path()
+            .unwrap()
+            .join(format!("{:032x}.output", key.operation.as_u128()));
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        ops.with_bash_file(&key, "unlink-retry", |file| {
+            file.fail_next_unlink
+                .store(true, std::sync::atomic::Ordering::Release);
+        })
+        .unwrap();
+        let request = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        assert_eq!(
+            ops.dispatch(request()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        assert_eq!(
+            ops.with_bash_file(&key, "unlink-retry", CaptureFile::proves_empty),
+            Some(true)
+        );
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+
+        assert_eq!(
+            ops.dispatch(request()),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert!(!path.exists());
+        assert!(ops.bash_file(&key, "unlink-retry").is_none());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        assert_eq!(
+            ops.dispatch(request()),
+            ProcessReply::OutputReleased { key }
+        );
+        assert!(ops.shutdown().is_ok());
+        assert!(!directory.path().join("unexpected-start").exists());
     }
 
     #[test]

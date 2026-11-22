@@ -1163,10 +1163,15 @@ envelope.
   per-binding disk data ceiling is 2 GiB. Storage failures distinguish
   a readable prefix from unavailable output. Releasing the process
   journal retains published capture until disposal or binding shutdown.
-  Cancellation before START preserves the empty live file prepared for
-  background acceptance. Client settlement reports complete output only
-  if the retained file is still present and empty. The owner of a
-  preparation that was never accepted explicitly discards the capture.
+  Background acceptance marks the live locator as published before
+  releasing the runner. Cancellation of an accepted Job first settles
+  its preparation, including when the executor has not been constructed
+  or its operation has not been polled. The START gate still refuses
+  dispatch after cancellation. Client settlement reports complete empty
+  output only after verifying the retained file. Unaccepted preparations
+  can explicitly discard their capture. Discard acknowledges release
+  after verified unlink, and its owner and quota remain available for
+  retry if unlink fails. Binding settlement also confirms capture deletion.
 - The absolute Bash continuation identifier is scoped to the owning
   Conversation and Client binding. Native Read and Grep send a typed
   query to that Client, and the Client opens its own retained capture.

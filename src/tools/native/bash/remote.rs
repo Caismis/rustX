@@ -3,6 +3,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -19,7 +20,7 @@ use crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint;
 use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::ConversationId;
 use crate::tools::environment::ToolEnvironment;
-use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle};
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
     ManagedOutputContinuation, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
@@ -99,6 +100,7 @@ pub(crate) fn discard_private_output(workspace: &Workspace, path: &Path) {
 pub(crate) struct PreparedBash {
     operation: std::sync::Mutex<Option<RemoteBash>>,
     output: PathBuf,
+    published_output: Arc<AtomicBool>,
 }
 
 impl PreparedBash {
@@ -121,6 +123,7 @@ impl PreparedBash {
         .await?;
         Ok(Self {
             output: locator(&operation.key),
+            published_output: operation.published_output.clone(),
             operation: std::sync::Mutex::new(Some(operation)),
         })
     }
@@ -135,6 +138,10 @@ impl PreparedBash {
         &self.output
     }
 
+    pub(crate) fn output_publication(&self) -> Arc<AtomicBool> {
+        self.published_output.clone()
+    }
+
     #[cfg(test)]
     pub(crate) fn hold_before_start(
         &self,
@@ -147,21 +154,10 @@ impl PreparedBash {
         self.operation.lock().unwrap().as_mut().unwrap().start_hold = Some((entered, parked));
         (observed, release)
     }
-}
-
-impl ToolExecutor for PreparedBash {
-    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
-        crate::tools::deadline::ToolProgressCapability::None
-    }
-
-    fn start<'a>(
-        &'a self,
-        _invocation: ToolInvocation,
-        context: ToolExecutionContext<'a>,
-    ) -> ToolExecutionHandle<'a> {
+    pub(crate) fn start<'a>(&self, context: ToolExecutionContext<'a>) -> ToolExecutionHandle<'a> {
         let operation = self.operation.lock().expect("prepared Bash").take();
         let cancellation = context.cancellation.clone();
-        ToolExecutionHandle::settled_by_operation(
+        ToolExecutionHandle::settled_by_prepared_operation(
             Box::pin(async move {
                 match operation {
                     Some(operation) => operation.run(&context).await,
@@ -204,6 +200,7 @@ struct RemoteBash {
     endpoint: Arc<LocalExecutionEndpoint>,
     key: ProcessOperationKey,
     live_output: bool,
+    published_output: Arc<AtomicBool>,
     cleanup: bool,
     start_gate: Option<StartGate>,
     #[cfg(test)]
@@ -279,6 +276,7 @@ impl RemoteBash {
             endpoint,
             key,
             live_output,
+            published_output: Arc::default(),
             cleanup: true,
             start_gate: None,
             #[cfg(test)]
@@ -316,7 +314,7 @@ impl RemoteBash {
         let cancellation = context.cancellation.clone();
         let stop = tokio_util::sync::CancellationToken::new();
         let _stop_relay_on_drop = stop.clone().drop_guard();
-        let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let settled = Arc::new(AtomicBool::new(false));
         let relay = tokio::spawn({
             let endpoint = self.endpoint.clone();
             let key = self.key.clone();
@@ -550,6 +548,7 @@ impl Drop for RemoteBash {
         // fences a late START and waits for Client-owned shutdown on failure.
         let endpoint = self.endpoint.clone();
         let key = self.key.clone();
+        let published = self.published_output.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 deliver_cancel(endpoint.clone(), key.clone(), Arc::default()).await;
@@ -558,7 +557,7 @@ impl Drop for RemoteBash {
                     ..
                 }) = exchange(&endpoint, ProcessRequest::Query { key: key.clone() }, None).await
                 {
-                    let _ = exchange(
+                    let release = exchange(
                         &endpoint,
                         ProcessRequest::ReleaseOutput {
                             key: key.clone(),
@@ -567,7 +566,11 @@ impl Drop for RemoteBash {
                         None,
                     )
                     .await;
-                    endpoint.discard_bash_capture(key).await;
+                    if !matches!(release, Ok(ProcessReply::OutputReleased { .. })) {
+                        endpoint.cut_pair_if_open();
+                    } else if !published.load(Ordering::Acquire) {
+                        endpoint.discard_bash_capture(key).await;
+                    }
                 } else {
                     endpoint.cut_pair_if_open();
                 }
