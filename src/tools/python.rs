@@ -1176,48 +1176,18 @@ impl PythonToolStore {
             // Dropping a JoinHandle detaches the task; it does not abort it.
             // The caller therefore cannot become the physical materialization
             // owner merely by being cancelled while waiting below.
-            std::mem::drop(tokio::spawn(async move {
-                let mut owner_guard = owner_guard;
-                // The elected owner re-verifies the published state under its
-                // ownership before building: a caller whose ready-state miss
-                // predates a retired owner cannot start a second physical
-                // build over a fingerprint that was published meanwhile.
-                let reverify_dir = build_dir.clone();
-                let reverify_package = package.clone();
-                let reverify_fingerprint = build_fingerprint.clone();
-                let reverify_python = python_identity.clone();
-                let reverify_uv = uv_identity.clone();
-                let reverify_cancellation = build_cancellation.clone();
-                let reverify = tokio::task::spawn_blocking(move || {
-                    read_prepared_state(
-                        &reverify_dir,
-                        &reverify_package,
-                        &reverify_fingerprint,
-                        &reverify_python,
-                        &reverify_uv,
-                        &reverify_cancellation,
-                    )
-                })
-                .await
-                .map_err(io_error);
-                let result = match reverify {
-                    Ok(Ok(Some(prepared))) => Ok(prepared),
-                    Ok(Ok(None)) => {
-                        materialize_package(
-                            &inner,
-                            &package,
-                            &build_dir,
-                            &build_fingerprint,
-                            &python_identity,
-                            &uv_identity,
-                            &build_cancellation,
-                        )
-                        .await
-                    }
-                    Ok(Err(error)) | Err(error) => Err(error),
-                };
-                owner_guard.finish(result);
-            }));
+            std::mem::drop(tokio::spawn(run_build_owner(
+                inner,
+                owner_guard,
+                BuildOwnerInput {
+                    package,
+                    state_dir: build_dir,
+                    fingerprint: build_fingerprint,
+                    python_identity,
+                    uv_identity,
+                    cancellation: build_cancellation,
+                },
+            )));
         }
         let result = state.wait().await;
         crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
@@ -1234,6 +1204,63 @@ fn with_package_permissions(
     prepared.permissions = package.permissions;
     prepared.tool_permissions = package.tool_permissions.clone();
     prepared
+}
+
+/// Everything an elected build owner needs to re-verify and, when still
+/// needed, physically build one fingerprint.
+struct BuildOwnerInput {
+    package: PythonToolPackage,
+    state_dir: PathBuf,
+    fingerprint: String,
+    python_identity: String,
+    uv_identity: String,
+    cancellation: crate::runtime::CancellationSignal,
+}
+
+/// The detached physical task of an elected build owner. It re-verifies
+/// the published state under its ownership before building: a caller
+/// whose ready-state miss predates a retired owner cannot start a second
+/// physical build over a fingerprint that was published meanwhile.
+async fn run_build_owner(
+    inner: Arc<PythonToolStoreInner>,
+    mut owner_guard: BuildOwnerGuard,
+    input: BuildOwnerInput,
+) {
+    let reverify_dir = input.state_dir.clone();
+    let reverify_package = input.package.clone();
+    let reverify_fingerprint = input.fingerprint.clone();
+    let reverify_python = input.python_identity.clone();
+    let reverify_uv = input.uv_identity.clone();
+    let reverify_cancellation = input.cancellation.clone();
+    let reverify = tokio::task::spawn_blocking(move || {
+        read_prepared_state(
+            &reverify_dir,
+            &reverify_package,
+            &reverify_fingerprint,
+            &reverify_python,
+            &reverify_uv,
+            &reverify_cancellation,
+        )
+    })
+    .await
+    .map_err(io_error);
+    let result = match reverify {
+        Ok(Ok(Some(prepared))) => Ok(prepared),
+        Ok(Ok(None)) => {
+            materialize_package(
+                &inner,
+                &input.package,
+                &input.state_dir,
+                &input.fingerprint,
+                &input.python_identity,
+                &input.uv_identity,
+                &input.cancellation,
+            )
+            .await
+        }
+        Ok(Err(error)) | Err(error) => Err(error),
+    };
+    owner_guard.finish(result);
 }
 
 /// One prepared managed package: the fingerprint-keyed immutable env state
@@ -2921,13 +2948,7 @@ full_access = "ask"
     #[derive(Debug, Default)]
     struct GatedRunner {
         runner: FakeRunner,
-        gate: Mutex<
-            Option<(
-                &'static str,
-                Option<tokio::sync::oneshot::Sender<()>>,
-                Option<tokio::sync::oneshot::Receiver<()>>,
-            )>,
-        >,
+        gate: Mutex<Option<CommandGate>>,
     }
 
     impl GatedRunner {
@@ -2962,16 +2983,22 @@ full_access = "ask"
                 }
             };
             Box::pin(async move {
-                if gate.1.is_some() {
+                if let Some(release) = gate.1 {
                     if let Some(entered) = gate.0 {
                         let _ = entered.send(());
                     }
-                    let _ = gate.1.expect("release").await;
+                    let _ = release.await;
                 }
                 self.runner.run(spec, control).await
             })
         }
     }
+
+    type CommandGate = (
+        &'static str,
+        Option<tokio::sync::oneshot::Sender<()>>,
+        Option<tokio::sync::oneshot::Receiver<()>>,
+    );
 
     #[derive(Default)]
     struct PublicationWake(std::sync::atomic::AtomicBool);
