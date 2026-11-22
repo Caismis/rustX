@@ -1,6 +1,6 @@
-import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v80';
 import type { AppServerClient } from './app-server';
-import { extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { acceptOlderTranscriptPage, extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
 import { transcriptWindowReady } from './history-policy';
 
 export interface AgentReadingState {
@@ -172,6 +172,7 @@ export class AgentReading {
     try {
       let pageAt = at, next = history;
       const added: NonNullable<typeof history.page.entries> = [];
+      const fetchedPages: RuntimeClientTranscriptPage[] = [];
       do {
         const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
         if (!current()) return;
@@ -179,14 +180,18 @@ export class AgentReading {
         if (window.cut.conversation_id !== this.conversationId || 'cut' in pageAt && pageAt.cut && !sameReadCut(window.cut, pageAt.cut)) throw new Error('Invalid native child history cut.');
         if (pageAt.type === 'older' && window.page.next_cursor != null && BigInt(window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native child history page.');
         added.push(...window.page.entries ?? []);
+        fetchedPages.push(window.page);
         next = extendTranscriptWindow(window, next, at.type === 'older');
         if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
         pageAt = { type: 'older', before: next.page.next_cursor, cut: window.cut };
       } while (current());
       if (!current()) return;
       if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
-        const { window: _, ...following } = next;
-        next = this.live ? refreshTranscript(following, this.live.transcript) : following;
+        // A replace raced this read: its new epoch owns the cache, drop ours.
+        if (this.state.history?.epoch !== history.epoch) return;
+        // Commit into the cache live now: rows admitted while this read was in
+        // flight are retained, and the continuation still covers their gaps.
+        next = acceptOlderTranscriptPage(this.state.history!, fetchedPages);
       }
       this.publish({ history: { ...next, loading: false, initialLoading: false } });
       void this.refreshEntries();

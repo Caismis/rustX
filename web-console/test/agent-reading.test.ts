@@ -90,7 +90,12 @@ it('reads native pages at the child cut and retains accumulated history', async 
   expect(reader.getSnapshot().history?.page.entries?.map(entry => entry.cursor)).toEqual(['0', '1', '2']);
   reader.returnToLatest();
   for (let n = 132; n < 800; n++) reader.observe({ ...live(n), transcript: { entries: [entry(n - 1), entry(n)], next_cursor: String(n - 1) } });
-  expect(reader.getSnapshot().history?.page.entries!.length).toBe(669);
+  // returnToLatest replaced the windowed rows with the live head; the sliding
+  // head then accumulated live rows at their durable positions 130..799.
+  const retained = reader.getSnapshot().history!.page.entries!;
+  expect(retained.slice(0, 3).map(entry => Number(entry.cursor))).toEqual([130, 131, 132]);
+  expect(retained.at(-1)!.cursor).toBe('799');
+  expect(retained.length).toBe(670);
   const loaded = reader.getSnapshot().history!.page.entries;
   reader.returnToLatest();
   expect(reader.getSnapshot().history!.page.entries).toBe(loaded);
@@ -106,6 +111,15 @@ it('parent detachment rejects pending child outline adoption', async () => {
 
 it('resident child conversations keep their historical location across hide and show', async () => {
   await setup(); installTurnNavigatorObserver(600);
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript') throw Error('method');
+    if (request.params.at.type === 'older') {
+      const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+      return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+    }
+    if (request.params.at.type !== 'turn_ordinal') throw Error('turn window');
+    return window(request.params.at.ordinal);
+  });
   const props = { client: server.client, sessionId: 'A', admission: server.client.getSnapshot().views.A.attachmentObservation,
     agent: { title: 'Worker', agent: 'Worker', agent_id: 'agent-worker', parent_agent_id: 'root', child_conversation_id: child,
       activation_id: 'activation', state: 'inactive' as const, activation_state: 'succeeded' as const, started_at: '2026-10-10T00:00:00Z', definition_digest: 'd', profile_digest: 'p',
@@ -120,7 +134,12 @@ it('resident child conversations keep their historical location across hide and 
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: false })); });
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: true })); });
   expect(ui.getByText('Report 1')).toBeTruthy();
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
+  // Three reads: the bounded hydration pages below the live head (exclusive
+  // before continuation 130 → 98 makes real progress through the unfetched gap),
+  // then the explicit turn window. The remount refetches nothing — hydration
+  // retained its pages and the windowed turn stays installed across hide/show.
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: unknown }).at))
+    .toEqual([{ type: 'older', before: '130', cut: null }, { type: 'older', before: '98', cut }, { type: 'turn_ordinal', ordinal: 1, cut }]);
 });
 
 it('T14 a replaced child activation cannot adopt a late outline from the prior view', async () => {
@@ -155,4 +174,33 @@ it.each(['owned','disposed'] as const)('a selected inherited Child Turn freezes 
  server.socket.success(request,{type:'transcript_window',window:{cut,target:selected.turn.id,target_cursor:'1',page:{entries:[row]}}});
  if(disposition==='owned'){expect(await work).toEqual(selected.turn);expect(reader.getSnapshot().history!.window!.cut).toEqual(cut);}
  else{expect(await work).toBe(false);expect(reader.getSnapshot()).toBe(before);}
+});
+
+it('an older page resolving late retains live rows admitted while it was in flight', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  const cursors = () => reader.getSnapshot().history?.page.entries?.map(row => Number(row.cursor));
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(3 + i)), next_cursor: '3' } });
+  server.held.add('agent/transcript');
+  const work = reader.loadEarlier();
+  const held = await server.waitFor('agent/transcript', 1);
+  // Two live heads land mid-read: m12 ends up held only in the client cache.
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(12 + i)), next_cursor: '12' } });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(13 + i)), next_cursor: '13' } });
+  expect(cursors()).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  server.socket.success(held, { type: 'transcript_window', window: { cut: { ...cut, transcript: '10' }, page: { entries: [entry(1), entry(2)], next_cursor: null } } });
+  await work;
+  expect(cursors()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('12');
+  // Walk the gap to the bottom: refetched held rows dedupe.
+  server.held.delete('agent/transcript');
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  await reader.loadEarlier();
+  expect(cursors()).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+  expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
 });

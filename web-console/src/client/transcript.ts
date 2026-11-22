@@ -92,8 +92,26 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
   if (!previous) return replaceTranscript(page);
   if (previous.window) return previous;
   const fresh = pageRows(page);
-  const overlap = [...pageRows(previous.page)].some(([cursor, identity]) => fresh.get(cursor) === identity);
-  if (!overlap) return replaceTranscript(page, previous);
+  const held = pageRows(previous.page);
+  const overlap = [...held].some(([cursor, identity]) => fresh.get(cursor) === identity);
+  if (!overlap) {
+    // A bounded native head delivers only its newest rows. One atomic
+    // transition may slide that window past every loaded row: all held
+    // positions are then strictly older history to retain, never a rewritten
+    // lineage. Only interleaved or backward moves replace the cache.
+    if (held.size && fresh.size) {
+      const positions = (rows: Map<number | string, string>) => [...rows.keys()].map(key => BigInt(key));
+      const newest = positions(held).reduce((a, b) => a > b ? a : b);
+      const oldest = positions(fresh).reduce((a, b) => a < b ? a : b);
+      if (newest < oldest) {
+        // Continue pagination from the fresh block downward so the rows the
+        // slide skipped stay reachable through loadEarlier; dedup in
+        // mergePages handles the refetched held rows.
+        return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: page.next_cursor ?? previous.page.next_cursor } };
+      }
+    }
+    return replaceTranscript(page, previous);
+  }
   // Keep the reader's rows in place. Mutable projections outside this head are
   // reread by identity in the background, never by discarding loaded history.
   return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor } };
@@ -117,6 +135,27 @@ export const turnKey = attemptOwnerKey;
 export const turnAnchor = (id: Parameters<typeof attemptOwnerKey>[0]) => `turn:${turnKey(id)}`;
 export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTranscriptPage): TranscriptCache {
   return { ...cache, loading: false, error: undefined, page: { ...mergePages(page, cache.page), next_cursor: page.next_cursor } };
+}
+
+/** Accept one completed 'older' page chain into the cache live at commit time.
+ * This is the linearization point for ordinary live pagination: the fetched
+ * rows merge into the cache the moment the read resolves, so rows the live
+ * head admitted while the request was in flight are retained — never
+ * overwritten by the cache captured when the read started. The continuation
+ * picks the deepest unfetched boundary: a mid-page gap is always recomputed
+ * from the merged rows, while stored cursors only continue below the merged
+ * minimum, so every unfetched gap stays reachable and the walk converges. */
+export function acceptOlderTranscriptPage(latest: TranscriptCache, fetchedPages: RuntimeClientTranscriptPage[]): TranscriptCache {
+  const fetched = fetchedPages.reduce((acc, page) => mergePages(acc, page));
+  const merged = mergePages(fetched, latest.page);
+  const positions = [...pageRows(merged).keys()].map(key => BigInt(String(key))).sort((a, b) => a < b ? -1 : 1);
+  const mergedMin = positions[0];
+  let gap: bigint | undefined;
+  for (let i = 0; i + 1 < positions.length; i++) if (positions[i + 1] > positions[i] + 1n) { gap = positions[i + 1]; break; }
+  const below = (cursor: unknown) => cursor == null || mergedMin === undefined || BigInt(String(cursor)) > mergedMin ? null : BigInt(String(cursor));
+  const candidates = [gap, below(fetched.next_cursor), below(latest.page.next_cursor)].filter((cursor): cursor is bigint => cursor != null);
+  const next_cursor = candidates.length ? String(candidates.reduce((a, b) => a < b ? a : b)) : null;
+  return { ...latest, loading: false, initialLoading: false, error: undefined, page: { ...merged, next_cursor } };
 }
 
 export function installTranscriptWindow(window: ConversationWindow, previous?: TranscriptCache): TranscriptCache {
