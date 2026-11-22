@@ -168,6 +168,8 @@ export class AgentReading {
     if (!history || !this.current()) return;
     this.invalidate();
     const intent = this.intent;
+    // A disjoint replace retires this read; a same-lineage head slide keeps
+    // the epoch and the fetched positions stay mergeable into the live cache.
     const current = () => this.current() && this.intent === intent && this.state.history?.epoch === history.epoch;
     this.publish({ history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
@@ -196,6 +198,10 @@ export class AgentReading {
       }
       this.publish({ history: { ...next, loading: false, initialLoading: false } });
       void this.refreshEntries();
-    } catch (error) { if (current()) this.publish({ history: { ...this.state.history!, loading: false, initialLoading: false, error: String(error) } }); }
+    } catch (error) {
+      // Suppress errors whose cache generation already moved on (slide or
+      // replace): a stale read must not poison the newer head's hydration.
+      if (current() && this.state.history?.generation === history.generation) this.publish({ history: { ...this.state.history!, loading: false, initialLoading: false, error: String(error) } });
+    }
   }
 }

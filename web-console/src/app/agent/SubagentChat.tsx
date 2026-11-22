@@ -34,10 +34,11 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, wo
   useEffect(() => () => reader?.dispose(), [reader]);
   useEffect(() => { if (!visible) reader?.suspend(); else if (snapshot) reader?.observe(snapshot); }, [reader, snapshot, visible]);
   const reading = useSyncExternalStore(reader?.subscribe ?? noopSubscribe, reader?.getSnapshot ?? (() => empty));
-  // A resync can replace the cached transcript with a disjoint, bounded head.
-  // Hydrate the new reading window even if this child is already visible.
-  const historyEpoch = reading.history?.epoch;
-  useEffect(() => { if (visible && historyEpoch !== undefined) void reader?.loadInitial(); }, [reader, visible, historyEpoch]);
+  // A resync can replace or slide the cached transcript head. Generation
+  // changes on every disjoint transition, so hydration re-checks coverage
+  // even while this child stays visible.
+  const historyGeneration = reading.history?.generation;
+  useEffect(() => { if (visible && historyGeneration !== undefined) void reader?.loadInitial(); }, [reader, visible, historyGeneration]);
   const currentId = useMemo(() => snapshot?.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? {
     conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source,
   } : undefined, [snapshot?.conversation_id, snapshot?.attempt?.attempt_id,snapshot?.attempt?.attempt_id_source, snapshot?.attempt?.phase.type]);

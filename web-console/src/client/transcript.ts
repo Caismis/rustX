@@ -20,6 +20,10 @@ export const HISTORY_PAGE_MAX_BYTES = 8 * 1024 * 1024;
 export interface TranscriptCache {
   page: RuntimeClientTranscriptPage;
   epoch: number;
+  /** Disjoint head transitions (replace or a forward slide past held rows):
+   * hydration should re-check coverage of the new head. Ordinary overlap
+   * merges keep the generation. */
+  generation?: number;
   window?: ConversationWindow;
   loading?: boolean;
   /** Passive initial hydration must preserve tail following, unlike a reader's prepend. */
@@ -86,7 +90,7 @@ export function transcriptContent(history: TranscriptCache|undefined, current: C
   const result=[...bindings.values()];byHistory.set(historical,result);return result;
 }
 export function replaceTranscript(page: RuntimeClientTranscriptPage, previous?: TranscriptCache): TranscriptCache {
-  return { page, epoch: (previous?.epoch ?? 0) + 1 };
+  return { page, epoch: (previous?.epoch ?? 0) + 1, generation: (previous?.generation ?? 0) + 1 };
 }
 export function refreshTranscript(previous: TranscriptCache | undefined, page: RuntimeClientTranscriptPage): TranscriptCache {
   if (!previous) return replaceTranscript(page);
@@ -106,8 +110,9 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
       if (newest < oldest) {
         // Continue pagination from the fresh block downward so the rows the
         // slide skipped stay reachable through loadEarlier; dedup in
-        // mergePages handles the refetched held rows.
-        return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: page.next_cursor ?? previous.page.next_cursor } };
+        // mergePages handles the refetched held rows. The lineage (epoch) is
+        // unchanged, but hydration must re-check coverage of the slid head.
+        return { ...previous, generation: (previous.generation ?? 0) + 1, page: { ...mergePages(previous.page, page), next_cursor: page.next_cursor ?? previous.page.next_cursor } };
       }
     }
     return replaceTranscript(page, previous);
