@@ -54,7 +54,10 @@ async fn scheduled(f: &Fixture) -> ScheduleCommandReceipt {
 async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attempt() {
     bounded(async {
         let mut f=Fixture::with_session_count(None,1).await;f.install_scheduled_workflow("Native execution");
-        let clock=Clock::new();f.manager.schedule_clock=clock.clone();
+        // Workflow settlement prunes retained Schedule history on the
+        // runtime's wall clock. Keep the manual admission clock in that
+        // retention window regardless of when the suite runs.
+        let clock=Arc::new(Clock(Mutex::new(Utc::now())));f.manager.schedule_clock=clock.clone();
         let resident=f.load(0).await.unwrap().unwrap();let runtime=resident.inspect_runtime().unwrap();let created=scheduled(&f).await;
         clock.add(60);
         let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted{start,..})=f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id.clone(),expected_revision:created.revision}).await.unwrap() else {panic!("native target admission")};
@@ -66,7 +69,8 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
         assert_eq!(events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowStarted{run_id,tool_call_id:None,..} if run_id==&start.run_id)).count(),1);
         assert!(events.iter().all(|event|!matches!(event.event,RuntimeEvent::AttemptStarted{..})));
         assert_eq!(store.load_pending().unwrap(), [] as [crate::durable::inbox::PendingInboundItem; 0]);
-        assert!(matches!(f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap(),ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced{..})));
+        let duplicate=f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap();
+        assert!(matches!(duplicate,ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced{..})),"duplicate admission returned {duplicate:?}");
         f.close().await;
     }).await;
 }
