@@ -12,7 +12,59 @@ use std::collections::BTreeSet;
 use std::io;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
+
+/// Tracks whether a child-side connection could have created retained work
+/// on the parent relay. The no-work proof seals future effectful sends.
+#[derive(Clone, Default)]
+pub struct DelegatedWork(Arc<AtomicU8>);
+
+impl DelegatedWork {
+    const OPEN: u8 = 0;
+    const DISPATCHED: u8 = 1;
+    const SEALED_UNUSED: u8 = 2;
+
+    /// Seals a child that never dispatched retained work.
+    #[must_use]
+    pub fn seal_unused(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::OPEN,
+                Self::SEALED_UNUSED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    pub(super) fn admit(&self, request: &ClientRequest) -> io::Result<()> {
+        // Only the relay's stateless reads can bypass this cut. A lost reply
+        // or a failed send after admission cannot erase potential work.
+        if matches!(
+            request,
+            ClientRequest::ReadLines { .. }
+                | ClientRequest::ReadDocument { .. }
+                | ClientRequest::ReadRange { .. }
+                | ClientRequest::Search { .. }
+                | ClientRequest::GetMetadata { .. }
+                | ClientRequest::ReadDirectory { .. }
+                | ClientRequest::ReadBashOutput { .. }
+                | ClientRequest::SearchBashOutput { .. }
+        ) {
+            return Ok(());
+        }
+        match self.0.compare_exchange(
+            Self::OPEN,
+            Self::DISPATCHED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) | Err(Self::DISPATCHED) => Ok(()),
+            Err(_) => Err(io::ErrorKind::NotConnected.into()),
+        }
+    }
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +163,7 @@ impl LocalConnection {
             })?;
         Ok(Self {
             owner: None,
+            delegated_work: Some(DelegatedWork::default()),
             channel,
             control: Some(ControlWorker { handle, join }),
             usable: true,
@@ -119,6 +172,12 @@ impl LocalConnection {
             connection,
             admission,
         })
+    }
+
+    /// Shared dispatch witness for the delegated child epilogue.
+    #[must_use]
+    pub fn delegated_work(&self) -> Option<DelegatedWork> {
+        self.delegated_work.clone()
     }
 
     /// The negotiated physical capabilities. A child can only receive a
@@ -176,12 +235,43 @@ impl LocalConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustx_execution_protocol::process::ServerIncarnation;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessOperationKey, ProcessRequest, ServerIncarnation,
+    };
     use rustx_execution_protocol::{
         ClientInstanceId, DecimalU64, EnvironmentId, FileStamp, Generation, PROTOCOL_VERSION,
         SessionId,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn unused_delegation_is_sealed_against_late_effectful_dispatch() {
+        let query = ClientRequest::GetMetadata {
+            relative_path: PathBuf::from("example"),
+        };
+        let start = ClientRequest::Process(ProcessRequest::Start {
+            key: ProcessOperationKey {
+                incarnation: ServerIncarnation::generate(),
+                session: SessionId::new("session"),
+                instance: ClientInstanceId::new("client"),
+                generation: Generation::try_from(1u64).unwrap(),
+                operation: OperationId::new(),
+            },
+        });
+
+        let unused = DelegatedWork::default();
+        let sender = unused.clone();
+        sender.admit(&query).unwrap();
+        assert!(unused.seal_unused());
+        assert_eq!(
+            sender.admit(&start).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+
+        let dispatched = DelegatedWork::default();
+        dispatched.clone().admit(&start).unwrap();
+        assert!(!dispatched.seal_unused());
+    }
 
     #[test]
     fn delegated_write_preserves_the_commit_frame_and_unknown_cut() {

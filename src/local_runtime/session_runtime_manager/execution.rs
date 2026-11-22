@@ -127,6 +127,7 @@ enum EndpointAuthority {
     Delegated {
         control: rustx_execution_server::ControlHandle,
         shutdown: rustx_execution_transport::ChannelShutdown,
+        work: rustx_execution_server::delegation::DelegatedWork,
     },
 }
 
@@ -1730,6 +1731,17 @@ pub(crate) struct WorkspaceConfiguration {
 }
 
 impl SessionExecutionScope {
+    pub(crate) fn delegated_work(
+        &self,
+    ) -> Option<rustx_execution_server::delegation::DelegatedWork> {
+        if let ExecutionRoute::Delegated(endpoint) = &self.route
+            && let EndpointAuthority::Delegated { work, .. } = &endpoint.authority
+        {
+            return Some(work.clone());
+        }
+        None
+    }
+
     /// The Session's published endpoint, resolved at dispatch time — a
     /// lookup, never a claim. An absent, preparing, fenced, or dropped
     /// endpoint is `NotConnected`; the scope itself is never proof of

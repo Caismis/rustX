@@ -79,6 +79,7 @@
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
+use rustx_execution_server::delegation::DelegatedWork;
 
 #[cfg(test)]
 use crate::events::types::RuntimeEvent;
@@ -106,6 +107,7 @@ use crate::runtime::subagent::{
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
 use super::dispatcher::{ChildControlDispatcher, ChildControlEvent, ChildControlHandle};
 use super::live_inspection::{LiveConversationInspectionLease, LiveConversationInspectionServer};
+use super::session_runtime_manager::SessionExecutionScope;
 
 /// The child-side adapter from the conversation-owned coordinator to the
 /// parent's reliable control lane. It carries only route events; the parent
@@ -333,9 +335,11 @@ async fn run_child(
     handle: &ChildControlHandle,
     spec: SubagentChildSpec,
     physical_lease: &crate::runtime::subagent::physical_recovery::ChildPhysicalLease,
-    execution_scope: Option<super::session_runtime_manager::SessionExecutionScope>,
+    execution_scope: Option<SessionExecutionScope>,
 ) -> Result<(), ChildExit> {
-    let delegated = execution_scope.is_some();
+    let delegated_work = execution_scope
+        .as_ref()
+        .and_then(SessionExecutionScope::delegated_work);
     let mut lifetime = ChildPhysicalLifetime::new(handle);
     lifetime.preparation.execution_scope = execution_scope;
     let result = Box::pin(run_child_inner(dispatcher, handle, spec, &mut lifetime)).await;
@@ -344,11 +348,19 @@ async fn run_child(
     // emits no proof. A failed drain retains uncertainty regardless of the
     // logical result or whether any process happens to remain observable.
     match lifetime.settle(handle.parent_lost()).await {
-        Ok(()) if !delegated => physical_lease.publish_quiescent().map_err(|error| {
-            ChildExit::Protocol(format!("publish physical settlement receipt: {error}"))
-        })?,
-        // Only the parent owns the physical relay and can attest its drain.
-        Ok(()) => {}
+        Ok(()) => {
+            // Once effectful dispatch was possible, only the parent relay
+            // can attest its physical settlement. A child that lost its
+            // parent before dispatch can seal that boundary itself.
+            if delegated_work
+                .as_ref()
+                .is_none_or(DelegatedWork::seal_unused)
+            {
+                physical_lease.publish_quiescent().map_err(|error| {
+                    ChildExit::Protocol(format!("publish physical settlement receipt: {error}"))
+                })?;
+            }
+        }
         Err(failures) => {
             eprintln!(
                 "subagent child: physical settlement unproven: {}",

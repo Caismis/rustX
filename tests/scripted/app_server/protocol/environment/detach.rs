@@ -1811,6 +1811,10 @@ async fn unproven_child_settlement(journal_released: bool) {
     .await;
     state.unwrap();
 
+    assert!(
+        !scope.delegated_work().unwrap().seal_unused(),
+        "dispatch crossed the child's no-work boundary"
+    );
     bounded(crate::runtime::subagent::process::assert_unproven_relay_retains_child_root(owner))
         .await;
     assert!(

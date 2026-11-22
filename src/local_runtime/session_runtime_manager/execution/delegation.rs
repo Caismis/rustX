@@ -58,8 +58,15 @@ impl ChildExecutionGrant {
             control,
         )?;
         let control = connection.control().expect("delegated control lane");
+        let work = connection
+            .delegated_work()
+            .expect("delegated dispatch witness");
         let endpoint = LocalExecutionEndpoint {
-            authority: EndpointAuthority::Delegated { control, shutdown },
+            authority: EndpointAuthority::Delegated {
+                control,
+                shutdown,
+                work,
+            },
             connection: Mutex::new(Some(connection)),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             connection_released: tokio::sync::Notify::new(),

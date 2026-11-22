@@ -1111,7 +1111,10 @@ envelope.
   output release, or a confirmed binding-wide Revoke from the terminal
   owner. The parent owns the execution relay and uses its settlement
   before publishing a delegated child's quiescence and removing its
-  runtime root. Input controls are
+  runtime root. A child can attest its local drain directly if it seals
+  its relay-side dispatch boundary before any request that might leave
+  retained work crosses it. This preserves recovery after a parent
+  crash during an unused child's preparation. Input controls are
   admitted as `InputAccepted` and their physical outcome — `Pending`,
   `Applied`, `Failed`, `Rejected`, or `Unknown` — is correlated by
   `InputReceipt`. A pending poll keeps the receipt and a terminal poll

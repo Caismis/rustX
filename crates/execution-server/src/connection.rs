@@ -11,6 +11,7 @@ use super::*;
 /// reply could still be outstanding, and later calls fail closed.
 pub struct LocalConnection {
     pub(super) owner: Option<Arc<ConnectionOwner>>,
+    pub(super) delegated_work: Option<delegation::DelegatedWork>,
     /// The data lane — the only dispatch channel.
     pub(super) channel: RecordChannel,
     /// The paired control lane's worker, stopped exactly once.
@@ -277,6 +278,9 @@ impl LocalConnection {
             .map_err(ExchangeFailure::Refused)?;
         self.gate().map_err(ExchangeFailure::Refused)?;
         admit().map_err(ExchangeFailure::Refused)?;
+        if let Some(work) = &self.delegated_work {
+            work.admit(request).map_err(ExchangeFailure::Refused)?;
+        }
         self.exchange_encoded(&encoded, deadline, sent)
             .map_err(|failure| match failure {
                 ExchangeFailure::Unknown(error) => ExchangeFailure::Unknown(self.retire(error)),

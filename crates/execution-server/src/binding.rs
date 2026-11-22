@@ -1055,6 +1055,7 @@ impl Binding {
                             ControlWorker::spawn(channel, self.inner.clone(), connection, shared);
                         Ok(ChannelAccept::Live(LocalConnection {
                             owner: Some(self.inner.clone()),
+                            delegated_work: None,
                             channel: commit.channel,
                             control: Some(worker),
                             usable: true,
