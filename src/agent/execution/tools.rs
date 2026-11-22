@@ -215,7 +215,8 @@ impl ToolExecutor for BashHandoff<'_> {
                             completion.await
                         }
                     };
-                    self.registry.finish_unpromoted_bash(result)
+                    self.registry
+                        .finish_unpromoted_bash(result, Some(prepared.output()))
                 }
                 Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
                     ..

@@ -198,12 +198,16 @@ impl CaptureFile {
         if *removed {
             return Ok(());
         }
+        let retained = fstat(&self.file)?;
+        if retained.st_nlink == 0 {
+            *removed = true;
+            return Ok(());
+        }
         let name = self.name.as_os_str();
         let root = &self.directory.root;
         root.verify()?;
         match statat(root.descriptor(), name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(named) => {
-                let retained = fstat(&self.file)?;
                 if (named.st_dev, named.st_ino) != (retained.st_dev, retained.st_ino) {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }

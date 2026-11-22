@@ -66,7 +66,7 @@ pub struct LocalExecutionEndpoint {
     #[cfg(test)]
     pub(crate) settlement_joined: tokio::sync::Notify,
     #[cfg(test)]
-    mutation_test_hooks: Mutex<MutationTestHooks>,
+    test_hooks: Mutex<ExecutionTestHooks>,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -99,7 +99,8 @@ enum Settlement {
 
 #[cfg(test)]
 #[derive(Default)]
-struct MutationTestHooks {
+struct ExecutionTestHooks {
+    expire_bash_capture_query: bool,
     preparation_cleanup: std::collections::BTreeMap<
         rustx_execution_protocol::DecimalU64,
         tokio::sync::oneshot::Sender<()>,
@@ -242,7 +243,7 @@ impl LocalExecutionEndpoint {
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
-            mutation_test_hooks: Mutex::default(),
+            test_hooks: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -297,7 +298,7 @@ impl LocalExecutionEndpoint {
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
-            mutation_test_hooks: Mutex::default(),
+            test_hooks: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -1124,11 +1125,18 @@ impl LocalExecutionEndpoint {
     }
 
     #[cfg(test)]
-    pub(crate) fn hold_data_exchange_for_test(&self, hold: impl FnOnce()) -> io::Result<()> {
-        self.with_connection(None, true, |_| {
-            hold();
-            Ok(())
-        })
+    pub(crate) fn hold_data_exchange_for_test<T>(&self, hold: impl FnOnce() -> T) -> io::Result<T> {
+        self.with_connection(None, true, |_| Ok(hold()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_bash_capture_query_for_test(&self) {
+        self.test_hooks.lock().unwrap().expire_bash_capture_query = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_bash_capture_expiry_for_test(&self) -> bool {
+        std::mem::take(&mut self.test_hooks.lock().unwrap().expire_bash_capture_query)
     }
 
     /// The shared authority binding behind this endpoint — test-facing:
@@ -1342,7 +1350,7 @@ impl LocalExecutionEndpoint {
         ticket: rustx_execution_protocol::DecimalU64,
     ) -> tokio::sync::oneshot::Receiver<()> {
         let (send, done) = tokio::sync::oneshot::channel();
-        self.mutation_test_hooks
+        self.test_hooks
             .lock()
             .unwrap()
             .preparation_cleanup
@@ -1358,18 +1366,14 @@ impl LocalExecutionEndpoint {
         let (ready, decision_ready) = tokio::sync::oneshot::channel();
         let (resume, parked) = tokio::sync::oneshot::channel();
         let (done, decision_done) = tokio::sync::oneshot::channel();
-        self.mutation_test_hooks
-            .lock()
-            .unwrap()
-            .cancel_fence
-            .insert(
-                ticket,
-                CancelFenceHook {
-                    ready,
-                    resume: parked,
-                    done,
-                },
-            );
+        self.test_hooks.lock().unwrap().cancel_fence.insert(
+            ticket,
+            CancelFenceHook {
+                ready,
+                resume: parked,
+                done,
+            },
+        );
         CancelMutationFenceTest {
             decision_ready,
             resume,
@@ -1380,7 +1384,7 @@ impl LocalExecutionEndpoint {
     #[cfg(test)]
     fn prepared_cleanup_completed_for_test(&self, ticket: rustx_execution_protocol::DecimalU64) {
         if let Some(done) = self
-            .mutation_test_hooks
+            .test_hooks
             .lock()
             .unwrap()
             .preparation_cleanup
@@ -1396,12 +1400,7 @@ impl LocalExecutionEndpoint {
         ticket: rustx_execution_protocol::DecimalU64,
         disposition: Option<rustx_execution_protocol::CancelDisposition>,
     ) -> Option<tokio::sync::oneshot::Sender<()>> {
-        let gate = self
-            .mutation_test_hooks
-            .lock()
-            .unwrap()
-            .cancel_fence
-            .remove(&ticket);
+        let gate = self.test_hooks.lock().unwrap().cancel_fence.remove(&ticket);
         let CancelFenceHook {
             ready,
             resume,

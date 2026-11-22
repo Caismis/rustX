@@ -805,8 +805,16 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
     bounded(control).await.unwrap();
 }
 
+pub(crate) enum UnavailableBashCapture {
+    ClientReported,
+    QueryBusy,
+    PrivateStage,
+}
+
 #[allow(clippy::too_many_lines)] // Keep the native invocation and its physical cleanup trace together.
-pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_release() {
+pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_release(
+    case: UnavailableBashCapture,
+) {
     use crate::runtime::identity::ToolCallId;
     use crate::tools::artifacts::ArtifactStore;
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolRegistry};
@@ -823,6 +831,8 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
         fn report(&self, _progress: ToolProgress) {}
     }
 
+    let query_busy = !matches!(case, UnavailableBashCapture::ClientReported);
+    let private_stage = matches!(case, UnavailableBashCapture::PrivateStage);
     let fixture = Fixture::with_session_count(None, 1).await;
     let ProxiedClient {
         data: (mut client_data, mut server_data),
@@ -834,13 +844,26 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
     let control = tokio::spawn(async move {
         let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
     });
+    if query_busy {
+        endpoint.expire_bash_capture_query_for_test();
+    }
     // The Client still uses its scratch root while shutting down.
     let client_scratch = scratch.path().to_path_buf();
+    let (file_retained, retained_file) = oneshot::channel();
+    let (discard_received, discarded) = oneshot::channel();
     let data = tokio::spawn(async move {
+        let mut file_retained = Some(file_retained);
+        let mut discard_received = Some(discard_received);
         let mut trace = Vec::new();
         let mut path = None;
         let mut operation = None;
         while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            if query_busy {
+                assert!(!matches!(
+                    request,
+                    ClientRequest::Process(ProcessRequest::BashCapture { .. })
+                ));
+            }
             if let ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }) = &request {
                 assert_eq!(Some(key), operation.as_ref());
                 if trace == ["capture", "release"] {
@@ -857,14 +880,14 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
                 (
                     ClientRequest::Process(ProcessRequest::RegisterAgentBash { key, spec, .. }),
                     ClientReply::Process(ProcessReply::Registered { key: admitted }),
-                ) => {
+                ) if operation.is_none() => {
                     assert_eq!(key, admitted);
                     assert!(matches!(
                         spec.program,
                         ProcessProgram::Shell {
-                            live_output: false,
+                            live_output,
                             ..
-                        }
+                        } if live_output == private_stage
                     ));
                     assert!(operation.replace(key.clone()).is_none());
                 }
@@ -877,15 +900,6 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
                 ) => {
                     assert_eq!(Some(&*key), operation.as_ref());
                     assert_eq!(capture.output, BashCaptureState::Complete);
-                    let name = format!("{:032x}.output", key.operation.as_u128());
-                    path = std::fs::read_dir(&client_scratch)
-                        .unwrap()
-                        .map(|entry| entry.unwrap().path().join(&name))
-                        .find(|path| path.is_file());
-                    assert_eq!(
-                        std::fs::read(path.as_ref().unwrap()).unwrap(),
-                        vec![b' '; 65_536]
-                    );
                     // The Client's own regression injects the append/rollback fault.
                     capture.output = BashCaptureState::Unavailable;
                     capture.total = None;
@@ -898,7 +912,20 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
                 ) => {
                     assert_eq!(key, released);
                     assert_eq!(Some(key), operation.as_ref());
-                    assert!(path.as_deref().is_some_and(Path::is_file));
+                    let name = format!("{:032x}.output", key.operation.as_u128());
+                    path = std::fs::read_dir(&client_scratch)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path().join(&name))
+                        .find(|path| path.is_file());
+                    assert_eq!(
+                        std::fs::read(path.as_ref().unwrap()).unwrap(),
+                        vec![b' '; 65_536]
+                    );
+                    file_retained
+                        .take()
+                        .unwrap()
+                        .send(path.clone().unwrap())
+                        .unwrap();
                     trace.push("release");
                 }
                 (
@@ -908,6 +935,7 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
                     assert_eq!(key, released);
                     assert!(!path.as_deref().unwrap().exists());
                     trace.push("discard confirmed");
+                    discard_received.take().unwrap().send(()).unwrap();
                 }
                 _ => {}
             }
@@ -926,47 +954,101 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
     let managed =
         ManagedToolOutput::new(conversation.clone(), output.path().join("managed")).unwrap();
     let environment = crate::tools::environment::ToolEnvironment::new();
-    let context = ToolExecutionContext::new(
-        conversation,
-        None,
-        detached_cancellation(crate::runtime::CancellationSignal::new()),
-        &workspace,
-        &NoProgress,
-        &artifacts,
-        &managed,
-        &environment,
-    );
-    let mut registry = ToolRegistry::new();
     let bash =
         crate::tools::native::subagent_child_definition("bash", ToolInvocationPolicy::default())
             .unwrap();
-    crate::tools::native::register_subagent_child_tools(&mut registry, std::slice::from_ref(&bash))
+    let invocation = ToolInvocation {
+        id: ToolInvocationId::Agent {
+            call_id: ToolCallId::new("foreground-capture-cleanup"),
+        },
+        tool_id: bash.id.clone(),
+        tool_name: bash.name.clone(),
+        mode: if private_stage {
+            ToolInvocationMode::Background
+        } else {
+            ToolInvocationMode::Foreground
+        },
+        arguments: serde_json::json!({
+            "description": "Generate foreground output",
+            "command": "printf '%65536s' ''",
+        }),
+    };
+    let cancellation = detached_cancellation(crate::runtime::CancellationSignal::new());
+    let result = if private_stage {
+        use crate::runtime::inbound::ConversationInboundMailbox;
+        use crate::tools::background::{BackgroundResources, ConversationBackgroundRegistry};
+
+        let prepared = crate::tools::native::PreparedBash::register(
+            &invocation,
+            &workspace,
+            conversation,
+            &environment,
+            &cancellation,
+        )
+        .await
         .unwrap();
-    let executor = registry.executor(&bash.id);
-    let result = bounded(
-        executor
-            .start(
-                ToolInvocation {
-                    id: ToolInvocationId::Agent {
-                        call_id: ToolCallId::new("foreground-capture-cleanup"),
-                    },
-                    tool_id: bash.id,
-                    tool_name: bash.name,
-                    mode: ToolInvocationMode::Foreground,
-                    arguments: serde_json::json!({
-                        "description": "Generate foreground output",
-                        "command": "printf '%65536s' ''",
-                    }),
-                },
-                context,
+        let registry = ConversationBackgroundRegistry::new(
+            conversation.clone(),
+            BackgroundResources {
+                mailbox: ConversationInboundMailbox::new(conversation.clone()),
+                workspace,
+                artifacts,
+                tool_output: managed,
+                clock: Arc::new(crate::runtime::SystemClock),
+                event_sink: None,
+            },
+        );
+        let mut stage = registry
+            .stage_private_bash(
+                &invocation,
+                Arc::new(prepared),
+                environment,
+                crate::tools::mcp::McpRuntimeLeaseSet::default(),
+                cancellation,
             )
-            .completion,
-    )
-    .await;
+            .unwrap();
+        let result = bounded(async {
+            loop {
+                if let Some(result) = stage.take_result() {
+                    break result;
+                }
+                stage.wait_event().await;
+            }
+        })
+        .await;
+        // While the stage could still be promoted, its output stays usable.
+        let path = bounded(retained_file).await.unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), vec![b' '; 65_536]);
+        let result = stage.release_finished(result);
+        assert_eq!(registry.listing(false, 16).matched, 0);
+        result
+    } else {
+        let context = ToolExecutionContext::new(
+            conversation,
+            None,
+            cancellation,
+            &workspace,
+            &NoProgress,
+            &artifacts,
+            &managed,
+            &environment,
+        );
+        let mut registry = ToolRegistry::new();
+        crate::tools::native::register_subagent_child_tools(
+            &mut registry,
+            std::slice::from_ref(&bash),
+        )
+        .unwrap();
+        let executor = registry.executor(&bash.id);
+        let result = bounded(executor.start(invocation, context).completion).await;
+        bounded(retained_file).await.unwrap();
+        result
+    };
     assert!(matches!(
         result.managed_output.as_deref(),
         Some(ManagedOutputContinuation::Unavailable { .. })
     ));
+    bounded(discarded).await.unwrap();
     let handle = endpoint
         .control()
         .expect("the binding should survive a confirmed discard retry");
@@ -974,13 +1056,72 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
         .await
         .unwrap()
         .unwrap();
+    if query_busy {
+        let conversation = conversation.as_str().to_owned();
+        bounded(tokio::task::spawn_blocking(move || {
+            assert_bash_capture_quota_recovered(&endpoint, conversation);
+        }))
+        .await
+        .unwrap();
+    }
     assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
     assert!(bounded(child.wait()).await.unwrap().success());
-    assert_eq!(
-        bounded(data).await.unwrap(),
-        ["capture", "release", "discard refused", "discard confirmed"]
-    );
+    let expected: &[_] = if query_busy {
+        &["release", "discard confirmed"]
+    } else {
+        &["capture", "release", "discard refused", "discard confirmed"]
+    };
+    assert_eq!(bounded(data).await.unwrap(), expected);
     bounded(control).await.unwrap();
+}
+
+fn assert_bash_capture_quota_recovered(
+    endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    conversation: String,
+) {
+    use rustx_execution_protocol::process::{
+        MAX_BASH_CAPTURES, OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+    use rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT;
+    use std::time::Instant;
+
+    let spec = ProcessSpec {
+        cwd: std::path::PathBuf::new(),
+        program: ProcessProgram::Shell {
+            command: "exit 0".into(),
+            conversation,
+            live_output: true,
+        },
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 0,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let fingerprint = spec.fingerprint();
+    let control = endpoint.control().unwrap();
+    for _ in 0..MAX_BASH_CAPTURES {
+        let key = endpoint.process_key(OperationId::new()).unwrap();
+        let registration = ProcessRequest::RegisterAgentBash {
+            key: key.clone(),
+            fingerprint,
+            spec: spec.clone(),
+        };
+        assert_eq!(
+            endpoint
+                .agent_process(&registration, Instant::now() + PAGE_REQUEST_TIMEOUT, || Ok(
+                    ()
+                ))
+                .unwrap(),
+            ProcessReply::Registered { key: key.clone() },
+        );
+        // Cancellation retires the registration and leaves its capture charged.
+        assert_eq!(
+            control.cancel_process(&key).unwrap(),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+    }
 }
 
 fn park_revoked_receipt(

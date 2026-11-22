@@ -180,6 +180,7 @@
 //! generic retry framework.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -753,6 +754,7 @@ pub(crate) struct PrivateBashStage {
     dispatch: PreparedBackgroundDispatch,
     progress_rx: tokio::sync::mpsc::Receiver<ToolProgress>,
     settled: Arc<Notify>,
+    client_output: Option<PathBuf>,
 }
 
 impl PrivateBashStage {
@@ -795,8 +797,11 @@ impl PrivateBashStage {
         self.dispatch.committed = true;
         self.registry.notify_state_change();
         self.registry.resources.mailbox.wake().notify_one();
-        self.registry
-            .finish_private_output(&self.execution_id, result)
+        self.registry.finish_private_output(
+            &self.execution_id,
+            result,
+            self.client_output.as_deref(),
+        )
     }
 
     pub(crate) async fn adopt(
@@ -1760,7 +1765,11 @@ impl ConversationBackgroundRegistry {
             };
             if let Some(result) = prepared_record.private_result.take() {
                 return Ok(BackgroundDispatchOutcome::ForegroundFinished(
-                    self.finish_private_output(execution_id, result),
+                    self.finish_private_output(
+                        execution_id,
+                        result,
+                        prepared_record.record.client_output.as_deref(),
+                    ),
                 ));
             }
             // Issue #12 (M9a): the durable ownership fact commits **before**
@@ -1917,6 +1926,7 @@ impl ConversationBackgroundRegistry {
             BackgroundExecutor::Bash(bash) => Some(bash.clone()),
             BackgroundExecutor::Tool(_) => None,
         };
+        let client_output = bash.as_ref().map(|bash| bash.output().to_path_buf());
         let dispatch = self.prepare_runner(invocation, executor, environment, mcp_leases)?;
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(32);
         let settled = {
@@ -1948,6 +1958,7 @@ impl ConversationBackgroundRegistry {
             dispatch,
             progress_rx,
             settled,
+            client_output,
         })
     }
 
@@ -1955,6 +1966,7 @@ impl ConversationBackgroundRegistry {
         &self,
         id: &ToolExecutionId,
         result: ToolExecutionResult,
+        client_output: Option<&Path>,
     ) -> ToolExecutionResult {
         let storage = &self.resources.tool_output;
         if result
@@ -1973,18 +1985,27 @@ impl ConversationBackgroundRegistry {
         } else {
             storage.discard_background_output(id);
         }
-        self.finish_unpromoted_bash(result)
+        self.finish_unpromoted_bash(result, client_output)
     }
 
     pub(crate) fn finish_unpromoted_bash(
         &self,
         mut result: ToolExecutionResult,
+        client_output: Option<&Path>,
     ) -> ToolExecutionResult {
-        if !result
+        use crate::tools::types::ManagedOutputContinuation;
+
+        if let Some(ManagedOutputContinuation::Unavailable { .. }) =
+            result.managed_output.as_deref()
+            && let Some(locator) = client_output
+        {
+            // An unpromoted result carries no public locator for this file.
+            crate::tools::native::discard_private_bash_output(&self.resources.workspace, locator);
+        } else if !result
             .truncation
             .as_ref()
             .is_some_and(|state| state.truncated)
-            && let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
+            && let Some(ManagedOutputContinuation::Complete { locator }) =
                 result.managed_output.as_deref()
         {
             crate::tools::native::discard_private_bash_output(&self.resources.workspace, locator);

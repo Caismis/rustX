@@ -405,13 +405,14 @@ impl RemoteBash {
             snapshot.physical_settlement_proven,
             std::sync::atomic::Ordering::Release,
         );
-        let (mut capture, discard_unavailable) = self.collect_capture(&snapshot).await;
+        let (mut capture, client_unavailable) = self.collect_capture(&snapshot).await;
         if let Some(stdout) = &context.stdout_capture
             && self.receive_raw_stdout(stdout, &snapshot).await.is_err()
         {
             self.endpoint.cut_pair_if_open();
         }
-        if !self.release(&snapshot).await {
+        let released = self.release(&snapshot).await;
+        if !released {
             // Release does not rewrite the known business outcome. Retiring
             // the pair does make the continuation unavailable.
             self.endpoint.cut_pair_if_open();
@@ -424,22 +425,30 @@ impl RemoteBash {
             } else if self.live_output {
                 capture = Some(unavailable_capture());
             }
-        } else if discard_unavailable {
-            // An unavailable capture can still own a Client file and quota.
-            // There is no continuation to take over that ownership.
-            self.endpoint
-                .clone()
-                .discard_bash_capture(self.key.clone())
-                .await;
         }
-        Ok(project(
+        let result = project(
             snapshot,
             capture,
             before_start,
             self.live_output,
             &self.key,
             &context.cancellation,
-        ))
+        );
+        if released
+            && matches!(
+                result.managed_output.as_deref(),
+                Some(ManagedOutputContinuation::Unavailable { .. })
+            )
+            && (client_unavailable || !self.live_output)
+        {
+            // A promotable capture with a failed query is still readable.
+            // The registry decides whether the foreground keeps cleanup ownership.
+            self.endpoint
+                .clone()
+                .discard_bash_capture(self.key.clone())
+                .await;
+        }
+        Ok(result)
     }
 
     async fn collect_capture(
@@ -615,6 +624,15 @@ async fn exchange_with_gate(
     start_gate: Option<StartGate>,
 ) -> io::Result<ProcessReply> {
     let deadline = Instant::now() + EXCHANGE_BUDGET;
+    #[cfg(test)]
+    let expire_capture = matches!(request, ProcessRequest::BashCapture { .. })
+        && endpoint.take_bash_capture_expiry_for_test();
+    #[cfg(test)]
+    let deadline = if expire_capture {
+        Instant::now()
+    } else {
+        deadline
+    };
     let request = Arc::new(request);
     loop {
         if cancellation.is_some_and(ExecutionCancellation::is_cancelled) {
@@ -625,18 +643,32 @@ async fn exchange_with_gate(
         let cancellation = cancellation.cloned();
         let start_gate = start_gate.clone();
         let result = tokio::task::spawn_blocking(move || {
-            endpoint.agent_process(&request, deadline, || {
-                if start_gate.is_some_and(|gate| !gate()) {
-                    return Err(io::ErrorKind::Interrupted.into());
-                }
-                if let Some(cancellation) = cancellation {
-                    cancellation
-                        .with_active(|| ())
-                        .ok_or(io::ErrorKind::Interrupted.into())
-                } else {
-                    Ok(())
-                }
-            })
+            let dispatch = || {
+                endpoint.agent_process(&request, deadline, || {
+                    if start_gate.is_some_and(|gate| !gate()) {
+                        return Err(io::ErrorKind::Interrupted.into());
+                    }
+                    if let Some(cancellation) = cancellation {
+                        cancellation
+                            .with_active(|| ())
+                            .ok_or(io::ErrorKind::Interrupted.into())
+                    } else {
+                        Ok(())
+                    }
+                })
+            };
+            #[cfg(test)]
+            if expire_capture {
+                // Exhaust just this query's budget with real prewire connection
+                // contention, and release the lock before journal settlement.
+                let result = endpoint.hold_data_exchange_for_test(dispatch)?;
+                assert_eq!(
+                    result.as_ref().unwrap_err().kind(),
+                    io::ErrorKind::WouldBlock
+                );
+                return result;
+            }
+            dispatch()
         })
         .await
         .map_err(io::Error::other)?;

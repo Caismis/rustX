@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -226,7 +226,49 @@ struct Minimal {
     receipts: BTreeMap<u64, RetainedInput>,
 }
 
+impl Minimal {
+    fn cancelled_before_start(fingerprint: Option<SpecFingerprint>) -> Self {
+        Self {
+            fingerprint,
+            snapshot: SettledSnapshot {
+                disposition: SettledDisposition::Cancelled,
+                physical_settlement_proven: true,
+                exit_code: None,
+                stdout_total: 0.into(),
+                stderr_total: 0.into(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                final_sequence: 0.into(),
+            },
+            bash_file: None,
+            never_started: true,
+            receipts: BTreeMap::new(),
+        }
+    }
+}
+
+struct PreparingBash {
+    fingerprint: SpecFingerprint,
+    cancelled: bool,
+    reply: Arc<OnceLock<ProcessReply>>,
+}
+
+enum RegistrationReply {
+    Ready(ProcessReply),
+    Preparing(Arc<OnceLock<ProcessReply>>),
+}
+
+impl RegistrationReply {
+    fn wait(self) -> ProcessReply {
+        match self {
+            Self::Ready(reply) => reply,
+            Self::Preparing(reply) => reply.wait().clone(),
+        }
+    }
+}
+
 enum Record {
+    PreparingBash(PreparingBash),
     Full(Box<Operation>),
     Minimal(Minimal),
 }
@@ -234,6 +276,7 @@ enum Record {
 impl Record {
     fn capture_file(&self) -> Option<&Arc<CaptureFile>> {
         match self {
+            Self::PreparingBash(_) => None,
             Self::Full(operation) => operation.bash_file.as_ref(),
             Self::Minimal(operation) => operation.bash_file.as_ref().map(|(_, file)| file),
         }
@@ -245,6 +288,7 @@ impl Record {
             .is_some_and(|retained| Arc::ptr_eq(retained, file))
         {
             match self {
+                Self::PreparingBash(_) => unreachable!("preparation has no registered capture"),
                 Self::Full(operation) => operation.bash_file = None,
                 Self::Minimal(operation) => operation.bash_file = None,
             }
@@ -266,8 +310,11 @@ impl Inner {
         &mut self,
         key: &ProcessOperationKey,
         fingerprint: SpecFingerprint,
-    ) -> Option<ProcessReply> {
+    ) -> Option<RegistrationReply> {
         let reply = match self.records.get_mut(&key.operation) {
+            Some(Record::PreparingBash(pending)) if pending.fingerprint == fingerprint => {
+                return Some(RegistrationReply::Preparing(pending.reply.clone()));
+            }
             Some(Record::Full(op)) if op.key == *key && op.fingerprint == fingerprint => {
                 // The original journal is still owned. The caller can
                 // attach to it and retrieve the actual state with START or Query.
@@ -283,14 +330,16 @@ impl Inner {
                     ProcessReply::Conflict { key: key.clone() }
                 }
             }
-            Some(Record::Full(_)) => ProcessReply::Conflict { key: key.clone() },
+            Some(Record::Full(_) | Record::PreparingBash(_)) => {
+                ProcessReply::Conflict { key: key.clone() }
+            }
             None => {
                 let reason = if self.records.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
                     SpecRefusal::TombstonesSaturated
                 } else if self
                     .records
                     .values()
-                    .filter(|r| matches!(r, Record::Full(_)))
+                    .filter(|r| !matches!(r, Record::Minimal(_)))
                     .count()
                     >= MAX_OPERATIONS_PER_SESSION
                 {
@@ -304,7 +353,7 @@ impl Inner {
                 }
             }
         };
-        Some(reply)
+        Some(RegistrationReply::Ready(reply))
     }
 }
 
@@ -495,6 +544,10 @@ impl Operations {
         }
         let mut inner = self.inner.lock().expect("operation registry");
         match inner.records.get_mut(&key.operation) {
+            Some(Record::PreparingBash(pending)) => {
+                pending.cancelled = true;
+                ProcessCancelDisposition::CancelledBeforeStart
+            }
             Some(Record::Full(operation)) if operation.key == *key => {
                 if let OperationState::Settled(snapshot) = operation.state {
                     settled_cancel_disposition(snapshot)
@@ -519,24 +572,12 @@ impl Operations {
                         // `Start` or `ReleaseOutput` that cannot come.
                         if matches!(operation.state, OperationState::Registered) {
                             resolve_pending(operation);
-                            let minimal = Minimal {
-                                fingerprint: Some(operation.fingerprint),
-                                // START can lag behind Server-side background
-                                // acceptance. Only the output owner may discard it.
-                                bash_file: registered_capture(operation),
-                                never_started: true,
-                                receipts: std::mem::take(&mut operation.receipts),
-                                snapshot: SettledSnapshot {
-                                    disposition: SettledDisposition::Cancelled,
-                                    physical_settlement_proven: true,
-                                    exit_code: None,
-                                    stdout_total: 0.into(),
-                                    stderr_total: 0.into(),
-                                    stdout_truncated: false,
-                                    stderr_truncated: false,
-                                    final_sequence: 0.into(),
-                                },
-                            };
+                            let mut minimal =
+                                Minimal::cancelled_before_start(Some(operation.fingerprint));
+                            // START can lag behind Server-side background acceptance.
+                            // Only the output owner may discard a published capture.
+                            minimal.bash_file = registered_capture(operation);
+                            minimal.receipts = std::mem::take(&mut operation.receipts);
                             inner
                                 .records
                                 .insert(key.operation, Record::Minimal(minimal));
@@ -557,22 +598,7 @@ impl Operations {
                 }
                 inner.records.insert(
                     key.operation,
-                    Record::Minimal(Minimal {
-                        fingerprint: None,
-                        bash_file: None,
-                        never_started: true,
-                        receipts: BTreeMap::new(),
-                        snapshot: SettledSnapshot {
-                            disposition: SettledDisposition::Cancelled,
-                            physical_settlement_proven: true,
-                            exit_code: None,
-                            stdout_total: 0.into(),
-                            stderr_total: 0.into(),
-                            stdout_truncated: false,
-                            stderr_truncated: false,
-                            final_sequence: 0.into(),
-                        },
-                    }),
+                    Record::Minimal(Minimal::cancelled_before_start(None)),
                 );
                 ProcessCancelDisposition::CancelledBeforeStart
             }
@@ -665,13 +691,13 @@ impl Operations {
         let Some(_active) = self.admit_auxiliary() else {
             return ProcessReply::Unknown { key };
         };
-        if let Some(reply) = self
+        let reply = self
             .inner
             .lock()
             .expect("operation registry")
-            .registration_reply(&key, fingerprint)
-        {
-            return reply;
+            .registration_reply(&key, fingerprint);
+        if let Some(reply) = reply {
+            return reply.wait();
         }
         // Only a new identity checks cwd. The filesystem lookup does not
         // hold the registry lock needed by control cancellation.
@@ -681,7 +707,8 @@ impl Operations {
             return ProcessReply::Unknown { key };
         }
         if let Some(reply) = inner.registration_reply(&key, fingerprint) {
-            return reply;
+            drop(inner);
+            return reply.wait();
         }
         // A concurrent registration or cancel could have won during the
         // lookup. Only a still-unclaimed key reaches this allocation.
@@ -691,55 +718,105 @@ impl Operations {
                 reason: SpecRefusal::InvalidCwd,
             };
         };
-        let bash_file = if matches!(
+        let prepare_capture = matches!(
             &spec.program,
             ProcessProgram::Shell {
                 live_output: true,
                 ..
             }
-        ) {
-            match self.captures.create(key.operation) {
-                Ok(file) => Some(file),
-                Err(_) => {
-                    return ProcessReply::Refused {
-                        key,
-                        reason: SpecRefusal::BashCaptureUnavailable,
-                    };
-                }
-            }
-        } else {
-            None
-        };
+        );
         let input = (spec.stdin == ProcessStdin::Streamed || spec.pty.is_some())
             .then(|| tokio::sync::mpsc::channel::<InputEvent>(INPUT_QUEUE_DEPTH));
         let (input_tx, input_rx) = match input {
             Some((tx, rx)) => (Some(tx), Some(rx)),
             None => (None, None),
         };
+        let operation = Box::new(Operation {
+            key: key.clone(),
+            fingerprint,
+            spec,
+            cwd,
+            state: OperationState::Registered,
+            journal: Journal::default(),
+            input_sequence: 1,
+            input: input_tx,
+            input_rx,
+            receipts: BTreeMap::new(),
+            #[cfg(test)]
+            pipe_close_received: None,
+            #[cfg(test)]
+            partial_input_failure: None,
+            cancel: ProcessSignal::new(),
+            witness: None,
+            bash_file: None,
+            bash_result: None,
+        });
+        if !prepare_capture {
+            inner.records.insert(key.operation, Record::Full(operation));
+            return ProcessReply::Registered { key };
+        }
+        let reply = Arc::new(OnceLock::new());
         inner.records.insert(
             key.operation,
-            Record::Full(Box::new(Operation {
-                key: key.clone(),
+            Record::PreparingBash(PreparingBash {
                 fingerprint,
-                spec,
-                cwd,
-                state: OperationState::Registered,
-                journal: Journal::default(),
-                input_sequence: 1,
-                input: input_tx,
-                input_rx,
-                receipts: BTreeMap::new(),
-                #[cfg(test)]
-                pipe_close_received: None,
-                #[cfg(test)]
-                partial_input_failure: None,
-                cancel: ProcessSignal::new(),
-                witness: None,
-                bash_file,
-                bash_result: None,
-            })),
+                cancelled: false,
+                reply: reply.clone(),
+            }),
         );
-        ProcessReply::Registered { key }
+        drop(inner);
+        // The counted registration on the blocking data lane owns allocation and
+        // rollback until the file is transferred to the registry.
+        let result = self.prepare_bash_capture(operation);
+        reply
+            .set(result.clone())
+            .expect("one capture registration owner");
+        result
+    }
+
+    fn prepare_bash_capture(&self, mut operation: Box<Operation>) -> ProcessReply {
+        let key = operation.key.clone();
+        let allocated = self.captures.create(key.operation);
+        let mut inner = self.inner.lock().expect("operation registry");
+        let Some(Record::PreparingBash(pending)) = inner.records.get(&key.operation) else {
+            unreachable!("capture allocation owns its registration slot");
+        };
+        if pending.cancelled || self.revoke.is_cancelled() {
+            drop(inner);
+            let mut minimal = Minimal::cancelled_before_start(Some(operation.fingerprint));
+            operation.bash_file = allocated.ok().filter(|file| {
+                if let Err(error) = file.discard() {
+                    tracing::warn!(%error, "uncommitted Bash capture unlink failed");
+                    return true;
+                }
+                false
+            });
+            // If deletion could not be confirmed, retain the file and its
+            // quota for explicit discard or the binding's revocation sweep.
+            minimal.bash_file = registered_capture(&operation);
+            let state = OperationState::Settled(minimal.snapshot);
+            self.inner
+                .lock()
+                .expect("operation registry")
+                .records
+                .insert(key.operation, Record::Minimal(minimal));
+            return if self.revoke.is_cancelled() {
+                ProcessReply::Unknown { key }
+            } else {
+                ProcessReply::State { key, state }
+            };
+        }
+        if let Ok(file) = allocated {
+            operation.bash_file = Some(file);
+            inner.records.insert(key.operation, Record::Full(operation));
+            ProcessReply::Registered { key }
+        } else {
+            inner.records.remove(&key.operation);
+            ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::BashCaptureUnavailable,
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)] // one coherent registration→START-admission path
@@ -885,7 +962,7 @@ impl Operations {
         match inner.records.get(&key.operation) {
             Some(Record::Full(op)) => op.state,
             Some(Record::Minimal(m)) => OperationState::Settled(m.snapshot),
-            None => OperationState::Registered,
+            Some(Record::PreparingBash(_)) | None => OperationState::Registered,
         }
     }
 
@@ -1002,6 +1079,7 @@ impl Operations {
             Record::Full(op) if op.key == key => &op.receipts,
             Record::Minimal(retired) => &retired.receipts,
             Record::Full(_) => return ProcessReply::Conflict { key },
+            Record::PreparingBash(_) => return ProcessReply::Unknown { key },
         };
         if let Some(receipt) = receipts.get(&sequence.get()) {
             return if receipt.fingerprint == fingerprint {
@@ -1183,7 +1261,7 @@ impl Operations {
                     minimal.bash_file.as_ref().map(|(_, file)| file.clone())
                 }
                 Some(Record::Full(_)) => return ProcessReply::Conflict { key },
-                None => return ProcessReply::Unknown { key },
+                Some(Record::PreparingBash(_)) | None => return ProcessReply::Unknown { key },
             }
         };
         #[cfg(test)]
@@ -1282,6 +1360,7 @@ impl Operations {
             return None;
         }
         let (conversation, file) = match inner.records.get(&key.operation)? {
+            Record::PreparingBash(_) => return None,
             Record::Full(op) => {
                 let ProcessProgram::Shell { conversation, .. } = &op.spec.program else {
                     return None;
@@ -2522,21 +2601,29 @@ mod tests {
         live_output: bool,
     ) -> ProcessOperationKey {
         let key = fresh_key(admission);
+        assert_eq!(
+            ops.dispatch(bash_capture_registration(key.clone(), command, live_output)),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        key
+    }
+
+    fn bash_capture_registration(
+        key: ProcessOperationKey,
+        command: &str,
+        live_output: bool,
+    ) -> ProcessRequest {
         let mut bash = spec(&[]);
         bash.program = ProcessProgram::Shell {
             command: command.into(),
             conversation: "capture-fixture".into(),
             live_output,
         };
-        assert_eq!(
-            ops.dispatch(ProcessRequest::RegisterAgentBash {
-                key: key.clone(),
-                fingerprint: bash.fingerprint(),
-                spec: bash,
-            }),
-            ProcessReply::Registered { key: key.clone() }
-        );
-        key
+        ProcessRequest::RegisterAgentBash {
+            key,
+            fingerprint: bash.fingerprint(),
+            spec: bash,
+        }
     }
 
     fn capture_path(ops: &Operations, key: &ProcessOperationKey) -> std::path::PathBuf {
@@ -2559,8 +2646,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let admission = admission(directory.path());
         let ops = Arc::new(Operations::new(admission.clone()).unwrap());
-        let failed = register_bash_capture(&ops, &admission, ":", true);
-        let other = register_bash_capture(&ops, &admission, ":", true);
+        let first = register_bash_capture(&ops, &admission, ":", true);
+        let second = register_bash_capture(&ops, &admission, ":", true);
+        // The sweep orders records by operation ID, not registration time.
+        let (failed, other) = if first.operation < second.operation {
+            (first, second)
+        } else {
+            (second, first)
+        };
         fail_capture_unlink(&ops, &failed);
         let failed = capture_path(&ops, &failed);
         let other = capture_path(&ops, &other);
@@ -2695,6 +2788,32 @@ mod tests {
             ops.dispatch(discard()),
             ProcessReply::OutputReleased { key }
         );
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn discard_reclaims_unlinked_capture_with_a_replacement_at_its_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, ":", true);
+        let path = capture_path(&ops, &key);
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                ops.dispatch(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+                ProcessReply::OutputReleased { key: key.clone() },
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+            assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        }
+        std::fs::remove_file(path).unwrap();
         ops.shutdown().unwrap();
     }
 
@@ -3650,6 +3769,196 @@ mod tests {
             ));
         }
         assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Keep the real control receipts and allocation barrier together.
+    fn background_capture_preparation_keeps_control_independent_and_settles_its_owner() {
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc::channel;
+
+        fn send_turn(server: &mut UnixStream, poll: &ControlPoll, request: ControlRequest) {
+            write_record(
+                server,
+                &ControlTurn {
+                    sequence: poll.sequence,
+                    health: poll.health,
+                    request: Some(request),
+                },
+            )
+            .unwrap();
+        }
+
+        enum Outcome {
+            Accepted,
+            Cancelled,
+            Revoked,
+        }
+        for outcome in [Outcome::Accepted, Outcome::Cancelled, Outcome::Revoked] {
+            let workspace = tempfile::tempdir().unwrap();
+            let admission = admission(workspace.path());
+            let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+            let key = fresh_key(&admission);
+            let request = bash_capture_registration(key.clone(), "touch unexpected-start", true);
+            let ProcessRequest::RegisterAgentBash { fingerprint, .. } = request else {
+                unreachable!()
+            };
+            let other = fresh_key(&admission);
+            assert_eq!(
+                register(&ops, &other, &spec(&["/bin/true"])),
+                ProcessReply::Registered { key: other.clone() }
+            );
+
+            let (entered, paused) = channel();
+            let (resume, resume_rx) = channel();
+            ops.captures
+                .hold_allocation(key.operation, entered, resume_rx);
+            let registration = std::thread::spawn({
+                let (ops, request) = (ops.clone(), request.clone());
+                move || ops.dispatch(request)
+            });
+            paused.recv_timeout(Duration::from_secs(5)).unwrap();
+
+            let (client, mut server) = UnixStream::pair().unwrap();
+            let (data, _server_data) = UnixStream::pair().unwrap();
+            let worker = crate::client_control_worker(
+                RecordChannel::unix(client),
+                Arc::new(crate::mutation::Arbitration::new()),
+                RecordChannel::unix(data).shutdown_handle().unwrap(),
+                ops.clone(),
+                Arc::new(crate::watch::Watches::new()),
+            );
+            server
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut poll: ControlPoll = read_record(&mut server).unwrap();
+            // Keep the wire exchange and receipt adjacent while allocation is parked.
+            send_turn(
+                &mut server,
+                &poll,
+                ControlRequest::CancelProcess { key: other.clone() },
+            );
+            poll = read_record(&mut server).unwrap();
+            assert_eq!(
+                poll.receipt,
+                Some(ControlReply::ProcessCancelled {
+                    key: other,
+                    disposition: ProcessCancelDisposition::CancelledBeforeStart,
+                })
+            );
+            send_turn(
+                &mut server,
+                &poll,
+                ControlRequest::Health { nonce: 7.into() },
+            );
+            poll = read_record(&mut server).unwrap();
+            assert_eq!(
+                poll.receipt,
+                Some(ControlReply::Healthy { nonce: 7.into() })
+            );
+
+            let matching = ops
+                .inner
+                .lock()
+                .unwrap()
+                .registration_reply(&key, fingerprint)
+                .unwrap();
+            assert!(matches!(matching, RegistrationReply::Preparing(_)));
+            assert_eq!(
+                ops.dispatch(bash_capture_registration(key.clone(), ":", true)),
+                ProcessReply::Conflict { key: key.clone() }
+            );
+            assert_eq!(
+                ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+                ProcessReply::Unknown { key: key.clone() }
+            );
+            assert!(ops.captures.path().is_none());
+            assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+
+            let request_on_control = match outcome {
+                Outcome::Accepted => None,
+                Outcome::Cancelled => Some(ControlRequest::CancelProcess { key: key.clone() }),
+                Outcome::Revoked => Some(ControlRequest::Revoke),
+            };
+            if let Some(request) = request_on_control {
+                send_turn(&mut server, &poll, request);
+            }
+            match outcome {
+                Outcome::Accepted => {}
+                Outcome::Cancelled => {
+                    let receipt: ControlPoll = read_record(&mut server).unwrap();
+                    assert_eq!(
+                        receipt.receipt,
+                        Some(ControlReply::ProcessCancelled {
+                            key: key.clone(),
+                            disposition: ProcessCancelDisposition::CancelledBeforeStart,
+                        })
+                    );
+                }
+                Outcome::Revoked => {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .unwrap()
+                        .block_on(async {
+                            tokio::time::timeout(Duration::from_secs(5), ops.revoke.cancelled())
+                                .await
+                                .unwrap();
+                        });
+                    assert_eq!(ops.settle(Duration::ZERO), 1);
+                }
+            }
+            resume.send(()).unwrap();
+            let reply = registration.join().unwrap();
+            assert_eq!(matching.wait(), reply);
+            assert_eq!(ops.dispatch(request), reply);
+            match outcome {
+                Outcome::Accepted => {
+                    assert_eq!(reply, ProcessReply::Registered { key: key.clone() });
+                    let path = capture_path(&ops, &key);
+                    assert_eq!(std::fs::read(&path).unwrap(), b"");
+                    assert_eq!(
+                        std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+                        1
+                    );
+                    assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+                }
+                Outcome::Cancelled => {
+                    let ProcessReply::State {
+                        state: OperationState::Settled(snapshot),
+                        ..
+                    } = reply
+                    else {
+                        panic!("expected cancelled registration")
+                    };
+                    assert_eq!(snapshot.disposition, SettledDisposition::Cancelled);
+                    assert!(snapshot.physical_settlement_proven);
+                    assert_eq!(
+                        ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+                        ProcessReply::State {
+                            key: key.clone(),
+                            state: OperationState::Settled(snapshot)
+                        }
+                    );
+                    assert!(!capture_path(&ops, &key).exists());
+                    assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+                }
+                Outcome::Revoked => {
+                    let receipt: ControlPoll = read_record(&mut server).unwrap();
+                    assert_eq!(receipt.receipt, Some(ControlReply::Revoked));
+                    assert_eq!(reply, ProcessReply::Unknown { key });
+                    assert!(ops.captures.path().is_none());
+                    assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+                }
+            }
+            assert!(!workspace.path().join("unexpected-start").exists());
+            worker.stop();
+            ops.shutdown().unwrap();
+            assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        }
     }
 
     #[test]

@@ -1156,9 +1156,13 @@ envelope.
 - Agent Bash registers its Client-owned capture before accepting a
   background job. A promoted invocation keeps the same operation and
   locator. Direct foreground capture allocates on the first combined
-  preview overflow. The blocking allocation owns its work through
-  registration and performs filesystem calls outside the operation
-  registry lock, so cancellation and health can proceed during creation.
+  preview overflow. Both allocation paths perform filesystem calls
+  outside the operation registry lock, so cancellation and health
+  can proceed during creation. Background preparation reserves the
+  operation identity before allocating. Matching replays share its
+  result and START is unavailable until registration commits. If
+  cancellation or revocation wins, the counted allocation owner
+  rolls back the file and retains any unconfirmed removal for cleanup.
   Capture produces separate 16 KiB stdout, stderr
   and combined previews. Each stream is decoded incrementally before
   multiplexing. Complete native captures have a 64 MiB file bound
@@ -1173,12 +1177,16 @@ envelope.
   dispatch after cancellation. Client settlement reports complete empty
   output only after verifying the retained file. Unaccepted preparations
   can explicitly discard their capture. After the journal is released,
-  the Server also discards a capture that the Client reports as
-  unavailable. Discard checks the named object's identity before unlinking
-  and confirms removal only when the retained descriptor has no directory
-  links. A renamed capture still has an owner, and a replacement file is
-  left alone. An explicit unlink conflict leaves the Client's owner and
-  quota in place for retry.
+  the Server discards a capture that the Client reports as unavailable.
+  A private capture also stays with the Server's cleanup owner when a
+  failed query yields an unavailable result without a locator.
+  A promotable capture stays readable until ownership is decided. If the
+  execution finishes in the foreground, its registry uses the private
+  locator to discard it. Discard
+  confirms that the retained descriptor has no directory links. If
+  unlinking is needed, it first checks the named object's identity.
+  A renamed capture retains its owner and quota. A replacement file is
+  left alone even when the original capture can already be released.
 - The absolute Bash continuation identifier is scoped to the owning
   Conversation and Client binding. Native Read and Grep send a typed
   query to that Client, and the Client opens its own retained capture.
