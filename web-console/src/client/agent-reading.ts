@@ -167,7 +167,8 @@ export class AgentReading {
     const history = this.state.history;
     if (!history || !this.current()) return;
     this.invalidate();
-    const intent = this.intent, current = () => this.current() && this.intent === intent;
+    const intent = this.intent;
+    const current = () => this.current() && this.intent === intent && this.state.history?.epoch === history.epoch;
     this.publish({ history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
       let pageAt = at, next = history;

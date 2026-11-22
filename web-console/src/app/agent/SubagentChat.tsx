@@ -34,7 +34,10 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, wo
   useEffect(() => () => reader?.dispose(), [reader]);
   useEffect(() => { if (!visible) reader?.suspend(); else if (snapshot) reader?.observe(snapshot); }, [reader, snapshot, visible]);
   const reading = useSyncExternalStore(reader?.subscribe ?? noopSubscribe, reader?.getSnapshot ?? (() => empty));
-  useEffect(() => { if (visible && snapshot) void reader?.loadInitial(); }, [reader, visible, !!snapshot]);
+  // A resync can replace the cached transcript with a disjoint, bounded head.
+  // Hydrate the new reading window even if this child is already visible.
+  const historyEpoch = reading.history?.epoch;
+  useEffect(() => { if (visible && historyEpoch !== undefined) void reader?.loadInitial(); }, [reader, visible, historyEpoch]);
   const currentId = useMemo(() => snapshot?.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? {
     conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source,
   } : undefined, [snapshot?.conversation_id, snapshot?.attempt?.attempt_id,snapshot?.attempt?.attempt_id_source, snapshot?.attempt?.phase.type]);
