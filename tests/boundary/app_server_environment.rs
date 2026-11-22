@@ -187,7 +187,10 @@ async fn foreground_bash_discards_unavailable_capture_after_journal_release() {
     use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
     Box::pin(
         scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
-            scenarios::UnavailableBashCapture::ClientReported,
+            scenarios::ForegroundBashExecution::Direct,
+            scenarios::UnavailableBashCapture::ClientReported {
+                refuse_first_discard: true,
+            },
         ),
     )
     .await;
@@ -198,6 +201,7 @@ async fn foreground_bash_reclaims_capture_after_query_expires_before_dispatch() 
     use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
     Box::pin(
         scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
+            scenarios::ForegroundBashExecution::Direct,
             scenarios::UnavailableBashCapture::QueryBusy,
         ),
     )
@@ -209,7 +213,22 @@ async fn promotable_bash_keeps_capture_until_private_foreground_ownership_finish
     use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
     Box::pin(
         scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
-            scenarios::UnavailableBashCapture::PrivateStage,
+            scenarios::ForegroundBashExecution::PrivateStage,
+            scenarios::UnavailableBashCapture::QueryBusy,
+        ),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotable_bash_discards_client_unavailable_capture_once() {
+    use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
+    Box::pin(
+        scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
+            scenarios::ForegroundBashExecution::PrivateStage,
+            scenarios::UnavailableBashCapture::ClientReported {
+                refuse_first_discard: false,
+            },
         ),
     )
     .await;

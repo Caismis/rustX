@@ -806,14 +806,19 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
 }
 
 pub(crate) enum UnavailableBashCapture {
-    ClientReported,
+    ClientReported { refuse_first_discard: bool },
     QueryBusy,
+}
+
+pub(crate) enum ForegroundBashExecution {
+    Direct,
     PrivateStage,
 }
 
 #[allow(clippy::too_many_lines)] // Keep the native invocation and its physical cleanup trace together.
 pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_release(
-    case: UnavailableBashCapture,
+    execution: ForegroundBashExecution,
+    unavailable: UnavailableBashCapture,
 ) {
     use crate::runtime::identity::ToolCallId;
     use crate::tools::artifacts::ArtifactStore;
@@ -831,8 +836,14 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
         fn report(&self, _progress: ToolProgress) {}
     }
 
-    let query_busy = !matches!(case, UnavailableBashCapture::ClientReported);
-    let private_stage = matches!(case, UnavailableBashCapture::PrivateStage);
+    let query_busy = matches!(unavailable, UnavailableBashCapture::QueryBusy);
+    let refuse_first_discard = matches!(
+        unavailable,
+        UnavailableBashCapture::ClientReported {
+            refuse_first_discard: true
+        }
+    );
+    let private_stage = matches!(execution, ForegroundBashExecution::PrivateStage);
     let fixture = Fixture::with_session_count(None, 1).await;
     let ProxiedClient {
         data: (mut client_data, mut server_data),
@@ -866,7 +877,11 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
             }
             if let ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }) = &request {
                 assert_eq!(Some(key), operation.as_ref());
-                if trace == ["capture", "release"] {
+                assert!(
+                    discard_received.is_some(),
+                    "discard started again after success"
+                );
+                if refuse_first_discard && trace == ["capture", "release"] {
                     assert!(path.as_deref().is_some_and(Path::is_file));
                     trace.push("discard refused");
                     let reply = ClientReply::Process(ProcessReply::Conflict { key: key.clone() });
@@ -909,9 +924,8 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
                 (
                     ClientRequest::Process(ProcessRequest::ReleaseOutput { key, .. }),
                     ClientReply::Process(ProcessReply::OutputReleased { key: released }),
-                ) => {
+                ) if Some(key) == operation.as_ref() => {
                     assert_eq!(key, released);
-                    assert_eq!(Some(key), operation.as_ref());
                     let name = format!("{:032x}.output", key.operation.as_u128());
                     path = std::fs::read_dir(&client_scratch)
                         .unwrap()
@@ -987,6 +1001,7 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
         )
         .await
         .unwrap();
+        let capture_owner = prepared.capture_owner().clone();
         let registry = ConversationBackgroundRegistry::new(
             conversation.clone(),
             BackgroundResources {
@@ -1016,10 +1031,19 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
             }
         })
         .await;
-        // While the stage could still be promoted, its output stays usable.
         let path = bounded(retained_file).await.unwrap();
-        assert_eq!(std::fs::read(path).unwrap(), vec![b' '; 65_536]);
+        if query_busy {
+            // While the stage could still be promoted, readable output survives.
+            assert_eq!(std::fs::read(path).unwrap(), vec![b' '; 65_536]);
+        } else {
+            // The driver already received a successful discard before handoff.
+            assert!(!path.exists());
+        }
         let result = stage.release_finished(result);
+        if !query_busy {
+            // The shared owner rejects another request before queuing admission.
+            assert!(capture_owner.discard().is_none());
+        }
         assert_eq!(registry.listing(false, 16).matched, 0);
         result
     } else {
@@ -1056,7 +1080,7 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
         .await
         .unwrap()
         .unwrap();
-    if query_busy {
+    if query_busy || private_stage {
         let conversation = conversation.as_str().to_owned();
         bounded(tokio::task::spawn_blocking(move || {
             assert_bash_capture_quota_recovered(&endpoint, conversation);
@@ -1064,12 +1088,22 @@ pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_r
         .await
         .unwrap();
     }
+    grant(&fixture);
+    let connection = AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    assert!(matches!(
+        bounded(call(&connection, 1, Method::CommandExec(parameters(&fixture, &["/bin/true"])))).await,
+        MethodResult::CommandExec { result } if result.status == ExecStatus::Completed && result.exit_code == Some(0)
+    ));
+    connection.close();
     assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
     assert!(bounded(child.wait()).await.unwrap().success());
     let expected: &[_] = if query_busy {
         &["release", "discard confirmed"]
-    } else {
+    } else if refuse_first_discard {
         &["capture", "release", "discard refused", "discard confirmed"]
+    } else {
+        &["capture", "release", "discard confirmed"]
     };
     assert_eq!(bounded(data).await.unwrap(), expected);
     bounded(control).await.unwrap();

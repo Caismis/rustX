@@ -87,20 +87,36 @@ pub(crate) fn operation_at(path: &Path) -> Option<BashOutputLocator> {
     })
 }
 
-pub(crate) fn discard_private_output(workspace: &Workspace, path: &Path) {
-    if let Some(operation) = operation_at(path)
-        && let Some(scope) = workspace.execution_scope()
-        && let Ok(endpoint) = scope.endpoint()
-        && let Ok(key) = operation.key_for(&endpoint)
-    {
-        tokio::spawn(endpoint.discard_bash_capture(key));
+/// The exact capture authority shared by the driver and foreground handoff.
+pub(crate) struct BashCaptureOwner {
+    endpoint: Arc<LocalExecutionEndpoint>,
+    key: ProcessOperationKey,
+    published: AtomicBool,
+    discard_started: AtomicBool,
+}
+
+impl BashCaptureOwner {
+    pub(crate) fn publish(&self) {
+        self.published.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn discard(&self) -> Option<tokio::task::JoinHandle<()>> {
+        // Claim before scheduling, including when foreground handoff runs
+        // under the registry lock. The task owns all admission and retry
+        // through a confirmed receipt or transfer to binding teardown.
+        if self.discard_started.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        Some(tokio::spawn(
+            self.endpoint.clone().discard_bash_capture(self.key.clone()),
+        ))
     }
 }
 
 pub(crate) struct PreparedBash {
     operation: std::sync::Mutex<Option<RemoteBash>>,
     output: PathBuf,
-    published_output: Arc<AtomicBool>,
+    capture: Arc<BashCaptureOwner>,
 }
 
 impl PreparedBash {
@@ -122,8 +138,8 @@ impl PreparedBash {
         )
         .await?;
         Ok(Self {
-            output: locator(&operation.key),
-            published_output: operation.published_output.clone(),
+            output: locator(&operation.capture.key),
+            capture: operation.capture.clone(),
             operation: std::sync::Mutex::new(Some(operation)),
         })
     }
@@ -138,8 +154,8 @@ impl PreparedBash {
         &self.output
     }
 
-    pub(crate) fn output_publication(&self) -> Arc<AtomicBool> {
-        self.published_output.clone()
+    pub(crate) fn capture_owner(&self) -> &Arc<BashCaptureOwner> {
+        &self.capture
     }
 
     #[cfg(test)]
@@ -197,10 +213,8 @@ pub(super) async fn run(
 type StartGate = Arc<dyn Fn() -> bool + Send + Sync>;
 
 struct RemoteBash {
-    endpoint: Arc<LocalExecutionEndpoint>,
-    key: ProcessOperationKey,
+    capture: Arc<BashCaptureOwner>,
     live_output: bool,
-    published_output: Arc<AtomicBool>,
     cleanup: bool,
     start_gate: Option<StartGate>,
     #[cfg(test)]
@@ -273,10 +287,13 @@ impl RemoteBash {
         spec.validate()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         let mut operation = Self {
-            endpoint,
-            key,
+            capture: Arc::new(BashCaptureOwner {
+                endpoint,
+                key,
+                published: AtomicBool::default(),
+                discard_started: AtomicBool::default(),
+            }),
             live_output,
-            published_output: Arc::default(),
             cleanup: true,
             start_gate: None,
             #[cfg(test)]
@@ -285,7 +302,7 @@ impl RemoteBash {
         match operation
             .exchange(
                 ProcessRequest::RegisterAgentBash {
-                    key: operation.key.clone(),
+                    key: operation.capture.key.clone(),
                     fingerprint: spec.fingerprint(),
                     spec,
                 },
@@ -316,8 +333,8 @@ impl RemoteBash {
         let _stop_relay_on_drop = stop.clone().drop_guard();
         let settled = Arc::new(AtomicBool::new(false));
         let relay = tokio::spawn({
-            let endpoint = self.endpoint.clone();
-            let key = self.key.clone();
+            let endpoint = self.capture.endpoint.clone();
+            let key = self.capture.key.clone();
             let stop = stop.clone();
             let settled = settled.clone();
             let cancellation = cancellation.clone();
@@ -361,7 +378,7 @@ impl RemoteBash {
         let started = self
             .exchange(
                 ProcessRequest::Start {
-                    key: self.key.clone(),
+                    key: self.capture.key.clone(),
                 },
                 Some(&context.cancellation),
             )
@@ -387,7 +404,7 @@ impl RemoteBash {
             state = match self
                 .exchange(
                     ProcessRequest::Query {
-                        key: self.key.clone(),
+                        key: self.capture.key.clone(),
                     },
                     None,
                 )
@@ -409,13 +426,13 @@ impl RemoteBash {
         if let Some(stdout) = &context.stdout_capture
             && self.receive_raw_stdout(stdout, &snapshot).await.is_err()
         {
-            self.endpoint.cut_pair_if_open();
+            self.capture.endpoint.cut_pair_if_open();
         }
         let released = self.release(&snapshot).await;
         if !released {
             // Release does not rewrite the known business outcome. Retiring
             // the pair does make the continuation unavailable.
-            self.endpoint.cut_pair_if_open();
+            self.capture.endpoint.cut_pair_if_open();
             if let Some(projection) = capture.as_mut() {
                 if projection.output != BashCaptureState::None {
                     projection.output = BashCaptureState::Unavailable;
@@ -431,7 +448,7 @@ impl RemoteBash {
             capture,
             before_start,
             self.live_output,
-            &self.key,
+            &self.capture.key,
             &context.cancellation,
         );
         if released
@@ -440,13 +457,11 @@ impl RemoteBash {
                 Some(ManagedOutputContinuation::Unavailable { .. })
             )
             && (client_unavailable || !self.live_output)
+            && let Some(discard) = self.capture.discard()
         {
             // A promotable capture with a failed query is still readable.
             // The registry decides whether the foreground keeps cleanup ownership.
-            self.endpoint
-                .clone()
-                .discard_bash_capture(self.key.clone())
-                .await;
+            let _ = discard.await;
         }
         Ok(result)
     }
@@ -458,7 +473,7 @@ impl RemoteBash {
         match self
             .exchange(
                 ProcessRequest::BashCapture {
-                    key: self.key.clone(),
+                    key: self.capture.key.clone(),
                 },
                 None,
             )
@@ -497,7 +512,7 @@ impl RemoteBash {
             match self
                 .exchange(
                     ProcessRequest::OutputPage {
-                        key: self.key.clone(),
+                        key: self.capture.key.clone(),
                         cursor: DecimalU64::new(cursor),
                         max_bytes: 8192,
                     },
@@ -544,7 +559,7 @@ impl RemoteBash {
         matches!(
             self.exchange(
                 ProcessRequest::ReleaseOutput {
-                    key: self.key.clone(),
+                    key: self.capture.key.clone(),
                     final_sequence: snapshot.final_sequence,
                 },
                 None
@@ -562,31 +577,31 @@ impl RemoteBash {
         let gate = matches!(request, ProcessRequest::Start { .. })
             .then(|| self.start_gate.clone())
             .flatten();
-        exchange_with_gate(&self.endpoint, request, cancellation, gate).await
+        exchange_with_gate(&self.capture.endpoint, request, cancellation, gate).await
     }
 }
 
 impl Drop for RemoteBash {
     fn drop(&mut self) {
-        if !self.cleanup {
+        if !self.cleanup || self.capture.discard_started.load(Ordering::Acquire) {
             return;
         }
         // Before ownership commits, dropping the gated executor rolls back
         // the registration. If a driver was abandoned, the same cleanup also
         // fences a late START and waits for Client-owned shutdown on failure.
-        let endpoint = self.endpoint.clone();
-        let key = self.key.clone();
-        let published = self.published_output.clone();
+        let capture = self.capture.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                let endpoint = &capture.endpoint;
+                let key = &capture.key;
                 deliver_cancel(endpoint.clone(), key.clone(), Arc::default()).await;
                 if let Ok(ProcessReply::State {
                     state: OperationState::Settled(snapshot),
                     ..
-                }) = exchange(&endpoint, ProcessRequest::Query { key: key.clone() }, None).await
+                }) = exchange(endpoint, ProcessRequest::Query { key: key.clone() }, None).await
                 {
                     let release = exchange(
-                        &endpoint,
+                        endpoint,
                         ProcessRequest::ReleaseOutput {
                             key: key.clone(),
                             final_sequence: snapshot.final_sequence,
@@ -596,15 +611,17 @@ impl Drop for RemoteBash {
                     .await;
                     if !matches!(release, Ok(ProcessReply::OutputReleased { .. })) {
                         endpoint.cut_pair_if_open();
-                    } else if !published.load(Ordering::Acquire) {
-                        endpoint.discard_bash_capture(key).await;
+                    } else if !capture.published.load(Ordering::Acquire)
+                        && let Some(discard) = capture.discard()
+                    {
+                        let _ = discard.await;
                     }
                 } else {
                     endpoint.cut_pair_if_open();
                 }
             });
         } else {
-            endpoint.cut_pair_if_open();
+            self.capture.endpoint.cut_pair_if_open();
         }
     }
 }

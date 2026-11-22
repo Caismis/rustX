@@ -1181,8 +1181,10 @@ envelope.
   A private capture also stays with the Server's cleanup owner when a
   failed query yields an unavailable result without a locator.
   A promotable capture stays readable until ownership is decided. If the
-  execution finishes in the foreground, its registry uses the private
-  locator to discard it. Discard
+  execution finishes in the foreground, its registry uses the driver's
+  capture owner to discard it. Both paths share one disposal claim,
+  which is taken before requesting data admission. One claimant receives
+  the discard receipt or transfers cleanup to binding teardown. Discard
   confirms that the retained descriptor has no directory links. If
   unlinking is needed, it first checks the named object's identity.
   A renamed capture retains its owner and quota. A replacement file is

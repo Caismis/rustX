@@ -180,7 +180,6 @@
 //! generic retry framework.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -210,6 +209,7 @@ use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::bound_tool_progress;
 use crate::tools::mcp::McpRuntimeLeaseSet;
+use crate::tools::native::BashCaptureOwner;
 use crate::tools::types::{
     ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
     ToolInvocationMode, ToolProgress, ToolResultContent,
@@ -754,7 +754,7 @@ pub(crate) struct PrivateBashStage {
     dispatch: PreparedBackgroundDispatch,
     progress_rx: tokio::sync::mpsc::Receiver<ToolProgress>,
     settled: Arc<Notify>,
-    client_output: Option<PathBuf>,
+    bash_capture: Option<Arc<BashCaptureOwner>>,
 }
 
 impl PrivateBashStage {
@@ -800,7 +800,7 @@ impl PrivateBashStage {
         self.registry.finish_private_output(
             &self.execution_id,
             result,
-            self.client_output.as_deref(),
+            self.bash_capture.as_deref(),
         )
     }
 
@@ -928,7 +928,7 @@ struct PreparedRecord {
     record: BackgroundRecord,
     gate: Arc<Notify>,
     runner: tokio::task::JoinHandle<()>,
-    output_publication: Option<Arc<AtomicBool>>,
+    bash_capture: Option<Arc<BashCaptureOwner>>,
     /// A foreground Bash stage. The process may run before ownership commit,
     /// but the record stays out of listing and publishes no terminal inbound
     /// until [`ConversationBackgroundRegistry::commit_dispatch_owned`].
@@ -1454,10 +1454,10 @@ impl ConversationBackgroundRegistry {
                 detail: "execution identity already reserved".into(),
             });
         }
-        let (client_output, output_publication) = match &executor {
+        let (client_output, bash_capture) = match &executor {
             BackgroundExecutor::Bash(prepared) => (
                 Some(prepared.output().to_path_buf()),
-                Some(prepared.output_publication()),
+                Some(prepared.capture_owner().clone()),
             ),
             BackgroundExecutor::Tool(_) => (None, None),
         };
@@ -1516,7 +1516,7 @@ impl ConversationBackgroundRegistry {
             },
             gate,
             runner,
-            output_publication,
+            bash_capture,
             private_owner: None,
             settled: Arc::new(Notify::new()),
             private_result: None,
@@ -1768,7 +1768,7 @@ impl ConversationBackgroundRegistry {
                     self.finish_private_output(
                         execution_id,
                         result,
-                        prepared_record.record.client_output.as_deref(),
+                        prepared_record.bash_capture.as_deref(),
                     ),
                 ));
             }
@@ -1804,8 +1804,8 @@ impl ConversationBackgroundRegistry {
             if let Some(hook) = state.publication_hook.take() {
                 hook.enter();
             }
-            if let Some(publication) = prepared_record.output_publication {
-                publication.store(true, Ordering::Release);
+            if let Some(capture) = prepared_record.bash_capture {
+                capture.publish();
             }
             let output = prepared_record
                 .record
@@ -1926,7 +1926,7 @@ impl ConversationBackgroundRegistry {
             BackgroundExecutor::Bash(bash) => Some(bash.clone()),
             BackgroundExecutor::Tool(_) => None,
         };
-        let client_output = bash.as_ref().map(|bash| bash.output().to_path_buf());
+        let bash_capture = bash.as_ref().map(|bash| bash.capture_owner().clone());
         let dispatch = self.prepare_runner(invocation, executor, environment, mcp_leases)?;
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(32);
         let settled = {
@@ -1958,7 +1958,7 @@ impl ConversationBackgroundRegistry {
             dispatch,
             progress_rx,
             settled,
-            client_output,
+            bash_capture,
         })
     }
 
@@ -1966,7 +1966,7 @@ impl ConversationBackgroundRegistry {
         &self,
         id: &ToolExecutionId,
         result: ToolExecutionResult,
-        client_output: Option<&Path>,
+        bash_capture: Option<&BashCaptureOwner>,
     ) -> ToolExecutionResult {
         let storage = &self.resources.tool_output;
         if result
@@ -1985,30 +1985,32 @@ impl ConversationBackgroundRegistry {
         } else {
             storage.discard_background_output(id);
         }
-        self.finish_unpromoted_bash(result, client_output)
+        Self::finish_unpromoted_bash(result, bash_capture)
     }
 
     pub(crate) fn finish_unpromoted_bash(
-        &self,
         mut result: ToolExecutionResult,
-        client_output: Option<&Path>,
+        bash_capture: Option<&BashCaptureOwner>,
     ) -> ToolExecutionResult {
         use crate::tools::types::ManagedOutputContinuation;
 
-        if let Some(ManagedOutputContinuation::Unavailable { .. }) =
-            result.managed_output.as_deref()
-            && let Some(locator) = client_output
-        {
-            // An unpromoted result carries no public locator for this file.
-            crate::tools::native::discard_private_bash_output(&self.resources.workspace, locator);
-        } else if !result
+        let redundant_output = matches!(
+            result.managed_output.as_deref(),
+            Some(ManagedOutputContinuation::Complete { .. })
+        ) && !result
             .truncation
             .as_ref()
-            .is_some_and(|state| state.truncated)
-            && let Some(ManagedOutputContinuation::Complete { locator }) =
-                result.managed_output.as_deref()
+            .is_some_and(|state| state.truncated);
+        if let Some(capture) = bash_capture
+            && (redundant_output
+                || matches!(
+                    result.managed_output.as_deref(),
+                    Some(ManagedOutputContinuation::Unavailable { .. })
+                ))
         {
-            crate::tools::native::discard_private_bash_output(&self.resources.workspace, locator);
+            let _ = capture.discard();
+        }
+        if redundant_output {
             result.managed_output = None;
         }
         result

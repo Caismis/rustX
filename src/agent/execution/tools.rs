@@ -17,7 +17,7 @@ use crate::message::types::{MessageBlock, ToolMessageBlock};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolId};
 use crate::runtime::interaction::InteractionFailure;
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::tools::background::BackgroundDispatchOutcome;
+use crate::tools::background::{BackgroundDispatchOutcome, ConversationBackgroundRegistry};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext,
@@ -215,8 +215,10 @@ impl ToolExecutor for BashHandoff<'_> {
                             completion.await
                         }
                     };
-                    self.registry
-                        .finish_unpromoted_bash(result, Some(prepared.output()))
+                    ConversationBackgroundRegistry::finish_unpromoted_bash(
+                        result,
+                        Some(prepared.capture_owner()),
+                    )
                 }
                 Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
                     ..

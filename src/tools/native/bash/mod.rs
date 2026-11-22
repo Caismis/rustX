@@ -40,7 +40,7 @@ use input::BashInput;
 use executor::BashTool;
 #[cfg(test)]
 pub(crate) use fixture::{BashTestControl, FixtureBashTool};
-pub(crate) use remote::{BashOutputLocator, PreparedBash, discard_private_output, operation_at};
+pub(crate) use remote::{BashCaptureOwner, BashOutputLocator, PreparedBash, operation_at};
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "bash";
