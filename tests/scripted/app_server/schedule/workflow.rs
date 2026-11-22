@@ -136,7 +136,10 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
                 .iter()
                 .all(|event| !matches!(event.event, RuntimeEvent::AttemptStarted { .. }))
         );
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [rustx_durable::PendingInboundItem; 0]
+        );
         f.close().await;
     })
     .await;
