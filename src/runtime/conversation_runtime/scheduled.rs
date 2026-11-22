@@ -82,7 +82,6 @@ impl RuntimeInner {
         binding: &crate::scheduler::ScheduleBinding,
         id: &ScheduledWorkflowStartId,
         (after, limit): (u64, u32),
-        clock: &dyn crate::runtime::types::RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
         let own = state.scheduled.as_ref().filter(|owner| &owner.id == id);
@@ -115,7 +114,7 @@ impl RuntimeInner {
                 limit,
                 retirement,
             },
-            clock,
+            self.clock.as_ref(),
         )
     }
 

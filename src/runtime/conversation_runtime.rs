@@ -694,8 +694,8 @@ pub struct RuntimeConversationConfig {
     /// The complete immutable process-local resource generation initially
     /// active for this runtime.
     pub resources: Arc<RuntimeResourceSnapshot>,
-    /// The runtime clock stamping submitted inbound messages; the system
-    /// clock is used when omitted.
+    /// The UTC clock for durable operations including inbound submission and
+    /// scheduled execution. The system clock is used when omitted.
     pub clock: Option<Arc<dyn RuntimeClock>>,
     /// The canonical conversation history the runtime starts from.
     pub initial_messages: Vec<MessageBlock>,
@@ -1066,7 +1066,6 @@ impl ConversationRuntime {
         &self,
         binding: &crate::scheduler::ScheduleBinding,
         operation: &crate::scheduler::ScheduleOperation,
-        clock: &dyn crate::runtime::types::RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
         let state = self.inner.lock_state();
@@ -1075,7 +1074,7 @@ impl ConversationRuntime {
         {
             return self
                 .inner
-                .reconcile_scheduled(&state, binding, id, (*after, *limit), clock);
+                .reconcile_scheduled(&state, binding, id, (*after, *limit));
         }
         let prepared;
         let operation = if let crate::scheduler::ScheduleOperation::Command(command) = operation {
@@ -1133,7 +1132,7 @@ impl ConversationRuntime {
             self.inner.store.as_ref(),
             binding,
             operation,
-            clock,
+            self.inner.clock.as_ref(),
         )?;
         if let crate::scheduler::ScheduleOperation::WorkflowCancel { id } = operation
             && let Some(current) = state.scheduled.as_ref().filter(|owner| &owner.id == id)

@@ -489,11 +489,7 @@ impl SessionRuntimeManager {
                                         busy.send_replace(true);
                                     }
                                 });
-                            let result = lease.schedule_operation(
-                                &binding,
-                                &operation,
-                                owner.schedule_clock.as_ref(),
-                            );
+                            let result = lease.schedule_operation(&binding, &operation);
                             drop(permit);
                             drop(ownership);
                             drop(lease);
