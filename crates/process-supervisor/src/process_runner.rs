@@ -158,6 +158,9 @@ pub struct ProcessTermination {
     pub exit_status: Option<ExitStatus>,
     /// The outcome intent owning the settlement.
     pub intent: ProcessOutcomeIntent,
+    /// The unit was proven terminal and its direct supervisor was reaped.
+    /// This is independent of the business outcome and output availability.
+    pub physical_settlement_proven: bool,
 }
 
 /// A bounded captured supervised-command result (convenience path).
@@ -1468,6 +1471,7 @@ impl SupervisedCommandRunner {
         ProcessTermination {
             exit_status: self.exit_status,
             intent,
+            physical_settlement_proven: self.lifecycle.is_terminal() && self.direct_child_reaped,
         }
     }
 

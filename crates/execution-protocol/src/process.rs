@@ -23,10 +23,10 @@ use crate::{ClientInstanceId, DecimalU64, Generation, SessionId};
 /// At most this many live process operations per Session in v1.
 pub const MAX_OPERATIONS_PER_SESSION: usize = 4;
 
-/// Finite tombstone capacity per binding generation. Once saturated the
-/// Server refuses new registrations; tombstones are never evicted while
-/// their generation is active.
-pub const MAX_GENERATION_TOMBSTONES: usize = 4096;
+/// Total active and retired process identities in one binding generation.
+/// Admission reserves the eventual tombstone. The Client never evicts an
+/// identity while its generation is active.
+pub const MAX_PROCESS_IDENTITIES_PER_GENERATION: usize = 4096;
 
 /// Maximum argv element count in a `ProcessProgram::Argv`.
 pub const MAX_PROCESS_ARGS: usize = 256;
@@ -672,7 +672,9 @@ pub enum ProcessRequest {
         max_bytes: u32,
     },
     /// Deliver one ordered stdin delta — shares the single input
-    /// sequence with `CloseStdin` and `Resize`.
+    /// sequence with `CloseStdin` and `Resize`. The same sequence and input
+    /// can attach while its receipt is retained. A released receipt cannot
+    /// authorize a replay.
     WriteStdin {
         /// The operation owning stdin.
         key: ProcessOperationKey,

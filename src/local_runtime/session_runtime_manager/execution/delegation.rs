@@ -5,8 +5,8 @@ use super::{
 };
 use base64::Engine as _;
 use rustx_execution_protocol::process::{
-    BashCaptureState, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION, OperationId,
-    OperationState, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
+    BashCaptureState, MAX_PROCESS_IDENTITIES_PER_GENERATION, OperationId, OperationState,
+    ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
 };
 use rustx_execution_protocol::transport::{
     LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record,
@@ -259,8 +259,7 @@ impl Authority {
                     && {
                         let operations = self.operations.lock().expect("child process keys");
                         operations.contains_key(&key.operation)
-                            || operations.len()
-                                < MAX_GENERATION_TOMBSTONES + MAX_OPERATIONS_PER_SESSION
+                            || operations.len() < MAX_PROCESS_IDENTITIES_PER_GENERATION
                     }
             }
             ClientRequest::Process(ProcessRequest::Register { .. }) => false,

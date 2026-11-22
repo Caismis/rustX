@@ -853,6 +853,83 @@ fn detached_cancellation(
     )
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) async fn client_sigkill_keeps_other_sessions_and_history_available() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let fixture = Fixture::with_session_count(None, 3).await;
+    grant(&fixture);
+    let mut killed = fixture.start_execution(0).await;
+    let mut independent = fixture.start_execution(1).await;
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let script = format!("exec 3<>/dev/tcp/127.0.0.1/{port}; printf ready >&3; read -r -u 3");
+    let mut command = parameters(&fixture, &["/bin/bash", "-c", &script]);
+    command.timeout_ms = Some(60_000);
+    let interrupted = tokio::spawn({
+        let connection = connection.clone();
+        async move { rejected(&connection, 1, Method::CommandExec(command)).await }
+    });
+    let (mut business, _) = bounded(listener.accept()).await.unwrap();
+    let mut ready = [0; 5];
+    bounded(business.read_exact(&mut ready)).await.unwrap();
+    assert_eq!(&ready, b"ready");
+    killed.start_kill().unwrap();
+    assert_eq!(
+        bounded(killed.wait()).await.unwrap().signal(),
+        Some(nix::libc::SIGKILL)
+    );
+
+    // These requests are independent of any result or cleanup evidence
+    // from the dead Client's binding.
+    let mut command = parameters(&fixture, &["/bin/sh", "-c", "printf alive"]);
+    command.session_id = fixture.sessions[1].id.clone();
+    command.cwd = fixture.workspaces[1].display().to_string();
+    let MethodResult::CommandExec { result } =
+        call(&connection, 2, Method::CommandExec(command)).await
+    else {
+        panic!("the independent Session must execute");
+    };
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result.stdout_base64)
+            .unwrap(),
+        b"alive"
+    );
+    let cold_session = &fixture.sessions[2].id;
+    assert!(fixture.manager.execution_endpoint(cold_session).is_err());
+    let MethodResult::Session { session } = call(
+        &connection,
+        3,
+        Method::SessionRead {
+            session_id: cold_session.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("the unbound Session must remain readable");
+    };
+    assert_eq!(&session.id, cold_session);
+    assert!(fixture.manager.execution_endpoint(cold_session).is_err());
+    assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
+
+    assert_eq!(bounded(business.read(&mut ready)).await.unwrap(), 0);
+    assert!(matches!(
+        bounded(interrupted).await.unwrap(),
+        ErrorData::OutcomeUnknown | ErrorData::ExecutionUnavailable
+    ));
+    connection.close();
+    let unsettled = bounded(fixture.host.drain()).await;
+    assert_eq!(unsettled.len(), 1);
+    assert!(unsettled[0].contains("unconfirmed"));
+    assert!(bounded(independent.wait()).await.unwrap().success());
+}
+
 pub(crate) async fn lost_input_acceptance_reports_unknown_and_retires_the_binding() {
     const INPUT: &[u8; 15] = b"already written";
 

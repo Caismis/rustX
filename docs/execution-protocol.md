@@ -970,8 +970,10 @@ the original record (`Starting`, running, cancelled, failed, settled);
 same-identity different-parameter requests are explicitly rejected, never
 overwrite. A query is observation, not a launch permit: a miss proves
 nothing about an in-flight START. Retried identities keep minimal
-tombstones until the generation stops accepting their retries; capacity
-refuses new STARTs, never LRU-forgets live tombstones. A new instance
+tombstones until the generation stops accepting their retries. The
+4,096-identity generation limit includes active entries. A new entry
+reserves its future tombstone and no transition frees that slot for a new
+identity. Replays use the admitted fingerprint and cwd descriptor. A new instance
 answers `Unknown` to old identities — no cross-instance exactly-once.
 Background Bash additionally keeps prepare-then-accept: `Prepare`
 registers the owner and allocates the unique managed file without
@@ -1120,9 +1122,12 @@ envelope.
   is unavailable, or if it reports `Failed`. Pre-dispatch refusals keep
   their original result. A collected `Failed` receipt releases its slot
   and may describe an already-applied prefix.
-  A stale sequence is never reapplied and an ambiguous write is never
-  retried. The Client holds at most four
-  concurrent operations per Session plus a bounded tombstone budget.
+  The Client retains a fingerprint for each outstanding input receipt.
+  Retransmitting the same operation and sequence with identical bytes and
+  flags attaches to that receipt without enqueuing input. Conflicting
+  content or an old sequence whose evidence was released is refused. The
+  Client holds at most four unreleased operations per Session within the
+  generation's shared live-and-retired identity budget.
   Native Agent Bash uses a separate `RegisterAgentBash` message and
   negotiates `AgentBash` on the same authenticated binding. Ordinary
   `Register` refuses a shell spec. The shell spec freezes the command,
@@ -1224,6 +1229,14 @@ its unknown disposition and fences the binding. The Server still owns
 canonical results and the order in which calls commit.
 
 ### Completion and drain
+
+The Client's active process guard keeps physical settlement separate from
+the command's outcome. Once a supervisor is spawned, the guard needs both
+terminal containment and successful reap of that supervisor. If the worker
+ends without that proof, the unresolved count survives the worker and any
+output release. Revoke and clean shutdown require the count to reach zero.
+This evidence is local to the running Client. See the
+[EXEC-02 evidence ledger](exec-02-evidence.md) for death and recovery scope.
 
 Discarded mutation preparations retain their ticket until a bounded
 Abort can wait for the same data and writer admission as other Agent

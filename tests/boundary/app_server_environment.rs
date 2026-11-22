@@ -202,6 +202,12 @@ async fn lost_input_acceptance_reports_unknown_and_retires_the_binding() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_input_acceptance_reports_unknown_and_retires_the_binding()).await;
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_sigkill_keeps_other_sessions_and_history_available() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::client_sigkill_keeps_other_sessions_and_history_available()).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn expired_input_cleanup_retires_an_open_binding() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::expired_input_cleanup_settles_the_binding(false)).await;
