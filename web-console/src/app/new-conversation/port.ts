@@ -48,11 +48,6 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
     current,
     viable,
     async readExisting(id) {
-      // The Session's own attach may still be landing (e.g. right after a
-      // fork). It was UI-initiated and does not depend on this submission, so
-      // settle it under the hard fences before dispatching the intent: the
-      // strict `current` fence would otherwise drop the gesture mid-churn.
-      if (client.getSnapshot().views[id]?.attachment === 'attaching') await client.waitForAttachment(id, viable);
       const node = client.getSnapshot().views[id]?.nodeId ??
         (await client.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current)).session.active_node;
       const sameNode = () => current() && (client.getSnapshot().views[id]?.nodeId ?? node) === node;

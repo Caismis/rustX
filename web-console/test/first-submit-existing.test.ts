@@ -20,15 +20,23 @@ function churning(overrides?: { connection?: string }) {
   };
   const requested: string[] = [];
   const sent: string[] = [];
+  const ops: string[] = [];
   const client: any = {
     getSnapshot: () => state,
     request: vi.fn(async (req: any, _expected: string, _ack: unknown, _fence: unknown) => {
       requested.push(req.method);
+      ops.push(`req:${req.method}`);
       if (req.method === 'session/read') return { session: { active_node: 'n1' } };
       return {};
     }),
-    admitSessionOperation: vi.fn(async () => ({ current: () => true, validate: async () => true })),
+    admitSessionOperation: vi.fn(async () => {
+      // The admission RPC itself needs the socket: reaching it means the
+      // transient reconnect has already recovered.
+      state.connection = 'connected';
+      return { current: () => true, validate: async () => true };
+    }),
     waitForAttachment: vi.fn(async (_id: string, fence: () => boolean) => {
+      ops.push('waitForAttachment');
       if (!fence()) throw new Error('Conversation connection changed. Your input was not sent.');
       // The UI-initiated attach completes and the host re-observation bumps the
       // authority revision — the churn that used to kill this send mid-flight.
@@ -45,7 +53,7 @@ function churning(overrides?: { connection?: string }) {
     upload: vi.fn(),
     uploadStatus: vi.fn(),
   };
-  return { state, client, requested, sent };
+  return { state, client, requested, sent, ops };
 }
 
 const draft: FirstDraft = { workspaceId: '', text: 'Fork follow-up', files: [] };
@@ -57,10 +65,13 @@ function run(client: any) {
 }
 
 it('existing-Session send survives the attach-window authority churn and is dispatched once', async () => {
-  const { client, requested, sent } = churning();
+  const { client, requested, sent, ops } = churning();
   expect(await run(client)).toBe(true);
-  expect(client.waitForAttachment).toHaveBeenCalledTimes(3);
+  expect(client.waitForAttachment).toHaveBeenCalledTimes(2);
   expect(requested).toContain('session/submissionIntent');
+  // Cold MCP attachments may depend on the intent arming native
+  // initialization, so the intent must precede the attachment wait.
+  expect(ops.indexOf('req:session/submissionIntent')).toBeLessThan(ops.indexOf('waitForAttachment'));
   expect(sent).toEqual(['Fork follow-up']);
 });
 
