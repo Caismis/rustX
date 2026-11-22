@@ -2825,9 +2825,13 @@ describe('WorkflowRunCanvas UI and integration', () => {
       expect(exactLookupCalls[0]).toEqual({ cut: cut2, visitKey: lateVisitKey });
 
       // Old cut1 unsettled/omitted header was not retagged at cut2; selected visit stays #69 with completed cut2 header.
-      const selectedOption = dialog.querySelector(`[data-run-visit-key="${CSS.escape(lateVisitKey)}"]`);
-      expect(selectedOption?.getAttribute('aria-selected')).toBe('true');
-      expect(within(dialog).queryByText(/Waiting for/i)).toBeNull();
+      // The visit option and its selection settle asynchronously after the exact lookup resolves; poll for the
+      // settled state so slow runners do not sample the dialog before the option is rendered.
+      await waitFor(() => {
+        const selectedOption = dialog.querySelector(`[data-run-visit-key="${CSS.escape(lateVisitKey)}"]`);
+        expect(selectedOption?.getAttribute('aria-selected')).toBe('true');
+        expect(within(dialog).queryByText(/Waiting for/i)).toBeNull();
+      });
       expect(valueSpy).not.toHaveBeenCalled();
 
       // Opening Output reads cut2 + new reference lazily and renders cut2 value (never cut1 output_omitted).
