@@ -1,6 +1,6 @@
 import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v80';
 import type { AppServerClient } from './app-server';
-import { acceptOlderTranscriptPage, extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { acceptOlderTranscriptPage, extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptCoverageComplete, transcriptCoverageTarget, transcriptRepairs, repairTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
 import { transcriptWindowReady } from './history-policy';
 
 export interface AgentReadingState {
@@ -128,9 +128,15 @@ export class AgentReading {
     if (!history?.page.next_cursor || history.loading) return Promise.resolve();
     return this.readWindow({ type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   };
-  loadInitial = () => {
+  private hydrationPending = false;
+  loadInitial = (): Promise<void> => {
     const history = this.state.history;
-    if (!history || history.window || history.loading || history.error || !history.page.next_cursor || transcriptWindowReady(history.page.entries ?? [])) return Promise.resolve();
+    if (!history || history.window || history.error || !history.page.next_cursor) return Promise.resolve();
+    // Coverage, not count: meeting the message/turn bound says nothing about
+    // holes a head slide left between the held rows and the live head.
+    if (transcriptWindowReady(history.page.entries ?? []) && transcriptCoverageComplete(history.page)) return Promise.resolve();
+    // The refill need survives the in-flight read: its settle re-judges.
+    if (history.loading) { this.hydrationPending = true; return Promise.resolve(); }
     return this.readWindow({ type: 'older', before: history.page.next_cursor, cut: null }, true);
   };
   loadLater = () => {
@@ -163,7 +169,7 @@ export class AgentReading {
     })();
     return read.work;
   }
-  private async readWindow(at: ConversationWindowAt, initial = false) {
+  private async readWindow(at: ConversationWindowAt, initial = false): Promise<void> {
     const history = this.state.history;
     if (!history || !this.current()) return;
     this.invalidate();
@@ -184,9 +190,18 @@ export class AgentReading {
         if (pageAt.type === 'older' && window.page.next_cursor != null && BigInt(window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native child history page.');
         added.push(...window.page.entries ?? []);
         fetchedPages.push(window.page);
+        const sizeBefore = next.page.entries?.length ?? 0;
         next = extendTranscriptWindow(window, next, at.type === 'older');
-        if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
-        pageAt = { type: 'older', before: next.page.next_cursor, cut: window.cut };
+        if (at.type !== 'older') break;
+        // No progress — the page merged nothing new: stop even if gaps the
+        // server simply has no rows for remain.
+        if (initial && (next.page.entries?.length ?? 0) === sizeBefore) break;
+        if (transcriptWindowReady(initial ? next.page.entries! : added) && (!initial || transcriptCoverageComplete(next.page))) break;
+        // The walk target: a slide gap takes priority over the deeper
+        // boundary so the hole near the new head is filled first.
+        const target = initial ? transcriptCoverageTarget(next.page) : next.page.next_cursor;
+        if (target == null) break;
+        pageAt = { type: 'older', before: target, cut: window.cut };
       } while (current());
       if (!current()) return;
       if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
@@ -198,16 +213,26 @@ export class AgentReading {
       }
       this.publish({ history: { ...next, loading: false, initialLoading: false } });
       void this.refreshEntries();
+      // A hydration pass deferred while this read held the cache is owed a
+      // re-judgement now that it settled.
+      if (this.hydrationPending) { this.hydrationPending = false; return this.loadInitial(); }
     } catch (error) {
+      // Only the read that still owns this intent settles its flags: a read
+      // retired by suspend/invalidate/a newer read must not clear the live
+      // request's loading state or write its stale error.
+      if (!current()) return;
       const latest = this.state.history;
-      if (!this.current() || !latest) return;
+      if (!latest) return;
       if (latest.generation !== history.generation) {
         // A slide or replace owns the cache now: the stale error must not be
         // written into the newer head, but its loading flags still need
-        // clearing so hydration is not wedged on this dead read.
+        // clearing so hydration is not wedged on this dead read — and any
+        // refill the head transition deferred is re-judged here.
         if (latest.loading || latest.initialLoading) this.publish({ history: { ...latest, loading: false, initialLoading: false } });
+        if (this.hydrationPending) { this.hydrationPending = false; return this.loadInitial(); }
         return;
       }
+      this.hydrationPending = false;
       this.publish({ history: { ...latest, loading: false, initialLoading: false, error: String(error) } });
     }
   }

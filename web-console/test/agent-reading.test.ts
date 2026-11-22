@@ -180,6 +180,90 @@ it('recovers the canonical streamed reply after resync skips to a settled child 
   expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
 });
 
+it('a not-bottomed cache still walks below the held minimum after a head slide', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  const cursors = () => reader.getSnapshot().history?.page.entries?.map(row => Number(row.cursor));
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 72 }, (_, i) => entry(56 + i)), next_cursor: '56' } });
+  // The head slides past every held row: the deeper boundary must survive.
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(160 + i)), next_cursor: '160' } });
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('56');
+  await reader.loadInitial();
+  // Hydration fills the slide gap; the deeper boundary stays reachable.
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('24');
+  while (reader.getSnapshot().history?.page.next_cursor) await reader.loadEarlier();
+  expect(cursors()).toEqual(Array.from({ length: 167 }, (_, i) => i + 1));
+  expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
+});
+
+it('an already-bottomed cache refills the slide gap without re-reading below the bottom', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  const cursors = () => reader.getSnapshot().history?.page.entries?.map(row => Number(row.cursor));
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 64 }, (_, i) => entry(i + 1)), next_cursor: null } });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(193 + i)), next_cursor: '193' } });
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('193');
+  await reader.loadInitial();
+  expect(cursors()).toEqual(Array.from({ length: 200 }, (_, i) => i + 1));
+  const reads = server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: { before: string } }).at.before);
+  expect(reads).not.toContain('1');
+  expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
+});
+
+it('a retired read cannot clear the live request\'s loading state or write its stale error', async () => {
+  await setup();
+  server.held.add('agent/transcript');
+  const first = reader.loadInitial();
+  const stale = await server.waitFor('agent/transcript', 1);
+  reader.invalidate();
+  const live2 = reader.loadEarlier();
+  const newer = await server.waitFor('agent/transcript', 2);
+  server.socket.deliver({ jsonrpc: '2.0', id: stale.id, error: { code: -32000, message: 'Obsolete history read' } });
+  await first;
+  expect(reader.getSnapshot().history?.loading).toBe(true);
+  expect(reader.getSnapshot().history?.error).toBeUndefined();
+  server.socket.success(newer, { type: 'transcript_window', window: { cut, page: { entries: [entry(1), entry(2), entry(3)], next_cursor: null } } });
+  await live2;
+  expect(reader.getSnapshot().history?.loading).toBe(false);
+});
+
+it('re-arms deferred hydration after an in-flight read fails across a head slide', async () => {
+  await setup();
+  server.held.add('agent/transcript');
+  const first = reader.loadInitial();
+  const stale = await server.waitFor('agent/transcript', 1);
+  // A slide bumps the generation; the hydration pass it triggers defers
+  // behind the in-flight read, whose settle must re-issue the read.
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(160 + i)), next_cursor: '160' } });
+  void reader.loadInitial();
+  server.socket.deliver({ jsonrpc: '2.0', id: stale.id, error: { code: -32000, message: 'Obsolete history read' } });
+  // The deferred hydration re-issues at the preserved deeper cursor.
+  const retry = await server.waitFor('agent/transcript', 2);
+  expect(retry.params).toMatchObject({ at: { type: 'older', before: '130' } });
+  expect(reader.getSnapshot().history?.error).toBeUndefined();
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  server.socket.success(retry, { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: 32 }, (_, i) => entry(98 + i)), next_cursor: '98' } } });
+  server.held.delete('agent/transcript');
+  await first;
+  expect(reader.getSnapshot().history?.error).toBeUndefined();
+});
+
 it('retires an in-flight history page when a disjoint child head replaces its cache', async () => {
   await setup();
   server.held.add('agent/transcript');

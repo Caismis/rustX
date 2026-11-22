@@ -108,11 +108,13 @@ export function refreshTranscript(previous: TranscriptCache | undefined, page: R
       const newest = positions(held).reduce((a, b) => a > b ? a : b);
       const oldest = positions(fresh).reduce((a, b) => a < b ? a : b);
       if (newest < oldest) {
-        // Continue pagination from the fresh block downward so the rows the
-        // slide skipped stay reachable through loadEarlier; dedup in
-        // mergePages handles the refetched held rows. The lineage (epoch) is
-        // unchanged, but hydration must re-check coverage of the slid head.
-        return { ...previous, generation: (previous.generation ?? 0) + 1, page: { ...mergePages(previous.page, page), next_cursor: page.next_cursor ?? previous.page.next_cursor } };
+        // Keep the held page's deeper cursor: it is the only surviving proof
+        // that rows below the held minimum are still unread. The skipped
+        // region between the blocks is re-found by gap detection in
+        // acceptOlderTranscriptPage, so pagination still reaches it. The
+        // lineage (epoch) is unchanged, but hydration must re-check coverage
+        // of the slid head.
+        return { ...previous, generation: (previous.generation ?? 0) + 1, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor ?? page.next_cursor } };
       }
     }
     return replaceTranscript(page, previous);
@@ -138,6 +140,31 @@ export function repairTranscript(cache: TranscriptCache, window: ConversationWin
 }
 export const turnKey = attemptOwnerKey;
 export const turnAnchor = (id: Parameters<typeof attemptOwnerKey>[0]) => `turn:${turnKey(id)}`;
+/** Positions the page already holds: loaded rows plus deferred rows, whose
+ * content is unloaded but whose position is cached. */
+const coveragePositions = (page: RuntimeClientTranscriptPage): bigint[] =>
+  [...pageRows(page).keys(), ...(page.deferred_entries ?? []).map(item => item.offset)]
+    .map(key => BigInt(String(key))).sort((a, b) => a < b ? -1 : 1);
+/** The first unfetched position between cached rows, if any. A head slide
+ * leaves exactly such a hole above the held minimum. */
+export function transcriptCoverageGap(page: RuntimeClientTranscriptPage): string | null {
+  const positions = coveragePositions(page);
+  for (let i = 0; i + 1 < positions.length; i++) if (positions[i + 1] > positions[i] + 1n) return String(positions[i + 1]);
+  return null;
+}
+export const transcriptCoverageComplete = (page: RuntimeClientTranscriptPage): boolean => transcriptCoverageGap(page) == null;
+/** Where an initial coverage walk continues: the first hole above the held
+ * rows, else below the merged minimum while the bottom stays unproven. The
+ * fetched page's own next_cursor can land inside already-covered rows, so the
+ * boundary is the merged minimum, not that cursor. */
+export function transcriptCoverageTarget(page: RuntimeClientTranscriptPage): string | null {
+  const gap = transcriptCoverageGap(page);
+  if (gap) return gap;
+  if (page.next_cursor == null) return null;
+  const min = coveragePositions(page)[0];
+  return min !== undefined && min > 1n ? String(min) : null;
+}
+
 export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTranscriptPage): TranscriptCache {
   return { ...cache, loading: false, error: undefined, page: { ...mergePages(page, cache.page), next_cursor: page.next_cursor } };
 }
@@ -153,12 +180,14 @@ export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTra
 export function acceptOlderTranscriptPage(latest: TranscriptCache, fetchedPages: RuntimeClientTranscriptPage[]): TranscriptCache {
   const fetched = fetchedPages.reduce((acc, page) => mergePages(acc, page));
   const merged = mergePages(fetched, latest.page);
-  const positions = [...pageRows(merged).keys()].map(key => BigInt(String(key))).sort((a, b) => a < b ? -1 : 1);
+  const positions = coveragePositions(merged);
   const mergedMin = positions[0];
   let gap: bigint | undefined;
   for (let i = 0; i + 1 < positions.length; i++) if (positions[i + 1] > positions[i] + 1n) { gap = positions[i + 1]; break; }
   const below = (cursor: unknown) => cursor == null || mergedMin === undefined || BigInt(String(cursor)) > mergedMin ? null : BigInt(String(cursor));
-  const candidates = [gap, below(fetched.next_cursor), below(latest.page.next_cursor)].filter((cursor): cursor is bigint => cursor != null);
+  // Every fetched page's boundary counts: the merged page keeps only the
+  // last fetch's cursor, but an earlier page may have proven a deeper edge.
+  const candidates = [gap, ...fetchedPages.map(page => below(page.next_cursor)), below(latest.page.next_cursor)].filter((cursor): cursor is bigint => cursor != null);
   const next_cursor = candidates.length ? String(candidates.reduce((a, b) => a < b ? a : b)) : null;
   return { ...latest, loading: false, initialLoading: false, error: undefined, page: { ...merged, next_cursor } };
 }
