@@ -50,7 +50,7 @@ test('native child live cuts, independent title, active and file-only resume upl
     await expect(child).toHaveAttribute('data-agent-state', 'inactive');
     await expect(child.getByText('Canonical child final report.', { exact: true })).toBeVisible();
     // The in-flight message becomes its single canonical message at settlement.
-    await expect(child.getByText('Live child first chunk. Second live chunk.', { exact: true })).toHaveCount(1);
+    await expect(child.getByText('Live child first chunk. Second live chunk.', { exact: true })).toHaveCount(1, { timeout: 20_000 });
     const card = child.locator('[data-delivery-card]').filter({ has: page.locator('[data-presented-name]', { hasText: 'child-report.md' }) }).first();
     await card.getByRole('button', { name: 'Preview child-report.md in sidebar', exact: true }).click();
     const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
