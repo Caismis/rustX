@@ -11,7 +11,7 @@ import { Server, snapshot } from './fixture';
 const child = 'conversation-worker';
 const cut = { conversation_id: child, journal: '300', transcript: '300', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
 const turn = (n: number): ObservedTurn => ({ id: { conversation_id: child, attempt_id: `child-${n}` }, ordinal: n, cursor: String(n), prompt: `Task ${n}`, response: `Report ${n}` });
-const entry = (n: number) => ({ cursor: String(n), item: { type: 'message' as const, message: { role: 'assistant' as const, id: `reply-${n}`, content: [{ type: 'text' as const, text: `Report ${n}` }] } }, turn_process: { ...turn(n).id, control_cursor: String(n), final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: `reply-${n}`, message_count: 1, tool_call_count: 0, outcome: 'completed' as const } });
+const entry = (n: number, text = `Report ${n}`) => ({ cursor: String(n), item: { type: 'message' as const, message: { role: 'assistant' as const, id: `reply-${n}`, content: [{ type: 'text' as const, text }] } }, turn_process: { ...turn(n).id, control_cursor: String(n), final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: `reply-${n}`, message_count: 1, tool_call_count: 0, outcome: 'completed' as const } });
 const live = (n: number): RuntimeClientSnapshot => ({ ...snapshot(), conversation_id: child, transcript: { entries: [entry(n)], next_cursor: String(n) } });
 const window = (n: number): MethodResult => ({ type: 'transcript_window', window: { cut, page: { entries: [entry(n)], next_cursor: String(n) }, target: turn(n).id, target_cursor: String(n), newer_cursor: String(n) } });
 let server: Server, reader: AgentReading;
@@ -121,6 +121,56 @@ it('resident child conversations keep their historical location across hide and 
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: true })); });
   expect(ui.getByText('Report 1')).toBeTruthy();
   expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
+});
+
+it('recovers the canonical streamed reply after resync skips to a settled child checkpoint', async () => {
+  await setup();
+  installTurnNavigatorObserver(600);
+  const streamed = 'Live child first chunk. Second live chunk.';
+  const final = 'Canonical child final report.';
+  const props = { client: server.client, sessionId: 'A', admission: server.client.getSnapshot().views.A.attachmentObservation,
+    agent: { title: 'Worker', agent: 'Worker', agent_id: 'agent-worker', parent_agent_id: 'root', child_conversation_id: child,
+      activation_id: 'activation', state: 'active' as const, activation_state: 'running' as const, started_at: '2026-10-10T00:00:00Z',
+      definition_digest: 'd', profile_digest: 'p', workspace: '/workspace',
+      observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } } },
+    visible: true };
+  const active: RuntimeClientSnapshot = { ...live(1), transcript: { entries: [entry(1)] }, attempt: {
+    attempt_id: 'child-2', phase: { type: 'running' }, turn: 1,
+    in_flight: { message_id: 'reply-2', blocks: [{ type: 'text', block_index: 0, text: streamed }] },
+  } };
+  let ui!: ReturnType<typeof render>;
+  await act(async () => { ui = render(createElement(SubagentChat, { ...props, snapshot: active })); });
+  expect(ui.getAllByText(streamed, { exact: true })).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(0);
+
+  // Resume from the settled eight-row head without following the intervening
+  // commit events. The transcript page can still read the streamed reply by cursor.
+  server.handlers.set('agent/transcript', request => {
+    expect(request).toMatchObject({ params: { at: { type: 'older', before: '3', cut: null } } });
+    return { type: 'transcript_window', window: { cut: { ...cut, transcript: '10', transcript_total: '10' },
+      page: { entries: [entry(1), entry(2, streamed)], next_cursor: null }, newer_cursor: '2' } };
+  });
+  const settled: RuntimeClientSnapshot = { ...live(10), transcript: {
+    entries: [...Array.from({ length: 7 }, (_, i) => entry(i + 3)), entry(10, final)], next_cursor: '3',
+  } };
+  await act(async () => ui.rerender(createElement(SubagentChat, {
+    ...props, agent: { ...props.agent, state: 'inactive', activation_state: 'succeeded' }, snapshot: settled,
+  })));
+  expect(ui.getByText(final, { exact: true })).toBeTruthy();
+  expect(ui.getAllByText(streamed, { exact: true })).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
+});
+
+it('retires an in-flight history page when a disjoint child head replaces its cache', async () => {
+  await setup();
+  server.held.add('agent/transcript');
+  const loading = reader.loadInitial();
+  const older = await server.waitFor('agent/transcript', 1);
+  reader.observe(live(200));
+  const replaced = reader.getSnapshot().history;
+  server.socket.deliver({ jsonrpc: '2.0', id: older.id, error: { code: -32000, message: 'Obsolete history read' } });
+  await loading;
+  expect(reader.getSnapshot().history).toBe(replaced);
 });
 
 it('T14 a replaced child activation cannot adopt a late outline from the prior view', async () => {
