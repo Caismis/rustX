@@ -199,9 +199,16 @@ export class AgentReading {
       this.publish({ history: { ...next, loading: false, initialLoading: false } });
       void this.refreshEntries();
     } catch (error) {
-      // Suppress errors whose cache generation already moved on (slide or
-      // replace): a stale read must not poison the newer head's hydration.
-      if (current() && this.state.history?.generation === history.generation) this.publish({ history: { ...this.state.history!, loading: false, initialLoading: false, error: String(error) } });
+      const latest = this.state.history;
+      if (!this.current() || !latest) return;
+      if (latest.generation !== history.generation) {
+        // A slide or replace owns the cache now: the stale error must not be
+        // written into the newer head, but its loading flags still need
+        // clearing so hydration is not wedged on this dead read.
+        if (latest.loading || latest.initialLoading) this.publish({ history: { ...latest, loading: false, initialLoading: false } });
+        return;
+      }
+      this.publish({ history: { ...latest, loading: false, initialLoading: false, error: String(error) } });
     }
   }
 }

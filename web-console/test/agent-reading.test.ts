@@ -189,7 +189,9 @@ it('retires an in-flight history page when a disjoint child head replaces its ca
   const replaced = reader.getSnapshot().history;
   server.socket.deliver({ jsonrpc: '2.0', id: older.id, error: { code: -32000, message: 'Obsolete history read' } });
   await loading;
-  expect(reader.getSnapshot().history).toBe(replaced);
+  // The stale read's error is suppressed, but its loading flags still clear
+  // so the slid head is not wedged on the dead read.
+  expect(reader.getSnapshot().history).toEqual({ ...replaced, loading: false, initialLoading: false });
 });
 
 it('T14 a replaced child activation cannot adopt a late outline from the prior view', async () => {
