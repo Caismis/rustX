@@ -16,8 +16,20 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
   let opened: ReturnType<typeof preparePublication> | undefined;
   const current = () => {
     const state = client.getSnapshot();
-    return navigation() && state.endpoint === endpoint && state.connection === 'connected' && state.generation === generation && state.authorityRevision === authorityRevision
+    // Existing-Session sends embed no workspace authority: admission re-checks
+    // the Session's cwd at every dispatch, so the gesture-time authority
+    // revision must not pin this port — a configuration observation landing
+    // during attach is churn, not a replay hazard. The create path keeps the
+    // pinned revision because its submission embeds the observed authority.
+    return navigation() && state.endpoint === endpoint && state.connection === 'connected' && state.generation === generation && (existing || state.authorityRevision === authorityRevision)
       && (!target || sameTarget(state.views[target.session_id]?.target, target));
+  };
+  // Hard-identity fences only: the send may still be viable while the socket
+  // or attachment is settling, but never after navigation, endpoint or client
+  // generation changed.
+  const viable = () => {
+    const state = client.getSnapshot();
+    return navigation() && state.endpoint === endpoint && state.generation === generation;
   };
   const requireCurrent = () => { if (!current()) throw new Error('New Conversation authority changed. Inspect Sessions; do not replay.'); };
   const bindSession = (session: { id: string; conversation: string }) => {
@@ -34,7 +46,13 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
   };
   return {
     current,
+    viable,
     async readExisting(id) {
+      // The Session's own attach may still be landing (e.g. right after a
+      // fork). It was UI-initiated and does not depend on this submission, so
+      // settle it under the hard fences before dispatching the intent: the
+      // strict `current` fence would otherwise drop the gesture mid-churn.
+      if (client.getSnapshot().views[id]?.attachment === 'attaching') await client.waitForAttachment(id, viable);
       const node = client.getSnapshot().views[id]?.nodeId ??
         (await client.request({ method: 'session/read', params: { session_id: id } }, 'session', undefined, current)).session.active_node;
       const sameNode = () => current() && (client.getSnapshot().views[id]?.nodeId ?? node) === node;
