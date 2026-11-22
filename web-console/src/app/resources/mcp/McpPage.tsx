@@ -6,7 +6,8 @@ import { CardMenu } from '../../../presentation/catalog/CardMenu';
 import { transferActions } from '../shared/ResourceTransfer';
 import { Button } from '../../../presentation/primitives/Button';
 import { Menu } from '../../../presentation/primitives/Menu';
-import { IconDownloadOutline16, IconEditOutline16, IconEllipsisOutline16, IconPlusOutline16, IconShieldOutline16 } from '../../../presentation/primitives/icons';
+import { IconDownloadOutline16, IconEditOutline16, IconEllipsisOutline16, IconPlusOutline16 } from '../../../presentation/primitives/icons';
+import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import { documentAuthoring } from '../../settings/projection';
 import { extensionEntries } from '../shared/inventory';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
@@ -55,11 +56,11 @@ export function McpDetail({ source, scope, revision, focus, scopeControl, bodyDi
   </SettingsPageShell>;
 }
 
-export function McpPage({ source, scope, revision, onFocus, query, group, probeStates = {}, testConnection, probeAvailable = false, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
+export function McpPage({ source, scope, revision, onFocus, query, group, view, probeStates = {}, testConnection, probeAvailable = false, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
   probeStates?: Record<string, ProbeState>;
   testConnection?: (id: string) => void; probeAvailable?: boolean;
   source: SourceSettings; scope: SourceScope; revision?: string;
-  onFocus: (focus: McpFocus) => void; query: string; group?: string;
+  onFocus: (focus: McpFocus) => void; query: string; group?: string; view: CatalogView;
   onTransfer?: (scope: SourceScope, name: string, revision: string, operation: TransferOperation) => void;
   canOverride?: (name: string) => boolean; onOverride?: (name: string) => void;
   workspaceAvailability?: (name: string, valid?: boolean) => ReactNode;
@@ -95,18 +96,14 @@ export function McpPage({ source, scope, revision, onFocus, query, group, probeS
         }} />
       : <Button size="sm" variant="ghost" aria-label={`${editLabel} ${entry.name}`}
         onClick={() => onFocus({ kind: 'mcp', name: entry.name })}><IconEditOutline16 /></Button>}
-    actions={<>
-      <Button size="sm" variant="outline" disabled={!probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'}
-        aria-label={`${tx('settings:mcp.test-connection')} ${entry.name}`} onClick={() => testConnection?.(entry.name)}>{tx('settings:mcp.test-connection')}</Button>
-      <Button size="sm" variant="ghost" aria-label={`${tx('resources:mcp.permissions')} ${entry.name}`}
-        onClick={() => onFocus({kind:'mcp', name:entry.name, mode:'permissions'})}><IconShieldOutline16 /></Button>
-    </>} />;
+    actions={<Button size="sm" variant="outline" disabled={!probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'}
+      aria-label={`${tx('settings:mcp.test-connection')} ${entry.name}`} onClick={() => testConnection?.(entry.name)}>{tx('settings:mcp.test-connection')}</Button>} />;
   };
 
   if (group && needle && !matches.length) return null;
   return <div data-mcp-page="">
     {document.state !== 'structured' && <p className={catalog.banner} role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
-    <ResourceGroup label={group ?? tx('settings:mcp.installed')} count={matches.length}
+    <ResourceGroup label={group ?? tx('settings:mcp.installed')} count={matches.length} view={view}
       empty={<><p>{tx(needle ? 'settings:catalog.no-results' : 'settings:mcp.empty')}</p><p>{tx(needle ? 'settings:catalog.no-results-description' : 'settings:mcp.empty-help')}</p></>}>
       {matches.map(renderCard)}
     </ResourceGroup>

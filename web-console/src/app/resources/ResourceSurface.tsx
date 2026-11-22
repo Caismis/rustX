@@ -9,7 +9,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { sameEndpoint } from '../../workspaces/endpoint';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import { useTranslation } from '../../locale/react';
-import { CatalogSearch } from '../../presentation/catalog/CatalogControls';
+import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../presentation/catalog/CatalogControls';
 import catalogCss from '../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../presentation/primitives/Button';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -77,6 +77,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const busy = useSelector(actor, state => state.matches({ mutation: 'submitting' }) || state.matches({ maintenance: 'reconciling' }));
   const [workspaceMenu, setWorkspaceMenu] = useState(false);
   const [query, setQuery] = useState('');
+  const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
   const [transferIntent, setTransferIntent] = useState<TransferIntent>();
   const [skillCatalogRefresh, setSkillCatalogRefresh] = useState(0);
@@ -233,11 +234,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       : undefined;
     return module === 'mcp'
       ? <McpPage source={shown} scope={owner} revision={revision} onFocus={next => focusMcp(next, owner)}
-        query={query} group={group} probeStates={inherited ? undefined : probes.states}
+        query={query} view={view} group={group} probeStates={inherited ? undefined : probes.states}
         testConnection={probes.testConnection} probeAvailable={!inherited && probes.available}
         onOverride={canOverride ? name => focusMcp({ kind: 'mcp', name }, 'workspace') : undefined} canOverride={canOverride}
         onTransfer={transfer} transferDisabled={transferDisabled} workspaceAvailability={workspaceAvailability} />
-      : <SubagentList source={shown} scope={owner} revision={revision} query={query} group={group}
+      : <SubagentList source={shown} scope={owner} revision={revision} query={query} view={view} group={group}
         onOpen={name => openAgent(name, owner)} onOverride={canOverride ? name => openAgent(name, 'workspace') : undefined}
         canOverride={canOverride} onTransfer={transfer} transferDisabled={transferDisabled} workspaceAvailability={workspaceAvailability} />;
   };
@@ -320,6 +321,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
           </div>
           <div className={clsx(catalogCss.controlsRight, css.tools)}>
             <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
+            <CatalogViewSwitch view={view} onChange={setView} />
             <button type="button" className={shellCss.refreshButton} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
               disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></button>
           </div>
@@ -330,7 +332,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             {!skillFocused && [readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
             {!source ? <CatalogListSkeleton label={tx('resources:loading')} /> : <SettingsActorContext value={actor}><SourceContext value={source}>
               {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                query={query} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
+                query={query} view={view} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
                 bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled}
                 onFocusChange={setSkillFocused} bodyDisabled={!editable} />
                 : <fieldset className={css.editor} disabled={!editable} key={lifetime}>{renderResources(source, scope)}</fieldset>}

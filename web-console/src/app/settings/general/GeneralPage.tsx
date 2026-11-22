@@ -8,6 +8,7 @@ import { IconChevronUpOutline14, IconChevronDownOutline14 } from '../../../prese
 import { Choice } from '../primitives/aria';
 import { useBusyEnter } from '../../composer/preferences';
 import { SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
+import { PageRefreshButton } from '../ScopeToolbar';
 import shellCss from '../../../presentation/settings/SettingsPageShell.module.css';
 import preferenceCss from './ConversationPreferences.module.css';
 
@@ -29,7 +30,7 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
   const [interactiveHtml, setInteractiveHtml] = useInteractiveHtml();
   const [preferences, preferenceStore] = useConversationPreferences();
 
-  return <SettingsPageShell title={tx('settings:general-page.general')}>
+  return <SettingsPageShell title={tx('settings:general-page.general')} toolbar={<PageRefreshButton />}>
     <SettingsGroup title={tx('settings:general-page.appearance')}>
       <SettingsRow
         label={tx('settings:general-page.appearance')}

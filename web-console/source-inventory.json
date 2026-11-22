@@ -2598,7 +2598,7 @@
       "treatment": "Direct theme-token switch track/thumb styling.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "9baa1cfa828e5806cf59d88b82bbde6d9ba5f795c1105a2e819476388f734149",
-      "local_sha256": "8de5d94e585d9c2902f8084337f986f0aecead190af0e9d70068a5149fe35c33",
+      "local_sha256": "99413d10e25cd02d5e98a81ec1a4c6bc5d846933e3da85a185bf2a6935fbefd6",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -3014,7 +3014,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "d42b0d0f4e5960ee54138b877261237bdd7af2805333ff3a4b6c1608b29ea7ce",
+      "local_sha256": "845c5ade172b1399ada2ba68ee383b8c80510c495da7853c8e62f6bbf5e0821b",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [

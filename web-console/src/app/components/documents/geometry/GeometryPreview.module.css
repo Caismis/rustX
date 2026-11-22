@@ -23,6 +23,14 @@
 .rail { composes: rail from '../../../../presentation/primitives/CanvasTools.module.css'; top: 16px; inset-inline-start: 16px; }
 .control { composes: tool from '../../../../presentation/primitives/CanvasTools.module.css'; }
 .controlActive { composes: active from '../../../../presentation/primitives/CanvasTools.module.css'; }
+
+/* The parts footer Isolate control is a Button primitive whose ghost colors
+   outrank the composed active state; doubling the class keeps its pressed
+   style identical to the rail toggles (the e2e spec compares them). */
+.footer .controlActive.controlActive {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-state-business-primary);
+}
 .divider { composes: separator from '../../../../presentation/primitives/CanvasTools.module.css'; }
 .count { margin-inline-start: 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .metadata { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }

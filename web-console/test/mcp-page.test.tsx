@@ -222,7 +222,7 @@ it('MCP cards only list definitions belonging to their authored scope',async()=>
  const {McpPage}=await import('../src/app/resources/mcp/McpPage');
  const {vi}=await import('vitest');
  const onFocus=vi.fn();
- const props={source:s.source,scope:'workspace' as const,onFocus,query:''};
+ const props={source:s.source,scope:'workspace' as const,onFocus,query:'',view:'cards' as const};
  const ui=render(<McpPage {...props}/>);
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();
  expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();

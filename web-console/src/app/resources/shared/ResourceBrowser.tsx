@@ -15,6 +15,7 @@ import { PageTransactionProvider } from '../../settings/forms/bridge';
 import { extensionEntries } from './inventory';
 import { ResourceAvailability, SkillSelectionPolicy } from './ResourceAvailability';
 import { ResourceCard, ResourceGroup } from './ResourceCards';
+import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import { transferActions } from './ResourceTransfer';
 
 const userTarget = { kind: 'user' } as const;
@@ -28,14 +29,14 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
   return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
 }
 
-export function ResourceBrowser({ client, source, scope, revision, query, refresh, onRefresh, workspaceLabel,
+export function ResourceBrowser({ client, source, scope, revision, query, view, refresh, onRefresh, workspaceLabel,
   bindDisplayWrite, bindDelete, onTransfer, transferDisabled, onFocusChange, bodyDisabled = false }: {
   client: AppServerClient; source: SourceSettings; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
   transferDisabled: boolean; workspaceLabel?: string;
-  query: string; refresh: number; onRefresh: () => void;
+  query: string; view: CatalogView; refresh: number; onRefresh: () => void;
   onFocusChange?: (focused: boolean) => void; bodyDisabled?: boolean;
 }) {
   const tx = useTranslation();
@@ -154,11 +155,11 @@ export function ResourceBrowser({ client, source, scope, revision, query, refres
       <CatalogListSkeleton label={tx('resources:loading')} />
     ) : (
       <>
-        <ResourceGroup label={tx('resources:scope.owned')} count={owned.length}
+        <ResourceGroup label={tx('resources:scope.owned')} count={owned.length} view={view}
           empty={<p role="status">{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>}>
           {owned.map(renderCard)}
         </ResourceGroup>
-        {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} empty={null}>
+        {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} view={view} empty={null}>
           {inherited.map(renderCard)}
         </ResourceGroup>}
       </>

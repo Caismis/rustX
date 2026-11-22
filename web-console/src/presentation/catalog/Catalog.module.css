@@ -174,17 +174,37 @@
 }
 .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; }
 
-.viewSwitch { display: flex; height: 34px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; }
-
-.viewSwitch button {
-  width: 32px;
-  border: 0;
-  background: none;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
+/* DSH SegmentedTabs pattern: a padded module track whose selected segment is
+ * a layer-3 pill; the sm density (2px inset, 30px tab) keeps the switch at the
+ * catalog toolbar's 34px control height. */
+.viewSwitch {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 2px;
+  gap: 2px;
+  border-radius: calc(var(--dsw-radius-md) + 2px);
+  background: var(--dsw-alias-bg-module-platform);
 }
 
-.viewSwitch .viewActive { background: var(--dsw-alias-interactive-bg-active); color: var(--dsw-alias-label-primary); }
+.viewSwitch button {
+  width: 34px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  transition: color 180ms ease;
+}
+
+.viewSwitch button:hover { color: var(--dsw-alias-label-primary); }
+
+.viewSwitch .viewActive {
+  border: .5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+}
 
 .context { margin: 6px 0 18px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 
