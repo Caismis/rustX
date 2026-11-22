@@ -1,6 +1,6 @@
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, acceptOlderTranscriptPage, extendTranscriptWindow, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
 import { transcriptWindowReady } from './history-policy';
-import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v80';
+import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v80';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OutlinePagingIntent, SessionView } from './contracts';
 
@@ -290,12 +290,14 @@ export class ReadingNavigation {
     try {
       let pageAt = at, next = history;
       const added: RuntimeClientTranscriptEntry[] = [];
+      const fetchedPages: RuntimeClientTranscriptPage[] = [];
       do {
         const result = await this.port.request({ method: 'session/transcript', params: { target, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
         if (!current()) return;
         if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in pageAt && pageAt.cut && !sameReadCut(result.window.cut, pageAt.cut))) throw new Error('Invalid native history cut.');
         if (pageAt.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native history page.');
         added.push(...result.window.page.entries ?? []);
+        fetchedPages.push(result.window.page);
         next = extendTranscriptWindow(result.window, next, at.type === 'older');
         if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
         pageAt = { type: 'older', before: next.page.next_cursor, cut: result.window.cut };
@@ -304,8 +306,9 @@ export class ReadingNavigation {
       // Ordinary pagination remains a live conversation. Only an explicit Turn
       // or message jump owns a frozen historical window and its continuation.
       if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
-        const { window: _, ...following } = next;
-        next = refreshTranscript(following, this.port.state().views[id].snapshot!.transcript);
+        // Commit into the cache live now: rows admitted while this read was in
+        // flight are retained, and the continuation still covers their gaps.
+        next = acceptOlderTranscriptPage(this.port.state().views[id].history!, fetchedPages);
       }
       this.port.setSession(id, { history: { ...next, loading: false, initialLoading: false } });
       void this.refreshTranscriptDomain(id);

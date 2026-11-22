@@ -95,10 +95,10 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       } catch (error) {
         // Failure-path wire facts: was the follow-up sent to the forked session,
         // did the provider answer, and did any observation deliver its row.
-        const summarize = (row: any) => JSON.stringify({ method: row.method, session: row.request?.params?.session_id ?? row.request?.params?.target?.session_id, agent: row.request?.params?.agent_id });
+        const summarize = (row: any) => JSON.stringify({ id: row.id, method: row.method, session: row.params?.session_id ?? row.params?.target?.session_id, agent: row.params?.agent_id });
         console.error('[sidebar-fork] selected:', await selected());
         console.error('[sidebar-fork] requests:', wire.requests.map(summarize).join('\n'));
-        console.error('[sidebar-fork] observe-responses:', wire.responses.filter(row => row.method === 'agent/observe' || row.method === 'session/checkpoint').map(row => JSON.stringify({ method: row.method, entries: row.result?.checkpoint?.snapshot?.transcript?.entries?.map((e: any) => e.cursor) ?? row.result?.snapshot?.transcript?.entries?.map((e: any) => e.cursor) })).join('\n'));
+        console.error('[sidebar-fork] observe-responses:', wire.responses.filter(row => row.method === 'agent/observe' || row.method === 'session/checkpoint').map(row => JSON.stringify({ id: row.id, method: row.method, entries: row.result?.checkpoint?.snapshot?.transcript?.entries?.map((e: any) => e.cursor) ?? row.result?.snapshot?.transcript?.entries?.map((e: any) => e.cursor), events: (row.result?.events ?? []).map((event: any) => event.type ?? Object.keys(event)[0]) })).join('\n'));
         console.error('[sidebar-fork] notifications:', JSON.stringify(wire.notifications.map(row => row.method).reduce((counts: Record<string, number>, method: string) => ({ ...counts, [method]: (counts[method] ?? 0) + 1 }), {})));
         throw error;
       }

@@ -171,7 +171,7 @@ test('native child live cuts, independent title, active and file-only resume upl
     console.error('observe-responses', JSON.stringify(wire.responses.filter(row => row.method === 'agent/observe').map(row => ({
       type: row.result?.type, cursor: row.result?.cursor, source: row.result?.source,
       transcript: summarizePage(row.result?.checkpoint?.snapshot?.transcript),
-      events: row.result?.events?.length, resync: row.result?.reason,
+      events: (row.result?.events ?? []).map((event: any) => event.type ?? Object.keys(event)[0]), resync: row.result?.reason,
     }))));
     const notificationTypes = wire.notifications.reduce((counts: Record<string, number>, note) => {
       counts[note.method] = (counts[note.method] ?? 0) + 1; return counts; }, {});

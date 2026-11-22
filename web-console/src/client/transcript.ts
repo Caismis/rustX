@@ -137,6 +137,27 @@ export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTra
   return { ...cache, loading: false, error: undefined, page: { ...mergePages(page, cache.page), next_cursor: page.next_cursor } };
 }
 
+/** Accept one completed 'older' page chain into the cache live at commit time.
+ * This is the linearization point for ordinary live pagination: the fetched
+ * rows merge into the cache the moment the read resolves, so rows the live
+ * head admitted while the request was in flight are retained — never
+ * overwritten by the cache captured when the read started. The continuation
+ * picks the deepest unfetched boundary: a mid-page gap is always recomputed
+ * from the merged rows, while stored cursors only continue below the merged
+ * minimum, so every unfetched gap stays reachable and the walk converges. */
+export function acceptOlderTranscriptPage(latest: TranscriptCache, fetchedPages: RuntimeClientTranscriptPage[]): TranscriptCache {
+  const fetched = fetchedPages.reduce((acc, page) => mergePages(acc, page));
+  const merged = mergePages(fetched, latest.page);
+  const positions = [...pageRows(merged).keys()].map(key => BigInt(String(key))).sort((a, b) => a < b ? -1 : 1);
+  const mergedMin = positions[0];
+  let gap: bigint | undefined;
+  for (let i = 0; i + 1 < positions.length; i++) if (positions[i + 1] > positions[i] + 1n) { gap = positions[i + 1]; break; }
+  const below = (cursor: unknown) => cursor == null || mergedMin === undefined || BigInt(String(cursor)) > mergedMin ? null : BigInt(String(cursor));
+  const candidates = [gap, below(fetched.next_cursor), below(latest.page.next_cursor)].filter((cursor): cursor is bigint => cursor != null);
+  const next_cursor = candidates.length ? String(candidates.reduce((a, b) => a < b ? a : b)) : null;
+  return { ...latest, loading: false, initialLoading: false, error: undefined, page: { ...merged, next_cursor } };
+}
+
 export function installTranscriptWindow(window: ConversationWindow, previous?: TranscriptCache): TranscriptCache {
   const entries = window.page.entries ?? [];
   if (entries.length > HISTORY_PAGE_SIZE || JSON.stringify(entries).length * 2 > HISTORY_PAGE_MAX_BYTES) throw new Error('Native history page exceeds the browser reading bound.');
