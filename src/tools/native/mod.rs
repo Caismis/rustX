@@ -54,8 +54,7 @@ mod bash;
 pub(crate) use bash::NAME as BASH_TOOL_NAME;
 pub(crate) use bash::handoff::drive_private_bash;
 pub(crate) use bash::{
-    BashOutputLocator, PreparedBash, discard_private_output as discard_private_bash_output,
-    operation_at as bash_operation_at,
+    BashCaptureOwner, BashOutputLocator, PreparedBash, operation_at as bash_operation_at,
 };
 mod edit;
 mod glob;

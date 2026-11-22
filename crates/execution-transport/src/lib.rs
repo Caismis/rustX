@@ -20,7 +20,7 @@
 //!
 //! Supported endpoint forms are deliberately narrow: `ws://IP:PORT` is
 //! accepted only for a literal loopback IP, `wss://IP:PORT` accepts any
-//! literal IP, the path must be exactly `/execution/v1`, and userinfo,
+//! literal IP, the path must be exactly `/execution/v2`, and userinfo,
 //! query, and fragment are rejected. Hostnames are unsupported — numeric
 //! IPs keep resolution inside the bounded connect budget and pair with
 //! IP-SAN certificates. `wss` certificate and hostname verification can
@@ -38,9 +38,7 @@ pub use path::open_dir_nofollow;
 
 pub use channel::{LoopbackTls, accept, connect, connect_provisioned};
 
-/// The required WebSocket protocol path, shared by client validation and
-/// server enforcement.
-pub(crate) const EXECUTION_PATH: &str = "/execution/v1";
+pub(crate) use rustx_execution_protocol::EXECUTION_PATH;
 
 #[cfg(test)]
 mod tests;

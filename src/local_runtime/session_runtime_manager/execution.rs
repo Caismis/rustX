@@ -66,7 +66,7 @@ pub struct LocalExecutionEndpoint {
     #[cfg(test)]
     pub(crate) settlement_joined: tokio::sync::Notify,
     #[cfg(test)]
-    mutation_test_hooks: Mutex<MutationTestHooks>,
+    test_hooks: Mutex<ExecutionTestHooks>,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -99,7 +99,8 @@ enum Settlement {
 
 #[cfg(test)]
 #[derive(Default)]
-struct MutationTestHooks {
+struct ExecutionTestHooks {
+    expire_bash_capture_query: bool,
     preparation_cleanup: std::collections::BTreeMap<
         rustx_execution_protocol::DecimalU64,
         tokio::sync::oneshot::Sender<()>,
@@ -127,6 +128,7 @@ enum EndpointAuthority {
     Delegated {
         control: rustx_execution_server::ControlHandle,
         shutdown: rustx_execution_transport::ChannelShutdown,
+        work: rustx_execution_server::delegation::DelegatedWork,
     },
 }
 
@@ -241,7 +243,7 @@ impl LocalExecutionEndpoint {
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
-            mutation_test_hooks: Mutex::default(),
+            test_hooks: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -255,7 +257,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v1`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v2`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -296,7 +298,7 @@ impl LocalExecutionEndpoint {
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
-            mutation_test_hooks: Mutex::default(),
+            test_hooks: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -1123,11 +1125,18 @@ impl LocalExecutionEndpoint {
     }
 
     #[cfg(test)]
-    pub(crate) fn hold_data_exchange_for_test(&self, hold: impl FnOnce()) -> io::Result<()> {
-        self.with_connection(None, true, |_| {
-            hold();
-            Ok(())
-        })
+    pub(crate) fn hold_data_exchange_for_test<T>(&self, hold: impl FnOnce() -> T) -> io::Result<T> {
+        self.with_connection(None, true, |_| Ok(hold()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_bash_capture_query_for_test(&self) {
+        self.test_hooks.lock().unwrap().expire_bash_capture_query = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_bash_capture_expiry_for_test(&self) -> bool {
+        std::mem::take(&mut self.test_hooks.lock().unwrap().expire_bash_capture_query)
     }
 
     /// The shared authority binding behind this endpoint — test-facing:
@@ -1286,10 +1295,18 @@ impl LocalExecutionEndpoint {
             return;
         }
         let request = ProcessRequest::DiscardBashOutput { key };
-        let result = self.with_bounded_data_connection(deadline, |connection| {
-            connection.process_until(&request, deadline)
-        });
-        if !matches!(result, Ok(ProcessReply::OutputReleased { .. })) {
+        let exchange = || {
+            self.with_bounded_data_connection(deadline, |connection| {
+                connection.process_until(&request, deadline)
+            })
+        };
+        let mut reply = exchange();
+        // Conflict confirms the Client retained the file for this identity.
+        // Keep the original deadline and never retry an uncertain exchange.
+        if matches!(reply, Ok(ProcessReply::Conflict { .. })) {
+            reply = exchange();
+        }
+        if !matches!(reply, Ok(ProcessReply::OutputReleased { .. })) {
             self.cut_pair_if_open();
         }
     }
@@ -1333,7 +1350,7 @@ impl LocalExecutionEndpoint {
         ticket: rustx_execution_protocol::DecimalU64,
     ) -> tokio::sync::oneshot::Receiver<()> {
         let (send, done) = tokio::sync::oneshot::channel();
-        self.mutation_test_hooks
+        self.test_hooks
             .lock()
             .unwrap()
             .preparation_cleanup
@@ -1349,18 +1366,14 @@ impl LocalExecutionEndpoint {
         let (ready, decision_ready) = tokio::sync::oneshot::channel();
         let (resume, parked) = tokio::sync::oneshot::channel();
         let (done, decision_done) = tokio::sync::oneshot::channel();
-        self.mutation_test_hooks
-            .lock()
-            .unwrap()
-            .cancel_fence
-            .insert(
-                ticket,
-                CancelFenceHook {
-                    ready,
-                    resume: parked,
-                    done,
-                },
-            );
+        self.test_hooks.lock().unwrap().cancel_fence.insert(
+            ticket,
+            CancelFenceHook {
+                ready,
+                resume: parked,
+                done,
+            },
+        );
         CancelMutationFenceTest {
             decision_ready,
             resume,
@@ -1371,7 +1384,7 @@ impl LocalExecutionEndpoint {
     #[cfg(test)]
     fn prepared_cleanup_completed_for_test(&self, ticket: rustx_execution_protocol::DecimalU64) {
         if let Some(done) = self
-            .mutation_test_hooks
+            .test_hooks
             .lock()
             .unwrap()
             .preparation_cleanup
@@ -1387,12 +1400,7 @@ impl LocalExecutionEndpoint {
         ticket: rustx_execution_protocol::DecimalU64,
         disposition: Option<rustx_execution_protocol::CancelDisposition>,
     ) -> Option<tokio::sync::oneshot::Sender<()>> {
-        let gate = self
-            .mutation_test_hooks
-            .lock()
-            .unwrap()
-            .cancel_fence
-            .remove(&ticket);
+        let gate = self.test_hooks.lock().unwrap().cancel_fence.remove(&ticket);
         let CancelFenceHook {
             ready,
             resume,
@@ -1730,6 +1738,17 @@ pub(crate) struct WorkspaceConfiguration {
 }
 
 impl SessionExecutionScope {
+    pub(crate) fn delegated_work(
+        &self,
+    ) -> Option<rustx_execution_server::delegation::DelegatedWork> {
+        if let ExecutionRoute::Delegated(endpoint) = &self.route
+            && let EndpointAuthority::Delegated { work, .. } = &endpoint.authority
+        {
+            return Some(work.clone());
+        }
+        None
+    }
+
     /// The Session's published endpoint, resolved at dispatch time — a
     /// lookup, never a claim. An absent, preparing, fenced, or dropped
     /// endpoint is `NotConnected`; the scope itself is never proof of
@@ -4143,6 +4162,7 @@ mod tests {
             key: key.clone(),
             state: OperationState::Settled(SettledSnapshot {
                 disposition: SettledDisposition::Known,
+                physical_settlement_proven: true,
                 exit_code: Some(0),
                 stdout_total: DecimalU64::new(0),
                 stderr_total: DecimalU64::new(0),

@@ -64,7 +64,7 @@ fn ws_rig() -> Rig {
         None,
     )
     .unwrap();
-    let url = format!("wss://{}/execution/v1", listener.local_addr().unwrap());
+    let url = format!("wss://{}/execution/v2", listener.local_addr().unwrap());
     let mut file = fs::File::open(&bundle).unwrap();
     let published: Bootstrap = read_record(&mut file).unwrap();
     assert!(matches!(
@@ -335,7 +335,7 @@ fn websocket_session_version_and_generation_mismatches_stay_reserved() {
             b.generation = Generation::new(NonZeroU64::new(7).unwrap());
         }),
         ("version", |b: &mut Bootstrap| {
-            b.version = rustx_execution_protocol::PROTOCOL_VERSION + 1;
+            b.version = 1;
         }),
     ];
     for (name, tamper) in tampers {
@@ -364,11 +364,11 @@ fn websocket_plaintext_nonloopback_and_wrong_path_never_connect() {
     // before a byte leaves the process — the listener never accepts.
     let address = rig.listener.local_addr().unwrap();
     for url in [
-        format!("ws://192.0.2.10:{}/execution/v1", address.port()),
-        format!("ws://{address}/execution/v1"),
+        format!("ws://192.0.2.10:{}/execution/v2", address.port()),
+        format!("ws://{address}/execution/v2"),
         format!("wss://{address}/other"),
-        format!("wss://user@{address}/execution/v1"),
-        format!("wss://{address}/execution/v1?token=1"),
+        format!("wss://user@{address}/execution/v2"),
+        format!("wss://{address}/execution/v2?token=1"),
     ] {
         tamper_bundle(&rig, |bootstrap| {
             bootstrap.endpoint = BootstrapEndpoint::WebSocket {
@@ -420,7 +420,7 @@ fn websocket_plaintext_never_consumes_the_tls_reservation() {
     // A plaintext peer fails at the TLS handshake; the binding
     // stays Reserved and the real Client still wins afterwards.
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
-    raw.write_all(b"GET /execution/v1 HTTP/1.1\r\nHost: x\r\n\r\n")
+    raw.write_all(b"GET /execution/v2 HTTP/1.1\r\nHost: x\r\n\r\n")
         .unwrap();
     raw.flush().unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
@@ -447,7 +447,7 @@ fn websocket_slow_peer_shares_one_absolute_deadline() {
     // die on the armed deadline, not get a budget per fragment.
     let deadline = Instant::now() + Duration::from_millis(700);
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
-    raw.write_all(b"GET /execution/v1 HTTP/1.1\r\n").unwrap();
+    raw.write_all(b"GET /execution/v2 HTTP/1.1\r\n").unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
     let outcome = rustx_execution_transport::accept(stream, deadline);
     let elapsed = deadline.saturating_duration_since(Instant::now());

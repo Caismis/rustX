@@ -2121,6 +2121,54 @@ async fn settle_nested(
     }
 }
 
+#[cfg(test)]
+pub(crate) async fn assert_unproven_relay_retains_child_root(relay: ChildExecutionSettlement) {
+    use super::physical_recovery::{ChildPhysicalLease, ParentPhysicalLease, prove_after_release};
+    use crate::runtime::identity::SessionId;
+    use crate::runtime::local_storage::ProductRoot;
+
+    let artifacts = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("child-runtime");
+    std::fs::create_dir(&path).unwrap();
+    let product = ProductRoot::create(artifacts.path()).unwrap();
+    let session = SessionId::generate();
+    let conversation = ConversationId::generate();
+    let activation = SubagentId::new("unproven-relay:1");
+    let owner =
+        ParentPhysicalLease::reserve(&product, &session, &conversation, &activation).unwrap();
+    let child =
+        ChildPhysicalLease::acquire_from_parent(&owner, &activation, &conversation).unwrap();
+    let mut root = PhysicalChildRuntimeRoot::from_existing(path.clone());
+    root.install_physical_owner(std::sync::Arc::new(owner));
+    root.execution_relay = Some(relay);
+    // The Server child has been reaped. Its delegated work can still be live.
+    drop(child);
+    let settlement = settle_nested(
+        PhysicalOutcome::Lost {
+            diagnostic: "child was reaped".to_owned(),
+            cancellation_delivered: false,
+        },
+        &mut RetainedProcessUnits::default(),
+        root,
+    )
+    .await;
+    assert!(
+        settlement
+            .runtime_root_cleanup_error
+            .as_deref()
+            .is_some_and(|detail| detail.contains("unconfirmed")),
+        "{settlement:?}"
+    );
+    assert!(path.is_dir());
+    assert!(
+        prove_after_release(&product, &session, &conversation, &activation)
+            .unwrap()
+            .is_none(),
+        "recovery must not observe a quiescent receipt"
+    );
+}
+
 /// Removes the exact disposable live-inspection lease belonging to one
 /// physical child incarnation. The driver calls this only after the direct
 /// child has been reaped; the child itself removes the lease on its normal

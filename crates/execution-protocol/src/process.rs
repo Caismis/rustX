@@ -20,13 +20,13 @@ use uuid::Uuid;
 
 use crate::{ClientInstanceId, DecimalU64, Generation, SessionId};
 
-/// At most this many live process operations per Session in v1.
+/// At most this many live process operations per Session.
 pub const MAX_OPERATIONS_PER_SESSION: usize = 4;
 
-/// Finite tombstone capacity per binding generation. Once saturated the
-/// Server refuses new registrations; tombstones are never evicted while
-/// their generation is active.
-pub const MAX_GENERATION_TOMBSTONES: usize = 4096;
+/// Total active and retired process identities in one binding generation.
+/// Admission reserves the eventual tombstone. The Client never evicts an
+/// identity while its generation is active.
+pub const MAX_PROCESS_IDENTITIES_PER_GENERATION: usize = 4096;
 
 /// Maximum argv element count in a `ProcessProgram::Argv`.
 pub const MAX_PROCESS_ARGS: usize = 256;
@@ -505,8 +505,8 @@ pub enum OperationState {
         /// The observed exit code, when the platform reported one.
         exit_code: Option<i32>,
     },
-    /// Fully settled: retained bytes finalized and physical settlement
-    /// actual — never synthesized on data loss.
+    /// The operation driver finalized its outcome and journal. Physical
+    /// settlement is independently reported by the snapshot.
     Settled(SettledSnapshot),
 }
 
@@ -518,7 +518,11 @@ pub enum OperationState {
 pub struct SettledSnapshot {
     /// The terminal disposition.
     pub disposition: SettledDisposition,
-    /// The observed exit code, present only when `Known` reported one.
+    /// The process never started, or its containment and reap were proven.
+    /// This remains available after output is released. An unconfirmed
+    /// snapshot carries `Unknown` and no exit code.
+    pub physical_settlement_proven: bool,
+    /// The observed exit code, absent for an `Unknown` outcome.
     pub exit_code: Option<i32>,
     /// Total bytes the process emitted on stdout (cap-independent).
     pub stdout_total: DecimalU64,
@@ -539,7 +543,8 @@ pub struct SettledSnapshot {
 pub enum SettledDisposition {
     /// Exited with an observed status — `exit_code` is authoritative.
     Known,
-    /// The physical outcome could not be witnessed honestly.
+    /// The business outcome could not be witnessed honestly. Containment
+    /// may still be proven independently.
     Unknown,
     /// The spec's timeout elapsed; distinct from an external cancel.
     TimedOut,
@@ -672,7 +677,9 @@ pub enum ProcessRequest {
         max_bytes: u32,
     },
     /// Deliver one ordered stdin delta — shares the single input
-    /// sequence with `CloseStdin` and `Resize`.
+    /// sequence with `CloseStdin` and `Resize`. The same sequence and input
+    /// can attach while its receipt is retained. A released receipt cannot
+    /// authorize a replay.
     WriteStdin {
         /// The operation owning stdin.
         key: ProcessOperationKey,

@@ -564,7 +564,7 @@ impl<'a> ToolExecutionHandle<'a> {
         cancellation: ExecutionCancellation,
     ) -> Self {
         let operation_cancellation = cancellation.clone();
-        let operation: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
+        let operation = Box::pin(async move {
             // This checkpoint precedes the first physical poll, including
             // when cancellation hands an unpolled operation to settlement.
             if operation_cancellation.is_cancelled() {
@@ -573,6 +573,19 @@ impl<'a> ToolExecutionHandle<'a> {
                     phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
                 });
             }
+            operation.await
+        });
+        Self::settled_by_prepared_operation(operation, cancellation)
+    }
+
+    /// Drives a previously prepared native operation even when already
+    /// cancelled. The operation must gate business dispatch itself and
+    /// settle its preparation before reporting a result.
+    pub(crate) fn settled_by_prepared_operation(
+        operation: BoxFuture<'a, ToolExecutionResult>,
+        cancellation: ExecutionCancellation,
+    ) -> Self {
+        let operation: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
             // Catch inside the shared slot's lock so invocation unwinding
             // cannot poison that ownership lock or unwind sibling calls.
             // The consumed future is dropped before publishing its result.

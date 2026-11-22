@@ -111,7 +111,9 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client's first and only binding-opening message is protocol v1:
+The Client's first and only binding-opening message is protocol v2. Revision 2 requires
+`physical_settlement_proven` in every terminal process snapshot. A revision 1
+peer is rejected during bootstrap or Hello, before execution admission:
 
 ```rust
 pub struct Hello {
@@ -389,7 +391,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v1` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v2` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -444,7 +446,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v1]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v2]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -970,8 +972,10 @@ the original record (`Starting`, running, cancelled, failed, settled);
 same-identity different-parameter requests are explicitly rejected, never
 overwrite. A query is observation, not a launch permit: a miss proves
 nothing about an in-flight START. Retried identities keep minimal
-tombstones until the generation stops accepting their retries; capacity
-refuses new STARTs, never LRU-forgets live tombstones. A new instance
+tombstones until the generation stops accepting their retries. The
+4,096-identity generation limit includes active entries. A new entry
+reserves its future tombstone and no transition frees that slot for a new
+identity. Replays use the admitted fingerprint and cwd descriptor. A new instance
 answers `Unknown` to old identities — no cross-instance exactly-once.
 Background Bash additionally keeps prepare-then-accept: `Prepare`
 registers the owner and allocates the unique managed file without
@@ -1094,14 +1098,30 @@ envelope.
   including `Unknown`; `Running` is published only after the
   physical START witness inside the Client (the outer supervisor
   helper's own spawn is not business START), exit only after the
-  real `ShellExited` event, and settlement — `Known`, `TimedOut`,
-  `Cancelled`, `Failed`, or `Unknown` — only after actual reap and
-  drain, with per-stream byte totals and truncation flags the Server
-  projects into the exact `ExecResult`. Output is an ordered
+  real `ShellExited` event. A `Settled` snapshot finalizes the driver
+  outcome and output accounting. Its `physical_settlement_proven` field
+  attests that the operation never started or that its physical
+  containment and reap are confirmed. An unconfirmed snapshot carries
+  `Unknown` with no exit code. A physically settled operation can also
+  have an `Unknown` business outcome. The Server projects the outcome,
+  byte totals and truncation flags into `ExecResult`. Output is an ordered
   interleaved journal addressed by a global byte-boundary cursor with
   validated per-stream offsets and capped retained prefixes;
   `ReleaseOutput` at the exact final cursor frees the bulky buffers
-  while a minimal tombstone keeps replay honest. Input controls are
+  while a minimal tombstone retains identity and physical settlement
+  evidence. Delegated cleanup requires that evidence even after a prior
+  output release, or a confirmed binding-wide Revoke from the terminal
+  owner. The parent owns the execution relay and uses its settlement
+  before publishing a delegated child's quiescence and removing its
+  runtime root. A child can attest its local drain directly if it seals
+  its relay-side dispatch boundary before any request that might leave
+  retained work crosses it. This preserves recovery after a parent
+  crash during an unused child's preparation. The parent's data relay
+  takes responsibility before sending a registration, mutation preparation,
+  or commit. Validated receipts attach that responsibility to the operation
+  or ticket, discharge it, or leave it unresolved. A lost or invalid
+  receipt and `CommitUnknown` leave the relay dependent on confirmed
+  binding settlement even if it never received a ticket. Input controls are
   admitted as `InputAccepted` and their physical outcome — `Pending`,
   `Applied`, `Failed`, `Rejected`, or `Unknown` — is correlated by
   `InputReceipt`. A pending poll keeps the receipt and a terminal poll
@@ -1120,9 +1140,12 @@ envelope.
   is unavailable, or if it reports `Failed`. Pre-dispatch refusals keep
   their original result. A collected `Failed` receipt releases its slot
   and may describe an already-applied prefix.
-  A stale sequence is never reapplied and an ambiguous write is never
-  retried. The Client holds at most four
-  concurrent operations per Session plus a bounded tombstone budget.
+  The Client retains a fingerprint for each outstanding input receipt.
+  Retransmitting the same operation and sequence with identical bytes and
+  flags attaches to that receipt without enqueuing input. Conflicting
+  content or an old sequence whose evidence was released is refused. The
+  Client holds at most four unreleased operations per Session within the
+  generation's shared live-and-retired identity budget.
   Native Agent Bash uses a separate `RegisterAgentBash` message and
   negotiates `AgentBash` on the same authenticated binding. Ordinary
   `Register` refuses a shell spec. The shell spec freezes the command,
@@ -1133,13 +1156,39 @@ envelope.
 - Agent Bash registers its Client-owned capture before accepting a
   background job. A promoted invocation keeps the same operation and
   locator. Direct foreground capture allocates on the first combined
-  preview overflow. Capture produces separate 16 KiB stdout, stderr
+  preview overflow. Both allocation paths perform filesystem calls
+  outside the operation registry lock, so cancellation and health
+  can proceed during creation. Background preparation reserves the
+  operation identity before allocating. Matching replays share its
+  result and START is unavailable until registration commits. If
+  cancellation or revocation wins, the counted allocation owner
+  rolls back the file and retains any unconfirmed removal for cleanup.
+  Capture produces separate 16 KiB stdout, stderr
   and combined previews. Each stream is decoded incrementally before
   multiplexing. Complete native captures have a 64 MiB file bound
   and at most 32 live/published files occupy a binding at once, so the
   per-binding disk data ceiling is 2 GiB. Storage failures distinguish
   a readable prefix from unavailable output. Releasing the process
   journal retains published capture until disposal or binding shutdown.
+  Background acceptance marks the live locator as published before
+  releasing the runner. Cancellation of an accepted Job first settles
+  its preparation, including when the executor has not been constructed
+  or its operation has not been polled. The START gate still refuses
+  dispatch after cancellation. Client settlement reports complete empty
+  output only after verifying the retained file. Unaccepted preparations
+  can explicitly discard their capture. After the journal is released,
+  the Server discards a capture that the Client reports as unavailable.
+  A private capture also stays with the Server's cleanup owner when a
+  failed query yields an unavailable result without a locator.
+  A promotable capture stays readable until ownership is decided. If the
+  execution finishes in the foreground, its registry uses the driver's
+  capture owner to discard it. Both paths share one disposal claim,
+  which is taken before requesting data admission. One claimant receives
+  the discard receipt or transfers cleanup to binding teardown. Discard
+  confirms that the retained descriptor has no directory links. If
+  unlinking is needed, it first checks the named object's identity.
+  A renamed capture retains its owner and quota. A replacement file is
+  left alone even when the original capture can already be released.
 - The absolute Bash continuation identifier is scoped to the owning
   Conversation and Client binding. Native Read and Grep send a typed
   query to that Client, and the Client opens its own retained capture.
@@ -1225,6 +1274,14 @@ canonical results and the order in which calls commit.
 
 ### Completion and drain
 
+The Client's active process guard keeps physical settlement separate from
+the command's outcome. Once a supervisor is spawned, the guard needs both
+terminal containment and successful reap of that supervisor. If the worker
+ends without that proof, the unresolved count survives the worker and any
+output release. Revoke and clean shutdown require the count to reach zero.
+This evidence is local to the running Client. See the
+[EXEC-02 evidence ledger](exec-02-evidence.md) for death and recovery scope.
+
 Discarded mutation preparations retain their ticket until a bounded
 Abort can wait for the same data and writer admission as other Agent
 requests. Abort is idempotent for an issued ticket whose preparation
@@ -1257,14 +1314,18 @@ checks the most recent terminal evidence before fencing. When terminal
 settlement already owns a binding, a failed mutation cancel leaves the
 control lane available for Revoke. The original commit receipt still
 determines the mutation outcome. Private Bash
-capture discard waits for bounded data admission and either confirms
-release or retires its owning binding. Once terminal settlement closes
+capture discard waits for bounded data admission and retries an explicit
+unlink conflict once within the original deadline. If release is still
+unconfirmed, the open binding is retired. Once terminal settlement closes
 ordinary data admission, queued capture discard and prepared-ticket
 cleanup transfer to it. A child relay with unfinished cleanup waits for
 the same physical settlement result. The Client counts capture owners
-from START admission through worker exit, and from Discard admission
-through file release. It removes the retained capture files before sending
-Revoke confirmation. Non-EOF PTY read errors preserve output loss in the
+from START admission through worker exit, including blocking allocation,
+and from Discard admission through file release. It tries every idle
+capture during teardown even if a different process lacks settlement
+proof or a different capture could not be removed. Unconfirmed physical
+work or capture removal still prevents a Revoke confirmation. Non-EOF
+PTY read errors preserve output loss in the
 terminal disposition.
 
 ### Workspace Python readiness

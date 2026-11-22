@@ -84,7 +84,7 @@ fn wrong_hello_fields_never_consume_a_reservation() {
     let cases: Vec<(&str, Mutation, Reject)> = vec![
         (
             "version",
-            Box::new(|h: &mut Hello| h.version = 2),
+            Box::new(|h: &mut Hello| h.version = 1),
             Reject::UnsupportedVersion,
         ),
         (
@@ -261,7 +261,7 @@ fn credential_is_verified_before_any_field_probe() {
     let mut probe = valid_hello(&credential);
     probe.credential = BindingCredential::from_bytes([0x00; 32]);
     probe.session = SessionId::new("other");
-    probe.version = 2;
+    probe.version = 1;
     assert_eq!(
         binding.connect(&probe, ConnectionId::new("conn-1")),
         Err(Reject::InvalidCredential)
@@ -535,7 +535,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v1"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v2"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -685,6 +685,67 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
     let (mut peer, stream) = UnixStream::pair().unwrap();
     write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
     (live_data_half(binding, hello, stream, &mut peer), peer)
+}
+
+#[test]
+fn revision_one_cannot_admit_either_lane_in_revision_two() {
+    use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
+
+    assert_eq!(PROTOCOL_VERSION, 2);
+    let (binding, credential) = Binding::reserve(reservation()).unwrap();
+    let hello = valid_hello(&credential);
+    let mut old = hello.clone();
+    old.version = 1;
+    let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
+    write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
+    write_record(
+        &mut data_peer,
+        &ClientRequest::Process(ProcessRequest::Start {
+            key: ProcessOperationKey {
+                incarnation: ServerIncarnation::generate(),
+                session: hello.session.clone(),
+                instance: hello.instance.clone(),
+                generation: hello.generation,
+                operation: OperationId::new(),
+            },
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        binding.accept_local(data_stream).unwrap(),
+        ChannelAccept::Rejected(Reject::UnsupportedVersion)
+    ));
+    assert!(matches!(
+        read_record::<DataHelloReply>(&mut data_peer).unwrap(),
+        Err(Reject::UnsupportedVersion)
+    ));
+    assert_eq!(binding.status().phase, BindingPhase::Reserved);
+
+    let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
+    write_record(&mut data_peer, &PeerHello::Data(hello.clone())).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_stream).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let challenge = read_record::<DataHelloReply>(&mut data_peer)
+        .unwrap()
+        .unwrap()
+        .challenge;
+    let (mut control_peer, control_stream) = UnixStream::pair().unwrap();
+    write_record(&mut control_peer, &control_hello(&old, challenge.clone())).unwrap();
+    assert!(matches!(
+        binding.accept_local(control_stream).unwrap(),
+        ChannelAccept::Rejected(Reject::UnsupportedVersion)
+    ));
+    assert_eq!(
+        read_record::<ControlHelloReply>(&mut control_peer).unwrap(),
+        Err(Reject::UnsupportedVersion)
+    );
+    assert_eq!(binding.status().phase, BindingPhase::Reserved);
+    // Only a matched revision-two pair can yield a business dispatch lane.
+    let connection = pair_control_half(&binding, &hello, &challenge);
+    assert_eq!(connection.admission().version, 2);
+    assert_eq!(binding.status().phase, BindingPhase::Live);
 }
 
 /// The paired admission on an already-configured server stream: the
@@ -3171,7 +3232,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v1"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v2"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {

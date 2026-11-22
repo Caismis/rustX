@@ -17,11 +17,11 @@ use crate::message::types::{MessageBlock, ToolMessageBlock};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolId};
 use crate::runtime::interaction::InteractionFailure;
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::tools::background::BackgroundDispatchOutcome;
+use crate::tools::background::{BackgroundDispatchOutcome, ConversationBackgroundRegistry};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext,
-    ToolExecutionHandle, ToolExecutor, ToolRegistry, start_tool_execution,
+    ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use crate::tools::types::{
     ToolCall, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
@@ -183,14 +183,12 @@ impl ToolExecutor for BashHandoff<'_> {
                 Err(error) => return failed_result(&error.to_string()),
             };
             let prepared = Arc::new(prepared);
-            let executor: Arc<dyn ToolExecutor> = prepared.clone();
-            match self.registry.stage_private_with_output(
+            match self.registry.stage_private_bash(
                 &job,
-                &executor,
+                prepared.clone(),
                 context.environment.clone(),
                 leases,
                 context.cancellation.clone(),
-                Some(&prepared),
             ) {
                 Ok(stage) => {
                     crate::tools::native::drive_private_bash(
@@ -205,8 +203,7 @@ impl ToolExecutor for BashHandoff<'_> {
                     // Continue the same registration under foreground ownership.
                     let (trigger, cancellation) = context.cancellation.child_execution();
                     context.cancellation = cancellation;
-                    let completion =
-                        start_tool_execution(&*prepared, invocation, context).completion;
+                    let completion = prepared.start(context).completion;
                     tokio::pin!(completion);
                     let result = tokio::select! {
                         biased;
@@ -218,7 +215,10 @@ impl ToolExecutor for BashHandoff<'_> {
                             completion.await
                         }
                     };
-                    self.registry.finish_unpromoted_bash(result)
+                    ConversationBackgroundRegistry::finish_unpromoted_bash(
+                        result,
+                        Some(prepared.capture_owner()),
+                    )
                 }
                 Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
                     ..
@@ -1447,7 +1447,12 @@ impl AgentExecution<'_> {
                 )
                 .await
         } else {
-            registry.prepare_with_output(invocation, &executor, environment, mcp_leases, None)
+            registry.prepare_dispatch_with_mcp_leases(
+                invocation,
+                &executor,
+                environment,
+                mcp_leases,
+            )
         };
         match prepared {
             Ok(prepared) => {

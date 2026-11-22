@@ -8,7 +8,7 @@
 use base64::Engine as _;
 use rustx_execution_protocol::DecimalU64;
 use rustx_execution_protocol::process::{
-    MAX_PROCESS_DATA_BYTES, OperationState, ProcessReply, ProcessRequest,
+    MAX_PROCESS_DATA_BYTES, OperationState, ProcessReply, ProcessRequest, SettledDisposition,
 };
 
 /// Refuses a request the Server must never send. Nothing has crossed the
@@ -35,6 +35,7 @@ pub(super) fn validate(request: &ProcessRequest, reply: &ProcessReply) -> Result
     if reply.key() != request.key() {
         return Err("process reply echoes a foreign key");
     }
+    validate_settlement(reply)?;
     match (request, reply) {
         (
             ProcessRequest::Register { .. } | ProcessRequest::RegisterAgentBash { .. },
@@ -128,6 +129,21 @@ pub(super) fn validate(request: &ProcessRequest, reply: &ProcessReply) -> Result
     }
 }
 
+fn validate_settlement(reply: &ProcessReply) -> Result<(), &'static str> {
+    if let ProcessReply::State {
+        state: OperationState::Settled(snapshot),
+        ..
+    } = reply
+        && match snapshot.disposition {
+            SettledDisposition::Unknown => snapshot.exit_code.is_some(),
+            _ => !snapshot.physical_settlement_proven,
+        }
+    {
+        return Err("process snapshot contradicts its outcome or physical settlement");
+    }
+    Ok(())
+}
+
 fn validate_bash_capture(
     capture: Option<&rustx_execution_protocol::process::BashCaptureResult>,
 ) -> Result<(), &'static str> {
@@ -218,7 +234,7 @@ mod tests {
 
     use rustx_execution_protocol::process::{
         InputOutcome, OperationId, ProcessOperationKey, ProcessProgram, ProcessSpec, ProcessStdin,
-        ProcessStream, ServerIncarnation, SettledDisposition, SettledSnapshot,
+        ProcessStream, ServerIncarnation, SettledSnapshot,
     };
     use rustx_execution_protocol::{ClientInstanceId, Generation, SessionId};
 
@@ -262,6 +278,7 @@ mod tests {
     fn settled() -> OperationState {
         OperationState::Settled(SettledSnapshot {
             disposition: SettledDisposition::Known,
+            physical_settlement_proven: true,
             exit_code: Some(0),
             stdout_total: DecimalU64::new(0),
             stderr_total: DecimalU64::new(0),
@@ -336,6 +353,47 @@ mod tests {
             assert_eq!(validate(request, &unknown), Ok(()));
             assert!(validate(request, &released).is_err());
         }
+    }
+
+    #[test]
+    fn unknown_outcome_is_independent_of_physical_proof_and_has_no_exit_code() {
+        let key = key();
+        let request = ProcessRequest::Query { key: key.clone() };
+        let OperationState::Settled(snapshot) = settled() else {
+            unreachable!();
+        };
+        let validate_snapshot = |snapshot| {
+            validate(
+                &request,
+                &ProcessReply::State {
+                    key: key.clone(),
+                    state: OperationState::Settled(snapshot),
+                },
+            )
+        };
+        for physical_settlement_proven in [false, true] {
+            let unknown = SettledSnapshot {
+                disposition: SettledDisposition::Unknown,
+                physical_settlement_proven,
+                exit_code: None,
+                ..snapshot
+            };
+            assert_eq!(validate_snapshot(unknown), Ok(()));
+            assert!(
+                validate_snapshot(SettledSnapshot {
+                    exit_code: Some(0),
+                    ..unknown
+                })
+                .is_err()
+            );
+        }
+        assert!(
+            validate_snapshot(SettledSnapshot {
+                physical_settlement_proven: false,
+                ..snapshot
+            })
+            .is_err()
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ use super::*;
 /// reply could still be outstanding, and later calls fail closed.
 pub struct LocalConnection {
     pub(super) owner: Option<Arc<ConnectionOwner>>,
+    pub(super) delegated_work: Option<delegation::DelegatedWork>,
     /// The data lane — the only dispatch channel.
     pub(super) channel: RecordChannel,
     /// The paired control lane's worker, stopped exactly once.
@@ -277,6 +278,9 @@ impl LocalConnection {
             .map_err(ExchangeFailure::Refused)?;
         self.gate().map_err(ExchangeFailure::Refused)?;
         admit().map_err(ExchangeFailure::Refused)?;
+        if let Some(work) = &self.delegated_work {
+            work.admit(request).map_err(ExchangeFailure::Refused)?;
+        }
         self.exchange_encoded(&encoded, deadline, sent)
             .map_err(|failure| match failure {
                 ExchangeFailure::Unknown(error) => ExchangeFailure::Unknown(self.retire(error)),
@@ -1943,6 +1947,20 @@ impl LocalConnection {
         expectation: &WriteExpectation,
         size: u64,
     ) -> io::Result<PreparedMutation> {
+        let (ticket, original) = self.verify_write_prepared(reply, expectation)?;
+        Ok(PreparedMutation {
+            ticket,
+            original,
+            size,
+            connection: self.connection.clone(),
+        })
+    }
+
+    pub(super) fn verify_write_prepared(
+        &mut self,
+        reply: ClientReply,
+        expectation: &WriteExpectation,
+    ) -> io::Result<(DecimalU64, Option<FileStamp>)> {
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
         let ClientReply::WritePrepared { ticket, original } = reply else {
             return Err(self.retire(violation("unexpected reply to write prepare")));
@@ -1961,12 +1979,7 @@ impl LocalConnection {
         if !holds {
             return Err(self.retire(violation("write reply ignores the expected revision")));
         }
-        Ok(PreparedMutation {
-            ticket,
-            original,
-            size,
-            connection: self.connection.clone(),
-        })
+        Ok((ticket, original))
     }
 
     /// The commit half of [`prepare_write`](Self::prepare_write) and
@@ -2163,6 +2176,15 @@ impl LocalConnection {
             admit,
             sent,
         )?;
+        self.valid_edit_prepared(reply, expectation, replacements)
+    }
+
+    pub(super) fn valid_edit_prepared(
+        &mut self,
+        reply: ClientReply,
+        expectation: &WriteExpectation,
+        replacements: &[TextReplacement],
+    ) -> io::Result<PreparedMutation> {
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
         match reply {
             ClientReply::Error { kind } => return Err(read_error(kind)),

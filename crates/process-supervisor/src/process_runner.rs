@@ -158,6 +158,9 @@ pub struct ProcessTermination {
     pub exit_status: Option<ExitStatus>,
     /// The outcome intent owning the settlement.
     pub intent: ProcessOutcomeIntent,
+    /// The unit was proven terminal and its direct supervisor was reaped.
+    /// This is independent of the business outcome and output availability.
+    pub physical_settlement_proven: bool,
 }
 
 /// A bounded captured supervised-command result (convenience path).
@@ -683,6 +686,8 @@ pub struct RunnerTestControl {
     #[cfg(any(test, feature = "test-support"))]
     pub interrupt_direct_wait: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(any(test, feature = "test-support"))]
+    pub fail_direct_wait_after_exit: bool,
+    #[cfg(any(test, feature = "test-support"))]
     pub fail_sigterm_handler: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub fail_subreaper_init: bool,
@@ -733,6 +738,7 @@ impl RunnerTestControl {
             fail_signal: false,
             fail_wait: false,
             interrupt_direct_wait: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fail_direct_wait_after_exit: false,
             fail_sigterm_handler: false,
             fail_subreaper_init: false,
             force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1438,6 +1444,20 @@ impl SupervisedCommandRunner {
                     result => break result,
                 }
             };
+            // Reap the actual helper in the fixture, then exercise the
+            // same non-Interrupted wait failure branch without a leaked child.
+            #[cfg(any(test, feature = "test-support"))]
+            let wait = if wait.is_ok()
+                && self
+                    .control
+                    .as_ref()
+                    .is_some_and(|control| control.fail_direct_wait_after_exit)
+            {
+                assert!(self.exit_status.and_then(|status| status.code()).is_some());
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            } else {
+                wait
+            };
             match wait {
                 Ok(_) => {
                     self.direct_child_reaped = true;
@@ -1468,6 +1488,7 @@ impl SupervisedCommandRunner {
         ProcessTermination {
             exit_status: self.exit_status,
             intent,
+            physical_settlement_proven: self.lifecycle.is_terminal() && self.direct_child_reaped,
         }
     }
 

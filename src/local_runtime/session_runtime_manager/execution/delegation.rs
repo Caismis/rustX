@@ -5,8 +5,8 @@ use super::{
 };
 use base64::Engine as _;
 use rustx_execution_protocol::process::{
-    BashCaptureState, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION, OperationId,
-    OperationState, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
+    BashCaptureState, MAX_PROCESS_IDENTITIES_PER_GENERATION, OperationId, OperationState,
+    ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
 };
 use rustx_execution_protocol::transport::{
     LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record,
@@ -18,6 +18,7 @@ use rustx_execution_protocol::{
 use rustx_execution_server::LocalConnection;
 use rustx_execution_server::delegation::{ControlReceipt, DataReply, DataRequest, Refusal};
 use rustx_execution_transport::{ChannelShutdown, RecordChannel};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -58,8 +59,15 @@ impl ChildExecutionGrant {
             control,
         )?;
         let control = connection.control().expect("delegated control lane");
+        let work = connection
+            .delegated_work()
+            .expect("delegated dispatch witness");
         let endpoint = LocalExecutionEndpoint {
-            authority: EndpointAuthority::Delegated { control, shutdown },
+            authority: EndpointAuthority::Delegated {
+                control,
+                shutdown,
+                work,
+            },
             connection: Mutex::new(Some(connection)),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             connection_released: tokio::sync::Notify::new(),
@@ -68,7 +76,7 @@ impl ChildExecutionGrant {
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
-            mutation_test_hooks: Mutex::default(),
+            test_hooks: Mutex::default(),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             workspace: workspace.to_path_buf(),
@@ -123,6 +131,7 @@ struct Authority {
 
 struct ChildOperation {
     key: ProcessOperationKey,
+    physically_settled: bool,
     journal_released: bool,
     capture_disposed: bool,
 }
@@ -214,10 +223,10 @@ impl ChildExecutionRelay {
             .name("child-execution-data-relay".into())
             .spawn(move || {
                 let _runtime = runtime.enter();
-                run_data(parent_data, &owner, &authority);
+                let unconfirmed = run_data(parent_data, &owner, &authority);
                 authority.stop.cancel();
                 data_to_control.shutdown();
-                let result = authority.release(&owner);
+                let result = authority.release(&owner, unconfirmed);
                 let control_result = control_worker
                     .join()
                     .map_err(|_| io::Error::other("child control relay stopped without proof"));
@@ -259,8 +268,7 @@ impl Authority {
                     && {
                         let operations = self.operations.lock().expect("child process keys");
                         operations.contains_key(&key.operation)
-                            || operations.len()
-                                < MAX_GENERATION_TOMBSTONES + MAX_OPERATIONS_PER_SESSION
+                            || operations.len() < MAX_PROCESS_IDENTITIES_PER_GENERATION
                     }
             }
             ClientRequest::Process(ProcessRequest::Register { .. }) => false,
@@ -301,67 +309,19 @@ impl Authority {
             .copied()
     }
 
-    fn retain_reply(&self, request: &ClientRequest, reply: &ClientReply) {
+    fn retain_reply(&self, request: &ClientRequest, reply: &ClientReply) -> io::Result<()> {
         match (request, reply) {
-            (
-                ClientRequest::Process(ProcessRequest::RegisterAgentBash { key, .. }),
-                ClientReply::Process(ProcessReply::Registered { key: echoed }),
-            ) if key == echoed => {
-                self.operations
-                    .lock()
-                    .expect("child process keys")
-                    .entry(key.operation)
-                    .or_insert_with(|| ChildOperation {
-                        key: key.clone(),
-                        journal_released: false,
-                        capture_disposed: false,
-                    });
-            }
-            (
-                ClientRequest::Process(
-                    request @ (ProcessRequest::ReleaseOutput { key, .. }
-                    | ProcessRequest::DiscardBashOutput { key }),
-                ),
-                ClientReply::Process(ProcessReply::OutputReleased { key: echoed }),
-            ) if key == echoed => {
-                let mut operations = self.operations.lock().expect("child process keys");
-                if let Some(operation) = operations.get_mut(&key.operation) {
-                    operation.journal_released = true;
-                    operation.capture_disposed |=
-                        matches!(request, ProcessRequest::DiscardBashOutput { .. });
-                }
-            }
-            (
-                ClientRequest::Process(ProcessRequest::BashCapture { key }),
-                ClientReply::Process(ProcessReply::BashCapture {
-                    key: echoed,
-                    capture: Some(capture),
-                }),
-            ) if key == echoed
-                && matches!(
-                    capture.output,
-                    BashCaptureState::None | BashCaptureState::Unavailable
-                ) =>
-            {
-                if let Some(operation) = self
-                    .operations
-                    .lock()
-                    .expect("child process keys")
-                    .get_mut(&key.operation)
-                {
-                    operation.capture_disposed = true;
-                }
+            (ClientRequest::Process(request), ClientReply::Process(reply)) => {
+                self.retain_process_reply(request, reply);
             }
             (
                 ClientRequest::PrepareWrite { data_base64, .. },
                 ClientReply::WritePrepared { ticket, .. },
             ) => {
-                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_base64) {
-                    self.tickets
-                        .lock()
-                        .expect("child mutation tickets")
-                        .insert(*ticket, bytes.len() as u64);
-                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_base64)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                return self.retain_ticket(*ticket, bytes.len() as u64);
             }
             (
                 ClientRequest::BeginWrite { total: size, .. },
@@ -375,16 +335,12 @@ impl Authority {
                     ..
                 },
             ) => {
-                self.tickets
-                    .lock()
-                    .expect("child mutation tickets")
-                    .insert(*ticket, size.get());
+                return self.retain_ticket(*ticket, size.get());
             }
             (
                 ClientRequest::CommitWrite { ticket },
                 ClientReply::Written { ticket: echoed, .. }
-                | ClientReply::WriteCancelled { ticket: echoed }
-                | ClientReply::CommitUnknown { ticket: echoed },
+                | ClientReply::WriteCancelled { ticket: echoed },
             )
             | (
                 ClientRequest::AbortWrite { ticket },
@@ -397,13 +353,110 @@ impl Authority {
             }
             _ => {}
         }
+        Ok(())
     }
 
-    fn release(&self, owner: &LocalExecutionEndpoint) -> io::Result<()> {
-        let tickets = std::mem::take(&mut *self.tickets.lock().expect("child mutation tickets"));
-        let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
+    fn retain_ticket(&self, ticket: DecimalU64, size: u64) -> io::Result<()> {
+        let mut tickets = self.tickets.lock().expect("child mutation tickets");
+        let std::collections::btree_map::Entry::Vacant(entry) = tickets.entry(ticket) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate delegated mutation ticket",
+            ));
+        };
+        entry.insert(size);
+        Ok(())
+    }
+
+    fn retain_process_reply(&self, request: &ProcessRequest, reply: &ProcessReply) {
+        match (request, reply) {
+            (
+                ProcessRequest::RegisterAgentBash { key, .. },
+                reply @ (ProcessReply::Registered { key: echoed }
+                | ProcessReply::State {
+                    key: echoed,
+                    state: OperationState::Settled(_),
+                }),
+            ) if key == echoed => {
+                let mut operations = self.operations.lock().expect("child process keys");
+                let operation = operations
+                    .entry(key.operation)
+                    .or_insert_with(|| ChildOperation {
+                        key: key.clone(),
+                        physically_settled: false,
+                        journal_released: false,
+                        capture_disposed: false,
+                    });
+                if let ProcessReply::State {
+                    state: OperationState::Settled(snapshot),
+                    ..
+                } = reply
+                {
+                    operation.physically_settled |= snapshot.physical_settlement_proven;
+                }
+            }
+            (
+                ProcessRequest::BashCapture { key },
+                ProcessReply::BashCapture {
+                    key: echoed,
+                    capture: Some(capture),
+                },
+            ) if key == echoed && capture.output == BashCaptureState::None => {
+                // None proves no capture was allocated. Unavailable
+                // describes a read outcome and may still retain a file.
+                if let Some(operation) = self
+                    .operations
+                    .lock()
+                    .expect("child process keys")
+                    .get_mut(&key.operation)
+                {
+                    operation.capture_disposed = true;
+                }
+            }
+            (
+                request,
+                ProcessReply::State {
+                    key,
+                    state: OperationState::Settled(snapshot),
+                },
+            ) if request.key() == key && snapshot.physical_settlement_proven => {
+                if let Some(operation) = self
+                    .operations
+                    .lock()
+                    .expect("child process keys")
+                    .get_mut(&key.operation)
+                {
+                    operation.physically_settled = true;
+                }
+            }
+            (
+                request @ (ProcessRequest::ReleaseOutput { key, .. }
+                | ProcessRequest::DiscardBashOutput { key }),
+                ProcessReply::OutputReleased { key: echoed },
+            ) if key == echoed => {
+                let mut operations = self.operations.lock().expect("child process keys");
+                if let Some(operation) = operations.get_mut(&key.operation) {
+                    operation.journal_released |=
+                        matches!(request, ProcessRequest::ReleaseOutput { .. });
+                    operation.capture_disposed |=
+                        matches!(request, ProcessRequest::DiscardBashOutput { .. });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn release(&self, owner: &LocalExecutionEndpoint, unconfirmed: bool) -> io::Result<()> {
         let deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+        if unconfirmed {
+            // A lost preparation may have no ticket to address. A lost commit
+            // may already have consumed its ticket. Only binding settlement
+            // covers those resources and any other work on the connection.
+            return owner.finish_child_cleanup(deadline);
+        }
+        let tickets = std::mem::take(&mut *self.tickets.lock().expect("child mutation tickets"));
+        let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
         for ticket in tickets.into_keys() {
             let reply = owner.with_bounded_data_connection(deadline, |connection| {
                 connection.forward_delegated(
@@ -431,9 +484,7 @@ impl Authority {
         operation: &ChildOperation,
         deadline: Instant,
     ) -> io::Result<()> {
-        if !operation.journal_released {
-            Self::release_journal(owner, &operation.key, deadline)?;
-        }
+        Self::settle_process(owner, operation, deadline)?;
         if !operation.capture_disposed {
             let key = &operation.key;
             let discarded = owner.with_bounded_data_connection(deadline, |connection| {
@@ -450,11 +501,15 @@ impl Authority {
         Ok(())
     }
 
-    fn release_journal(
+    fn settle_process(
         owner: &LocalExecutionEndpoint,
-        key: &ProcessOperationKey,
+        operation: &ChildOperation,
         deadline: Instant,
     ) -> io::Result<()> {
+        if operation.physically_settled && operation.journal_released {
+            return Ok(());
+        }
+        let key = &operation.key;
         let exchange = |request| {
             owner.with_bounded_data_connection(deadline, |connection| {
                 connection.process_until(&request, deadline)
@@ -496,18 +551,30 @@ impl Authority {
         else {
             unreachable!();
         };
-        let released = exchange(ProcessRequest::ReleaseOutput {
-            key: key.clone(),
-            final_sequence: snapshot.final_sequence,
-        })?;
-        if !matches!(released, ProcessReply::OutputReleased { key: echoed } if echoed == *key) {
-            return Err(io::ErrorKind::InvalidData.into());
+        if !operation.journal_released {
+            let released = exchange(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: snapshot.final_sequence,
+            })?;
+            if !matches!(released, ProcessReply::OutputReleased { key: echoed } if echoed == *key) {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+        }
+        if !snapshot.physical_settlement_proven {
+            return Err(io::Error::other(
+                "the child process has no physical settlement proof",
+            ));
         }
         Ok(())
     }
 }
 
-fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authority: &Authority) {
+fn run_data(
+    mut channel: RecordChannel,
+    owner: &LocalExecutionEndpoint,
+    authority: &Authority,
+) -> bool {
+    let mut unconfirmed = false;
     while let Ok(Some(DataRequest {
         request,
         remaining_ms,
@@ -516,8 +583,20 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
         let budget = Duration::from_millis(u64::from(remaining_ms)).min(PAGE_REQUEST_TIMEOUT);
         let deadline = Instant::now() + budget;
         let reply = if authority.permits(owner, &request) {
+            // Known operations and tickets already have an owner. The
+            // following exchanges can create an unidentified resource or
+            // consume a ticket without a confirmable settlement.
+            let needs_receipt = matches!(
+                request,
+                ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
+                    | ClientRequest::PrepareWrite { .. }
+                    | ClientRequest::BeginWrite { .. }
+                    | ClientRequest::PrepareEdit { .. }
+                    | ClientRequest::CommitWrite { .. }
+            );
+            let crossed = Cell::new(false);
             let result = owner.with_bounded_data_connection(deadline, |connection| {
-                connection.forward_delegated(
+                let reply = connection.forward_delegated(
                     &request,
                     deadline,
                     authority.commit_size(&request),
@@ -527,17 +606,32 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
                         }
                         authority
                             .stop
-                            .with_active(|| ())
+                            .with_active(|| crossed.set(needs_receipt))
                             .ok_or(io::ErrorKind::Interrupted.into())
                     },
-                )
+                )?;
+                if let Err(error) = authority.retain_reply(&request, &reply) {
+                    connection.disconnect();
+                    return Err(error);
+                }
+                Ok(reply)
             });
             match result {
                 Ok(reply) => {
-                    authority.retain_reply(&request, &reply);
+                    unconfirmed |= crossed.get()
+                        && matches!(
+                            reply,
+                            ClientReply::CommitUnknown { .. }
+                                | ClientReply::Process(ProcessReply::Unknown { .. })
+                        );
                     DataReply::Client(reply)
                 }
-                Err(error) => DataReply::Rejected(error.into()),
+                Err(error) => {
+                    // The send gate runs after encoding and admission. In
+                    // particular, a refused deadline/permit cannot leave debt.
+                    unconfirmed |= crossed.get();
+                    DataReply::Rejected(error.into())
+                }
             }
         } else {
             DataReply::Rejected(Refusal::Denied)
@@ -549,6 +643,7 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
             break;
         }
     }
+    unconfirmed
 }
 
 fn run_control(
@@ -743,6 +838,7 @@ mod tests {
                 key.operation,
                 ChildOperation {
                     key: key.clone(),
+                    physically_settled: false,
                     journal_released: false,
                     capture_disposed: false,
                 },
@@ -758,38 +854,58 @@ mod tests {
             let operation = &operations[&key.operation];
             (operation.journal_released, operation.capture_disposed)
         };
-        authority.retain_reply(
-            &command(ProcessRequest::BashCapture { key: key.clone() }),
-            &receipt(ProcessReply::BashCapture {
-                key: key.clone(),
-                capture: None,
-            }),
-        );
-        assert_eq!(state(), (false, false));
-        authority.retain_reply(
-            &command(ProcessRequest::BashCapture { key: key.clone() }),
-            &receipt(ProcessReply::BashCapture {
-                key: key.clone(),
-                capture: Some(BashCaptureResult {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    combined: String::new(),
-                    truncated: false,
-                    total: Some(0.into()),
-                    output: BashCaptureState::None,
-                    started: true,
-                    signal: None,
+        authority
+            .retain_reply(
+                &command(ProcessRequest::BashCapture { key: key.clone() }),
+                &receipt(ProcessReply::BashCapture {
+                    key: key.clone(),
+                    capture: None,
                 }),
-            }),
-        );
-        assert_eq!(state(), (false, true));
-        authority.retain_reply(
-            &command(ProcessRequest::ReleaseOutput {
-                key: key.clone(),
-                final_sequence: 0.into(),
-            }),
-            &output_released,
-        );
+            )
+            .unwrap();
+        assert_eq!(state(), (false, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::BashCapture { key: key.clone() }),
+                &receipt(ProcessReply::BashCapture {
+                    key: key.clone(),
+                    capture: Some(BashCaptureResult {
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        combined: String::new(),
+                        truncated: true,
+                        total: None,
+                        output: BashCaptureState::Unavailable,
+                        started: true,
+                        signal: None,
+                    }),
+                }),
+            )
+            .unwrap();
+        assert_eq!(state(), (false, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::ReleaseOutput {
+                    key: key.clone(),
+                    final_sequence: 0.into(),
+                }),
+                &output_released,
+            )
+            .unwrap();
+        assert_eq!(state(), (true, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+                &receipt(ProcessReply::Conflict { key: key.clone() }),
+            )
+            .unwrap();
+        assert_eq!(state(), (true, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+                &output_released,
+            )
+            .unwrap();
         assert_eq!(state(), (true, true));
         assert!(authority.owns_process(&key));
     }

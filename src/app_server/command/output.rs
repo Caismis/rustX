@@ -229,6 +229,7 @@ mod tests {
         assert!(totals.0 >= retained.0 && totals.1 >= retained.1);
         SettledSnapshot {
             disposition: SettledDisposition::Known,
+            physical_settlement_proven: true,
             exit_code: Some(0),
             stdout_total: DecimalU64::new(totals.0),
             stderr_total: DecimalU64::new(totals.1),

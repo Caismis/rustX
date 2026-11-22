@@ -805,6 +805,359 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
     bounded(control).await.unwrap();
 }
 
+pub(crate) enum UnavailableBashCapture {
+    ClientReported { refuse_first_discard: bool },
+    QueryBusy,
+}
+
+pub(crate) enum ForegroundBashExecution {
+    Direct,
+    PrivateStage,
+}
+
+#[allow(clippy::too_many_lines)] // Keep the native invocation and its physical cleanup trace together.
+pub(crate) async fn foreground_bash_discards_unavailable_capture_after_journal_release(
+    execution: ForegroundBashExecution,
+    unavailable: UnavailableBashCapture,
+) {
+    use crate::runtime::identity::ToolCallId;
+    use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolRegistry};
+    use crate::tools::managed_output::ManagedToolOutput;
+    use crate::tools::types::{
+        ManagedOutputContinuation, ToolInvocation, ToolInvocationId, ToolInvocationMode,
+        ToolInvocationPolicy, ToolProgress,
+    };
+    use crate::tools::workspace::Workspace;
+    use rustx_execution_protocol::process::{BashCaptureState, ProcessProgram};
+
+    struct NoProgress;
+    impl ProgressReporter for NoProgress {
+        fn report(&self, _progress: ToolProgress) {}
+    }
+
+    let query_busy = matches!(unavailable, UnavailableBashCapture::QueryBusy);
+    let refuse_first_discard = matches!(
+        unavailable,
+        UnavailableBashCapture::ClientReported {
+            refuse_first_discard: true
+        }
+    );
+    let private_stage = matches!(execution, ForegroundBashExecution::PrivateStage);
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch: scratch,
+    } = proxied_client(&fixture).await;
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+    if query_busy {
+        endpoint.expire_bash_capture_query_for_test();
+    }
+    // The Client still uses its scratch root while shutting down.
+    let client_scratch = scratch.path().to_path_buf();
+    let (file_retained, retained_file) = oneshot::channel();
+    let (discard_received, discarded) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        let mut file_retained = Some(file_retained);
+        let mut discard_received = Some(discard_received);
+        let mut trace = Vec::new();
+        let mut path = None;
+        let mut operation = None;
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            if query_busy {
+                assert!(!matches!(
+                    request,
+                    ClientRequest::Process(ProcessRequest::BashCapture { .. })
+                ));
+            }
+            if let ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }) = &request {
+                assert_eq!(Some(key), operation.as_ref());
+                assert!(
+                    discard_received.is_some(),
+                    "discard started again after success"
+                );
+                if refuse_first_discard && trace == ["capture", "release"] {
+                    assert!(path.as_deref().is_some_and(Path::is_file));
+                    trace.push("discard refused");
+                    let reply = ClientReply::Process(ProcessReply::Conflict { key: key.clone() });
+                    send(&mut server_data, &reply).await.unwrap();
+                    continue;
+                }
+            }
+            send(&mut client_data, &request).await.unwrap();
+            let mut reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            match (&request, &mut reply) {
+                (
+                    ClientRequest::Process(ProcessRequest::RegisterAgentBash { key, spec, .. }),
+                    ClientReply::Process(ProcessReply::Registered { key: admitted }),
+                ) if operation.is_none() => {
+                    assert_eq!(key, admitted);
+                    assert!(matches!(
+                        spec.program,
+                        ProcessProgram::Shell {
+                            live_output,
+                            ..
+                        } if live_output == private_stage
+                    ));
+                    assert!(operation.replace(key.clone()).is_none());
+                }
+                (
+                    _,
+                    ClientReply::Process(ProcessReply::BashCapture {
+                        key,
+                        capture: Some(capture),
+                    }),
+                ) => {
+                    assert_eq!(Some(&*key), operation.as_ref());
+                    assert_eq!(capture.output, BashCaptureState::Complete);
+                    // The Client's own regression injects the append/rollback fault.
+                    capture.output = BashCaptureState::Unavailable;
+                    capture.total = None;
+                    capture.truncated = true;
+                    trace.push("capture");
+                }
+                (
+                    ClientRequest::Process(ProcessRequest::ReleaseOutput { key, .. }),
+                    ClientReply::Process(ProcessReply::OutputReleased { key: released }),
+                ) if Some(key) == operation.as_ref() => {
+                    assert_eq!(key, released);
+                    let name = format!("{:032x}.output", key.operation.as_u128());
+                    path = std::fs::read_dir(&client_scratch)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path().join(&name))
+                        .find(|path| path.is_file());
+                    assert_eq!(
+                        std::fs::read(path.as_ref().unwrap()).unwrap(),
+                        vec![b' '; 65_536]
+                    );
+                    file_retained
+                        .take()
+                        .unwrap()
+                        .send(path.clone().unwrap())
+                        .unwrap();
+                    trace.push("release");
+                }
+                (
+                    ClientRequest::Process(ProcessRequest::DiscardBashOutput { key }),
+                    ClientReply::Process(ProcessReply::OutputReleased { key: released }),
+                ) => {
+                    assert_eq!(key, released);
+                    assert!(!path.as_deref().unwrap().exists());
+                    trace.push("discard confirmed");
+                    discard_received.take().unwrap().send(()).unwrap();
+                }
+                _ => {}
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        let _ = client_data.shutdown().await;
+        trace
+    });
+
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let mut workspace = Workspace::new(endpoint.workspace()).unwrap();
+    workspace.bind_execution_scope(Some(fixture.manager.execution_scope(&session.id)));
+    let output = tempfile::tempdir().unwrap();
+    let artifacts = ArtifactStore::new(conversation.clone(), output.path()).unwrap();
+    let managed =
+        ManagedToolOutput::new(conversation.clone(), output.path().join("managed")).unwrap();
+    let environment = crate::tools::environment::ToolEnvironment::new();
+    let bash =
+        crate::tools::native::subagent_child_definition("bash", ToolInvocationPolicy::default())
+            .unwrap();
+    let invocation = ToolInvocation {
+        id: ToolInvocationId::Agent {
+            call_id: ToolCallId::new("foreground-capture-cleanup"),
+        },
+        tool_id: bash.id.clone(),
+        tool_name: bash.name.clone(),
+        mode: if private_stage {
+            ToolInvocationMode::Background
+        } else {
+            ToolInvocationMode::Foreground
+        },
+        arguments: serde_json::json!({
+            "description": "Generate foreground output",
+            "command": "printf '%65536s' ''",
+        }),
+    };
+    let cancellation = detached_cancellation(crate::runtime::CancellationSignal::new());
+    let result = if private_stage {
+        use crate::runtime::inbound::ConversationInboundMailbox;
+        use crate::tools::background::{BackgroundResources, ConversationBackgroundRegistry};
+
+        let prepared = crate::tools::native::PreparedBash::register(
+            &invocation,
+            &workspace,
+            conversation,
+            &environment,
+            &cancellation,
+        )
+        .await
+        .unwrap();
+        let capture_owner = prepared.capture_owner().clone();
+        let registry = ConversationBackgroundRegistry::new(
+            conversation.clone(),
+            BackgroundResources {
+                mailbox: ConversationInboundMailbox::new(conversation.clone()),
+                workspace,
+                artifacts,
+                tool_output: managed,
+                clock: Arc::new(crate::runtime::SystemClock),
+                event_sink: None,
+            },
+        );
+        let mut stage = registry
+            .stage_private_bash(
+                &invocation,
+                Arc::new(prepared),
+                environment,
+                crate::tools::mcp::McpRuntimeLeaseSet::default(),
+                cancellation,
+            )
+            .unwrap();
+        let result = bounded(async {
+            loop {
+                if let Some(result) = stage.take_result() {
+                    break result;
+                }
+                stage.wait_event().await;
+            }
+        })
+        .await;
+        let path = bounded(retained_file).await.unwrap();
+        if query_busy {
+            // While the stage could still be promoted, readable output survives.
+            assert_eq!(std::fs::read(path).unwrap(), vec![b' '; 65_536]);
+        } else {
+            // The driver already received a successful discard before handoff.
+            assert!(!path.exists());
+        }
+        let result = stage.release_finished(result);
+        if !query_busy {
+            // The shared owner rejects another request before queuing admission.
+            assert!(capture_owner.discard().is_none());
+        }
+        assert_eq!(registry.listing(false, 16).matched, 0);
+        result
+    } else {
+        let context = ToolExecutionContext::new(
+            conversation,
+            None,
+            cancellation,
+            &workspace,
+            &NoProgress,
+            &artifacts,
+            &managed,
+            &environment,
+        );
+        let mut registry = ToolRegistry::new();
+        crate::tools::native::register_subagent_child_tools(
+            &mut registry,
+            std::slice::from_ref(&bash),
+        )
+        .unwrap();
+        let executor = registry.executor(&bash.id);
+        let result = bounded(executor.start(invocation, context).completion).await;
+        bounded(retained_file).await.unwrap();
+        result
+    };
+    assert!(matches!(
+        result.managed_output.as_deref(),
+        Some(ManagedOutputContinuation::Unavailable { .. })
+    ));
+    bounded(discarded).await.unwrap();
+    let handle = endpoint
+        .control()
+        .expect("the binding should survive a confirmed discard retry");
+    bounded(tokio::task::spawn_blocking(move || handle.health()))
+        .await
+        .unwrap()
+        .unwrap();
+    if query_busy || private_stage {
+        let conversation = conversation.as_str().to_owned();
+        bounded(tokio::task::spawn_blocking(move || {
+            assert_bash_capture_quota_recovered(&endpoint, conversation);
+        }))
+        .await
+        .unwrap();
+    }
+    grant(&fixture);
+    let connection = AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    assert!(matches!(
+        bounded(call(&connection, 1, Method::CommandExec(parameters(&fixture, &["/bin/true"])))).await,
+        MethodResult::CommandExec { result } if result.status == ExecStatus::Completed && result.exit_code == Some(0)
+    ));
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    assert!(bounded(child.wait()).await.unwrap().success());
+    let expected: &[_] = if query_busy {
+        &["release", "discard confirmed"]
+    } else if refuse_first_discard {
+        &["capture", "release", "discard refused", "discard confirmed"]
+    } else {
+        &["capture", "release", "discard confirmed"]
+    };
+    assert_eq!(bounded(data).await.unwrap(), expected);
+    bounded(control).await.unwrap();
+}
+
+fn assert_bash_capture_quota_recovered(
+    endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    conversation: String,
+) {
+    use rustx_execution_protocol::process::{
+        MAX_BASH_CAPTURES, OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+    use rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT;
+    use std::time::Instant;
+
+    let spec = ProcessSpec {
+        cwd: std::path::PathBuf::new(),
+        program: ProcessProgram::Shell {
+            command: "exit 0".into(),
+            conversation,
+            live_output: true,
+        },
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 0,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let fingerprint = spec.fingerprint();
+    let control = endpoint.control().unwrap();
+    for _ in 0..MAX_BASH_CAPTURES {
+        let key = endpoint.process_key(OperationId::new()).unwrap();
+        let registration = ProcessRequest::RegisterAgentBash {
+            key: key.clone(),
+            fingerprint,
+            spec: spec.clone(),
+        };
+        assert_eq!(
+            endpoint
+                .agent_process(&registration, Instant::now() + PAGE_REQUEST_TIMEOUT, || Ok(
+                    ()
+                ))
+                .unwrap(),
+            ProcessReply::Registered { key: key.clone() },
+        );
+        // Cancellation retires the registration and leaves its capture charged.
+        assert_eq!(
+            control.cancel_process(&key).unwrap(),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+    }
+}
+
 fn park_revoked_receipt(
     (mut client, mut server): (UnixStream, UnixStream),
 ) -> (
@@ -851,6 +1204,83 @@ fn detached_cancellation(
         signal,
         crate::runtime::types::CancellationReason::UserRequested,
     )
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn client_sigkill_keeps_other_sessions_and_history_available() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let fixture = Fixture::with_session_count(None, 3).await;
+    grant(&fixture);
+    let mut killed = fixture.start_execution(0).await;
+    let mut independent = fixture.start_execution(1).await;
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let script = format!("exec 3<>/dev/tcp/127.0.0.1/{port}; printf ready >&3; read -r -u 3");
+    let mut command = parameters(&fixture, &["/bin/bash", "-c", &script]);
+    command.timeout_ms = Some(60_000);
+    let interrupted = tokio::spawn({
+        let connection = connection.clone();
+        async move { rejected(&connection, 1, Method::CommandExec(command)).await }
+    });
+    let (mut business, _) = bounded(listener.accept()).await.unwrap();
+    let mut ready = [0; 5];
+    bounded(business.read_exact(&mut ready)).await.unwrap();
+    assert_eq!(&ready, b"ready");
+    killed.start_kill().unwrap();
+    assert_eq!(
+        bounded(killed.wait()).await.unwrap().signal(),
+        Some(nix::libc::SIGKILL)
+    );
+
+    // These requests are independent of any result or cleanup evidence
+    // from the dead Client's binding.
+    let mut command = parameters(&fixture, &["/bin/sh", "-c", "printf alive"]);
+    command.session_id = fixture.sessions[1].id.clone();
+    command.cwd = fixture.workspaces[1].display().to_string();
+    let MethodResult::CommandExec { result } =
+        call(&connection, 2, Method::CommandExec(command)).await
+    else {
+        panic!("the independent Session must execute");
+    };
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result.stdout_base64)
+            .unwrap(),
+        b"alive"
+    );
+    let cold_session = &fixture.sessions[2].id;
+    assert!(fixture.manager.execution_endpoint(cold_session).is_err());
+    let MethodResult::Session { session } = call(
+        &connection,
+        3,
+        Method::SessionRead {
+            session_id: cold_session.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("the unbound Session must remain readable");
+    };
+    assert_eq!(&session.id, cold_session);
+    assert!(fixture.manager.execution_endpoint(cold_session).is_err());
+    assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
+
+    assert_eq!(bounded(business.read(&mut ready)).await.unwrap(), 0);
+    assert!(matches!(
+        bounded(interrupted).await.unwrap(),
+        ErrorData::OutcomeUnknown | ErrorData::ExecutionUnavailable
+    ));
+    connection.close();
+    let unsettled = bounded(fixture.host.drain()).await;
+    assert_eq!(unsettled.len(), 1);
+    assert!(unsettled[0].contains("unconfirmed"));
+    assert!(bounded(independent.wait()).await.unwrap().success());
 }
 
 pub(crate) async fn lost_input_acceptance_reports_unknown_and_retires_the_binding() {
@@ -1564,4 +1994,545 @@ pub(crate) async fn child_relay_joins_the_physical_binding_revocation() {
     bounded(control).await.unwrap();
     assert!(!endpoint.workspace().join("child-unpublished").exists());
     assert!(!endpoint.workspace().join("child-started").exists());
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SettlementExchange {
+    Query,
+    ReleaseOutput,
+}
+
+fn with_unproven_process_snapshot(
+    (mut client_data, mut server_data): (UnixStream, UnixStream),
+) -> tokio::task::JoinHandle<Vec<SettlementExchange>> {
+    // The Client tests inject the supervisor wait failure itself. This proxy
+    // injects the resulting typed snapshot at the Server's real wire boundary.
+    tokio::spawn(async move {
+        let mut selected = None;
+        let mut trace = Vec::new();
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            if let ClientRequest::Process(process) = &request {
+                if matches!(
+                    process,
+                    ProcessRequest::Register { .. } | ProcessRequest::RegisterAgentBash { .. }
+                ) {
+                    selected.get_or_insert_with(|| process.key().clone());
+                }
+                if selected.as_ref() == Some(process.key()) {
+                    match process {
+                        ProcessRequest::Query { .. } => trace.push(SettlementExchange::Query),
+                        ProcessRequest::ReleaseOutput { .. } => {
+                            trace.push(SettlementExchange::ReleaseOutput);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            send(&mut client_data, &request).await.unwrap();
+            let mut reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if let ClientReply::Process(ProcessReply::State {
+                key,
+                state: OperationState::Settled(snapshot),
+            }) = &mut reply
+                && selected.as_ref() == Some(key)
+            {
+                assert!(snapshot.physical_settlement_proven);
+                assert_eq!(snapshot.exit_code, Some(0));
+                snapshot.disposition = SettledDisposition::Unknown;
+                snapshot.exit_code = None;
+                snapshot.physical_settlement_proven = false;
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        let _ = client_data.shutdown().await;
+        trace
+    })
+}
+
+#[allow(clippy::too_many_lines)] // Both cleanup orders use the same real Client and relay fixture.
+async fn unproven_child_settlement(journal_released: bool) {
+    use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
+    use crate::runtime::subagent::ResolvedSubagentTool;
+    use crate::tools::types::ToolInvocationPolicy;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data,
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = with_unproven_process_snapshot(data);
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let definition =
+        crate::tools::native::subagent_child_definition("bash", ToolInvocationPolicy::default())
+            .unwrap();
+    let relay = ChildExecutionRelay::create(
+        &fixture.manager.execution_scope(&session.id),
+        endpoint.workspace(),
+        conversation,
+        &[ResolvedSubagentTool::Builtin {
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            definition,
+        }],
+    )
+    .unwrap();
+    let (parent, child_startup) = UnixStream::pair().unwrap();
+    relay.transfer(&parent).await.unwrap();
+    let scope = relay
+        .grant()
+        .open(&session.id, endpoint.workspace(), &child_startup)
+        .await
+        .unwrap();
+    let owner = relay.start().unwrap();
+    let process = scope.endpoint().unwrap();
+    let key = process.process_key(OperationId::new()).unwrap();
+    let spec = ProcessSpec {
+        cwd: std::path::PathBuf::new(),
+        program: ProcessProgram::Shell {
+            command: "printf settled; exit 0".into(),
+            conversation: conversation.as_str().into(),
+            live_output: false,
+        },
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 5_000,
+        pty: None,
+        stdin: ProcessStdin::Closed,
+        capture: false,
+        output_cap: 0,
+    };
+    let state = bounded(tokio::task::spawn_blocking(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let exchange = |request| {
+            process
+                .agent_process(&request, deadline, || Ok(()))
+                .unwrap()
+        };
+        assert_eq!(
+            exchange(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: spec.fingerprint(),
+                spec,
+            }),
+            ProcessReply::Registered { key: key.clone() },
+        );
+        let mut reply = exchange(ProcessRequest::Start { key: key.clone() });
+        loop {
+            if let ProcessReply::State {
+                state: OperationState::Settled(snapshot),
+                ..
+            } = reply
+            {
+                assert_eq!(snapshot.disposition, SettledDisposition::Unknown);
+                assert!(!snapshot.physical_settlement_proven);
+                if journal_released {
+                    assert_eq!(
+                        exchange(ProcessRequest::ReleaseOutput {
+                            key: key.clone(),
+                            final_sequence: snapshot.final_sequence,
+                        }),
+                        ProcessReply::OutputReleased { key: key.clone() },
+                    );
+                }
+                break;
+            }
+            assert!(matches!(
+                reply,
+                ProcessReply::State {
+                    state: OperationState::Starting
+                        | OperationState::Running
+                        | OperationState::Exited { .. },
+                    ..
+                }
+            ));
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+            reply = exchange(ProcessRequest::Query { key: key.clone() });
+        }
+    }))
+    .await;
+    state.unwrap();
+
+    assert!(
+        !scope.delegated_work().unwrap().seal_unused(),
+        "dispatch crossed the child's no-work boundary"
+    );
+    bounded(crate::runtime::subagent::process::assert_unproven_relay_retains_child_root(owner))
+        .await;
+    assert!(
+        endpoint.control().is_none(),
+        "unconfirmed Open binding retires"
+    );
+    let failures = bounded(fixture.host.drain()).await;
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    let trace = bounded(data).await.unwrap();
+    let releases: Vec<_> = trace
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| (*step == SettlementExchange::ReleaseOutput).then_some(index))
+        .collect();
+    let [released_at] = releases[..] else {
+        panic!("expected exactly one acknowledged journal release, got {trace:?}");
+    };
+    if journal_released {
+        assert_eq!(trace[released_at + 1..], [SettlementExchange::Query]);
+    } else {
+        assert_eq!(trace.last(), Some(&SettlementExchange::ReleaseOutput));
+        assert_eq!(trace.get(released_at - 1), Some(&SettlementExchange::Query));
+    }
+    bounded(child.wait()).await.unwrap();
+    bounded(control).await.unwrap();
+}
+
+pub(crate) async fn child_cleanup_requires_physical_settlement_before_and_after_journal_release() {
+    unproven_child_settlement(false).await;
+    unproven_child_settlement(true).await;
+}
+
+#[derive(Clone, Copy)]
+enum WithheldDelegatedReply {
+    Register,
+    PrepareWrite,
+    MalformedPrepare,
+    CommitWrite,
+    CommitUnknown,
+}
+
+impl WithheldDelegatedReply {
+    fn selects(self, request: &ClientRequest) -> bool {
+        matches!(
+            (self, request),
+            (
+                Self::Register,
+                ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
+            ) | (
+                Self::PrepareWrite | Self::MalformedPrepare,
+                ClientRequest::PrepareWrite { .. }
+            ) | (
+                Self::CommitWrite | Self::CommitUnknown,
+                ClientRequest::CommitWrite { .. }
+            )
+        )
+    }
+}
+
+#[allow(clippy::too_many_lines)] // The same physical Client stays parked across receipt loss and child cleanup.
+async fn withhold_delegated_reply(fault: WithheldDelegatedReply) {
+    use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
+    use crate::runtime::subagent::ResolvedSubagentTool;
+    use crate::tools::types::ToolInvocationPolicy;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch: scratch,
+    } = proxied_client(&fixture).await;
+    let (received, receipt) = oneshot::channel();
+    let (inject_fault, hold_reply) = oneshot::channel();
+    let (release_data, hold_data) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            assert!(!matches!(
+                request,
+                ClientRequest::Process(ProcessRequest::Start { .. })
+            ));
+            send(&mut client_data, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if fault.selects(&request) {
+                received.send(reply).unwrap();
+                hold_reply.await.unwrap();
+                let replacement = match (fault, request) {
+                    (
+                        WithheldDelegatedReply::CommitUnknown,
+                        ClientRequest::CommitWrite { ticket },
+                    ) => Some(ClientReply::CommitUnknown { ticket }),
+                    (WithheldDelegatedReply::MalformedPrepare, _) => {
+                        Some(ClientReply::WritePrepared {
+                            ticket: 0.into(),
+                            original: None,
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(reply) = replacement {
+                    send(&mut server_data, &reply).await.unwrap();
+                }
+                drop(server_data);
+                // Hold the Client-facing lane across the relay's conclusion.
+                hold_data.await.unwrap();
+                drop(client_data);
+                return;
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        panic!("expected a receipt from the real Client");
+    });
+    let (release_control, mut hold_control) = oneshot::channel();
+    let control = tokio::spawn(async move {
+        let mut server_open = true;
+        loop {
+            let poll = tokio::select! {
+                biased;
+                released = &mut hold_control => {
+                    released.unwrap();
+                    return;
+                }
+                poll = receive::<ControlPoll>(&mut client_control) => poll.unwrap()
+            };
+            if server_open
+                && send(&mut server_control, &poll).await.is_ok()
+                && let Ok(turn) = receive::<ControlTurn>(&mut server_control).await
+            {
+                if send(&mut client_control, &turn).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            // Isolate the Server-side loss. Echo idle polls on the Client
+            // side so its independent deadline cannot stand in for the gate.
+            assert!(poll.receipt.is_none());
+            server_open = false;
+            let idle = ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request: None,
+            };
+            if send(&mut client_control, &idle).await.is_err() {
+                break;
+            }
+        }
+        hold_control.await.unwrap();
+    });
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let tools = ["bash", "write"].map(|name| {
+        let definition =
+            crate::tools::native::subagent_child_definition(name, ToolInvocationPolicy::default())
+                .unwrap();
+        ResolvedSubagentTool::Builtin {
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            definition,
+        }
+    });
+    let relay = ChildExecutionRelay::create(
+        &fixture.manager.execution_scope(&session.id),
+        endpoint.workspace(),
+        conversation,
+        &tools,
+    )
+    .unwrap();
+    let (parent, child_startup) = UnixStream::pair().unwrap();
+    relay.transfer(&parent).await.unwrap();
+    let scope = relay
+        .grant()
+        .open(&session.id, endpoint.workspace(), &child_startup)
+        .await
+        .unwrap();
+    let cleanup = relay.start().unwrap();
+    let cancellation = detached_cancellation(crate::runtime::CancellationSignal::new());
+    let operation = OperationId::new();
+    let workspace_file = endpoint.workspace().join("child-owned");
+    let exchange = tokio::spawn({
+        let scope = scope.clone();
+        let conversation = conversation.as_str().to_owned();
+        async move {
+            if matches!(fault, WithheldDelegatedReply::Register) {
+                let process = scope.endpoint().unwrap();
+                let key = process.process_key(operation).unwrap();
+                let spec = ProcessSpec {
+                    cwd: std::path::PathBuf::new(),
+                    program: ProcessProgram::Shell {
+                        command: "touch unexpected-start".into(),
+                        conversation,
+                        live_output: true,
+                    },
+                    env: std::collections::BTreeMap::new(),
+                    timeout_ms: 5_000,
+                    pty: None,
+                    stdin: ProcessStdin::Closed,
+                    capture: false,
+                    output_cap: 0,
+                };
+                tokio::task::spawn_blocking(move || {
+                    process
+                        .agent_process(
+                            &ProcessRequest::RegisterAgentBash {
+                                key,
+                                fingerprint: spec.fingerprint(),
+                                spec,
+                            },
+                            std::time::Instant::now() + std::time::Duration::from_secs(5),
+                            || Ok(()),
+                        )
+                        .map(drop)
+                })
+                .await
+                .unwrap()
+            } else {
+                let prepared = scope
+                    .prepare_write(
+                        std::path::Path::new("child-owned"),
+                        b"published once".to_vec(),
+                        &cancellation,
+                    )
+                    .await?;
+                scope
+                    .commit_prepared(&prepared, &cancellation)
+                    .await
+                    .map(drop)
+            }
+        }
+    });
+
+    let capture = match (fault, bounded(receipt).await.unwrap()) {
+        (
+            WithheldDelegatedReply::Register,
+            ClientReply::Process(ProcessReply::Registered { key }),
+        ) => {
+            assert_eq!(key.operation, operation);
+            let name = format!("{:032x}.output", operation.as_u128());
+            Some(
+                std::fs::read_dir(scratch.path())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path().join(&name))
+                    .find(|path| path.is_file())
+                    .expect(
+                        "physical allocation exists while registration acknowledgement is held",
+                    ),
+            )
+        }
+        (
+            WithheldDelegatedReply::PrepareWrite | WithheldDelegatedReply::MalformedPrepare,
+            ClientReply::WritePrepared { ticket, .. },
+        ) => {
+            assert_ne!(ticket.get(), 0);
+            assert!(!workspace_file.exists());
+            None
+        }
+        (
+            WithheldDelegatedReply::CommitWrite | WithheldDelegatedReply::CommitUnknown,
+            ClientReply::Written { metadata, .. },
+        ) => {
+            assert_eq!(metadata.size.get(), 14);
+            assert_eq!(std::fs::read(&workspace_file).unwrap(), b"published once");
+            None
+        }
+        (_, reply) => panic!("unexpected receipt: {reply:?}"),
+    };
+    inject_fault.send(()).unwrap();
+    let error = bounded(exchange).await.unwrap().unwrap_err();
+    if matches!(
+        fault,
+        WithheldDelegatedReply::CommitWrite | WithheldDelegatedReply::CommitUnknown
+    ) {
+        assert!(
+            error
+                .downcast::<rustx_execution_server::WriteOutcomeUnknown>()
+                .is_ok()
+        );
+    }
+    assert!(!scope.delegated_work().unwrap().seal_unused());
+    bounded(crate::runtime::subagent::process::assert_unproven_relay_retains_child_root(cleanup))
+        .await;
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(endpoint.control().is_none());
+    assert!(!endpoint.workspace().join("unexpected-start").exists());
+    if let Some(path) = &capture {
+        assert!(path.is_file(), "Client cleanup is still gated");
+    }
+    assert_eq!(bounded(fixture.host.drain()).await.len(), 1);
+    release_control.send(()).unwrap();
+    release_data.send(()).unwrap();
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
+    bounded(child.wait()).await.unwrap();
+    if let Some(path) = capture {
+        assert!(!path.exists());
+    }
+}
+
+pub(crate) async fn lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed() {
+    for fault in [
+        WithheldDelegatedReply::Register,
+        WithheldDelegatedReply::PrepareWrite,
+        WithheldDelegatedReply::MalformedPrepare,
+        WithheldDelegatedReply::CommitWrite,
+        WithheldDelegatedReply::CommitUnknown,
+    ] {
+        withhold_delegated_reply(fault).await;
+    }
+}
+
+pub(crate) async fn unknown_command_settlement_preserves_the_binding_and_output() {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let ProxiedClient {
+        data,
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch,
+    } = proxied_client(&fixture).await;
+    let data = with_unproven_process_snapshot(data);
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut client_control, &mut server_control).await;
+    });
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let MethodResult::CommandExec { result } = bounded(call(
+        &connection,
+        1,
+        Method::CommandExec(parameters(
+            &fixture,
+            &["/bin/sh", "-c", "printf done; exit 0"],
+        )),
+    ))
+    .await
+    else {
+        panic!("expected a domain result for unconfirmed physical settlement");
+    };
+    assert_eq!(result.status, ExecStatus::ProcessControlFailed);
+    assert_eq!(result.exit_code, None);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result.stdout_base64)
+            .unwrap(),
+        b"done"
+    );
+    assert!(endpoint.control().is_some());
+    let result = bounded(call(
+        &connection,
+        2,
+        Method::CommandExec(parameters(&fixture, &["/bin/true"])),
+    ))
+    .await;
+    assert!(
+        matches!(result, MethodResult::CommandExec { result } if result.status == ExecStatus::Completed && result.exit_code == Some(0))
+    );
+    connection.close();
+    // Only the wire snapshot was fault-injected. The real Client can prove
+    // binding-wide settlement and returns an authentic Revoke receipt.
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    let trace = bounded(data).await.unwrap();
+    assert_eq!(trace.last(), Some(&SettlementExchange::ReleaseOutput));
+    assert!(bounded(child.wait()).await.unwrap().success());
+    bounded(control).await.unwrap();
 }

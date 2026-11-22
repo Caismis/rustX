@@ -20,14 +20,14 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::process::{
-    BashCaptureResult, InputOutcome, MAX_GENERATION_TOMBSTONES, MAX_OPERATIONS_PER_SESSION,
-    MAX_PROCESS_DATA_BYTES, MAX_PROCESS_OUTPUT_BYTES, OperationId, OperationState,
+    BashCaptureResult, InputOutcome, MAX_OPERATIONS_PER_SESSION, MAX_PROCESS_DATA_BYTES,
+    MAX_PROCESS_IDENTITIES_PER_GENERATION, MAX_PROCESS_OUTPUT_BYTES, OperationId, OperationState,
     ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest, ProcessSpec, ProcessStdin,
     ProcessStream, PtySpec, SettledDisposition, SettledSnapshot, SpecFingerprint, SpecRefusal,
 };
@@ -37,6 +37,7 @@ use rustx_process_supervisor::process_runner::{
     ProcessOutcomeIntent, ProcessWitness, SupervisedCommandRunner, SupervisedCommandSpec,
 };
 use rustx_process_supervisor::signal::ProcessSignal;
+use sha2::{Digest as _, Sha256};
 
 use crate::bash_capture::{Capture, CaptureFile, Captures};
 use crate::terminal::Terminal;
@@ -150,6 +151,30 @@ enum InputKind {
     Resize(PtySpec),
 }
 
+impl InputKind {
+    fn fingerprint(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        match self {
+            Self::Write { bytes, close } => {
+                digest.update([0, u8::from(*close)]);
+                digest.update(bytes);
+            }
+            Self::Close => digest.update([1]),
+            Self::Resize(size) => {
+                digest.update([2]);
+                digest.update(size.rows.to_be_bytes());
+                digest.update(size.cols.to_be_bytes());
+            }
+        }
+        digest.finalize().into()
+    }
+}
+
+struct RetainedInput {
+    fingerprint: [u8; 32],
+    outcome: InputOutcome,
+}
+
 /// One admitted ordered control — the data lane acknowledges admission
 /// only; the worker records the physical outcome into `receipts` for a
 /// later `InputReceipt` query.
@@ -176,7 +201,7 @@ struct Operation {
     input_rx: Option<tokio::sync::mpsc::Receiver<InputEvent>>,
     /// Each admitted input owns a slot until its terminal receipt is
     /// collected or the observer explicitly abandons it.
-    receipts: BTreeMap<u64, InputOutcome>,
+    receipts: BTreeMap<u64, RetainedInput>,
     #[cfg(test)]
     pipe_close_received: Option<std::sync::mpsc::Sender<()>>,
     #[cfg(test)]
@@ -197,18 +222,139 @@ struct Minimal {
     fingerprint: Option<SpecFingerprint>,
     snapshot: SettledSnapshot,
     bash_file: Option<(String, Arc<CaptureFile>)>,
-    receipts: BTreeMap<u64, InputOutcome>,
+    never_started: bool,
+    receipts: BTreeMap<u64, RetainedInput>,
+}
+
+impl Minimal {
+    fn cancelled_before_start(fingerprint: Option<SpecFingerprint>) -> Self {
+        Self {
+            fingerprint,
+            snapshot: SettledSnapshot {
+                disposition: SettledDisposition::Cancelled,
+                physical_settlement_proven: true,
+                exit_code: None,
+                stdout_total: 0.into(),
+                stderr_total: 0.into(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                final_sequence: 0.into(),
+            },
+            bash_file: None,
+            never_started: true,
+            receipts: BTreeMap::new(),
+        }
+    }
+}
+
+struct PreparingBash {
+    fingerprint: SpecFingerprint,
+    cancelled: bool,
+    reply: Arc<OnceLock<ProcessReply>>,
+}
+
+enum RegistrationReply {
+    Ready(ProcessReply),
+    Preparing(Arc<OnceLock<ProcessReply>>),
+}
+
+impl RegistrationReply {
+    fn wait(self) -> ProcessReply {
+        match self {
+            Self::Ready(reply) => reply,
+            Self::Preparing(reply) => reply.wait().clone(),
+        }
+    }
 }
 
 enum Record {
+    PreparingBash(PreparingBash),
     Full(Box<Operation>),
     Minimal(Minimal),
+}
+
+impl Record {
+    fn capture_file(&self) -> Option<&Arc<CaptureFile>> {
+        match self {
+            Self::PreparingBash(_) => None,
+            Self::Full(operation) => operation.bash_file.as_ref(),
+            Self::Minimal(operation) => operation.bash_file.as_ref().map(|(_, file)| file),
+        }
+    }
+
+    fn forget_capture(&mut self, file: &Arc<CaptureFile>) {
+        if self
+            .capture_file()
+            .is_some_and(|retained| Arc::ptr_eq(retained, file))
+        {
+            match self {
+                Self::PreparingBash(_) => unreachable!("preparation has no registered capture"),
+                Self::Full(operation) => operation.bash_file = None,
+                Self::Minimal(operation) => operation.bash_file = None,
+            }
+        }
+    }
 }
 
 struct Inner {
     #[cfg(test)]
     fail_pty_read: bool,
     records: BTreeMap<OperationId, Record>,
+}
+
+impl Inner {
+    /// Called before resolving cwd and again before first allocation. An
+    /// already-owned identity needs neither a new directory lookup nor room
+    /// in the registry. Every new record reserves its eventual tombstone.
+    fn registration_reply(
+        &mut self,
+        key: &ProcessOperationKey,
+        fingerprint: SpecFingerprint,
+    ) -> Option<RegistrationReply> {
+        let reply = match self.records.get_mut(&key.operation) {
+            Some(Record::PreparingBash(pending)) if pending.fingerprint == fingerprint => {
+                return Some(RegistrationReply::Preparing(pending.reply.clone()));
+            }
+            Some(Record::Full(op)) if op.key == *key && op.fingerprint == fingerprint => {
+                // The original journal is still owned. The caller can
+                // attach to it and retrieve the actual state with START or Query.
+                ProcessReply::Registered { key: key.clone() }
+            }
+            Some(Record::Minimal(minimal)) => {
+                if *minimal.fingerprint.get_or_insert(fingerprint) == fingerprint {
+                    ProcessReply::State {
+                        key: key.clone(),
+                        state: OperationState::Settled(minimal.snapshot),
+                    }
+                } else {
+                    ProcessReply::Conflict { key: key.clone() }
+                }
+            }
+            Some(Record::Full(_) | Record::PreparingBash(_)) => {
+                ProcessReply::Conflict { key: key.clone() }
+            }
+            None => {
+                let reason = if self.records.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
+                    SpecRefusal::TombstonesSaturated
+                } else if self
+                    .records
+                    .values()
+                    .filter(|r| !matches!(r, Record::Minimal(_)))
+                    .count()
+                    >= MAX_OPERATIONS_PER_SESSION
+                {
+                    SpecRefusal::CapacityExhausted
+                } else {
+                    return None;
+                };
+                ProcessReply::Refused {
+                    key: key.clone(),
+                    reason,
+                }
+            }
+        };
+        Some(RegistrationReply::Ready(reply))
+    }
 }
 
 /// The finite per-binding operation registry, the bound identity, and
@@ -226,10 +372,10 @@ pub(crate) struct Operations {
     workers: Arc<WorkerCount>,
     captures: Arc<Captures>,
     python: Arc<rustx_execution_client::workspace_python::WorkspacePython>,
-    /// Test-only START holds, each owned by exactly one operation id.
+    /// Test-only physical controls, each owned by exactly one operation id.
     #[cfg(test)]
-    start_holds:
-        Mutex<BTreeMap<OperationId, rustx_process_supervisor::process_runner::RunnerStartHold>>,
+    runner_controls:
+        Mutex<BTreeMap<OperationId, rustx_process_supervisor::process_runner::RunnerTestControl>>,
     #[cfg(test)]
     capture_holds: Mutex<BTreeMap<OperationId, CaptureHold>>,
 }
@@ -241,12 +387,29 @@ type CaptureHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
 // when the runtime discards the START future before polling it.
 struct ActiveProcess {
     capture: Option<Capture>,
-    _guard: WorkerGuard,
+    worker: WorkerGuard,
 }
 
 struct WorkerCount {
-    live: Mutex<usize>,
+    state: Mutex<WorkerState>,
     drained: Condvar,
+}
+
+impl WorkerCount {
+    fn retain_work(self: &Arc<Self>) -> WorkerGuard {
+        self.state.lock().expect("worker count").live += 1;
+        WorkerGuard {
+            workers: self.clone(),
+            unconfirmed: false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct WorkerState {
+    live: usize,
+    /// Completed workers for which no physical settlement was proven.
+    unconfirmed: usize,
 }
 
 fn registered_capture(op: &Operation) -> Option<(String, Arc<CaptureFile>)> {
@@ -289,11 +452,11 @@ impl Operations {
             )),
             captures: Arc::new(Captures::new()),
             workers: Arc::new(WorkerCount {
-                live: Mutex::new(0),
+                state: Mutex::new(WorkerState::default()),
                 drained: Condvar::new(),
             }),
             #[cfg(test)]
-            start_holds: Mutex::new(BTreeMap::new()),
+            runner_controls: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             capture_holds: Mutex::new(BTreeMap::new()),
         })
@@ -340,12 +503,15 @@ impl Operations {
     }
 
     pub(crate) fn admit_auxiliary(&self) -> Option<WorkerGuard> {
-        let mut workers = self.workers.live.lock().expect("worker count");
+        let mut state = self.workers.state.lock().expect("worker count");
         if self.revoke.is_cancelled() {
             return None;
         }
-        *workers += 1;
-        Some(WorkerGuard(self.workers.clone()))
+        state.live += 1;
+        Some(WorkerGuard {
+            workers: self.workers.clone(),
+            unconfirmed: false,
+        })
     }
 
     pub(crate) fn workspace_python_status(
@@ -378,9 +544,13 @@ impl Operations {
         }
         let mut inner = self.inner.lock().expect("operation registry");
         match inner.records.get_mut(&key.operation) {
+            Some(Record::PreparingBash(pending)) => {
+                pending.cancelled = true;
+                ProcessCancelDisposition::CancelledBeforeStart
+            }
             Some(Record::Full(operation)) if operation.key == *key => {
-                if matches!(operation.state, OperationState::Settled(_)) {
-                    ProcessCancelDisposition::AlreadySettled
+                if let OperationState::Settled(snapshot) = operation.state {
+                    settled_cancel_disposition(snapshot)
                 } else {
                     // The crossing read shares the START grant: either
                     // cancellation won before any business spawn, or
@@ -402,20 +572,12 @@ impl Operations {
                         // `Start` or `ReleaseOutput` that cannot come.
                         if matches!(operation.state, OperationState::Registered) {
                             resolve_pending(operation);
-                            let minimal = Minimal {
-                                fingerprint: Some(operation.fingerprint),
-                                bash_file: registered_capture(operation),
-                                receipts: std::mem::take(&mut operation.receipts),
-                                snapshot: SettledSnapshot {
-                                    disposition: SettledDisposition::Cancelled,
-                                    exit_code: None,
-                                    stdout_total: 0.into(),
-                                    stderr_total: 0.into(),
-                                    stdout_truncated: false,
-                                    stderr_truncated: false,
-                                    final_sequence: 0.into(),
-                                },
-                            };
+                            let mut minimal =
+                                Minimal::cancelled_before_start(Some(operation.fingerprint));
+                            // START can lag behind Server-side background acceptance.
+                            // Only the output owner may discard a published capture.
+                            minimal.bash_file = registered_capture(operation);
+                            minimal.receipts = std::mem::take(&mut operation.receipts);
                             inner
                                 .records
                                 .insert(key.operation, Record::Minimal(minimal));
@@ -424,37 +586,19 @@ impl Operations {
                     }
                 }
             }
-            Some(Record::Minimal(_)) => ProcessCancelDisposition::AlreadySettled,
+            Some(Record::Minimal(retired)) => settled_cancel_disposition(retired.snapshot),
             None => {
                 // The cancel outraced the `Register` on the data lane:
                 // plant the bounded tombstone so the operation can never
                 // spawn — a late `Register` attaches the `Cancelled`
                 // snapshot instead of starting an operation the caller
                 // already withdrew.
-                let minimal = inner
-                    .records
-                    .values()
-                    .filter(|r| matches!(r, Record::Minimal(_)))
-                    .count();
-                if minimal >= MAX_GENERATION_TOMBSTONES {
+                if inner.records.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
                     return ProcessCancelDisposition::Unknown;
                 }
                 inner.records.insert(
                     key.operation,
-                    Record::Minimal(Minimal {
-                        fingerprint: None,
-                        bash_file: None,
-                        receipts: BTreeMap::new(),
-                        snapshot: SettledSnapshot {
-                            disposition: SettledDisposition::Cancelled,
-                            exit_code: None,
-                            stdout_total: 0.into(),
-                            stderr_total: 0.into(),
-                            stdout_truncated: false,
-                            stderr_truncated: false,
-                            final_sequence: 0.into(),
-                        },
-                    }),
+                    Record::Minimal(Minimal::cancelled_before_start(None)),
                 );
                 ProcessCancelDisposition::CancelledBeforeStart
             }
@@ -522,7 +666,6 @@ impl Operations {
         }
     }
 
-    #[allow(clippy::too_many_lines)] // One admission, replay, and capacity transaction.
     fn register(
         &self,
         key: ProcessOperationKey,
@@ -545,114 +688,135 @@ impl Operations {
                 reason: SpecRefusal::ProgramNotAuthorized,
             };
         }
-        // The cwd descends from the retained workspace root at
-        // registration: a directory the Client's physical view does not
-        // hold is refused here, never discovered at spawn.
-        let Ok(cwd) = self.root.descend(&spec.cwd) else {
+        let Some(_active) = self.admit_auxiliary() else {
+            return ProcessReply::Unknown { key };
+        };
+        let reply = self
+            .inner
+            .lock()
+            .expect("operation registry")
+            .registration_reply(&key, fingerprint);
+        if let Some(reply) = reply {
+            return reply.wait();
+        }
+        // Only a new identity checks cwd. The filesystem lookup does not
+        // hold the registry lock needed by control cancellation.
+        let cwd = self.root.descend(&spec.cwd);
+        let mut inner = self.inner.lock().expect("operation registry");
+        if self.revoke.is_cancelled() {
+            return ProcessReply::Unknown { key };
+        }
+        if let Some(reply) = inner.registration_reply(&key, fingerprint) {
+            drop(inner);
+            return reply.wait();
+        }
+        // A concurrent registration or cancel could have won during the
+        // lookup. Only a still-unclaimed key reaches this allocation.
+        let Ok(cwd) = cwd else {
             return ProcessReply::Refused {
                 key,
                 reason: SpecRefusal::InvalidCwd,
             };
         };
-        let Some(_active) = self.admit_auxiliary() else {
-            return ProcessReply::Unknown { key };
-        };
-        let mut inner = self.inner.lock().expect("operation registry");
-        match inner.records.get(&key.operation) {
-            Some(Record::Full(existing)) => {
-                return if existing.key == key && existing.fingerprint == fingerprint {
-                    ProcessReply::Registered { key }
-                } else {
-                    ProcessReply::Conflict { key }
-                };
-            }
-            Some(Record::Minimal(minimal)) => {
-                return if minimal.fingerprint.is_none() || minimal.fingerprint == Some(fingerprint)
-                {
-                    // Exact replay of a released record — or the
-                    // cancelled-before-register tombstone — returns the
-                    // actual settled snapshot, never a resurrection.
-                    ProcessReply::State {
-                        key,
-                        state: OperationState::Settled(minimal.snapshot),
-                    }
-                } else {
-                    ProcessReply::Conflict { key }
-                };
-            }
-            None => {}
-        }
-        let full = inner
-            .records
-            .values()
-            .filter(|r| matches!(r, Record::Full(_)))
-            .count();
-        if full >= MAX_OPERATIONS_PER_SESSION {
-            return ProcessReply::Refused {
-                key,
-                reason: SpecRefusal::CapacityExhausted,
-            };
-        }
-        let minimal = inner
-            .records
-            .values()
-            .filter(|r| matches!(r, Record::Minimal(_)))
-            .count();
-        if minimal >= MAX_GENERATION_TOMBSTONES {
-            return ProcessReply::Refused {
-                key,
-                reason: SpecRefusal::TombstonesSaturated,
-            };
-        }
-        let bash_file = if matches!(
+        let prepare_capture = matches!(
             &spec.program,
             ProcessProgram::Shell {
                 live_output: true,
                 ..
             }
-        ) {
-            match self.captures.create(key.operation) {
-                Ok(file) => Some(file),
-                Err(_) => {
-                    return ProcessReply::Refused {
-                        key,
-                        reason: SpecRefusal::BashCaptureUnavailable,
-                    };
-                }
-            }
-        } else {
-            None
-        };
+        );
         let input = (spec.stdin == ProcessStdin::Streamed || spec.pty.is_some())
             .then(|| tokio::sync::mpsc::channel::<InputEvent>(INPUT_QUEUE_DEPTH));
         let (input_tx, input_rx) = match input {
             Some((tx, rx)) => (Some(tx), Some(rx)),
             None => (None, None),
         };
+        let operation = Box::new(Operation {
+            key: key.clone(),
+            fingerprint,
+            spec,
+            cwd,
+            state: OperationState::Registered,
+            journal: Journal::default(),
+            input_sequence: 1,
+            input: input_tx,
+            input_rx,
+            receipts: BTreeMap::new(),
+            #[cfg(test)]
+            pipe_close_received: None,
+            #[cfg(test)]
+            partial_input_failure: None,
+            cancel: ProcessSignal::new(),
+            witness: None,
+            bash_file: None,
+            bash_result: None,
+        });
+        if !prepare_capture {
+            inner.records.insert(key.operation, Record::Full(operation));
+            return ProcessReply::Registered { key };
+        }
+        let reply = Arc::new(OnceLock::new());
         inner.records.insert(
             key.operation,
-            Record::Full(Box::new(Operation {
-                key: key.clone(),
+            Record::PreparingBash(PreparingBash {
                 fingerprint,
-                spec,
-                cwd,
-                state: OperationState::Registered,
-                journal: Journal::default(),
-                input_sequence: 1,
-                input: input_tx,
-                input_rx,
-                receipts: BTreeMap::new(),
-                #[cfg(test)]
-                pipe_close_received: None,
-                #[cfg(test)]
-                partial_input_failure: None,
-                cancel: ProcessSignal::new(),
-                witness: None,
-                bash_file,
-                bash_result: None,
-            })),
+                cancelled: false,
+                reply: reply.clone(),
+            }),
         );
-        ProcessReply::Registered { key }
+        drop(inner);
+        // The counted registration on the blocking data lane owns allocation and
+        // rollback until the file is transferred to the registry.
+        let result = self.prepare_bash_capture(operation);
+        reply
+            .set(result.clone())
+            .expect("one capture registration owner");
+        result
+    }
+
+    fn prepare_bash_capture(&self, mut operation: Box<Operation>) -> ProcessReply {
+        let key = operation.key.clone();
+        let allocated = self.captures.create(key.operation);
+        let mut inner = self.inner.lock().expect("operation registry");
+        let Some(Record::PreparingBash(pending)) = inner.records.get(&key.operation) else {
+            unreachable!("capture allocation owns its registration slot");
+        };
+        if pending.cancelled || self.revoke.is_cancelled() {
+            drop(inner);
+            let mut minimal = Minimal::cancelled_before_start(Some(operation.fingerprint));
+            operation.bash_file = allocated.ok().filter(|file| {
+                if let Err(error) = file.discard() {
+                    tracing::warn!(%error, "uncommitted Bash capture unlink failed");
+                    return true;
+                }
+                false
+            });
+            // If deletion could not be confirmed, retain the file and its
+            // quota for explicit discard or the binding's revocation sweep.
+            minimal.bash_file = registered_capture(&operation);
+            let state = OperationState::Settled(minimal.snapshot);
+            self.inner
+                .lock()
+                .expect("operation registry")
+                .records
+                .insert(key.operation, Record::Minimal(minimal));
+            return if self.revoke.is_cancelled() {
+                ProcessReply::Unknown { key }
+            } else {
+                ProcessReply::State { key, state }
+            };
+        }
+        if let Ok(file) = allocated {
+            operation.bash_file = Some(file);
+            inner.records.insert(key.operation, Record::Full(operation));
+            ProcessReply::Registered { key }
+        } else {
+            inner.records.remove(&key.operation);
+            ProcessReply::Refused {
+                key,
+                reason: SpecRefusal::BashCaptureUnavailable,
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)] // one coherent registration→START-admission path
@@ -690,6 +854,7 @@ impl Operations {
         else {
             let snapshot = SettledSnapshot {
                 disposition: SettledDisposition::Cancelled,
+                physical_settlement_proven: true,
                 exit_code: None,
                 stdout_total: 0.into(),
                 stderr_total: 0.into(),
@@ -711,6 +876,7 @@ impl Operations {
         if operation.cwd.verify().is_err() {
             operation.state = OperationState::Settled(SettledSnapshot {
                 disposition: SettledDisposition::Failed,
+                physical_settlement_proven: true,
                 exit_code: None,
                 stdout_total: 0.into(),
                 stderr_total: 0.into(),
@@ -735,7 +901,7 @@ impl Operations {
         let active = ActiveProcess {
             capture: matches!(&spec.program, ProcessProgram::Shell { .. })
                 .then(|| Capture::new(operation.bash_file.clone())),
-            _guard: active,
+            worker: active,
         };
         let captures = self.captures.clone();
         let cwd_fd = operation.cwd.descriptor().try_clone();
@@ -796,7 +962,7 @@ impl Operations {
         match inner.records.get(&key.operation) {
             Some(Record::Full(op)) => op.state,
             Some(Record::Minimal(m)) => OperationState::Settled(m.snapshot),
-            None => OperationState::Registered,
+            Some(Record::PreparingBash(_)) | None => OperationState::Registered,
         }
     }
 
@@ -806,6 +972,7 @@ impl Operations {
             resolve_pending(op);
             op.state = OperationState::Settled(SettledSnapshot {
                 disposition: SettledDisposition::Failed,
+                physical_settlement_proven: true,
                 exit_code: None,
                 stdout_total: op.journal.stdout.total.into(),
                 stderr_total: op.journal.stderr.total.into(),
@@ -903,15 +1070,33 @@ impl Operations {
         if !self.own_key(&key) {
             return ProcessReply::Unknown { key };
         }
-        let admitted = sequence;
+        let fingerprint = kind.fingerprint();
         let mut inner = self.inner.lock().expect("operation registry");
-        let Some(Record::Full(op)) = inner.records.get_mut(&key.operation) else {
+        let Some(record) = inner.records.get_mut(&key.operation) else {
             return ProcessReply::Unknown { key };
         };
-        if op.key != key || sequence.get() != op.input_sequence {
+        let receipts = match record {
+            Record::Full(op) if op.key == key => &op.receipts,
+            Record::Minimal(retired) => &retired.receipts,
+            Record::Full(_) => return ProcessReply::Conflict { key },
+            Record::PreparingBash(_) => return ProcessReply::Unknown { key },
+        };
+        if let Some(receipt) = receipts.get(&sequence.get()) {
+            return if receipt.fingerprint == fingerprint {
+                ProcessReply::InputAccepted { key, sequence }
+            } else {
+                ProcessReply::Conflict { key }
+            };
+        }
+        let Record::Full(op) = record else {
+            return ProcessReply::Unknown { key };
+        };
+        if sequence.get() != op.input_sequence {
             return ProcessReply::Conflict { key };
         }
-        if matches!(op.state, OperationState::Settled(_)) || op.receipts.len() >= INPUT_QUEUE_DEPTH
+        if self.revoke.is_cancelled()
+            || matches!(op.state, OperationState::Settled(_))
+            || op.receipts.len() >= INPUT_QUEUE_DEPTH
         {
             return ProcessReply::Conflict { key };
         }
@@ -928,11 +1113,14 @@ impl Operations {
             return ProcessReply::Conflict { key };
         }
         op.input_sequence += 1;
-        op.receipts.insert(sequence.get(), InputOutcome::Pending);
-        ProcessReply::InputAccepted {
-            key,
-            sequence: admitted,
-        }
+        op.receipts.insert(
+            sequence.get(),
+            RetainedInput {
+                fingerprint,
+                outcome: InputOutcome::Pending,
+            },
+        );
+        ProcessReply::InputAccepted { key, sequence }
     }
 
     /// Claim the physical receipt. Pending polling never consumes a slot,
@@ -954,8 +1142,7 @@ impl Operations {
         };
         let status = receipts
             .get(&sequence.get())
-            .copied()
-            .unwrap_or(InputOutcome::Unknown);
+            .map_or(InputOutcome::Unknown, |receipt| receipt.outcome);
         if status != InputOutcome::Pending || abandon_pending {
             receipts.remove(&sequence.get());
         }
@@ -1039,6 +1226,10 @@ impl Operations {
         }
         let fingerprint = op.fingerprint;
         let bash_file = registered_capture(op);
+        let never_started = op
+            .witness
+            .as_ref()
+            .is_none_or(|witness| !witness.start_crossed());
         let receipts = std::mem::take(&mut op.receipts);
         inner.records.insert(
             key.operation,
@@ -1046,6 +1237,7 @@ impl Operations {
                 fingerprint: Some(fingerprint),
                 snapshot,
                 bash_file,
+                never_started,
                 receipts,
             }),
         );
@@ -1060,16 +1252,30 @@ impl Operations {
             return ProcessReply::Unknown { key };
         };
         let file = {
-            let mut inner = self.inner.lock().expect("operation registry");
-            match inner.records.get_mut(&key.operation) {
-                Some(Record::Minimal(minimal)) => minimal.bash_file.take(),
+            let inner = self.inner.lock().expect("operation registry");
+            if self.revoke.is_cancelled() {
+                return ProcessReply::Unknown { key };
+            }
+            match inner.records.get(&key.operation) {
+                Some(Record::Minimal(minimal)) => {
+                    minimal.bash_file.as_ref().map(|(_, file)| file.clone())
+                }
                 Some(Record::Full(_)) => return ProcessReply::Conflict { key },
-                None => return ProcessReply::Unknown { key },
+                Some(Record::PreparingBash(_)) | None => return ProcessReply::Unknown { key },
             }
         };
         #[cfg(test)]
         self.hold_capture(&key);
-        drop(file);
+        if let Some(file) = file {
+            if let Err(error) = file.discard() {
+                tracing::warn!(%error, "Bash capture unlink failed");
+                return ProcessReply::Conflict { key };
+            }
+            let mut inner = self.inner.lock().expect("operation registry");
+            if let Some(record) = inner.records.get_mut(&key.operation) {
+                record.forget_capture(&file);
+            }
+        }
         ProcessReply::OutputReleased { key }
     }
 
@@ -1086,20 +1292,53 @@ impl Operations {
         if !self.own_key(&key) {
             return ProcessReply::Unknown { key };
         }
-        let inner = self.inner.lock().expect("operation registry");
-        match inner.records.get(&key.operation) {
-            Some(Record::Full(op)) if matches!(op.spec.program, ProcessProgram::Shell { .. }) => {
-                if matches!(op.state, OperationState::Settled(_)) {
-                    ProcessReply::BashCapture {
-                        key,
-                        capture: op.bash_result.clone(),
-                    }
-                } else {
-                    ProcessReply::Conflict { key }
-                }
+        let Some(_active) = self.admit_auxiliary() else {
+            return ProcessReply::Unknown { key };
+        };
+        let (snapshot, capture, empty_file) = {
+            let inner = self.inner.lock().expect("operation registry");
+            if self.revoke.is_cancelled() {
+                return ProcessReply::Unknown { key };
             }
-            _ => ProcessReply::Unknown { key },
-        }
+            match inner.records.get(&key.operation) {
+                Some(Record::Full(op))
+                    if matches!(op.spec.program, ProcessProgram::Shell { .. }) =>
+                {
+                    let OperationState::Settled(snapshot) = op.state else {
+                        return ProcessReply::Conflict { key };
+                    };
+                    (snapshot, op.bash_result.clone(), op.bash_file.clone())
+                }
+                Some(Record::Minimal(retired))
+                    if retired.never_started && retired.bash_file.is_some() =>
+                {
+                    (
+                        retired.snapshot,
+                        None,
+                        retired.bash_file.as_ref().map(|(_, file)| file.clone()),
+                    )
+                }
+                _ => return ProcessReply::Unknown { key },
+            }
+        };
+        let capture = capture.or_else(|| {
+            (snapshot.disposition == SettledDisposition::Cancelled
+                && snapshot.final_sequence.get() == 0
+                && snapshot.stdout_total.get() == 0
+                && snapshot.stderr_total.get() == 0
+                && empty_file.is_some_and(|file| file.proves_empty()))
+            .then(|| BashCaptureResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                combined: String::new(),
+                truncated: false,
+                total: Some(0.into()),
+                output: rustx_execution_protocol::process::BashCaptureState::Complete,
+                started: false,
+                signal: None,
+            })
+        });
+        ProcessReply::BashCapture { key, capture }
     }
 
     pub(crate) fn with_bash_file<T>(
@@ -1117,7 +1356,11 @@ impl Operations {
             return None;
         }
         let inner = self.inner.lock().expect("operation registry");
+        if self.revoke.is_cancelled() {
+            return None;
+        }
         let (conversation, file) = match inner.records.get(&key.operation)? {
+            Record::PreparingBash(_) => return None,
             Record::Full(op) => {
                 let ProcessProgram::Shell { conversation, .. } = &op.spec.program else {
                     return None;
@@ -1145,39 +1388,88 @@ impl Operations {
         }
     }
 
-    /// Await physical worker settlement within `budget` — including
-    /// registered-never-started records — and return the count still
-    /// unresolved when the budget lapses. The caller decides what an
-    /// unresolved remainder means; it is never silently reported away.
+    /// Await physical worker settlement within `budget`. Returns live
+    /// workers plus those that ended without confirming physical settlement.
+    /// A failed or dropped waiter cannot turn an unproven unit into evidence.
     pub(crate) fn settle(&self, budget: Duration) -> usize {
-        let mut live = self.workers.live.lock().expect("worker count");
+        let mut state = self.workers.state.lock().expect("worker count");
         let deadline = std::time::Instant::now() + budget;
-        while *live != 0 {
+        while state.live != 0 {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 break;
             }
-            live = self
+            state = self
                 .workers
                 .drained
-                .wait_timeout(live, remaining)
+                .wait_timeout(state, remaining)
                 .expect("worker count")
                 .0;
         }
-        *live
+        state.live + state.unconfirmed
     }
 
-    /// Revoke has closed admission and settled the capture writers and
-    /// readers. Release their retained files before attesting settlement.
-    pub(crate) fn release_bash_captures(&self) -> io::Result<()> {
-        let mut inner = self.inner.lock().expect("operation registry");
-        for record in inner.records.values_mut() {
-            match record {
-                Record::Full(operation) => operation.bash_file = None,
-                Record::Minimal(operation) => operation.bash_file = None,
+    /// After revocation, each idle capture can be reclaimed even if an
+    /// unrelated process has no settlement proof. A worker or reader
+    /// retaining a reference still owns its capture.
+    fn release_bash_captures(&self) -> io::Result<()> {
+        let mut failures = Vec::new();
+        let owned = {
+            let inner = self.inner.lock().expect("operation registry");
+            inner
+                .records
+                .iter()
+                .filter_map(|(id, record)| {
+                    let file = record.capture_file()?;
+                    if Arc::strong_count(file) == 1 {
+                        Some((*id, file.clone()))
+                    } else {
+                        failures.push(format!("Bash capture {id:?} still has a reader or writer"));
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for (id, capture) in owned {
+            match capture.discard() {
+                Ok(()) => {
+                    let mut inner = self.inner.lock().expect("operation registry");
+                    if let Some(record) = inner.records.get_mut(&id) {
+                        record.forget_capture(&capture);
+                    }
+                }
+                Err(error) => failures.push(format!("Bash capture {id:?}: {error}")),
             }
         }
-        self.captures.close()
+        // An already admitted allocation might still be opening a file
+        // outside the registry. It can attach after this sweep, so keep
+        // the directory until the live owners are finished.
+        let workers_idle = self.workers.state.lock().expect("worker count").live == 0;
+        if workers_idle && let Err(error) = self.captures.close() {
+            failures.push(format!("Bash capture directory: {error}"));
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::other(failures.join(". ")))
+        }
+    }
+
+    pub(crate) fn finish_revocation(&self, budget: Duration) -> io::Result<()> {
+        self.finish_settlement(self.settle(budget))
+    }
+
+    fn finish_settlement(&self, unresolved: usize) -> io::Result<()> {
+        let cleanup = self.release_bash_captures();
+        if unresolved == 0 {
+            return cleanup;
+        }
+        let mut detail = format!("{unresolved} process workers unresolved");
+        if let Err(error) = cleanup {
+            use std::fmt::Write as _;
+            let _ = write!(detail, ". {error}");
+        }
+        Err(io::Error::new(io::ErrorKind::TimedOut, detail))
     }
 
     /// Signal every worker and await physical completion — including
@@ -1191,14 +1483,7 @@ impl Operations {
         if let Some(runtime) = self.runtime.lock().expect("runtime").take() {
             runtime.shutdown_timeout(Duration::from_secs(10));
         }
-        if unresolved == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("{unresolved} process workers unresolved at shutdown"),
-            ))
-        }
+        self.finish_settlement(unresolved)
     }
 }
 
@@ -1210,13 +1495,17 @@ impl Drop for Operations {
     }
 }
 
-pub(crate) struct WorkerGuard(Arc<WorkerCount>);
+pub(crate) struct WorkerGuard {
+    workers: Arc<WorkerCount>,
+    unconfirmed: bool,
+}
 
 impl Drop for WorkerGuard {
     fn drop(&mut self) {
-        let mut live = self.0.live.lock().expect("worker count");
-        *live = live.saturating_sub(1);
-        self.0.drained.notify_all();
+        let mut state = self.workers.state.lock().expect("worker count");
+        state.live -= 1;
+        state.unconfirmed += usize::from(self.unconfirmed);
+        self.workers.drained.notify_all();
     }
 }
 
@@ -1332,18 +1621,18 @@ async fn run_operation(
     // the irreversible boundary: dev/ino must still match what Register
     // retained.
     let Ok(identity) = nix::sys::stat::fstat(&cwd_fd).map(|s| (s.st_dev, s.st_ino)) else {
-        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
         return;
     };
     let Ok(temporary) = tempfile::tempdir() else {
-        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
         return;
     };
     let input_socket = temporary.path().join("stdin");
     let mut terminal = match spec.pty {
         Some(size) => {
             let Ok(terminal) = Terminal::open(size) else {
-                settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+                settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
                 return;
             };
             Some(terminal)
@@ -1352,7 +1641,7 @@ async fn run_operation(
     };
     let listener = if spec.pty.is_none() && spec.stdin == ProcessStdin::Streamed {
         let Ok(listener) = tokio::net::UnixListener::bind(&input_socket) else {
-            settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+            settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
             return;
         };
         Some(listener)
@@ -1368,7 +1657,7 @@ async fn run_operation(
         && let Err(error) = python.apply(&mut environment)
     {
         tracing::warn!(%error, "Workspace Python guard unavailable");
-        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
         return;
     }
     let command_spec = SupervisedCommandSpec {
@@ -1388,14 +1677,15 @@ async fn run_operation(
     // already-cancelled signal admits zero spawn.
     let spawn_blocked = signal.with_active(|| false).is_none() || revoke.is_cancelled();
     if spawn_blocked {
-        settle_outcome(&inner, &key, SettledDisposition::Cancelled, None);
+        settle_outcome(&inner, &key, SettledDisposition::Cancelled, None, true);
         return;
     }
     let spawned = SupervisedCommandRunner::spawn_program(&command_spec, control, Some(&invocation));
     let Ok((mut runner, mut stdout, mut stderr)) = spawned else {
-        settle_outcome(&inner, &key, SettledDisposition::Failed, None);
+        settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
         return;
     };
+    active.worker.unconfirmed = true;
     // The generation authority is an independent family — it never
     // shares the invocation signal's grant mutex.
     runner.guard_start(revoke);
@@ -1423,6 +1713,28 @@ async fn run_operation(
     // A read error is physical loss, never EOF: the outcome must be
     // honestly Failed/Unknown rather than a clean completion.
     let mut output_failed = false;
+    let workers = active.worker.workers.clone();
+    let allocate_capture = || {
+        let inner = inner.clone();
+        let captures = captures.clone();
+        let id = key.operation;
+        let owner = workers.retain_work();
+        tokio::task::spawn_blocking(move || {
+            // The blocking task retains physical ownership even if its
+            // async waiter is dropped. Register the file before returning
+            // it to the writer or handing it to binding teardown.
+            let _owner = owner;
+            let file = captures.create(id)?;
+            let mut guard = inner.lock().expect("operation registry");
+            let Some(Record::Full(operation)) = guard.records.get_mut(&id) else {
+                unreachable!(
+                    "an operation cannot be retired while its output worker is allocating"
+                );
+            };
+            operation.bash_file = Some(file.clone());
+            Ok(file)
+        })
+    };
     let mut running_published = false;
     let mut exit_published = false;
     let settlement = tokio::spawn(async move { runner.settle().await });
@@ -1462,12 +1774,13 @@ async fn run_operation(
         tokio::select! {
             result = &mut settlement, if termination.is_none() => {
                 termination = result.ok();
-                if termination.is_none() {
+                let Some(proof) = &termination else {
                     // A failed join is no settlement — the outcome stays
                     // honestly Unknown rather than a fabricated one.
-                    settle_outcome(&inner, &key, SettledDisposition::Unknown, None);
+                    settle_outcome(&inner, &key, SettledDisposition::Unknown, None, false);
                     return;
-                }
+                };
+                active.worker.unconfirmed = !proof.physical_settlement_proven;
                 if let Some(term) = &mut terminal { term.slave.take(); }
                 input_stream.take();
                 input_closed = true;
@@ -1487,13 +1800,13 @@ async fn run_operation(
                     Ok(0) => {
                         stdout_done = true;
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stdout, None, &captures, key.operation).await;
+                            capture.push(ProcessStream::Stdout, None, allocate_capture).await;
                         }
                     }
                     Ok(n) => {
                         let bytes = &stdout_buf[..n];
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stdout, Some(bytes), &captures, key.operation).await;
+                            capture.push(ProcessStream::Stdout, Some(bytes), allocate_capture).await;
                         }
                         push(&inner, &key, ProcessStream::Stdout, bytes);
                     }
@@ -1508,7 +1821,7 @@ async fn run_operation(
                     Ok(0) => {
                         stderr_done = true;
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stderr, None, &captures, key.operation).await;
+                            capture.push(ProcessStream::Stderr, None, allocate_capture).await;
                         }
                     }
                     Err(_) => {
@@ -1518,7 +1831,7 @@ async fn run_operation(
                     Ok(n) => {
                         let bytes = &stderr_buf[..n];
                         if let Some(capture) = &mut active.capture {
-                            capture.push(ProcessStream::Stderr, Some(bytes), &captures, key.operation).await;
+                            capture.push(ProcessStream::Stderr, Some(bytes), allocate_capture).await;
                         }
                         push(&inner, &key, ProcessStream::Stderr, bytes);
                     }
@@ -1660,35 +1973,44 @@ async fn run_operation(
         tokio::task::yield_now().await;
     }
     let Some(termination) = termination else {
-        settle_outcome(&inner, &key, SettledDisposition::Unknown, None);
+        settle_outcome(&inner, &key, SettledDisposition::Unknown, None, false);
         return;
     };
     if let Some(capture) = active.capture.take() {
         use std::os::unix::process::ExitStatusExt as _;
         let signal = termination.exit_status.and_then(|status| status.signal());
-        let (result, file, complete) =
-            capture.finish(!output_failed, witness.start_crossed(), signal);
+        let (result, complete) = capture.finish(!output_failed, witness.start_crossed(), signal);
         output_failed |= !complete;
         let mut guard = inner.lock().expect("operation registry");
         if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
-            op.bash_file = file;
             op.bash_result = Some(result);
         }
     }
     let exit_code = termination.exit_status.and_then(|status| status.code());
-    let disposition = match &termination.intent {
-        ProcessOutcomeIntent::Completed if output_failed => SettledDisposition::Failed,
-        ProcessOutcomeIntent::Completed => SettledDisposition::Known,
-        ProcessOutcomeIntent::TimedOut => SettledDisposition::TimedOut,
-        ProcessOutcomeIntent::Cancelled => SettledDisposition::Cancelled,
-        ProcessOutcomeIntent::ProcessControlFailed(_)
-            if matches!(spec.program, ProcessProgram::Shell { .. }) && witness.start_crossed() =>
-        {
-            SettledDisposition::Unknown
+    let disposition = if termination.physical_settlement_proven {
+        match &termination.intent {
+            ProcessOutcomeIntent::Completed if output_failed => SettledDisposition::Failed,
+            ProcessOutcomeIntent::Completed => SettledDisposition::Known,
+            ProcessOutcomeIntent::TimedOut => SettledDisposition::TimedOut,
+            ProcessOutcomeIntent::Cancelled => SettledDisposition::Cancelled,
+            ProcessOutcomeIntent::ProcessControlFailed(_)
+                if matches!(spec.program, ProcessProgram::Shell { .. })
+                    && witness.start_crossed() =>
+            {
+                SettledDisposition::Unknown
+            }
+            ProcessOutcomeIntent::ProcessControlFailed(_) => SettledDisposition::Failed,
         }
-        ProcessOutcomeIntent::ProcessControlFailed(_) => SettledDisposition::Failed,
+    } else {
+        SettledDisposition::Unknown
     };
-    settle_outcome(&inner, &key, disposition, exit_code);
+    settle_outcome(
+        &inner,
+        &key,
+        disposition,
+        exit_code,
+        termination.physical_settlement_proven,
+    );
 }
 
 /// Records one admitted input's physical outcome — the only writer of
@@ -1702,9 +2024,9 @@ fn record_input(
     let mut guard = inner.lock().expect("operation registry");
     if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation)
         && let Some(slot) = op.receipts.get_mut(&sequence)
-        && *slot == InputOutcome::Pending
+        && slot.outcome == InputOutcome::Pending
     {
-        *slot = outcome;
+        slot.outcome = outcome;
     }
 }
 
@@ -1725,14 +2047,10 @@ impl Operations {
         &self,
         key: &ProcessOperationKey,
     ) -> Option<rustx_process_supervisor::process_runner::RunnerTestControl> {
-        let hold = self
-            .start_holds
+        self.runner_controls
             .lock()
-            .expect("start holds")
-            .remove(&key.operation)?;
-        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
-        control.start_hold = Some(hold);
-        Some(control)
+            .expect("process runner controls")
+            .remove(&key.operation)
     }
 }
 
@@ -1743,10 +2061,12 @@ fn arm_start_hold(
     key: &ProcessOperationKey,
 ) -> rustx_process_supervisor::process_runner::RunnerStartHold {
     let hold = rustx_process_supervisor::process_runner::RunnerStartHold::new();
-    ops.start_holds
+    let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
+    control.start_hold = Some(hold.clone());
+    ops.runner_controls
         .lock()
-        .expect("start holds")
-        .insert(key.operation, hold.clone());
+        .expect("process runner controls")
+        .insert(key.operation, control);
     hold
 }
 
@@ -1770,9 +2090,9 @@ fn push(inner: &Mutex<Inner>, key: &ProcessOperationKey, stream: ProcessStream, 
 /// A settled operation can never physically apply a queued control —
 /// every `Pending` receipt resolves to `Failed`, never a guess.
 fn resolve_pending(operation: &mut Operation) {
-    for outcome in operation.receipts.values_mut() {
-        if *outcome == InputOutcome::Pending {
-            *outcome = InputOutcome::Failed;
+    for receipt in operation.receipts.values_mut() {
+        if receipt.outcome == InputOutcome::Pending {
+            receipt.outcome = InputOutcome::Failed;
         }
     }
 }
@@ -1782,6 +2102,7 @@ fn settle_outcome(
     key: &ProcessOperationKey,
     disposition: SettledDisposition,
     exit_code: Option<i32>,
+    physical_settlement_proven: bool,
 ) {
     let mut guard = inner.lock().expect("operation registry");
     if let Some(Record::Full(op)) = guard.records.get_mut(&key.operation) {
@@ -1793,7 +2114,8 @@ fn settle_outcome(
         resolve_pending(op);
         op.state = OperationState::Settled(SettledSnapshot {
             disposition,
-            exit_code,
+            physical_settlement_proven,
+            exit_code: exit_code.filter(|_| disposition != SettledDisposition::Unknown),
             stdout_total: op.journal.stdout.total.into(),
             stderr_total: op.journal.stderr.total.into(),
             stdout_truncated: op.journal.stdout.truncated,
@@ -1803,11 +2125,20 @@ fn settle_outcome(
     }
 }
 
+fn settled_cancel_disposition(snapshot: SettledSnapshot) -> ProcessCancelDisposition {
+    if snapshot.physical_settlement_proven {
+        ProcessCancelDisposition::AlreadySettled
+    } else {
+        ProcessCancelDisposition::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
+    use rustx_execution_protocol::process::{BashCaptureState, MAX_BASH_CAPTURES};
     use rustx_execution_protocol::{
         Admission, ClientInstanceId, EnvironmentId, Generation, PROTOCOL_VERSION, SessionId,
     };
@@ -1981,6 +2312,11 @@ mod tests {
 
     #[test]
     fn duplicate_register_attaches_and_second_start_cannot_spawn_twice() {
+        assert_one_concurrent_start(false);
+        assert_one_concurrent_start(true);
+    }
+
+    fn assert_one_concurrent_start(background_bash: bool) {
         assert!(
             supervisor_staged(),
             "staged bash-supervisor is absent: run test-support/prepare_native_tests.py"
@@ -1990,33 +2326,699 @@ mod tests {
         let ops = Arc::new(Operations::new(adm.clone()).unwrap());
         let key = fresh_key(&adm);
         let marker = dir.path().join("marker");
-        let spec = spec(&["/bin/sh", "-c", "touch marker; echo done"]);
-        assert!(matches!(
-            register(&ops, &key, &spec),
-            ProcessReply::Registered { .. }
-        ));
-        // Exact replay attaches; different fingerprint conflicts.
-        assert!(matches!(
-            register(&ops, &key, &spec),
-            ProcessReply::Registered { .. }
-        ));
-        let mut other = spec.clone();
+        let command = "printf x >> marker; printf done";
+        let mut specification = spec(&["/bin/sh", "-c", command]);
+        if background_bash {
+            specification.program = ProcessProgram::Shell {
+                command: command.into(),
+                conversation: "concurrent-start".into(),
+                live_output: true,
+            };
+        }
+        let prepare = |spec: &ProcessSpec| {
+            ops.register(
+                key.clone(),
+                spec.clone(),
+                spec.fingerprint(),
+                background_bash,
+            )
+        };
+        let (original_at_dispatch, waiting) = std::sync::mpsc::channel();
+        let (continue_original, parked) = std::sync::mpsc::channel();
+        let hold = arm_start_hold(&ops, &key);
+        std::thread::scope(|scope| {
+            let original = scope.spawn({
+                let prepare = &prepare;
+                let specification = &specification;
+                move || {
+                    original_at_dispatch.send(()).unwrap();
+                    parked.recv_timeout(Duration::from_secs(5)).unwrap();
+                    prepare(specification)
+                }
+            });
+            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                ops.query(key.clone()),
+                ProcessReply::Unknown { key: key.clone() }
+            );
+            assert_eq!(
+                prepare(&specification),
+                ProcessReply::Registered { key: key.clone() }
+            );
+            let capture = ops.bash_file(&key, "concurrent-start");
+            assert_eq!(capture.is_some(), background_bash);
+            dispatch_duplicate_starts(&ops, &key);
+            continue_original.send(()).unwrap();
+            assert_eq!(
+                original.join().unwrap(),
+                ProcessReply::Registered { key: key.clone() }
+            );
+            if let Some(capture) = capture {
+                assert!(Arc::ptr_eq(
+                    &capture,
+                    &ops.bash_file(&key, "concurrent-start").unwrap()
+                ));
+            }
+        });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(hold.await_entered());
+        assert!(!marker.exists());
+        let mut other = specification.clone();
         other.timeout_ms = 31_000;
-        assert!(matches!(
-            ops.dispatch(ProcessRequest::Register {
-                key: key.clone(),
-                fingerprint: other.fingerprint(),
-                spec: other,
-            }),
-            ProcessReply::Conflict { .. }
-        ));
-        ops.dispatch(ProcessRequest::Start { key: key.clone() });
-        // A second Start while Starting is a state reply, never a spawn.
-        let _ = ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        assert_eq!(prepare(&other), ProcessReply::Conflict { key: key.clone() });
+        hold.release();
         let snapshot = await_settled(&ops, &key);
         assert_eq!(snapshot.disposition, SettledDisposition::Known);
-        assert!(marker.is_file());
+        assert_eq!(snapshot.exit_code, Some(0));
+        assert_eq!(
+            prepare(&specification),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        ops.shutdown().unwrap();
+        assert_eq!(std::fs::read(marker).unwrap(), b"x");
+    }
+
+    fn dispatch_duplicate_starts(ops: &Arc<Operations>, key: &ProcessOperationKey) {
+        let contenders = std::sync::Barrier::new(3);
+        let start = || {
+            contenders.wait();
+            ops.dispatch(ProcessRequest::Start { key: key.clone() })
+        };
+        std::thread::scope(|scope| {
+            let first = scope.spawn(start);
+            let second = scope.spawn(start);
+            contenders.wait();
+            for reply in [first.join().unwrap(), second.join().unwrap()] {
+                assert_eq!(
+                    reply,
+                    ProcessReply::State {
+                        key: key.clone(),
+                        state: OperationState::Starting,
+                    }
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn replay_uses_the_original_registration_after_the_cwd_disappears() {
+        let directory = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut specification = spec(&["/bin/true"]);
+        specification.cwd = PathBuf::from("nested");
+        let registered = ProcessReply::Registered { key: key.clone() };
+        assert_eq!(register(&ops, &key, &specification), registered);
+        std::fs::remove_dir(nested).unwrap();
+        assert_eq!(register(&ops, &key, &specification), registered);
+        let first = ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        assert!(matches!(
+            first,
+            ProcessReply::State {
+                state: OperationState::Settled(SettledSnapshot {
+                    disposition: SettledDisposition::Failed,
+                    ..
+                }),
+                ..
+            }
+        ));
+        assert_eq!(register(&ops, &key, &specification), registered);
+        assert_eq!(ops.dispatch(ProcessRequest::Start { key }), first);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn cancelled_before_register_uses_one_reserved_identity_at_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let active = fresh_key(&admission);
+        let specification = spec(&["/bin/true"]);
+        assert_eq!(
+            register(&ops, &active, &specification),
+            ProcessReply::Registered {
+                key: active.clone()
+            }
+        );
+        let cancelled = fresh_key(&admission);
+        assert_eq!(
+            ops.cancel(&cancelled),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        for _ in 2..MAX_PROCESS_IDENTITIES_PER_GENERATION {
+            assert_eq!(
+                ops.cancel(&fresh_key(&admission)),
+                ProcessCancelDisposition::CancelledBeforeStart
+            );
+        }
+        let refused = fresh_key(&admission);
+        assert_eq!(ops.cancel(&refused), ProcessCancelDisposition::Unknown);
+        assert_eq!(
+            register(&ops, &refused, &specification),
+            ProcessReply::Refused {
+                key: refused,
+                reason: SpecRefusal::TombstonesSaturated,
+            }
+        );
+        assert_eq!(
+            ops.cancel(&active),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        let terminal = ops.dispatch(ProcessRequest::Start {
+            key: cancelled.clone(),
+        });
+        assert!(matches!(
+            terminal,
+            ProcessReply::State {
+                state: OperationState::Settled(SettledSnapshot {
+                    disposition: SettledDisposition::Cancelled,
+                    ..
+                }),
+                ..
+            }
+        ));
+        assert_eq!(register(&ops, &cancelled, &specification), terminal);
+        assert_eq!(
+            register(&ops, &cancelled, &spec(&["/bin/false"])),
+            ProcessReply::Conflict { key: cancelled }
+        );
+        assert_eq!(
+            ops.inner.lock().unwrap().records.len(),
+            MAX_PROCESS_IDENTITIES_PER_GENERATION
+        );
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn dropping_a_worker_without_physical_proof_keeps_revoke_unconfirmed() {
+        let directory = tempfile::tempdir().unwrap();
+        let ops = Operations::new(admission(directory.path())).unwrap();
+        let mut worker = ops.admit_auxiliary().unwrap();
+        worker.unconfirmed = true;
+        ops.revoke();
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        drop(worker);
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn real_supervisor_wait_failure_keeps_the_unknown_proof_after_output_release() {
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let retained = register_bash_capture(&ops, &admission, "printf retained", true);
+        ops.dispatch(ProcessRequest::Start {
+            key: retained.clone(),
+        });
+        let output = await_settled(&ops, &retained);
+        assert_eq!(output.disposition, SettledDisposition::Known);
+        let captures = ops.captures.path().unwrap();
+        let file = capture_path(&ops, &retained);
+        assert_eq!(std::fs::read(&file).unwrap(), b"retained");
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: retained.clone(),
+                final_sequence: output.final_sequence,
+            }),
+            ProcessReply::OutputReleased { key: retained }
+        );
+        let key = fresh_key(&admission);
+        assert_eq!(
+            register(&ops, &key, &spec(&["/bin/sh", "-c", "printf done; exit 0"])),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
+        control.fail_direct_wait_after_exit = true;
+        ops.runner_controls
+            .lock()
+            .unwrap()
+            .insert(key.operation, control);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert_eq!(snapshot.disposition, SettledDisposition::Unknown);
+        assert_eq!(snapshot.exit_code, None);
+        assert!(!snapshot.physical_settlement_proven);
+        let (output, cursor) = drain(&ops, &key);
+        assert_eq!(output, b"done");
+        assert_eq!(ops.cancel(&key), ProcessCancelDisposition::Unknown);
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: cursor.into()
+            }),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert_eq!(
+            ops.query(key.clone()),
+            ProcessReply::State {
+                key,
+                state: OperationState::Settled(snapshot)
+            }
+        );
+        ops.revoke();
+        assert_eq!(ops.settle(Duration::from_secs(5)), 1);
+        assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(!file.exists());
+        assert!(!captures.exists());
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+    }
+
+    fn register_bash_capture(
+        ops: &Arc<Operations>,
+        admission: &Admission,
+        command: &str,
+        live_output: bool,
+    ) -> ProcessOperationKey {
+        let key = fresh_key(admission);
+        assert_eq!(
+            ops.dispatch(bash_capture_registration(key.clone(), command, live_output)),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        key
+    }
+
+    fn bash_capture_registration(
+        key: ProcessOperationKey,
+        command: &str,
+        live_output: bool,
+    ) -> ProcessRequest {
+        let mut bash = spec(&[]);
+        bash.program = ProcessProgram::Shell {
+            command: command.into(),
+            conversation: "capture-fixture".into(),
+            live_output,
+        };
+        ProcessRequest::RegisterAgentBash {
+            key,
+            fingerprint: bash.fingerprint(),
+            spec: bash,
+        }
+    }
+
+    fn capture_path(ops: &Operations, key: &ProcessOperationKey) -> std::path::PathBuf {
+        ops.captures
+            .path()
+            .unwrap()
+            .join(format!("{:032x}.output", key.operation.as_u128()))
+    }
+
+    fn fail_capture_unlink(ops: &Arc<Operations>, key: &ProcessOperationKey) {
+        ops.with_bash_file(key, "capture-fixture", |file| {
+            file.fail_next_unlink
+                .store(true, std::sync::atomic::Ordering::Release);
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn revocation_reclaims_other_captures_after_an_unlink_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let first = register_bash_capture(&ops, &admission, ":", true);
+        let second = register_bash_capture(&ops, &admission, ":", true);
+        // The sweep orders records by operation ID, not registration time.
+        let (failed, other) = if first.operation < second.operation {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        fail_capture_unlink(&ops, &failed);
+        let failed = capture_path(&ops, &failed);
+        let other = capture_path(&ops, &other);
+        let captures = ops.captures.path().unwrap();
+        ops.revoke();
+        assert!(ops.finish_revocation(Duration::ZERO).is_err());
+        assert!(failed.is_file());
+        assert!(!other.exists());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        ops.shutdown().unwrap();
+        assert!(!captures.exists());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+    }
+
+    #[test]
+    fn unreadable_foreground_capture_keeps_its_owner_until_discard_succeeds() {
+        assert!(supervisor_staged());
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, "printf '%65536s' ''", false);
+        ops.captures.fail_append_and_rollback_for(key.operation);
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        let snapshot = await_settled(&ops, &key);
+        assert!(snapshot.physical_settlement_proven);
+        assert_eq!(snapshot.disposition, SettledDisposition::Failed);
+        assert!(matches!(
+            ops.dispatch(ProcessRequest::BashCapture { key: key.clone() }),
+            ProcessReply::BashCapture {
+                capture: Some(BashCaptureResult {
+                    output: BashCaptureState::Unavailable,
+                    started: true,
+                    ..
+                }),
+                ..
+            }
+        ));
+        let path = capture_path(&ops, &key);
+        assert_eq!(std::fs::read(&path).unwrap(), b" ");
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: snapshot.final_sequence,
+            }),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        fail_capture_unlink(&ops, &key);
+        let discard = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert!(path.is_file());
+        assert!(ops.bash_file(&key, "capture-fixture").is_some());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert!(!path.exists());
+        assert!(ops.bash_file(&key, "capture-fixture").is_none());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn discard_retains_quota_until_the_last_capture_link_is_gone() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, ":", true);
+        let path = capture_path(&ops, &key);
+        let alias = path.with_extension("link");
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        std::fs::hard_link(&path, &alias).unwrap();
+        let discard = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert!(!path.exists());
+        assert!(alias.is_file());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        std::fs::remove_file(alias).unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key }
+        );
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn discard_proves_a_missing_capture_is_unlinked_and_preserves_replacements() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, ":", true);
+        let path = capture_path(&ops, &key);
+        let moved = path.with_extension("moved");
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        let discard = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        std::fs::rename(&path, &moved).unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert!(moved.is_file());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        std::fs::write(&path, b"replacement").unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert!(moved.is_file());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        std::fs::rename(&moved, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        assert_eq!(
+            ops.dispatch(discard()),
+            ProcessReply::OutputReleased { key }
+        );
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn discard_reclaims_unlinked_capture_with_a_replacement_at_its_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = register_bash_capture(&ops, &admission, ":", true);
+        let path = capture_path(&ops, &key);
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                ops.dispatch(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+                ProcessReply::OutputReleased { key: key.clone() },
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+            assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        }
+        std::fs::remove_file(path).unwrap();
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn cancelled_background_prepare_explicitly_discards_its_capture_without_reviving() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(&directory.path().canonicalize().unwrap());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut specification = spec(&["/bin/true"]);
+        specification.program = ProcessProgram::Shell {
+            command: "touch revived".into(),
+            conversation: "cancel-prepare".into(),
+            live_output: true,
+        };
+        let prepare = ProcessRequest::RegisterAgentBash {
+            key: key.clone(),
+            fingerprint: specification.fingerprint(),
+            spec: specification,
+        };
+        assert_eq!(
+            ops.dispatch(prepare.clone()),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        let captures = ops.captures.path().unwrap();
+        assert_eq!(std::fs::read_dir(&captures).unwrap().count(), 1);
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        assert_eq!(std::fs::read_dir(&captures).unwrap().count(), 1);
+        let cancelled = ops.dispatch(prepare);
+        assert!(matches!(
+            cancelled,
+            ProcessReply::State {
+                state: OperationState::Settled(SettledSnapshot {
+                    disposition: SettledDisposition::Cancelled,
+                    ..
+                }),
+                ..
+            }
+        ));
+        assert_eq!(
+            ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+            cancelled
+        );
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: 0.into()
+            }),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert_eq!(
+            ops.dispatch(ProcessRequest::DiscardBashOutput { key: key.clone() }),
+            ProcessReply::OutputReleased { key }
+        );
+        assert_eq!(std::fs::read_dir(captures).unwrap().count(), 0);
+        let full_capture_quota = (0..rustx_execution_protocol::process::MAX_BASH_CAPTURES)
+            .map(|_| ops.captures.create(OperationId::new()).unwrap())
+            .collect::<Vec<_>>();
+        for file in full_capture_quota {
+            file.discard().unwrap();
+        }
+        ops.shutdown().unwrap();
+        assert!(!directory.path().join("revived").exists());
+    }
+
+    #[test]
+    fn failed_bash_capture_unlink_retains_its_owner_and_quota_for_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(&directory.path().canonicalize().unwrap());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut bash = spec(&[]);
+        bash.program = ProcessProgram::Shell {
+            command: "touch unexpected-start".into(),
+            conversation: "unlink-retry".into(),
+            live_output: true,
+        };
+        assert_eq!(
+            ops.dispatch(ProcessRequest::RegisterAgentBash {
+                key: key.clone(),
+                fingerprint: bash.fingerprint(),
+                spec: bash,
+            }),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        let path = ops
+            .captures
+            .path()
+            .unwrap()
+            .join(format!("{:032x}.output", key.operation.as_u128()));
+        assert_eq!(
+            ops.cancel(&key),
+            ProcessCancelDisposition::CancelledBeforeStart
+        );
+        ops.with_bash_file(&key, "unlink-retry", |file| {
+            file.fail_next_unlink
+                .store(true, std::sync::atomic::Ordering::Release);
+        })
+        .unwrap();
+        let request = || ProcessRequest::DiscardBashOutput { key: key.clone() };
+        assert_eq!(
+            ops.dispatch(request()),
+            ProcessReply::Conflict { key: key.clone() }
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        assert_eq!(
+            ops.with_bash_file(&key, "unlink-retry", CaptureFile::proves_empty),
+            Some(true)
+        );
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+
+        assert_eq!(
+            ops.dispatch(request()),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert!(!path.exists());
+        assert!(ops.bash_file(&key, "unlink-retry").is_none());
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        assert_eq!(
+            ops.dispatch(request()),
+            ProcessReply::OutputReleased { key }
+        );
         assert!(ops.shutdown().is_ok());
+        assert!(!directory.path().join("unexpected-start").exists());
+    }
+
+    #[test]
+    fn same_input_attaches_until_the_receipt_is_claimed() {
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let admission = admission(directory.path());
+        let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+        let key = fresh_key(&admission);
+        let mut specification = spec(&["/bin/cat"]);
+        specification.stdin = ProcessStdin::Streamed;
+        assert_eq!(
+            register(&ops, &key, &specification),
+            ProcessReply::Registered { key: key.clone() }
+        );
+        let first = DecimalU64::new(1);
+        let request = |bytes: &[u8], close| ProcessRequest::WriteStdin {
+            key: key.clone(),
+            sequence: first,
+            delta_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            close,
+        };
+        let accepted = ProcessReply::InputAccepted {
+            key: key.clone(),
+            sequence: first,
+        };
+        for _ in 0..2 {
+            assert_eq!(ops.dispatch(request(b"once", false)), accepted);
+        }
+        for conflicting in [request(b"different", false), request(b"once", true)] {
+            assert_eq!(
+                ops.dispatch(conflicting),
+                ProcessReply::Conflict { key: key.clone() }
+            );
+        }
+        let close = DecimalU64::new(2);
+        assert_eq!(
+            ops.dispatch(ProcessRequest::CloseStdin {
+                key: key.clone(),
+                sequence: close
+            }),
+            ProcessReply::InputAccepted {
+                key: key.clone(),
+                sequence: close
+            }
+        );
+        ops.dispatch(ProcessRequest::Start { key: key.clone() });
+        assert_eq!(await_settled(&ops, &key).exit_code, Some(0));
+        let (stdout, cursor) = drain(&ops, &key);
+        assert_eq!(stdout, b"once");
+        assert_eq!(
+            ops.dispatch(ProcessRequest::ReleaseOutput {
+                key: key.clone(),
+                final_sequence: cursor.into()
+            }),
+            ProcessReply::OutputReleased { key: key.clone() }
+        );
+        assert_eq!(ops.dispatch(request(b"once", false)), accepted);
+        assert_eq!(
+            ops.dispatch(ProcessRequest::InputReceipt {
+                key: key.clone(),
+                sequence: first,
+                abandon_pending: false
+            }),
+            ProcessReply::InputReceipt {
+                key: key.clone(),
+                sequence: first,
+                status: InputOutcome::Applied
+            }
+        );
+        assert_eq!(
+            ops.dispatch(request(b"once", false)),
+            ProcessReply::Unknown { key }
+        );
+        ops.shutdown().unwrap();
     }
 
     #[test]
@@ -2767,6 +3769,293 @@ mod tests {
             ));
         }
         assert!(ops.shutdown().is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Keep the real control receipts and allocation barrier together.
+    fn background_capture_preparation_keeps_control_independent_and_settles_its_owner() {
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc::channel;
+
+        fn send_turn(server: &mut UnixStream, poll: &ControlPoll, request: ControlRequest) {
+            write_record(
+                server,
+                &ControlTurn {
+                    sequence: poll.sequence,
+                    health: poll.health,
+                    request: Some(request),
+                },
+            )
+            .unwrap();
+        }
+
+        enum Outcome {
+            Accepted,
+            Cancelled,
+            Revoked,
+        }
+        for outcome in [Outcome::Accepted, Outcome::Cancelled, Outcome::Revoked] {
+            let workspace = tempfile::tempdir().unwrap();
+            let admission = admission(workspace.path());
+            let ops = Arc::new(Operations::new(admission.clone()).unwrap());
+            let key = fresh_key(&admission);
+            let request = bash_capture_registration(key.clone(), "touch unexpected-start", true);
+            let ProcessRequest::RegisterAgentBash { fingerprint, .. } = request else {
+                unreachable!()
+            };
+            let other = fresh_key(&admission);
+            assert_eq!(
+                register(&ops, &other, &spec(&["/bin/true"])),
+                ProcessReply::Registered { key: other.clone() }
+            );
+
+            let (entered, paused) = channel();
+            let (resume, resume_rx) = channel();
+            ops.captures
+                .hold_allocation(key.operation, entered, resume_rx);
+            let registration = std::thread::spawn({
+                let (ops, request) = (ops.clone(), request.clone());
+                move || ops.dispatch(request)
+            });
+            paused.recv_timeout(Duration::from_secs(5)).unwrap();
+
+            let (client, mut server) = UnixStream::pair().unwrap();
+            let (data, _server_data) = UnixStream::pair().unwrap();
+            let worker = crate::client_control_worker(
+                RecordChannel::unix(client),
+                Arc::new(crate::mutation::Arbitration::new()),
+                RecordChannel::unix(data).shutdown_handle().unwrap(),
+                ops.clone(),
+                Arc::new(crate::watch::Watches::new()),
+            );
+            server
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut poll: ControlPoll = read_record(&mut server).unwrap();
+            // Keep the wire exchange and receipt adjacent while allocation is parked.
+            send_turn(
+                &mut server,
+                &poll,
+                ControlRequest::CancelProcess { key: other.clone() },
+            );
+            poll = read_record(&mut server).unwrap();
+            assert_eq!(
+                poll.receipt,
+                Some(ControlReply::ProcessCancelled {
+                    key: other,
+                    disposition: ProcessCancelDisposition::CancelledBeforeStart,
+                })
+            );
+            send_turn(
+                &mut server,
+                &poll,
+                ControlRequest::Health { nonce: 7.into() },
+            );
+            poll = read_record(&mut server).unwrap();
+            assert_eq!(
+                poll.receipt,
+                Some(ControlReply::Healthy { nonce: 7.into() })
+            );
+
+            let matching = ops
+                .inner
+                .lock()
+                .unwrap()
+                .registration_reply(&key, fingerprint)
+                .unwrap();
+            assert!(matches!(matching, RegistrationReply::Preparing(_)));
+            assert_eq!(
+                ops.dispatch(bash_capture_registration(key.clone(), ":", true)),
+                ProcessReply::Conflict { key: key.clone() }
+            );
+            assert_eq!(
+                ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+                ProcessReply::Unknown { key: key.clone() }
+            );
+            assert!(ops.captures.path().is_none());
+            assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+
+            let request_on_control = match outcome {
+                Outcome::Accepted => None,
+                Outcome::Cancelled => Some(ControlRequest::CancelProcess { key: key.clone() }),
+                Outcome::Revoked => Some(ControlRequest::Revoke),
+            };
+            if let Some(request) = request_on_control {
+                send_turn(&mut server, &poll, request);
+            }
+            match outcome {
+                Outcome::Accepted => {}
+                Outcome::Cancelled => {
+                    let receipt: ControlPoll = read_record(&mut server).unwrap();
+                    assert_eq!(
+                        receipt.receipt,
+                        Some(ControlReply::ProcessCancelled {
+                            key: key.clone(),
+                            disposition: ProcessCancelDisposition::CancelledBeforeStart,
+                        })
+                    );
+                }
+                Outcome::Revoked => {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .unwrap()
+                        .block_on(async {
+                            tokio::time::timeout(Duration::from_secs(5), ops.revoke.cancelled())
+                                .await
+                                .unwrap();
+                        });
+                    assert_eq!(ops.settle(Duration::ZERO), 1);
+                }
+            }
+            resume.send(()).unwrap();
+            let reply = registration.join().unwrap();
+            assert_eq!(matching.wait(), reply);
+            assert_eq!(ops.dispatch(request), reply);
+            match outcome {
+                Outcome::Accepted => {
+                    assert_eq!(reply, ProcessReply::Registered { key: key.clone() });
+                    let path = capture_path(&ops, &key);
+                    assert_eq!(std::fs::read(&path).unwrap(), b"");
+                    assert_eq!(
+                        std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+                        1
+                    );
+                    assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+                }
+                Outcome::Cancelled => {
+                    let ProcessReply::State {
+                        state: OperationState::Settled(snapshot),
+                        ..
+                    } = reply
+                    else {
+                        panic!("expected cancelled registration")
+                    };
+                    assert_eq!(snapshot.disposition, SettledDisposition::Cancelled);
+                    assert!(snapshot.physical_settlement_proven);
+                    assert_eq!(
+                        ops.dispatch(ProcessRequest::Start { key: key.clone() }),
+                        ProcessReply::State {
+                            key: key.clone(),
+                            state: OperationState::Settled(snapshot)
+                        }
+                    );
+                    assert!(!capture_path(&ops, &key).exists());
+                    assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+                }
+                Outcome::Revoked => {
+                    let receipt: ControlPoll = read_record(&mut server).unwrap();
+                    assert_eq!(receipt.receipt, Some(ControlReply::Revoked));
+                    assert_eq!(reply, ProcessReply::Unknown { key });
+                    assert!(ops.captures.path().is_none());
+                    assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+                }
+            }
+            assert!(!workspace.path().join("unexpected-start").exists());
+            worker.stop();
+            ops.shutdown().unwrap();
+            assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        }
+    }
+
+    #[test]
+    fn lazy_foreground_allocation_does_not_block_cancel_or_health() {
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc::channel;
+
+        assert!(supervisor_staged());
+        let dir = tempfile::tempdir().unwrap();
+        let adm = admission(dir.path());
+        let ops = Arc::new(Operations::new(adm.clone()).unwrap());
+        let overflow = register_bash_capture(&ops, &adm, "printf '%65536s' ''", false);
+        let other = fresh_key(&adm);
+        assert_eq!(
+            register(&ops, &other, &spec(&["/bin/touch", "other-started"])),
+            ProcessReply::Registered { key: other.clone() }
+        );
+        let (entered, paused) = channel();
+        let (resume, resume_rx) = channel();
+        ops.captures
+            .hold_allocation(overflow.operation, entered, resume_rx);
+        ops.dispatch(ProcessRequest::Start {
+            key: overflow.clone(),
+        });
+        paused.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let (data, _server_data) = UnixStream::pair().unwrap();
+        let worker = crate::client_control_worker(
+            RecordChannel::unix(client),
+            Arc::new(crate::mutation::Arbitration::new()),
+            RecordChannel::unix(data).shutdown_handle().unwrap(),
+            ops.clone(),
+            Arc::new(crate::watch::Watches::new()),
+        );
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut poll: ControlPoll = read_record(&mut server).unwrap();
+        for (request, receipt) in [
+            (
+                ControlRequest::CancelProcess { key: other.clone() },
+                ControlReply::ProcessCancelled {
+                    key: other,
+                    disposition: ProcessCancelDisposition::CancelledBeforeStart,
+                },
+            ),
+            (
+                ControlRequest::Health { nonce: 7.into() },
+                ControlReply::Healthy { nonce: 7.into() },
+            ),
+        ] {
+            write_record(
+                &mut server,
+                &ControlTurn {
+                    sequence: poll.sequence,
+                    health: poll.health,
+                    request: Some(request),
+                },
+            )
+            .unwrap();
+            poll = read_record(&mut server).unwrap();
+            assert_eq!(poll.receipt, Some(receipt));
+        }
+        assert!(ops.captures.path().is_none());
+        assert!(!dir.path().join("other-started").exists());
+        write_record(
+            &mut server,
+            &ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request: Some(ControlRequest::Revoke),
+            },
+        )
+        .unwrap();
+        let wait = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        wait.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), ops.revoke.cancelled())
+                .await
+                .unwrap();
+        });
+        assert!(ops.settle(Duration::ZERO) >= 1);
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES - 1);
+        resume.send(()).unwrap();
+        let receipt: ControlPoll = read_record(&mut server).unwrap();
+        assert_eq!(receipt.receipt, Some(ControlReply::Revoked));
+        assert!(await_settled(&ops, &overflow).physical_settlement_proven);
+        assert_eq!(ops.captures.available(), MAX_BASH_CAPTURES);
+        assert!(ops.captures.path().is_none());
+        worker.stop();
+        ops.shutdown().unwrap();
     }
 
     fn revoke_during_capture_handoff(discard: bool) {

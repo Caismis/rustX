@@ -183,6 +183,58 @@ async fn queued_capture_discard_hands_off_to_binding_revocation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn foreground_bash_discards_unavailable_capture_after_journal_release() {
+    use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
+    Box::pin(
+        scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
+            scenarios::ForegroundBashExecution::Direct,
+            scenarios::UnavailableBashCapture::ClientReported {
+                refuse_first_discard: true,
+            },
+        ),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn foreground_bash_reclaims_capture_after_query_expires_before_dispatch() {
+    use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
+    Box::pin(
+        scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
+            scenarios::ForegroundBashExecution::Direct,
+            scenarios::UnavailableBashCapture::QueryBusy,
+        ),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotable_bash_keeps_capture_until_private_foreground_ownership_finishes() {
+    use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
+    Box::pin(
+        scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
+            scenarios::ForegroundBashExecution::PrivateStage,
+            scenarios::UnavailableBashCapture::QueryBusy,
+        ),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotable_bash_discards_client_unavailable_capture_once() {
+    use crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach as scenarios;
+    Box::pin(
+        scenarios::foreground_bash_discards_unavailable_capture_after_journal_release(
+            scenarios::ForegroundBashExecution::PrivateStage,
+            scenarios::UnavailableBashCapture::ClientReported {
+                refuse_first_discard: false,
+            },
+        ),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelled_preparation_hands_off_to_binding_revocation() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::cancelled_preparation_hands_off_to_binding_revocation()).await;
 }
@@ -200,6 +252,12 @@ async fn released_output_preserves_the_unclaimed_input_receipt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lost_input_acceptance_reports_unknown_and_retires_the_binding() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_input_acceptance_reports_unknown_and_retires_the_binding()).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_sigkill_keeps_other_sessions_and_history_available() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::client_sigkill_keeps_other_sessions_and_history_available()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -231,4 +289,19 @@ async fn unknown_mutation_cancel_hands_off_to_binding_revocation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_relay_joins_the_physical_binding_revocation() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::child_relay_joins_the_physical_binding_revocation()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_cleanup_requires_physical_settlement_before_and_after_journal_release() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::child_cleanup_requires_physical_settlement_before_and_after_journal_release()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unknown_command_settlement_preserves_the_binding_and_output() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::unknown_command_settlement_preserves_the_binding_and_output()).await;
 }
