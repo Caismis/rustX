@@ -889,6 +889,15 @@ struct PythonToolStoreInner {
     in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
     #[cfg(test)]
     build_join_observer: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>>,
+    /// Test hook parked between a prepared-state miss and the in-flight
+    /// owner election, so stale-miss interleavings are deterministic.
+    #[cfg(test)]
+    post_verification_gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 /// The runtime-private prepared-environment store of managed Python tool
@@ -936,6 +945,8 @@ impl PythonToolStore {
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
                 #[cfg(test)]
                 build_join_observer: Arc::new(Mutex::new(None)),
+                #[cfg(test)]
+                post_verification_gate: Mutex::new(None),
             }),
         })
     }
@@ -973,6 +984,7 @@ impl PythonToolStore {
                 python_binary,
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
                 build_join_observer: Arc::new(Mutex::new(None)),
+                post_verification_gate: Mutex::new(None),
             }),
         })
     }
@@ -1007,6 +1019,25 @@ impl PythonToolStore {
             .build_join_observer
             .lock()
             .expect("build join observer") = Some(observer);
+    }
+
+    /// Park the next caller that obtains a prepared-state miss before it elects
+    /// an in-flight owner, so a test can interleave another caller's complete
+    /// publish in between. One-shot: consumed by the first caller that hits it.
+    #[cfg(test)]
+    pub(crate) fn install_post_verification_gate(
+        &self,
+        entered: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        assert!(
+            self.inner
+                .post_verification_gate
+                .lock()
+                .expect("post-verification gate")
+                .replace((entered, release))
+                .is_none()
+        );
     }
 
     async fn settle_pending_cleanup(&self) -> Result<(), PythonToolError> {
@@ -1090,6 +1121,19 @@ impl PythonToolStore {
             // directory itself.
             return Ok(with_package_permissions(prepared, package));
         }
+        #[cfg(test)]
+        {
+            let gate = self
+                .inner
+                .post_verification_gate
+                .lock()
+                .expect("post-verification gate")
+                .take();
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+        }
         let key = fingerprint.clone();
         let (state, owner) = {
             let mut builds = self.inner.in_flight.lock().expect("Python build lock");
@@ -1134,16 +1178,44 @@ impl PythonToolStore {
             // owner merely by being cancelled while waiting below.
             std::mem::drop(tokio::spawn(async move {
                 let mut owner_guard = owner_guard;
-                let result = materialize_package(
-                    &inner,
-                    &package,
-                    &build_dir,
-                    &build_fingerprint,
-                    &python_identity,
-                    &uv_identity,
-                    &build_cancellation,
-                )
-                .await;
+                // The elected owner re-verifies the published state under its
+                // ownership before building: a caller whose ready-state miss
+                // predates a retired owner cannot start a second physical
+                // build over a fingerprint that was published meanwhile.
+                let reverify_dir = build_dir.clone();
+                let reverify_package = package.clone();
+                let reverify_fingerprint = build_fingerprint.clone();
+                let reverify_python = python_identity.clone();
+                let reverify_uv = uv_identity.clone();
+                let reverify_cancellation = build_cancellation.clone();
+                let reverify = tokio::task::spawn_blocking(move || {
+                    read_prepared_state(
+                        &reverify_dir,
+                        &reverify_package,
+                        &reverify_fingerprint,
+                        &reverify_python,
+                        &reverify_uv,
+                        &reverify_cancellation,
+                    )
+                })
+                .await
+                .map_err(io_error);
+                let result = match reverify {
+                    Ok(Ok(Some(prepared))) => Ok(prepared),
+                    Ok(Ok(None)) => {
+                        materialize_package(
+                            &inner,
+                            &package,
+                            &build_dir,
+                            &build_fingerprint,
+                            &python_identity,
+                            &uv_identity,
+                            &build_cancellation,
+                        )
+                        .await
+                    }
+                    Ok(Err(error)) | Err(error) => Err(error),
+                };
                 owner_guard.finish(result);
             }));
         }
@@ -2843,6 +2915,64 @@ full_access = "ask"
         }
     }
 
+    /// A recorded process backend that parks the first command containing a
+    /// chosen substring until the test releases it, so physical builds can be
+    /// held open while other callers interleave deterministically.
+    #[derive(Debug, Default)]
+    struct GatedRunner {
+        runner: FakeRunner,
+        gate: Mutex<
+            Option<(
+                &'static str,
+                Option<tokio::sync::oneshot::Sender<()>>,
+                Option<tokio::sync::oneshot::Receiver<()>>,
+            )>,
+        >,
+    }
+
+    impl GatedRunner {
+        fn gate_command(
+            &self,
+            needle: &'static str,
+            entered: tokio::sync::oneshot::Sender<()>,
+            release: tokio::sync::oneshot::Receiver<()>,
+        ) {
+            *self.gate.lock().expect("gated command") =
+                Some((needle, Some(entered), Some(release)));
+        }
+
+        fn commands(&self) -> Vec<String> {
+            self.runner.commands.lock().expect("commands").clone()
+        }
+    }
+
+    impl SupervisedProcessRunner for GatedRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            let gate = {
+                let mut gate = self.gate.lock().expect("gated command");
+                match &mut *gate {
+                    Some((needle, entered, release)) if spec.command.contains(*needle) => {
+                        (entered.take(), release.take())
+                    }
+                    _ => (None, None),
+                }
+            };
+            Box::pin(async move {
+                if gate.1.is_some() {
+                    if let Some(entered) = gate.0 {
+                        let _ = entered.send(());
+                    }
+                    let _ = gate.1.expect("release").await;
+                }
+                self.runner.run(spec, control).await
+            })
+        }
+    }
+
     #[derive(Default)]
     struct PublicationWake(std::sync::atomic::AtomicBool);
 
@@ -3037,6 +3167,121 @@ full_access = "ask"
             .expect("rebuild");
         assert_ne!(rebuilt.fingerprint, first.fingerprint);
     }
+
+    /// Truly overlapping callers coalesce: the first physical build is held
+    /// open, the second caller verifiably joins it, and exactly one `uv lock`
+    /// ever runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn overlapping_preparations_join_the_single_physical_build() {
+        let directory = tempfile::tempdir().expect("store");
+        let runner = Arc::new(GatedRunner::default());
+        let store = PythonToolStore::with_binaries_and_runner(
+            directory.path().to_path_buf(),
+            PathBuf::from("/usr/bin/uv"),
+            PathBuf::from("/usr/bin/python3"),
+            runner.clone(),
+        )
+        .expect("store");
+        let package = package("demo");
+        let (entered_build, build_entered) = tokio::sync::oneshot::channel();
+        let (release_build, build_release) = tokio::sync::oneshot::channel();
+        runner.gate_command(" lock ", entered_build, build_release);
+        let (joined, mut joins) = tokio::sync::mpsc::unbounded_channel();
+        store.install_build_join_observer(joined);
+        let cancellation = CancellationSignal::new();
+        let first = tokio::spawn({
+            let store = store.clone();
+            let package = package.clone();
+            let cancellation = cancellation.clone();
+            async move { store.ensure_prepared(&package, &cancellation).await }
+        });
+        build_entered.await.expect("first build entered uv lock");
+        let second = tokio::spawn({
+            let store = store.clone();
+            let package = package.clone();
+            let cancellation = cancellation.clone();
+            async move { store.ensure_prepared(&package, &cancellation).await }
+        });
+        joins
+            .recv()
+            .await
+            .expect("second caller joined the in-flight build");
+        release_build.send(()).expect("release first build");
+        let first = first.await.expect("task").expect("first preparation");
+        let second = second.await.expect("task").expect("second preparation");
+        assert_eq!(
+            first, second,
+            "both callers observe the same published state"
+        );
+        assert_eq!(
+            runner
+                .commands()
+                .iter()
+                .filter(|command| command.contains(" lock "))
+                .count(),
+            1,
+            "overlapping callers run exactly one physical build"
+        );
+    }
+
+    /// A caller whose prepared-state miss predates a retired owner cannot
+    /// start a second physical build: the newly elected owner re-verifies the
+    /// now-published state and reuses it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_miss_reuses_the_state_published_before_owner_election() {
+        let directory = tempfile::tempdir().expect("store");
+        let runner = Arc::new(GatedRunner::default());
+        let store = PythonToolStore::with_binaries_and_runner(
+            directory.path().to_path_buf(),
+            PathBuf::from("/usr/bin/uv"),
+            PathBuf::from("/usr/bin/python3"),
+            runner.clone(),
+        )
+        .expect("store");
+        let package = package("demo");
+        let (entered_build, build_entered) = tokio::sync::oneshot::channel();
+        let (release_build, build_release) = tokio::sync::oneshot::channel();
+        runner.gate_command(" lock ", entered_build, build_release);
+        let cancellation = CancellationSignal::new();
+        let first = tokio::spawn({
+            let store = store.clone();
+            let package = package.clone();
+            let cancellation = cancellation.clone();
+            async move { store.ensure_prepared(&package, &cancellation).await }
+        });
+        build_entered.await.expect("first build entered uv lock");
+        // The first caller already passed the miss path; gate the second
+        // caller between its miss and the owner election.
+        let (entered_verify, verify_entered) = tokio::sync::oneshot::channel();
+        let (release_verify, verify_release) = tokio::sync::oneshot::channel();
+        store.install_post_verification_gate(entered_verify, verify_release);
+        let second = tokio::spawn({
+            let store = store.clone();
+            let package = package.clone();
+            let cancellation = cancellation.clone();
+            async move { store.ensure_prepared(&package, &cancellation).await }
+        });
+        verify_entered
+            .await
+            .expect("second caller holds a prepared-state miss");
+        // Let the first build publish completely and retire its owner before
+        // the second caller elects a new one.
+        release_build.send(()).expect("release first build");
+        let first = first.await.expect("task").expect("first preparation");
+        release_verify.send(()).expect("release second caller");
+        let second = second.await.expect("task").expect("second preparation");
+        assert_eq!(second, first, "stale miss reuses the published state");
+        let commands = runner.commands();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.contains(" lock "))
+                .count(),
+            1,
+            "a miss older than a retired owner must not build again: {commands:?}"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn issue527_file_backed_packages_scale_without_retaining_asset_bytes() {
         use std::os::unix::fs::MetadataExt;
