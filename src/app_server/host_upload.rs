@@ -1,11 +1,7 @@
-//! EXEC-01 Host upload contract: the closed `item/tool/result/*` envelopes and a
-//! pure verifier for one chunked tool result.
+//! The closed `item/tool/result/*` envelopes and incremental verifier.
 //!
-//! This is a contract and fixture surface only. The envelopes are registered in
-//! the generated public schema, but the protocol parser does not accept them and
-//! no receiver is active; a Host upload is never routed, claimed, or published
-//! from here. Budgets are independent of the transport frame limit and of
-//! management limits: they bound these upload records alone.
+//! Upload record budgets are independent of the encoded transport frame limit
+//! and the callback broker's admission and lifecycle limits.
 
 use std::fmt;
 
@@ -23,7 +19,7 @@ pub const MAX_ITEMS: usize = 1024;
 /// At most this many raw bytes in one chunk.
 pub const MAX_CHUNK_BYTES: usize = 64 * 1024;
 /// At most this many raw bytes across all items of one result.
-pub const MAX_TOTAL_BYTES: u64 = 1024 * 1024;
+pub const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 
 /// A `u64` carried as a canonical decimal string: no sign, no leading zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -65,6 +61,12 @@ impl From<LosslessU64> for String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Sha256Hex([u8; 32]);
+
+impl Sha256Hex {
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 impl TryFrom<String> for Sha256Hex {
     type Error = String;
@@ -148,6 +150,24 @@ impl From<OpaqueToken> for String {
     fn from(value: OpaqueToken) -> Self {
         value.0
     }
+}
+
+impl OpaqueToken {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Address supplied to a single recipient of an item/tool/call request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostUploadScope {
+    /// Incarnation of the callback broker.
+    pub callback_incarnation: String,
+    /// Incarnation of the receiving Host connection.
+    pub connection_incarnation: String,
+    /// Incarnation of the Host's subscription to the conversation.
+    pub subscription_incarnation: String,
 }
 
 /// The identity one upload candidate belongs to. The Server callback
@@ -295,10 +315,35 @@ pub struct HostUploadEnvelope {
     pub call: HostUploadMethod,
 }
 
-/// Why the verifier refused a step. Every refusal leaves the state unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl HostUploadMethod {
+    pub(crate) fn is_method(method: &str) -> bool {
+        matches!(
+            method,
+            "item/tool/result/begin"
+                | "item/tool/result/chunk"
+                | "item/tool/result/end"
+                | "item/tool/result/abort"
+        )
+    }
+
+    pub(crate) fn candidate(&self) -> &HostUploadCandidate {
+        match self {
+            Self::Begin(params) => &params.candidate,
+            Self::Chunk(params) => &params.candidate,
+            Self::End(params) => &params.candidate,
+            Self::Abort(params) => &params.candidate,
+        }
+    }
+}
+
+/// Why the broker or incremental verifier refused an upload step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum HostUploadRefusal {
+    /// A receive slot limit was reached.
+    Capacity,
+    /// The fixed total or idle deadline ran out.
+    Expired,
     /// A type tag is not defined by this contract.
     UnknownTag,
     /// A type tag is reserved and never valid.
@@ -898,16 +943,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reserved_envelopes_are_not_live_management_messages() {
+    fn upload_fixtures_round_trip_as_public_requests() {
+        use crate::app_server::protocol::ProtocolMessage;
+
         for envelope in fixtures() {
             let json = serde_json::to_vec(&envelope).unwrap();
             assert_eq!(
                 serde_json::from_slice::<HostUploadEnvelope>(&json).unwrap(),
                 envelope
             );
-            assert!(
-                serde_json::from_slice::<crate::app_server::protocol::ProtocolMessage>(&json)
-                    .is_err()
+            assert_eq!(
+                serde_json::from_slice::<ProtocolMessage>(&json).unwrap(),
+                ProtocolMessage::HostUpload(Box::new(envelope))
             );
         }
     }
@@ -1191,10 +1238,19 @@ mod tests {
     }
 
     #[test]
-    fn the_upload_contract_is_registered_as_an_unreachable_public_definition() {
-        let schema = crate::app_server::schema::protocol_schema().to_string();
-        assert!(schema.contains("HostUploadEnvelope"));
-        assert!(schema.contains("item/tool/result/begin"));
+    fn upload_envelopes_are_admitted_by_the_public_schema() {
+        let schema = crate::app_server::schema::protocol_schema();
+        assert!(
+            schema["anyOf"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!({"$ref": "#/$defs/HostUploadEnvelope"}))
+        );
+        assert!(
+            schema["$defs"]["HostUploadEnvelope"]
+                .to_string()
+                .contains("item/tool/result/begin")
+        );
     }
 
     fn decode_hex(text: &str) -> [u8; 32] {

@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v80.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v81.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v80.schema.json
+ * protocol/app-server/v81.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v80.ts       (generated)
+ * protocol/app-server/v81.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundaryObservation,
   Success,
-} from "../../../protocol/app-server/v80.ts";
+} from "../../../protocol/app-server/v81.ts";
 
 export type {
   AttemptIdentitySource,
@@ -145,7 +145,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v80.ts";
+} from "../../../protocol/app-server/v81.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -561,6 +561,8 @@ export function describeRpcError(error: RpcError): string {
       return `the server rejected the request: ${error.message}`;
     case "invalid_params":
       return `the request parameters were rejected: ${error.message}`;
+    case "host_upload_rejected":
+      return `Hosted result upload rejected: ${data.reason}`;
     case "resync_required":
       return "the projection needs an authoritative repair";
     case "auxiliary":
@@ -577,6 +579,6 @@ export function describeRpcError(error: RpcError): string {
 
 export type { SessionNode as SessionNodeView };
 export type { SessionSnapshot as SessionView };
-export type SessionSummaryView = SessionSummary & { thread_id?:string;thread_status?: import('../../../protocol/app-server/v80.ts').ThreadStatusEntry|null };
+export type SessionSummaryView = SessionSummary & { thread_id?:string;thread_status?: import('../../../protocol/app-server/v81.ts').ThreadStatusEntry|null };
 
 export type { SessionPersistentState as SessionSettings };

@@ -5,7 +5,7 @@ import type {
   WorkflowFileDocument,
   WorkflowRunId,
   WorkflowTraceNode,
-} from '../../../../../protocol/app-server/v80';
+} from '../../../../../protocol/app-server/v81';
 import { workflowKey } from '../../../bindings/workflow-children';
 import type { TraceFieldReader } from '../../../client/trace';
 import type { WorkflowRunSnapshotHeader, WorkflowRunSnapshotLoadResult, WorkflowRunSnapshotTransport } from './contract';

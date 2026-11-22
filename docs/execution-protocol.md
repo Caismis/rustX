@@ -1002,25 +1002,43 @@ never reopens.
 
 ### Host chunked results
 
-Four message semantics — `Begin`, `Chunk`, `End`, `Abort` — share the
-existing response arbitration with ordinary single-message results and
-errors. A candidate identity binds the Server incarnation, the original
-callback request/invocation, the Host connection/subscription
-incarnation, and an `UploadId`. `Begin` registers a bounded receiving
-state and never claims the response, never blocks other eligible Hosts.
-`Chunk` carries candidate identity, content item/order, exact offset, and
-bytes; it updates incremental length/digest/bounded preview and may flow
-into unpublished Client staging — it never aggregates the full text on
-the Server, never writes a Server file, never commits per-chunk
-canonical facts. `End` verifies envelope completeness, contiguous range,
-declared length, and the incremental digest, then performs exactly one
-claim attempt in the original lifecycle/correlation gate; the first
-complete valid result (or a contract-conformant complete JSON-RPC error)
-wins. `Abort` retires the candidate without a result. Winner-only
-publication; losers' uploads and staging are cancelled and cleaned by
-ownership, and losing paths are never published. Transport/integrity
-verification precedes claim; business-domain validation keeps its
-original post-claim order.
+App Server v81 includes `uploadScope` on each delivered `item/tool/call`.
+A Host combines that scope with the callback request ID, thread, turn, tool
+call and its own `UploadId` to address a candidate. Scope is specific to the
+receiving connection and subscription. Resubscription produces a new scope
+and invalidates the old one.
+
+`Begin` reserves receiver state. `Chunk` validates and appends bounded
+metadata, a digest and text preview. Identical replay of the last accepted
+chunk returns `duplicate: true` and leaves both counters and deadlines
+unchanged. `Abort` discards that receiver state. Each request gets a
+correlated `host_upload_accepted` acknowledgement or a typed
+`host_upload_rejected` error. Acknowledging a frame does not commit a
+canonical ToolResult.
+
+`End` verifies continuity, UTF-8, immutable descriptors, byte counts and
+digest before competing with ordinary JSON-RPC replies and errors at the
+original callback claim. The first eligible complete response wins. The
+normal tool runtime still validates and commits the result. A complete
+response that fails business validation keeps its original claim. As with
+ordinary replies, multiple Hosts may already have performed external work.
+
+The broker allows 32 live receive or handoff buffers, four active candidates
+per Host connection and eight per conversation. Each pending callback has
+up to eight recipient slots, including retired candidates. A new UploadId
+cannot reopen a slot under the same subscription. Admission stops at the
+first capacity limit. The fixed budget is 60 seconds from Begin and the idle
+budget is 10 seconds from the last accepted new chunk. A frame for an expired
+candidate retires it. New Begin admission reaps expired candidates before
+checking active capacity. Detach, cancellation and callback resolution
+release their receiver state. The native invocation continues to own its own
+deadline and cancellation.
+
+The model receives at most 16 KiB of text. Above that threshold the Server
+keeps a bounded head and tail, retains the original byte count and returns
+`Unavailable` without a locator. This also works without a bound Client.
+The Client candidate storage and publication path is still open. The
+receiver creates no Server files and commits no durable record per chunk.
 
 ### Canonical byte layout and metadata
 
@@ -1041,20 +1059,14 @@ text, the only defined tag); `0x0000` is reserved and refused; every other
 tag is refused as unknown. Item order is significant and preserved; a
 zero-length item carries a header and no bytes. Independent upload-record
 budgets (not the transport frame limit, not the management limit): at most
-1024 items per result, 64 KiB raw per chunk, 1 MiB total per result. Immutable result
+1024 items per result, 64 KiB raw per chunk, 16 MiB raw total per result. The
+1 MiB fully encoded message limit still applies to every frame. Immutable result
 metadata — content-item count, per-item type and declared length — is
 fixed at `Begin`, verified again at `End`, and bounded. Chunk bytes
 append to the incremental digest; re-derived metadata never mutates the
 envelope.
 
 ## Explicitly not claimed
-
-- Host upload (EXEC-01, `item/tool/result/{begin,chunk,end,abort}`) is a
-  generated contract and fixtures only. `src/app_server/host_upload.rs`
-  defines the closed envelopes and a pure verifier; they are registered in
-  the public schema as unreachable definitions and the protocol parser does
-  not accept them. There is no receiver, no callback claim wiring, no
-  winner/loser arbitration, and no Host content storage (#578).
 
 - The remote transport is a real authenticated WebSocket channel with
   identical record/Session semantics as the Unix socket, bound to

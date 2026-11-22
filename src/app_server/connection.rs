@@ -561,24 +561,85 @@ impl AppServerConnection {
         // Responses have no response of their own, including malformed or
         // stale replies. A strict typed envelope must validate before claim.
         if json.len() <= super::transport::MAX_MESSAGE_BYTES
-            && let Ok(value) = serde_json::from_str::<serde_json::Value>(json)
-            && value.is_object()
-            && value.get("method").is_none()
-            && (value.get("result").is_some() || value.get("error").is_some())
+            && let Ok(serde_json::Value::Object(object)) = serde_json::from_str(json)
         {
-            if self.admitted().is_ok()
-                && let Ok(reply) = serde_json::from_str::<super::protocol::ClientReply>(json)
-                && reply.id().is_valid()
+            if let Some(method) = object.get("method").and_then(serde_json::Value::as_str)
+                && super::host_upload::HostUploadMethod::is_method(method)
             {
-                self.host.callbacks().respond(&self.callbacks.id, reply);
+                return self.prepare_host_upload(json, &object);
             }
-            return Prepared::Ready(None);
+            if !object.contains_key("method")
+                && (object.contains_key("result") || object.contains_key("error"))
+            {
+                if self.admitted().is_ok()
+                    && let Ok(reply) = serde_json::from_str::<super::protocol::ClientReply>(json)
+                    && reply.id().is_valid()
+                {
+                    self.host.callbacks().respond(&self.callbacks.id, reply);
+                }
+                return Prepared::Ready(None);
+            }
         }
         match Self::decode(json) {
             Ok(Some(request)) => self.prepare_request(request),
             Ok(None) => Prepared::Ready(None),
             Err(response) => Prepared::ready(Reply::plain(response)),
         }
+    }
+
+    fn prepare_host_upload(
+        &self,
+        json: &str,
+        object: &serde_json::Map<String, serde_json::Value>,
+    ) -> Prepared {
+        use super::host_upload::HostUploadEnvelope;
+
+        let id = object
+            .get("id")
+            .and_then(|value| serde_json::from_value::<RequestId>(value.clone()).ok())
+            .filter(valid_request_id);
+        let mut association = None;
+        let mut may_have_committed = false;
+        let result = (|| {
+            if object
+                .keys()
+                .any(|key| !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"))
+                || object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+                || id.is_none()
+            {
+                return Err(rpc_error(-32600, "Invalid Request", None));
+            }
+            let upload = serde_json::from_str::<HostUploadEnvelope>(json)
+                .map_err(|_| rpc_error(-32602, "Invalid params", None))?;
+            self.admitted()?;
+            association = Some(
+                self.associations
+                    .admit_host_upload(&upload.id)
+                    .map_err(domain)?,
+            );
+            may_have_committed =
+                matches!(&upload.call, super::host_upload::HostUploadMethod::End(_));
+            // One frame is processed synchronously in connection order. The
+            // host admission mutex is released before touching the broker.
+            let _owner = self
+                .host
+                .admit_request(super::RequestLane::Ordinary, std::convert::identity)
+                .map_err(host_error)?;
+            let duplicate = self
+                .host
+                .callbacks()
+                .upload(&self.callbacks.id, upload.call)
+                .map_err(|reason| domain(ErrorData::HostUploadRejected { reason }))?;
+            Ok(Response::Success(Box::new(Success {
+                jsonrpc: upload.jsonrpc,
+                id: upload.id,
+                result: MethodResult::HostUploadAccepted { duplicate },
+            })))
+        })();
+        let mut reply = Reply::plain(result.unwrap_or_else(|error| failure(id, error)));
+        reply.association = association;
+        reply.may_have_committed = may_have_committed;
+        Prepared::ready(reply)
     }
 
     #[cfg(test)]

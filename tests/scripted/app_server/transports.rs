@@ -84,6 +84,53 @@ pub(super) async fn initialize(client: &impl AppServerConformanceDriver) {
     )
     .await;
 }
+#[tokio::test]
+async fn legacy_app_server_revision_is_refused_before_normal_admission() {
+    bounded(Box::pin(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let (client, server) = connected(&fixture, false).await;
+        let Response::Failure(failure) = client
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(0),
+                call: Method::Initialize(InitializeParams {
+                    protocol_version: 80,
+                    client: ClientIdentity {
+                        name: "old-host".into(),
+                        version: "1".into(),
+                    },
+                    presentation: PresentationCapabilities::default(),
+                }),
+            })
+            .await
+        else {
+            panic!("legacy client must not initialize")
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::UnsupportedVersion {
+                requested: 80,
+                supported: APP_SERVER_PROTOCOL_VERSION,
+            })
+        );
+        let Response::Failure(_) = client
+            .request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(1),
+                call: Method::ServerInfo {},
+            })
+            .await
+        else {
+            panic!("legacy handshake did not grant access")
+        };
+        initialize(&client).await;
+        drop(client);
+        server.await.unwrap().unwrap();
+        fixture.close().await;
+    }))
+    .await;
+}
+
 async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> AttachmentTarget {
     let MethodResult::Attached { target, .. } = call(
         client,
@@ -614,7 +661,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v80, {}",
+                "rustx.app-server.v81, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -1027,7 +1074,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v80, {}",
+                "rustx.app-server.v81, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()

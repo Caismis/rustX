@@ -1,5 +1,5 @@
-// Generated contract examples; not admitted management messages.
-import type {HostUploadEnvelope} from './v80.js';
+// Generated examples of incremental Hosted result requests.
+import type {HostUploadEnvelope} from './v81.js';
 export const hostUploads = [
   {
     "jsonrpc": "2.0",

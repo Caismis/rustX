@@ -64,6 +64,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 turn_id:crate::runtime::identity::AttemptId::new("native-attempt"),
                 call_id:crate::runtime::identity::ToolCallId::new("native-call"),
                 namespace:Some("business".into()),tool:"lookup".into(),arguments:serde_json::json!({"key":"invoice"}),
+                upload_scope: Some(Box::new(super::host_upload::HostUploadScope {
+                    callback_incarnation: "server-incarnation".into(),
+                    connection_incarnation: "connection-fixture".into(),
+                    subscription_incarnation: "subscription-fixture".into(),
+                })),
             }),
         })),
         ProtocolMessage::ClientReply(super::protocol::ClientReply::Success(super::protocol::ClientSuccess {
@@ -2022,9 +2027,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v80.schema.json", "v80.ts"]);
+        assert_eq!(generations, ["v81.schema.json", "v81.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v80.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v81.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

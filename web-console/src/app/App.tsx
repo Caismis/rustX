@@ -40,7 +40,7 @@ import { navigationPreferencesKey, readNavigationPreferences, restoreRoute, resu
 import { RecentInactiveViews, recentViewSnapshot } from './navigation/recent-views';
 import { SessionPins } from '../workspaces/session-pins';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v80';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v81';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';

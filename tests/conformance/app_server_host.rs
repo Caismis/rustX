@@ -1,5 +1,9 @@
 //! Broadcast Host Tools over real `WebSockets`, catalog, adapter, HTTP and parser.
 use crate::{common::provider_emulator::ProviderEmulator, launch_fixture::LaunchFixture};
+use base64::Engine as _;
+use rustx::app_server::host_upload::{HostUploadRefusal, MAX_CHUNK_BYTES, canonical_digest};
+use rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+use rustx::tools::types::ManagedOutputContinuation;
 use rustx::{
     app_server::{host::AppServerHost, protocol::*, transport::websocket},
     credentials::CredentialSnapshot,
@@ -15,6 +19,8 @@ use rustx::{
     message::{content::TextBlock, types::MessageBlock},
     tools::{ToolExecutionStatus, host::HostToolDefinition},
 };
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 #[path = "../support/app_server_peer.rs"]
@@ -98,16 +104,133 @@ impl ServerFixture {
     }
 }
 
+fn candidate(request: &ServerRequest) -> Value {
+    let ServerRequestMethod::ToolCall(call) = &request.call else {
+        panic!("Host callback")
+    };
+    let mut candidate = serde_json::to_value(call.upload_scope.as_ref().unwrap()).unwrap();
+    candidate["requestId"] = json!(request.id);
+    candidate["threadId"] = json!(call.thread_id);
+    candidate["turnId"] = json!(call.turn_id);
+    candidate["callId"] = json!(call.call_id);
+    candidate["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
+    candidate
+}
+
+async fn upload_request(peer: &mut Peer, method: &str, params: Value) -> Response {
+    peer.raw_request(json!({
+        "jsonrpc": "2.0",
+        "method": format!("item/tool/result/{method}"),
+        "params": params,
+    }))
+    .await
+}
+
+fn assert_accepted(response: Response, expected_duplicate: bool) {
+    let Response::Success(success) = response else {
+        panic!("expected upload acknowledgement, got {response:?}")
+    };
+    assert!(
+        matches!(
+            success.result,
+            MethodResult::HostUploadAccepted { duplicate } if duplicate == expected_duplicate
+        ),
+        "{success:?}"
+    );
+}
+
+fn assert_refused(response: Response, expected: HostUploadRefusal) {
+    let Response::Failure(failure) = response else {
+        panic!("expected {expected:?}, got {response:?}")
+    };
+    assert!(
+        matches!(
+            failure.error.data,
+            Some(ErrorData::HostUploadRejected { reason }) if reason == expected
+        ),
+        "{failure:?}"
+    );
+}
+
+async fn stream_large_result(
+    first: &mut Peer,
+    second: &mut Peer,
+    call: &ServerRequest,
+    copy: &ServerRequest,
+) {
+    let a = candidate(call);
+    let b = candidate(copy);
+    let body = format!(
+        "start-of-host-output{}host-middle{}🙂end-of-host-output",
+        "q".repeat(600_000),
+        "z".repeat(600_000)
+    );
+    let items = json!([{"typeTag": 1, "length": body.len().to_string()}]);
+    let begin =
+        |candidate: &Value| json!({"candidate": candidate, "success": true, "items": items});
+    assert_accepted(upload_request(first, "begin", begin(&a)).await, false);
+    assert_refused(
+        upload_request(second, "begin", begin(&a)).await,
+        HostUploadRefusal::Foreign,
+    );
+    assert_accepted(upload_request(second, "begin", begin(&b)).await, false);
+    assert_accepted(upload_request(second, "begin", begin(&b)).await, true);
+    for (index, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
+        let params = json!({
+            "candidate": b,
+            "itemIndex": 0,
+            "sequence": (index + 1).to_string(),
+            "offset": (index * MAX_CHUNK_BYTES).to_string(),
+            "dataBase64": base64::engine::general_purpose::STANDARD.encode(chunk),
+            "sha256": format!("{:x}", Sha256::digest(chunk)),
+        });
+        assert_accepted(upload_request(second, "chunk", params.clone()).await, false);
+        if index == 0 {
+            assert_accepted(upload_request(second, "chunk", params).await, true);
+        }
+    }
+    let digest = format!(
+        "{:x}",
+        sha2::digest::Output::<Sha256>::from(canonical_digest(&[(1, body.as_bytes())]))
+    );
+    let end = json!({
+        "candidate": b, "success": true, "items": items,
+        "total": body.len().to_string(), "digest": digest,
+    });
+    let mut incomplete_end = end.clone();
+    incomplete_end["candidate"] = a.clone();
+    assert_refused(
+        upload_request(first, "end", incomplete_end).await,
+        HostUploadRefusal::Incomplete,
+    );
+    let mut invalid_end = end.clone();
+    invalid_end["digest"] = json!("0".repeat(64));
+    assert_refused(
+        upload_request(second, "end", invalid_end).await,
+        HostUploadRefusal::DigestMismatch,
+    );
+    assert_accepted(upload_request(second, "end", end.clone()).await, false);
+    assert_refused(
+        upload_request(second, "end", end).await,
+        HostUploadRefusal::Late,
+    );
+    assert_refused(
+        upload_request(first, "abort", json!({"candidate": a})).await,
+        HostUploadRefusal::Late,
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit_once() {
     tokio::time::timeout(std::time::Duration::from_secs(180),async {
-        for winner in ["success","error","invalid"] {
+        for winner in ["success","error","invalid","stream"] {
             let Some(provider)=ProviderEmulator::start("app_server_host_broadcast").await else {return;};
             let ServerFixture { root,workspace,sessions,manager,host,endpoint,shutdown,server }=ServerFixture::start(&provider).await;
             let mut first=Peer::connect(&endpoint).await; let mut second=Peer::connect(&endpoint).await; let mut generic=Peer::connect(&endpoint).await;
             let definitions=vec![definition("business"),definition("inventory")];
             let MethodResult::SessionTransition {thread,session,..}=first.rpc(Method::SessionCreate {dynamic_tools:definitions.clone(),submission:None,settings:SessionPersistentState {cwd:workspace.clone(),model:None}}).await else {panic!("Thread start")};
             sessions.rename_session(&session.id,"Host conformance").await.unwrap();
+            assert!(manager.execution_endpoint(&session.id).is_err());
             assert_eq!(thread.dynamic_tools,definitions);
             let a=first.follow(thread.id.clone()).await; let b=second.follow(thread.id.clone()).await; let c=generic.follow(thread.id.clone()).await;
             assert_eq!(a.runtime_incarnation,b.runtime_incarnation); assert_eq!(b.runtime_incarnation,c.runtime_incarnation);
@@ -117,7 +240,14 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let ServerMessage::Request(call)=first.callback().await else {panic!("Host call")};
             let ServerMessage::Request(copy)=second.callback().await else {panic!("broadcast")};
             let ServerMessage::Request(unhandled)=generic.callback().await else {panic!("generic subscriber")};
-            assert_eq!(call,copy); assert_eq!(copy,unhandled);
+            let mut common = Vec::new();
+            let mut scopes = std::collections::BTreeSet::new();
+            for mut received in [call.clone(), copy.clone(), unhandled.clone()] {
+                let ServerRequestMethod::ToolCall(tool) = &mut received.call else {panic!("tool callback")};
+                assert!(scopes.insert(tool.upload_scope.take().unwrap().connection_incarnation));
+                common.push(received);
+            }
+            assert_eq!(common[0], common[1]); assert_eq!(common[1], common[2]);
             let MethodResult::Thread {thread:working}=generic.rpc(Method::ThreadRead{thread_id:thread.id.clone()}).await else {panic!("Thread status")};
             assert_eq!(working.status,rustx::app_server::thread_status::ThreadStatus::Active{active_flags:vec![]},"Host callbacks are ordinary active execution without human waits");
             let ServerRequestMethod::ToolCall(tool)=&call.call else {panic!("tool callback")};
@@ -136,7 +266,11 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 "error"=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"error":{"code":-32000,"message":"remote result unknown"}}),
                 _=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":"invalid domain payload"}),
             };
-            first.reply(selected).await;
+            if winner == "stream" {
+                stream_large_result(&mut first, &mut second, &call, &copy).await;
+            } else {
+                first.reply(selected).await;
+            }
             let ServerMessage::Resolved {params,..}=second.callback().await else {panic!("resolution")}; assert_eq!(params.request_id,call.id);
             second.reply(serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":{"success":true,"contentItems":[{"type":"inputText","text":"late-result"}]}})).await;
             first.settled(&turn_id).await;
@@ -146,9 +280,25 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let store=SqliteConversationStore::open_existing(thread.id.clone(),&access.database_path).unwrap();
             let canonical=store.load_canonical().unwrap(); let results:Vec<_>=canonical.iter().filter_map(|message|if let MessageBlock::Tool(tool)=message {Some(&tool.result)}else{None}).collect();
             assert_eq!(results.len(),1,"one canonical ToolResult");
-            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),winner=="success");
-            if winner!="success" {assert!(matches!(results[0].status,ToolExecutionStatus::OutcomeUnknown {..}));}
-            assert_eq!(provider.requests().await.len(),2,"one model continuation");
+            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream"));
+            if matches!(winner, "error" | "invalid") {assert!(matches!(results[0].status,ToolExecutionStatus::OutcomeUnknown {..}));}
+            assert!(manager.execution_endpoint(&session.id).is_err());
+            let requests = provider.requests().await;
+            assert_eq!(requests.len(),2,"one model continuation");
+            if winner == "stream" {
+                let result = results[0];
+                assert!(matches!(result.managed_output.as_deref(), Some(ManagedOutputContinuation::Unavailable { .. })));
+                assert!(result.truncation.as_ref().unwrap().original_bytes.unwrap() > 1_048_576);
+                let tool_messages = requests[1]["body"]["messages"].as_array().unwrap()
+                    .iter().filter(|message| message["role"] == "tool").collect::<Vec<_>>();
+                assert_eq!(tool_messages.len(), 1);
+                assert_eq!(tool_messages[0]["tool_call_id"], "host-call-1");
+                let continuation = serde_json::to_string(&tool_messages[0]["content"]).unwrap();
+                assert!(continuation.contains("start-of-host-output"));
+                assert!(continuation.contains("end-of-host-output"));
+                assert!(!continuation.contains("host-middle"));
+                assert!(continuation.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 4096);
+            }
             drop(store); drop(access); drop(first); drop(second); drop(generic); shutdown.cancel();server.await.unwrap().unwrap();
             manager.unload(&thread.id).await.unwrap(); drop(host); drop(manager); provider.finish().await;
         }

@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v80 envelope and method vocabulary.
+//! Rust authority for the App Server v81 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 80;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 81;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -1554,6 +1554,9 @@ pub enum ErrorData {
     SteerUnavailable,
     InvalidState,
     InvalidParams,
+    HostUploadRejected {
+        reason: super::host_upload::HostUploadRefusal,
+    },
     ResyncRequired,
     OperationFailed,
 }
@@ -1644,6 +1647,9 @@ pub struct HostToolCall {
     pub namespace: Option<String>,
     pub tool: String,
     pub arguments: serde_json::Value,
+    /// Address of this particular recipient for chunked results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_scope: Option<Box<super::host_upload::HostUploadScope>>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1706,6 +1712,7 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    HostUploadAccepted { duplicate: bool },
     Skills { page: crate::local_runtime::skill_management::SkillPage },
     SkillContent { content: crate::local_runtime::skill_management::SkillContent },
     CommandExec { result: super::command::ExecResult },
@@ -2183,6 +2190,7 @@ pub enum ServerOutput {
 #[serde(untagged)]
 pub enum ProtocolMessage {
     Request(Box<Request>),
+    HostUpload(Box<super::host_upload::HostUploadEnvelope>),
     Response(Response),
     Notification(Notification),
     ServerMessage(ServerMessage),

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v80';
+import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v81';
 import { readToolCatalog } from '../src/app/workflows/port';
 
 it('collects every page of one source before exposing the complete catalog', async () => {

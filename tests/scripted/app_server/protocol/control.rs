@@ -3,6 +3,42 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+#[tokio::test]
+async fn hosted_uploads_share_the_normal_request_id_association() {
+    use crate::app_server::host_upload::{HostUploadRefusal, fixtures};
+
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let mut upload = fixtures().remove(0);
+        upload.id = RequestId::Integer(60);
+        let record = serde_json::to_string(&upload).unwrap();
+        let ordinary = connection.admitted_request_for_test(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: upload.id,
+            call: Method::ServerInfo {},
+        });
+        let Response::Failure(duplicate) = connection.handle_json(&record).await.unwrap() else {
+            panic!("duplicate request ID")
+        };
+        assert_eq!(duplicate.error.data, Some(ErrorData::DuplicateRequestId));
+        drop(ordinary.await);
+        let Response::Failure(late) = connection.handle_json(&record).await.unwrap() else {
+            panic!("upload for a resolved callback")
+        };
+        assert_eq!(
+            late.error.data,
+            Some(ErrorData::HostUploadRejected {
+                reason: HostUploadRefusal::Late
+            })
+        );
+        drop(connection);
+        fixture.close().await;
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn headless_interactions_broadcast_survive_disconnect_and_select_one_response() {
     bounded(async {

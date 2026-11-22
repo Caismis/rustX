@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientJob } from '../../protocol/app-server/v80';
+import type { RuntimeClientJob } from '../../protocol/app-server/v81';
 import { BackgroundJobsSection } from '../src/app/agent/BackgroundJobs';
 import { SessionPanel } from '../src/app/agent/SessionPanel';
 import { SessionPanelToggle } from '../src/app/agent/SessionPanelToggle';

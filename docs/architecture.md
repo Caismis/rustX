@@ -4985,7 +4985,7 @@ configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v80, the only external product control protocol, and
+console speak App Server v81, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7772,7 +7772,7 @@ When a native Workflow run starts, `JournalStore::publish_workflow_start` commit
 16 MiB ceiling), and the `workflow_run_snapshots` binding (foreign-keyed `ON DELETE
 CASCADE` to `events(sequence)`) in one SQLite transaction with no staging rows or
 mutable disk fallback. Best-effort start observability failures never change execution
-outcomes. Reads flow through authorized v80 `conversation/workflowRunSnapshotHeader|Chunk`
+outcomes. Reads flow through authorized v81 `conversation/workflowRunSnapshotHeader|Chunk`
 (`Family::Runtime`) and cold `session/workflowRunSnapshotHeader|Chunk`
 (`Family::History`, enforcing `ObservationReadCut` and conversation binding).
 

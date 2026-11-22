@@ -7,7 +7,7 @@ import type {
   RuntimeClientInteractionHeader,
   WorkflowRunView,
   WorkflowRunId,
-} from '../../../../../protocol/app-server/v80';
+} from '../../../../../protocol/app-server/v81';
 import { checkpointReadCutKey } from '../../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../../client/app-server';
 import type { Observation } from '../../../client/session-lifecycle/port';

@@ -181,6 +181,7 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
             "The Session's configured Model is not in its published catalog; select one it provides"
         }
         ErrorData::SteerUnavailable => "The expected Turn is no longer active or steerable",
+        ErrorData::HostUploadRejected { .. } => "Hosted result upload refused",
         _ => "Operation rejected",
     };
     rpc_error(-32000, message, Some(data))

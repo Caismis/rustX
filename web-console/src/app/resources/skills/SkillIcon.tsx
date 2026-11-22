@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SkillDisplayIcon, SkillIconUpload } from '../../../../../protocol/app-server/v80';
+import type { SkillDisplayIcon, SkillIconUpload } from '../../../../../protocol/app-server/v81';
 import { BundledIcon } from '../../../presentation/primitives/BundledIcon';
 import { IconSkillOutline16 } from '../../../presentation/primitives/icons';
 
