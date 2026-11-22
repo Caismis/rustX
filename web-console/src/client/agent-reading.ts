@@ -190,12 +190,13 @@ export class AgentReading {
         if (pageAt.type === 'older' && window.page.next_cursor != null && BigInt(window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native child history page.');
         added.push(...window.page.entries ?? []);
         fetchedPages.push(window.page);
-        const sizeBefore = next.page.entries?.length ?? 0;
+        const sizeBefore = (next.page.entries?.length ?? 0) + (next.page.deferred_entries?.length ?? 0);
         next = extendTranscriptWindow(window, next, at.type === 'older');
         if (at.type !== 'older') break;
-        // No progress — the page merged nothing new: stop even if gaps the
-        // server simply has no rows for remain.
-        if (initial && (next.page.entries?.length ?? 0) === sizeBefore) break;
+        // No progress — the page merged no new position (a deferred row is a
+        // cached position too): stop even if gaps the server has no rows for
+        // remain.
+        if (initial && (next.page.entries?.length ?? 0) + (next.page.deferred_entries?.length ?? 0) === sizeBefore) break;
         if (transcriptWindowReady(initial ? next.page.entries! : added) && (!initial || transcriptCoverageComplete(next.page))) break;
         // The walk target: a slide gap takes priority over the deeper
         // boundary so the hole near the new head is filled first.

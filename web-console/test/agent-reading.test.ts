@@ -222,6 +222,25 @@ it('an already-bottomed cache refills the slide gap without re-reading below the
   expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
 });
 
+it('an initial read keeps walking after a page that adds only deferred positions', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    if (before === 160) return { type: 'transcript_window', window: { cut, page: { entries: [], deferred_entries: [{ offset: '159', identity: 'm159', content: [], deferred: true }], next_cursor: '128' } } };
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 72 }, (_, i) => entry(56 + i)), next_cursor: '56' } });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(160 + i)), next_cursor: '160' } });
+  await reader.loadInitial();
+  // The deferred-only page cached position 159; the walk must continue past
+  // it instead of stopping on 'no progress'.
+  const reads = server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: { before: string } }).at.before);
+  expect(reads).toContain('159');
+});
+
 it('a retired read cannot clear the live request\'s loading state or write its stale error', async () => {
   await setup();
   server.held.add('agent/transcript');
