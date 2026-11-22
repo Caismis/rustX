@@ -100,6 +100,15 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
         console.error('[sidebar-fork] requests:', wire.requests.map(summarize).join('\n'));
         console.error('[sidebar-fork] observe-responses:', wire.responses.filter(row => row.method === 'agent/observe' || row.method === 'session/checkpoint').map(row => JSON.stringify({ id: row.id, method: row.method, entries: row.result?.checkpoint?.snapshot?.transcript?.entries?.map((e: any) => e.cursor) ?? row.result?.snapshot?.transcript?.entries?.map((e: any) => e.cursor), events: (row.result?.events ?? []).map((record: any) => ({ cursor: record.cursor, type: record.event?.type })) })).join('\n'));
         console.error('[sidebar-fork] notifications:', JSON.stringify(wire.notifications.map(row => row.method).reduce((counts: Record<string, number>, method: string) => ({ ...counts, [method]: (counts[method] ?? 0) + 1 }), {})));
+        // Composer outcome discriminates a stalled send (pending/busy), a
+        // silently refused send (unsent/rejected) and an uncertain one.
+        console.error('[sidebar-fork] composer:', await page.locator('[data-composer-card]').evaluate(card => JSON.stringify({
+          outcome: card.getAttribute('data-submission-outcome'), busy: card.getAttribute('aria-busy'),
+          incarnation: card.getAttribute('data-editor-incarnation'), revision: card.getAttribute('data-editor-revision'),
+        })).catch(error => `unavailable: ${error}`));
+        console.error('[sidebar-fork] draft:', await message.inputValue().catch(() => 'unavailable'));
+        console.error('[sidebar-fork] toasts:', await page.locator('[data-toast]').allTextContents().catch(() => ['unavailable']));
+        console.error('[sidebar-fork] page-errors:', JSON.stringify(errors));
         throw error;
       }
       await expect(retry).toBeEnabled();
