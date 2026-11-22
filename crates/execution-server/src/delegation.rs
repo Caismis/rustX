@@ -228,7 +228,32 @@ impl LocalConnection {
                 .process_admitted(request, deadline, permit)
                 .map(ClientReply::Process);
         }
-        self.exchange_admitted(request, Some(deadline), permit, || ())
+        let reply = self.exchange_admitted(request, Some(deadline), permit, || ())?;
+        if matches!(reply, ClientReply::Error { .. }) {
+            return Ok(reply);
+        }
+        match request {
+            ClientRequest::PrepareWrite { expectation, .. }
+            | ClientRequest::BeginWrite { expectation, .. } => {
+                // The child still validates and tracks the chunk stream. The
+                // parent must verify the ticket it will use for cleanup.
+                self.verify_write_prepared(reply.clone(), expectation)?;
+            }
+            ClientRequest::PrepareEdit {
+                expectation,
+                replacements,
+                ..
+            } => {
+                if let Err(error) =
+                    self.valid_edit_prepared(reply.clone(), expectation, replacements)
+                    && let Err(error) = error.downcast::<super::RefusedEdit>()
+                {
+                    return Err(error);
+                }
+            }
+            _ => {}
+        }
+        Ok(reply)
     }
 }
 

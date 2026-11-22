@@ -1,4 +1,4 @@
-//! Single wire definition for the rustX execution protocol (v1).
+//! Single wire definition for the rustX execution protocol (v2).
 //!
 //! The execution protocol is the physical environment/output channel between
 //! the Agent Server (package `rustx`) and the physical Execution Client
@@ -27,7 +27,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
+
+/// WebSocket path for this wire revision.
+pub const EXECUTION_PATH: &str = "/execution/v2";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -705,7 +708,7 @@ impl fmt::Debug for Hello {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Admission {
-    /// The negotiated protocol revision — always [`PROTOCOL_VERSION`] in v1.
+    /// The negotiated protocol revision — always [`PROTOCOL_VERSION`].
     pub version: u16,
     /// The process-wide Server incarnation operations are keyed under.
     pub server_incarnation: crate::process::ServerIncarnation,
@@ -1626,7 +1629,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v1` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v2` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

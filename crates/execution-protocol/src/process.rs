@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{ClientInstanceId, DecimalU64, Generation, SessionId};
 
-/// At most this many live process operations per Session in v1.
+/// At most this many live process operations per Session.
 pub const MAX_OPERATIONS_PER_SESSION: usize = 4;
 
 /// Total active and retired process identities in one binding generation.

@@ -111,7 +111,9 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client's first and only binding-opening message is protocol v1:
+The Client's first and only binding-opening message is protocol v2. Revision 2 requires
+`physical_settlement_proven` in every terminal process snapshot. A revision 1
+peer is rejected during bootstrap or Hello, before execution admission:
 
 ```rust
 pub struct Hello {
@@ -389,7 +391,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v1` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v2` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -444,7 +446,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v1]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v2]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1114,7 +1116,12 @@ envelope.
   runtime root. A child can attest its local drain directly if it seals
   its relay-side dispatch boundary before any request that might leave
   retained work crosses it. This preserves recovery after a parent
-  crash during an unused child's preparation. Input controls are
+  crash during an unused child's preparation. The parent's data relay
+  takes responsibility before sending a registration, mutation preparation,
+  or commit. Validated receipts attach that responsibility to the operation
+  or ticket, discharge it, or leave it unresolved. A lost or invalid
+  receipt and `CommitUnknown` leave the relay dependent on confirmed
+  binding settlement even if it never received a ticket. Input controls are
   admitted as `InputAccepted` and their physical outcome — `Pending`,
   `Applied`, `Failed`, `Rejected`, or `Unknown` — is correlated by
   `InputReceipt`. A pending poll keeps the receipt and a terminal poll

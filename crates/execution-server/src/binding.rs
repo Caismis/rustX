@@ -887,7 +887,11 @@ impl Binding {
             let certificate = base64::engine::general_purpose::STANDARD.encode(tls.certificate());
             binding.loopback_tls = Some(tls);
             (
-                format!("wss://{}/execution/v1", listener.local_addr()?),
+                format!(
+                    "wss://{}{}",
+                    listener.local_addr()?,
+                    rustx_execution_protocol::EXECUTION_PATH
+                ),
                 Some(certificate),
             )
         };

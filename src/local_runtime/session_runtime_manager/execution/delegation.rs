@@ -18,6 +18,7 @@ use rustx_execution_protocol::{
 use rustx_execution_server::LocalConnection;
 use rustx_execution_server::delegation::{ControlReceipt, DataReply, DataRequest, Refusal};
 use rustx_execution_transport::{ChannelShutdown, RecordChannel};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -222,10 +223,10 @@ impl ChildExecutionRelay {
             .name("child-execution-data-relay".into())
             .spawn(move || {
                 let _runtime = runtime.enter();
-                run_data(parent_data, &owner, &authority);
+                let unconfirmed = run_data(parent_data, &owner, &authority);
                 authority.stop.cancel();
                 data_to_control.shutdown();
-                let result = authority.release(&owner);
+                let result = authority.release(&owner, unconfirmed);
                 let control_result = control_worker
                     .join()
                     .map_err(|_| io::Error::other("child control relay stopped without proof"));
@@ -308,7 +309,7 @@ impl Authority {
             .copied()
     }
 
-    fn retain_reply(&self, request: &ClientRequest, reply: &ClientReply) {
+    fn retain_reply(&self, request: &ClientRequest, reply: &ClientReply) -> io::Result<()> {
         match (request, reply) {
             (ClientRequest::Process(request), ClientReply::Process(reply)) => {
                 self.retain_process_reply(request, reply);
@@ -317,12 +318,10 @@ impl Authority {
                 ClientRequest::PrepareWrite { data_base64, .. },
                 ClientReply::WritePrepared { ticket, .. },
             ) => {
-                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_base64) {
-                    self.tickets
-                        .lock()
-                        .expect("child mutation tickets")
-                        .insert(*ticket, bytes.len() as u64);
-                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_base64)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                return self.retain_ticket(*ticket, bytes.len() as u64);
             }
             (
                 ClientRequest::BeginWrite { total: size, .. },
@@ -336,16 +335,12 @@ impl Authority {
                     ..
                 },
             ) => {
-                self.tickets
-                    .lock()
-                    .expect("child mutation tickets")
-                    .insert(*ticket, size.get());
+                return self.retain_ticket(*ticket, size.get());
             }
             (
                 ClientRequest::CommitWrite { ticket },
                 ClientReply::Written { ticket: echoed, .. }
-                | ClientReply::WriteCancelled { ticket: echoed }
-                | ClientReply::CommitUnknown { ticket: echoed },
+                | ClientReply::WriteCancelled { ticket: echoed },
             )
             | (
                 ClientRequest::AbortWrite { ticket },
@@ -358,17 +353,33 @@ impl Authority {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn retain_ticket(&self, ticket: DecimalU64, size: u64) -> io::Result<()> {
+        let mut tickets = self.tickets.lock().expect("child mutation tickets");
+        let std::collections::btree_map::Entry::Vacant(entry) = tickets.entry(ticket) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate delegated mutation ticket",
+            ));
+        };
+        entry.insert(size);
+        Ok(())
     }
 
     fn retain_process_reply(&self, request: &ProcessRequest, reply: &ProcessReply) {
         match (request, reply) {
             (
                 ProcessRequest::RegisterAgentBash { key, .. },
-                ProcessReply::Registered { key: echoed },
+                reply @ (ProcessReply::Registered { key: echoed }
+                | ProcessReply::State {
+                    key: echoed,
+                    state: OperationState::Settled(_),
+                }),
             ) if key == echoed => {
-                self.operations
-                    .lock()
-                    .expect("child process keys")
+                let mut operations = self.operations.lock().expect("child process keys");
+                let operation = operations
                     .entry(key.operation)
                     .or_insert_with(|| ChildOperation {
                         key: key.clone(),
@@ -376,6 +387,13 @@ impl Authority {
                         journal_released: false,
                         capture_disposed: false,
                     });
+                if let ProcessReply::State {
+                    state: OperationState::Settled(snapshot),
+                    ..
+                } = reply
+                {
+                    operation.physically_settled |= snapshot.physical_settlement_proven;
+                }
             }
             (
                 request,
@@ -431,11 +449,17 @@ impl Authority {
         }
     }
 
-    fn release(&self, owner: &LocalExecutionEndpoint) -> io::Result<()> {
-        let tickets = std::mem::take(&mut *self.tickets.lock().expect("child mutation tickets"));
-        let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
+    fn release(&self, owner: &LocalExecutionEndpoint, unconfirmed: bool) -> io::Result<()> {
         let deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+        if unconfirmed {
+            // A lost preparation may have no ticket to address. A lost commit
+            // may already have consumed its ticket. Only binding settlement
+            // covers those resources and any other work on the connection.
+            return owner.finish_child_cleanup(deadline);
+        }
+        let tickets = std::mem::take(&mut *self.tickets.lock().expect("child mutation tickets"));
+        let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
         for ticket in tickets.into_keys() {
             let reply = owner.with_bounded_data_connection(deadline, |connection| {
                 connection.forward_delegated(
@@ -548,7 +572,12 @@ impl Authority {
     }
 }
 
-fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authority: &Authority) {
+fn run_data(
+    mut channel: RecordChannel,
+    owner: &LocalExecutionEndpoint,
+    authority: &Authority,
+) -> bool {
+    let mut unconfirmed = false;
     while let Ok(Some(DataRequest {
         request,
         remaining_ms,
@@ -557,8 +586,20 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
         let budget = Duration::from_millis(u64::from(remaining_ms)).min(PAGE_REQUEST_TIMEOUT);
         let deadline = Instant::now() + budget;
         let reply = if authority.permits(owner, &request) {
+            // Known operations and tickets already have an owner. The
+            // following exchanges can create an unidentified resource or
+            // consume a ticket without a confirmable settlement.
+            let needs_receipt = matches!(
+                request,
+                ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
+                    | ClientRequest::PrepareWrite { .. }
+                    | ClientRequest::BeginWrite { .. }
+                    | ClientRequest::PrepareEdit { .. }
+                    | ClientRequest::CommitWrite { .. }
+            );
+            let crossed = Cell::new(false);
             let result = owner.with_bounded_data_connection(deadline, |connection| {
-                connection.forward_delegated(
+                let reply = connection.forward_delegated(
                     &request,
                     deadline,
                     authority.commit_size(&request),
@@ -568,17 +609,32 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
                         }
                         authority
                             .stop
-                            .with_active(|| ())
+                            .with_active(|| crossed.set(needs_receipt))
                             .ok_or(io::ErrorKind::Interrupted.into())
                     },
-                )
+                )?;
+                if let Err(error) = authority.retain_reply(&request, &reply) {
+                    connection.disconnect();
+                    return Err(error);
+                }
+                Ok(reply)
             });
             match result {
                 Ok(reply) => {
-                    authority.retain_reply(&request, &reply);
+                    unconfirmed |= crossed.get()
+                        && matches!(
+                            reply,
+                            ClientReply::CommitUnknown { .. }
+                                | ClientReply::Process(ProcessReply::Unknown { .. })
+                        );
                     DataReply::Client(reply)
                 }
-                Err(error) => DataReply::Rejected(error.into()),
+                Err(error) => {
+                    // The send gate runs after encoding and admission. In
+                    // particular, a refused deadline/permit cannot leave debt.
+                    unconfirmed |= crossed.get();
+                    DataReply::Rejected(error.into())
+                }
             }
         } else {
             DataReply::Rejected(Refusal::Denied)
@@ -590,6 +646,7 @@ fn run_data(mut channel: RecordChannel, owner: &LocalExecutionEndpoint, authorit
             break;
         }
     }
+    unconfirmed
 }
 
 fn run_control(
@@ -800,38 +857,44 @@ mod tests {
             let operation = &operations[&key.operation];
             (operation.journal_released, operation.capture_disposed)
         };
-        authority.retain_reply(
-            &command(ProcessRequest::BashCapture { key: key.clone() }),
-            &receipt(ProcessReply::BashCapture {
-                key: key.clone(),
-                capture: None,
-            }),
-        );
-        assert_eq!(state(), (false, false));
-        authority.retain_reply(
-            &command(ProcessRequest::BashCapture { key: key.clone() }),
-            &receipt(ProcessReply::BashCapture {
-                key: key.clone(),
-                capture: Some(BashCaptureResult {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    combined: String::new(),
-                    truncated: false,
-                    total: Some(0.into()),
-                    output: BashCaptureState::None,
-                    started: true,
-                    signal: None,
+        authority
+            .retain_reply(
+                &command(ProcessRequest::BashCapture { key: key.clone() }),
+                &receipt(ProcessReply::BashCapture {
+                    key: key.clone(),
+                    capture: None,
                 }),
-            }),
-        );
+            )
+            .unwrap();
+        assert_eq!(state(), (false, false));
+        authority
+            .retain_reply(
+                &command(ProcessRequest::BashCapture { key: key.clone() }),
+                &receipt(ProcessReply::BashCapture {
+                    key: key.clone(),
+                    capture: Some(BashCaptureResult {
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        combined: String::new(),
+                        truncated: false,
+                        total: Some(0.into()),
+                        output: BashCaptureState::None,
+                        started: true,
+                        signal: None,
+                    }),
+                }),
+            )
+            .unwrap();
         assert_eq!(state(), (false, true));
-        authority.retain_reply(
-            &command(ProcessRequest::ReleaseOutput {
-                key: key.clone(),
-                final_sequence: 0.into(),
-            }),
-            &output_released,
-        );
+        authority
+            .retain_reply(
+                &command(ProcessRequest::ReleaseOutput {
+                    key: key.clone(),
+                    final_sequence: 0.into(),
+                }),
+                &output_released,
+            )
+            .unwrap();
         assert_eq!(state(), (true, true));
         assert!(authority.owns_process(&key));
     }

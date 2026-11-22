@@ -17,6 +17,8 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
 | T63 | `dropping_a_worker_without_physical_proof_keeps_revoke_unconfirmed`, `real_supervisor_wait_failure_keeps_the_unknown_proof_after_output_release` | The Client test injects a final wait error after a real process produced a numeric exit status. The operation publishes Unknown without an exit code, retains its unconfirmed physical responsibility across journal release, and prevents a confirmed Revoke. |
 | T63 | `child_cleanup_requires_physical_settlement_before_and_after_journal_release`, `unknown_command_settlement_preserves_the_binding_and_output` | A proxy projects the same typed snapshot from a real Client. Delegated cleanup queries for proof in both release orderings, preserves the runtime root, and publishes no quiescence proof. The App Server projects the domain failure with its captured output and continues using the pair. The physical wait fault itself is exercised in the separate Client test above. |
 | T63 | `unused_delegation_is_sealed_against_late_effectful_dispatch`, `reserved_crash_prefixes_recover_exact_identity_without_reuse` | A child can publish its local drain after sealing unused delegated dispatch. Preparing a child and losing the parent before it sent retained work preserves the exact activation's prior recovery contract. A retained-work send and unused sealing exclude one another. |
+| T63 | `lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed` | A real Client prepares a Bash capture or mutation, or publishes a write. The proxy drops the original receipt, substitutes an invalid ticket, or returns `CommitUnknown` and gates Client-side teardown. The parent keeps the child root and records no quiescence proof while the binding's physical settlement remains unconfirmed. |
+| T61 | `revision_one_cannot_admit_either_lane_in_revision_two`, `websocket_session_version_and_generation_mismatches_stay_reserved` | The revised snapshot is mandatory in wire revision 2. Revision 1 is refused during Client bootstrap or on either Server Hello before a business lane exists. |
 
 ## Open gates
 
@@ -30,3 +32,5 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
 - Physical candidate Spill, offline cleanup, and the Client-owned Managed
   Python Store and stdio MCP still require implementation. Native macOS
   fault injection and final exact-head verification remain open.
+- Private Bash capture discard still needs a confirmed unlink result.
+  Retain cleanup ownership and quota if the unlink fails.

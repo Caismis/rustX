@@ -245,6 +245,11 @@ async fn child_cleanup_requires_physical_settlement_before_and_after_journal_rel
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_command_settlement_preserves_the_binding_and_output() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::unknown_command_settlement_preserves_the_binding_and_output()).await;
 }

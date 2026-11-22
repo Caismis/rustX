@@ -1847,6 +1847,287 @@ pub(crate) async fn child_cleanup_requires_physical_settlement_before_and_after_
     unproven_child_settlement(true).await;
 }
 
+#[derive(Clone, Copy)]
+enum WithheldDelegatedReply {
+    Register,
+    PrepareWrite,
+    MalformedPrepare,
+    CommitWrite,
+    CommitUnknown,
+}
+
+impl WithheldDelegatedReply {
+    fn selects(self, request: &ClientRequest) -> bool {
+        matches!(
+            (self, request),
+            (
+                Self::Register,
+                ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
+            ) | (
+                Self::PrepareWrite | Self::MalformedPrepare,
+                ClientRequest::PrepareWrite { .. }
+            ) | (
+                Self::CommitWrite | Self::CommitUnknown,
+                ClientRequest::CommitWrite { .. }
+            )
+        )
+    }
+}
+
+#[allow(clippy::too_many_lines)] // The same physical Client stays parked across receipt loss and child cleanup.
+async fn withhold_delegated_reply(fault: WithheldDelegatedReply) {
+    use crate::local_runtime::session_runtime_manager::ChildExecutionRelay;
+    use crate::runtime::subagent::ResolvedSubagentTool;
+    use crate::tools::types::ToolInvocationPolicy;
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessProgram, ProcessSpec, ProcessStdin,
+    };
+
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let ProxiedClient {
+        data: (mut client_data, mut server_data),
+        control: (mut client_control, mut server_control),
+        endpoint,
+        mut child,
+        _scratch: scratch,
+    } = proxied_client(&fixture).await;
+    let (received, receipt) = oneshot::channel();
+    let (inject_fault, hold_reply) = oneshot::channel();
+    let (release_data, hold_data) = oneshot::channel();
+    let data = tokio::spawn(async move {
+        while let Ok(request) = receive::<ClientRequest>(&mut server_data).await {
+            assert!(!matches!(
+                request,
+                ClientRequest::Process(ProcessRequest::Start { .. })
+            ));
+            send(&mut client_data, &request).await.unwrap();
+            let reply = receive::<ClientReply>(&mut client_data).await.unwrap();
+            if fault.selects(&request) {
+                received.send(reply).unwrap();
+                hold_reply.await.unwrap();
+                let replacement = match (fault, request) {
+                    (
+                        WithheldDelegatedReply::CommitUnknown,
+                        ClientRequest::CommitWrite { ticket },
+                    ) => Some(ClientReply::CommitUnknown { ticket }),
+                    (WithheldDelegatedReply::MalformedPrepare, _) => {
+                        Some(ClientReply::WritePrepared {
+                            ticket: 0.into(),
+                            original: None,
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(reply) = replacement {
+                    send(&mut server_data, &reply).await.unwrap();
+                }
+                drop(server_data);
+                // Hold the Client-facing lane across the relay's conclusion.
+                hold_data.await.unwrap();
+                drop(client_data);
+                return;
+            }
+            send(&mut server_data, &reply).await.unwrap();
+        }
+        panic!("expected a receipt from the real Client");
+    });
+    let (release_control, mut hold_control) = oneshot::channel();
+    let control = tokio::spawn(async move {
+        let mut server_open = true;
+        loop {
+            let poll = tokio::select! {
+                biased;
+                released = &mut hold_control => {
+                    released.unwrap();
+                    return;
+                }
+                poll = receive::<ControlPoll>(&mut client_control) => poll.unwrap()
+            };
+            if server_open
+                && send(&mut server_control, &poll).await.is_ok()
+                && let Ok(turn) = receive::<ControlTurn>(&mut server_control).await
+            {
+                if send(&mut client_control, &turn).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            // Isolate the Server-side loss. Echo idle polls on the Client
+            // side so its independent deadline cannot stand in for the gate.
+            assert!(poll.receipt.is_none());
+            server_open = false;
+            let idle = ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request: None,
+            };
+            if send(&mut client_control, &idle).await.is_err() {
+                break;
+            }
+        }
+        hold_control.await.unwrap();
+    });
+    let session = &fixture.sessions[0];
+    let conversation = &session.active_conversation_id;
+    let tools = ["bash", "write"].map(|name| {
+        let definition =
+            crate::tools::native::subagent_child_definition(name, ToolInvocationPolicy::default())
+                .unwrap();
+        ResolvedSubagentTool::Builtin {
+            tool_id: definition.id.clone(),
+            name: definition.name.clone(),
+            definition,
+        }
+    });
+    let relay = ChildExecutionRelay::create(
+        &fixture.manager.execution_scope(&session.id),
+        endpoint.workspace(),
+        conversation,
+        &tools,
+    )
+    .unwrap();
+    let (parent, child_startup) = UnixStream::pair().unwrap();
+    relay.transfer(&parent).await.unwrap();
+    let scope = relay
+        .grant()
+        .open(&session.id, endpoint.workspace(), &child_startup)
+        .await
+        .unwrap();
+    let cleanup = relay.start().unwrap();
+    let cancellation = detached_cancellation(crate::runtime::CancellationSignal::new());
+    let operation = OperationId::new();
+    let workspace_file = endpoint.workspace().join("child-owned");
+    let exchange = tokio::spawn({
+        let scope = scope.clone();
+        let conversation = conversation.as_str().to_owned();
+        async move {
+            if matches!(fault, WithheldDelegatedReply::Register) {
+                let process = scope.endpoint().unwrap();
+                let key = process.process_key(operation).unwrap();
+                let spec = ProcessSpec {
+                    cwd: std::path::PathBuf::new(),
+                    program: ProcessProgram::Shell {
+                        command: "touch unexpected-start".into(),
+                        conversation,
+                        live_output: true,
+                    },
+                    env: std::collections::BTreeMap::new(),
+                    timeout_ms: 5_000,
+                    pty: None,
+                    stdin: ProcessStdin::Closed,
+                    capture: false,
+                    output_cap: 0,
+                };
+                tokio::task::spawn_blocking(move || {
+                    process
+                        .agent_process(
+                            &ProcessRequest::RegisterAgentBash {
+                                key,
+                                fingerprint: spec.fingerprint(),
+                                spec,
+                            },
+                            std::time::Instant::now() + std::time::Duration::from_secs(5),
+                            || Ok(()),
+                        )
+                        .map(drop)
+                })
+                .await
+                .unwrap()
+            } else {
+                let prepared = scope
+                    .prepare_write(
+                        std::path::Path::new("child-owned"),
+                        b"published once".to_vec(),
+                        &cancellation,
+                    )
+                    .await?;
+                scope
+                    .commit_prepared(&prepared, &cancellation)
+                    .await
+                    .map(drop)
+            }
+        }
+    });
+
+    let capture = match (fault, bounded(receipt).await.unwrap()) {
+        (
+            WithheldDelegatedReply::Register,
+            ClientReply::Process(ProcessReply::Registered { key }),
+        ) => {
+            assert_eq!(key.operation, operation);
+            let name = format!("{:032x}.output", operation.as_u128());
+            Some(
+                std::fs::read_dir(scratch.path())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path().join(&name))
+                    .find(|path| path.is_file())
+                    .expect(
+                        "physical allocation exists while registration acknowledgement is held",
+                    ),
+            )
+        }
+        (
+            WithheldDelegatedReply::PrepareWrite | WithheldDelegatedReply::MalformedPrepare,
+            ClientReply::WritePrepared { ticket, .. },
+        ) => {
+            assert_ne!(ticket.get(), 0);
+            assert!(!workspace_file.exists());
+            None
+        }
+        (
+            WithheldDelegatedReply::CommitWrite | WithheldDelegatedReply::CommitUnknown,
+            ClientReply::Written { metadata, .. },
+        ) => {
+            assert_eq!(metadata.size.get(), 14);
+            assert_eq!(std::fs::read(&workspace_file).unwrap(), b"published once");
+            None
+        }
+        (_, reply) => panic!("unexpected receipt: {reply:?}"),
+    };
+    inject_fault.send(()).unwrap();
+    let error = bounded(exchange).await.unwrap().unwrap_err();
+    if matches!(
+        fault,
+        WithheldDelegatedReply::CommitWrite | WithheldDelegatedReply::CommitUnknown
+    ) {
+        assert!(
+            error
+                .downcast::<rustx_execution_server::WriteOutcomeUnknown>()
+                .is_ok()
+        );
+    }
+    assert!(!scope.delegated_work().unwrap().seal_unused());
+    bounded(crate::runtime::subagent::process::assert_unproven_relay_retains_child_root(cleanup))
+        .await;
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(endpoint.control().is_none());
+    assert!(!endpoint.workspace().join("unexpected-start").exists());
+    if let Some(path) = &capture {
+        assert!(path.is_file(), "Client cleanup is still gated");
+    }
+    assert_eq!(bounded(fixture.host.drain()).await.len(), 1);
+    release_control.send(()).unwrap();
+    release_data.send(()).unwrap();
+    bounded(data).await.unwrap();
+    bounded(control).await.unwrap();
+    bounded(child.wait()).await.unwrap();
+    if let Some(path) = capture {
+        assert!(!path.exists());
+    }
+}
+
+pub(crate) async fn lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed() {
+    for fault in [
+        WithheldDelegatedReply::Register,
+        WithheldDelegatedReply::PrepareWrite,
+        WithheldDelegatedReply::MalformedPrepare,
+        WithheldDelegatedReply::CommitWrite,
+        WithheldDelegatedReply::CommitUnknown,
+    ] {
+        withhold_delegated_reply(fault).await;
+    }
+}
+
 pub(crate) async fn unknown_command_settlement_preserves_the_binding_and_output() {
     let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
