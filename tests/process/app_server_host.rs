@@ -15,8 +15,12 @@ use tokio::process::{Child, Command};
 mod peer;
 use peer::Peer;
 
-async fn start(root: &Path) -> (Child, String, tokio::task::JoinHandle<()>) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rustx"))
+#[cfg(target_os = "linux")]
+mod generation;
+
+fn server_command(root: &Path, program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command
         .current_dir(root)
         .env("HOME", root.join("home"))
         .env_remove("XDG_CONFIG_HOME")
@@ -31,9 +35,16 @@ async fn start(root: &Path) -> (Child, String, tokio::task::JoinHandle<()>) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+        .kill_on_drop(true);
+    command
+}
+
+async fn start(root: &Path) -> (Child, String, tokio::task::JoinHandle<()>) {
+    launch(server_command(root, env!("CARGO_BIN_EXE_rustx"))).await
+}
+
+async fn launch(mut command: Command) -> (Child, String, tokio::task::JoinHandle<()>) {
+    let mut child = command.spawn().unwrap();
     let (endpoint, mut stderr) = websocket_startup(&mut child).await;
     let diagnostics = tokio::spawn(async move {
         tokio::io::copy(&mut stderr, &mut tokio::io::sink())

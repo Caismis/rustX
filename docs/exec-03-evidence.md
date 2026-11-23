@@ -232,7 +232,7 @@ child path independently of the stdio relay fixture.
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |
 | T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. Native disk exhaustion and cancellation at the save cut remain open. |
-| T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. The lost-receipt case below composes a real Host publication, late receipt loss and same-instance recovery. A separate paired-Client test refuses the retired generation’s Save key on a replacement. The combined Host receive and generation-change case remains open. |
+| T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. The lost-receipt case below composes a real Host publication, late receipt loss and same-instance recovery. A separate paired-Client test refuses the retired generation’s Save key on a replacement. The standalone Linux case below tests a real local Client generation change and a late publication receipt. |
 | T71, T72, T73 | A real HTTP fixture holds an old lease across activation with identical tool schemas. New and old leases send their respective credentials. A failed candidate preserves the previous version and the old connection closes after its last lease. Concurrent activation and cancellation across the full Session stack remain open. |
 
 ## HTTP MCP and managed output
@@ -293,6 +293,16 @@ reattach. The proxy checks the exact prior Workspace observation identity
 receives Accepted on Release and observes zero Save requests on the recovered
 lane. The original 1,200,056-byte publication remains private until the real
 Client acknowledges Revoke and exits.
+
+`a_published_host_output_cannot_cross_a_local_client_generation` starts the
+standalone App Server with its local Client supervisor. A proxy holds the
+original Client’s actual Publish receipt after confirming the physical file
+length. SIGKILL of the original namespace init forces replacement. The exact
+private storage is gone by generation 2 admission. The held receipt is
+released against the old lane after canonical completion. The replacement
+reads the original Workspace and receives zero Save requests. The durable
+result counts one successful Host ToolResult with an unavailable locator,
+and the provider counts one tool call and one bounded model continuation.
 
 In a separate untraced run, sampling procfs every 10 ms recorded 204,564 KiB
 peak RSS for the entire Host harness and its in-process Server, with 3.35 s

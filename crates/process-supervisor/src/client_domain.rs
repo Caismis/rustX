@@ -14,7 +14,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::{net::UnixStream, process::CommandExt as _, process::ExitStatusExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -162,19 +162,7 @@ pub fn launch_init(
         ));
     }
     let init = pidfd_open(rustix::process::getpid(), PidfdFlags::empty())?;
-    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-    let mut ancillary = SendAncillaryBuffer::new(&mut space);
-    let descriptors = [init.as_fd()];
-    if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors))
-        || sendmsg(
-            io::stdout(),
-            &[IoSlice::new(b"R")],
-            &mut ancillary,
-            SendFlags::NOSIGNAL,
-        )? != 1
-    {
-        return Err(io::Error::other("cannot send Client namespace descriptor"));
-    }
+    send_namespace(io::stdout(), init.as_fd())?;
     drop(init);
     let mut grant = [0];
     io::stdin().read_exact(&mut grant)?;
@@ -188,7 +176,24 @@ pub fn launch_init(
         .exec())
 }
 
-fn namespace_init(channel: &UnixStream) -> io::Result<(OwnedFd, i32)> {
+fn send_namespace(channel: impl AsFd, descriptor: BorrowedFd<'_>) -> io::Result<()> {
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut ancillary = SendAncillaryBuffer::new(&mut space);
+    let descriptors = [descriptor];
+    if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors))
+        || sendmsg(
+            channel,
+            &[IoSlice::new(b"R")],
+            &mut ancillary,
+            SendFlags::NOSIGNAL,
+        )? != 1
+    {
+        return Err(io::Error::other("cannot send Client namespace descriptor"));
+    }
+    Ok(())
+}
+
+fn namespace_init(channel: impl AsFd) -> io::Result<(OwnedFd, i32)> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1), ScmCredentials(1))];
     let mut ancillary = RecvAncillaryBuffer::new(&mut space);
     let mut ready = [0];
@@ -224,7 +229,7 @@ fn namespace_init(channel: &UnixStream) -> io::Result<(OwnedFd, i32)> {
     }
 }
 
-fn wait_for_exit(descriptor: &OwnedFd, channel: &io::Stdin) -> io::Result<()> {
+fn wait_for_exit(descriptor: &OwnedFd, channel: &impl AsFd) -> io::Result<()> {
     let mut sources = [
         PollFd::new(descriptor.as_fd(), PollFlags::POLLIN),
         PollFd::new(channel.as_fd(), PollFlags::POLLIN | PollFlags::POLLHUP),
@@ -270,6 +275,48 @@ fn verify_exit(descriptor: &OwnedFd) -> io::Result<()> {
             Ok(_) => return Err(io::Error::other("Client namespace exit was not confirmed")),
         }
     }
+}
+
+/// Ends the retained Linux namespace if the supervisor's private socket
+/// closes. Only the independent supervisor may write settlement evidence.
+///
+/// # Errors
+/// Returns an invalid handoff or an unconfirmed kernel exit.
+pub fn watch_lease() -> io::Result<()> {
+    let mut channel = UnixStream::from(io::stdin().as_fd().try_clone_to_owned()?);
+    let (descriptor, _) = namespace_init(&channel)?;
+    channel.write_all(b"W")?;
+    wait_for_exit(&descriptor, &channel)?;
+    verify_exit(&descriptor)
+}
+
+fn arm_lease(descriptor: &OwnedFd) -> io::Result<(UnixStream, std::process::Child)> {
+    let (mut supervisor, watcher) = UnixStream::pair()?;
+    supervisor.set_read_timeout(Some(Duration::from_secs(2)))?;
+    set_socket_passcred(&watcher, true)?;
+    let mut child = Command::new(std::env::current_exe()?)
+        .arg("client-domain-lease")
+        .stdin(OwnedFd::from(watcher))
+        .stdout(Stdio::null())
+        .spawn()?;
+    let armed = send_namespace(&supervisor, descriptor.as_fd()).and_then(|()| {
+        let mut ready = [0_u8; 1];
+        supervisor.read_exact(&mut ready)?;
+        if ready == *b"W" {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "invalid Client namespace lease acknowledgement",
+            ))
+        }
+    });
+    if let Err(error) = armed {
+        drop(supervisor);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    Ok((supervisor, child))
 }
 
 fn run_in_namespace(
@@ -319,7 +366,12 @@ fn run_in_namespace(
         }
     };
     let mut result = io::stdout().lock();
+    let mut lease = None;
     let boot_and_wait = (|| -> io::Result<()> {
+        // Bubblewrap's parent-death signal is useful during setup. Its
+        // launcher and child run independently, so require a separate
+        // acknowledged pidfd owner before admitting any Client work.
+        lease = Some(arm_lease(&descriptor)?);
         writeln!(result, "ready {sender}")?;
         result.flush()?;
         let mut grant = [0];
@@ -338,6 +390,11 @@ fn run_in_namespace(
     // Bubblewrap owns the launcher wait. Only the exact PID1 descriptor
     // proves that all descendants and their writers have left this domain.
     verify_exit(&descriptor)?;
+    if let Some((lease, mut watcher)) = lease {
+        drop(lease);
+        // The exact pidfd has already proved the physical exit.
+        let _ = watcher.wait();
+    }
     if let Err(error) = boot_and_wait {
         eprintln!("Client namespace lease closed: {error}");
     }

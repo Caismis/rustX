@@ -289,13 +289,16 @@ any phase, and `Live` always means a *committed pair* of lanes.
 The `interactive-supervisor client-domain` role owns a Bubblewrap PID
 namespace for the local sibling Client. The same Client becomes PID 1.
 Before it executes, the trusted init transfers its own pidfd over a private
-socket. The host holds that descriptor and the Server holds the only writer
-of a separate lifetime pipe. The Client inherits neither the writer nor the
-settlement capability. EOF on that pipe signals the pinned init through the
-pidfd. Linux completes namespace teardown, including descendants in other
-process groups or sessions, before the descriptor reports exit. The ordinary
-per-operation supervisor and START/cancellation gates still run inside the
-namespace.
+socket. The host guardian retains that descriptor. Before the launch grant,
+a companion watcher acknowledges its own copy of the same descriptor and
+then monitors a private socket for guardian loss. The Server holds the only
+writer of a separate lifetime pipe. EOF on that pipe lets the guardian
+signal the pinned init. If the guardian dies, EOF on the private socket
+lets the watcher signal the same init. The Client inherits neither lifetime
+channel. Linux finishes teardown, including descendants in other process
+groups or sessions, before the pidfd reports exit. The watcher has no
+receipt authority. The per-operation supervisor and START and cancellation
+gates still run inside the namespace.
 
 The independent helper retains the original private scratch directory
 descriptor. After namespace exit it removes that exact directory and

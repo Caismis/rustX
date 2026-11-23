@@ -1077,7 +1077,7 @@ fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
     (bin, rustx)
 }
 
-fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
     // The Client is only ever the artifact preparation staged beside this
     // harness — never a runtime build, a PATH lookup, or a fallback path.
@@ -5400,8 +5400,11 @@ async fn namespace_receipt_covers_a_detached_session_and_requires_the_guardian()
 
     bounded(async {
         let script = r"
-import os, pathlib, signal, socket, sys
+import ctypes, os, pathlib, signal, socket, sys
 assert os.getpid() == 1
+# Exercise the inherited pidfd lease even if the launcher cannot propagate
+# its parent-death signal. Linux PR_SET_PDEATHSIG is 1.
+assert ctypes.CDLL(None).prctl(1, 0, 0, 0, 0) == 0
 assert not pathlib.Path(sys.argv[2]).exists()
 scratch = pathlib.Path(os.environ['TMPDIR'])
 (scratch / 'candidate').write_bytes(b'private namespace output')

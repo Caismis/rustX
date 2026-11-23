@@ -16,7 +16,7 @@ fn main() {
             rustx_process_supervisor::interactive_supervisor::run_inner(&arguments)
         }
         #[cfg(target_os = "linux")]
-        Some(role @ ("client-domain" | "client-domain-init")) => {
+        Some(role @ ("client-domain" | "client-domain-init" | "client-domain-lease")) => {
             let mut arguments = std::env::args_os().skip(2);
             use rustx_process_supervisor::client_domain;
             let outcome = if role == "client-domain" {
@@ -26,6 +26,8 @@ fn main() {
                     }
                     _ => std::process::exit(1),
                 }
+            } else if role == "client-domain-lease" {
+                client_domain::watch_lease()
             } else {
                 let Some(program) = arguments.next() else {
                     std::process::exit(1)
