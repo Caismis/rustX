@@ -121,15 +121,24 @@ jobs:
       #    selected or what they prove; it only changes how much dependency
       #    compilation is repeated. A completely cold runner remains valid.
       #
-      # 5. Every lane may *restore* a compatible cache, but only a trusted push
-      #    to `main` *publishes* one — that is what `save-if` encodes. Pull
-      #    requests are cache consumers, never cache publishers: a PR cannot
-      #    spend the repository's shared cache budget (the seven lineages are
-      #    ~7.1 GB of a 10 GB LRU pool) and untrusted fork execution can never
-      #    become a writer of the state trusted runs later restore. The reuse
-      #    path is `main` cache -> future run with a compatible key. This
-      #    workflow's `push` trigger is already `main`-only; the condition
-      #    stays explicit so the ownership contract is locally obvious.
+      # 5. Publishing has two scopes. A `main` push publishes the shared
+      #    lineage every run may restore (this workflow's `push` trigger is
+      #    `main`-only). A pull_request run may additionally publish into the
+      #    PR's own cache scope — writes on the merge ref are visible only to
+      #    later runs of that same PR and can never reach `main`, so PR saves
+      #    add entries without polluting the trusted lineage. They do still
+      #    draw on the repository's shared ~10 GB cache pool, so scope
+      #    isolation ≠ capacity isolation: each PR adds ~1 GB per lane entry.
+      #    Fork execution keeps its own scope and can never become a writer
+      #    of what `main` runs restore. Today `main` runs no macOS lane, so
+      #    the `rust-platform-*`/`desktop-host` lineages have no publisher at
+      #    all and every macOS run is cold by construction; PR-scope saves
+      #    are what make those lanes self-warming. After this lands on `main`
+      #    the FULL lanes (`rust-platform-boundaries`, `desktop-macos`) gain
+      #    main-published caches too; `rust-platform-core` is a FAST lane and
+      #    `main` only runs FULL, so it keeps relying on PR-scope saves. A
+      #    PR's first run stays cold unless a compatible main/base cache
+      #    exists — its own saves warm only that PR's later runs.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -561,6 +570,20 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+      # The cache key's environment hash covers every rustup toolchain the
+      # image happens to preinstall, so image revisions silently change the
+      # key. Keep only the pinned toolchain; idempotent and empty-set safe.
+      - name: Normalize preinstalled rustup toolchains
+        shell: bash
+        run: |
+          while read -r line; do
+            tc="${line%% *}"
+            case "$tc" in
+              1.100.0-*) ;;
+              *) rustup toolchain uninstall "$tc" || true ;;
+            esac
+          done < <(rustup toolchain list)
+          rustc --version --verbose
       # One lineage per lane; see the policy note in the `quality` job. The
       # macOS lineages share nothing with any Linux lane: the action's key
       # carries the runner OS, architecture and host triple.
@@ -569,7 +592,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-core
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Record native build environment
         shell: bash
@@ -690,6 +713,20 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+      # Same key-stability normalization as rust-platform-core: drop every
+      # preinstalled rustup toolchain except the pinned one so the runner
+      # image's toolchain set cannot perturb the cache key's env hash.
+      - name: Normalize preinstalled rustup toolchains
+        shell: bash
+        run: |
+          while read -r line; do
+            tc="${line%% *}"
+            case "$tc" in
+              1.100.0-*) ;;
+              *) rustup toolchain uninstall "$tc" || true ;;
+            esac
+          done < <(rustup toolchain list)
+          rustc --version --verbose
       # One lineage per lane; see the policy note in the `quality` job. The
       # macOS lineages share nothing with any Linux lane: the action's key
       # carries the runner OS, architecture and host triple.
@@ -698,7 +735,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-boundaries
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Record native build environment
         shell: bash
@@ -949,10 +986,24 @@ jobs:
           toolchain: "1.100.0"
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+      # Same key-stability normalization as rust-platform-core: drop every
+      # preinstalled rustup toolchain except the pinned one so the runner
+      # image's toolchain set cannot perturb the cache key's env hash.
+      - name: Normalize preinstalled rustup toolchains
+        shell: bash
+        run: |
+          while read -r line; do
+            tc="${line%% *}"
+            case "$tc" in
+              1.100.0-*) ;;
+              *) rustup toolchain uninstall "$tc" || true ;;
+            esac
+          done < <(rustup toolchain list)
+          rustc --version --verbose
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
