@@ -361,6 +361,108 @@ fn saved_files(scratch: &std::path::Path) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+async fn verify_native_continuation(
+    manager: &SessionRuntimeManager,
+    session: &rustx::runtime::identity::SessionId,
+    owner: &rustx::runtime::identity::ConversationId,
+    workspace: &std::path::Path,
+    artifacts: &std::path::Path,
+    locator: &std::path::Path,
+) {
+    use crate::common::NoopProgress;
+    use rustx::{
+        runtime::{
+            cancellation::{CancellationSignal, ExecutionCancellation},
+            identity::{ConversationId, ToolCallId, ToolId},
+            types::CancellationReason,
+        },
+        tools::{
+            NativeToolPolicies,
+            executor::{ToolExecutionContext, ToolRegistry},
+            native::{NativeToolResources, register_native_tools},
+            runtime::{ConversationRuntimeConfig, ConversationToolRuntime},
+            types::{ToolInvocation, ToolInvocationId, ToolInvocationMode},
+        },
+    };
+
+    let mut config = ConversationRuntimeConfig::new(workspace, artifacts);
+    config.execution_scope = Some(manager.execution_scope(session));
+    let runtime = ConversationToolRuntime::from_config(owner.clone(), config).unwrap();
+    let mut registry = ToolRegistry::new();
+    register_native_tools(
+        &mut registry,
+        NativeToolResources {
+            background: runtime.background().clone(),
+            subagents: None,
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
+        },
+        NativeToolPolicies::default(),
+    )
+    .unwrap();
+
+    let context = |conversation| {
+        ToolExecutionContext::new(
+            conversation,
+            None,
+            ExecutionCancellation::detached(
+                CancellationSignal::new(),
+                CancellationReason::UserRequested,
+            ),
+            runtime.workspace(),
+            &NoopProgress,
+            runtime.artifacts(),
+            runtime.tool_output(),
+            runtime.environment(),
+        )
+    };
+    let invoke = |name, arguments| ToolInvocation {
+        id: ToolInvocationId::Agent {
+            call_id: ToolCallId::new(format!("readback-{name}")),
+        },
+        tool_id: ToolId::new(format!("tool-{name}")),
+        tool_name: String::from(name),
+        mode: ToolInvocationMode::Foreground,
+        arguments,
+    };
+    let read = invoke("read", json!({"path": locator, "limit": 2}));
+    let reader = registry.executor(&read.tool_id);
+    let read_result = reader.start(read.clone(), context(owner)).completion.await;
+    assert_eq!(read_result.status, ToolExecutionStatus::Success);
+    assert!(
+        read_result
+            .model_facing_projection()
+            .as_text()
+            .contains("start-of-host-output\n")
+    );
+
+    let grep = invoke(
+        "grep",
+        json!({"path": locator, "pattern": "host-middle", "literal": true}),
+    );
+    let grep_result = registry
+        .executor(&grep.tool_id)
+        .start(grep, context(owner))
+        .completion
+        .await;
+    assert_eq!(grep_result.status, ToolExecutionStatus::Success);
+    assert!(
+        grep_result
+            .model_facing_projection()
+            .as_text()
+            .contains("truncated to 500 chars")
+    );
+
+    let foreign = ConversationId::new("conv_161360a8-58d1-7c90-8acb-24a22e5d6832");
+    let denied = reader.start(read, context(&foreign)).completion.await;
+    assert!(matches!(denied.status, ToolExecutionStatus::Failed { .. }));
+    assert!(
+        !denied
+            .model_facing_projection()
+            .as_text()
+            .contains("start-of-host-output")
+    );
+}
+
 async fn admit_execution_client(
     manager: &SessionRuntimeManager,
     session: &rustx::runtime::identity::SessionId,
@@ -496,6 +598,7 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                     assert_eq!(physical.len(), 1, "only the winner's complete output is retained");
                     let text = std::fs::read_to_string(physical[0].path()).unwrap();
                     assert_eq!(text, format!("start-of-host-output\n\n{}host-middle{}🙂end-of-host-output\n", "q".repeat(600_000), "z".repeat(600_000)));
+                    verify_native_continuation(&manager, &session.id, &thread.id, &workspace, &root.path().join("readback"), locator).await;
                 } else {
                     assert!(matches!(result.managed_output.as_deref(), Some(ManagedOutputContinuation::Unavailable { .. })));
                     assert!(result.truncation.as_ref().unwrap().original_bytes.unwrap() > 1_048_576);

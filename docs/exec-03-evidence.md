@@ -76,7 +76,7 @@ still require a Client-owned implementation.
 | T16 | Model reset and freeze still need cross-entry integration evidence. |
 | T19, T20, T21, T30, T38 | MCP declaration cache, optional startup, Client stdio and foreground-path consolidation remain open. |
 | T22, T40, T47 | The isolated Workspace test covers Client-owned AGENTS.md on cold load and explicit reconciliation, BOM stripping and retention of the last valid instructions. Skill discovery, automatic watching and reconnect repair remain open. |
-| T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
+| T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |
 | T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. Native disk exhaustion and cancellation at the save cut remain open. |
@@ -119,7 +119,8 @@ each case.
 | Confirmed staging followed by storage refusal | 1,625,151 | 414,754 | 5 | 177,030 | 1,695 |
 
 These were Linux debug runs of
-`three_clients_broadcast_first_response_error_and_invalid_payload_commit_once`.
+`three_clients_broadcast_first_response_error_and_invalid_payload_commit_once`
+on `d47c095f75358d7bb60ff464c77dd1865f3cc1c4`.
 The WebSocket counts include handshake, setup and notifications over the
 three attachment sockets. The Unix measurement includes typed Save records
 and their length prefixes. It excludes handshake, health and revocation.
@@ -157,7 +158,9 @@ separate fixture process. Startup, VCS and SQLite state are included.
   owners. Cross-entry model integration and credential rotation through the
   full Session stack remain open.
 - The real Execution Client saved and read normalized output through the
-  wire. The pinned rmcp fork passed two HTTP response-cap regressions.
+  wire. The execution boundary crates passed 412 tests with three ignored,
+  including a confirmed unlink retry. The pinned rmcp fork passed two
+  HTTP response-cap regressions.
 - The generated protocol check and type check passed. Dev type check and
   44 tests passed. TUI type check and 1,365 tests passed with one skip.
   Web Console type check, build and 5,018 tests passed with four skips.
