@@ -1132,35 +1132,52 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
 #[tokio::test]
 async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
     use super::probes::{ProbeState, execute, plan};
-    use crate::tools::mcp::fixture::{
-        FIXTURE_MODE_ENV, FixtureServer, fixture_spawn_args, serve_if_fixture_mode,
-    };
     use std::sync::Arc;
-    if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
-        return;
-    }
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+    let script = r"
+import os, signal, socket, sys
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with socket.socket(socket.AF_UNIX) as witness:
+    witness.connect(sys.argv[1])
+    witness.sendall(str(os.getpid()).encode() + b'\n')
+    witness.recv(1)
+";
     for timed_out in [false, true] {
         let f = Fixture::new();
-        f.mcp(true, json!({"owned":{
-            "command":std::env::current_exe().unwrap(),
-            "args":fixture_spawn_args("local_runtime::launch_tests::cfg235_probe_stdio_timeout_and_cancel_reap_owned_process"),
-            "env":{FIXTURE_MODE_ENV:"1"}
-        }}));
+        let witness_root = tempfile::tempdir_in("/tmp").unwrap();
+        let witness = witness_root.path().join("stdio");
+        let listener = tokio::net::UnixListener::bind(&witness).unwrap();
+        f.mcp(
+            true,
+            json!({"owned":{
+                "command": "/usr/bin/python3",
+                "args": ["-c", script, witness.to_str().unwrap()],
+            }}),
+        );
         f.user(
             json!({ "agent": {"model": {"model":"host/one"}, "tools":{"sources":{"owned":"all"}}}}),
         );
         let launch = analyze(&f.request, &f.host).unwrap();
         let mut plan = plan(&launch, false);
-        let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
         let expire = Arc::new(tokio::sync::Notify::new());
-        plan.hooks.ownership_pause = Some(pause.clone());
         plan.hooks.expire = Some(expire.clone());
         let cancellation = crate::runtime::CancellationSignal::new();
         let work = execute(&launch, &plan, cancellation.clone());
         tokio::pin!(work);
-        tokio::select! { () = pause.wait_entered() => {}, _ = &mut work => panic!("probe returned before owned pause") }
-        let pid =
-            nix::unistd::Pid::from_raw(i32::try_from(pause.supervisor_pid().unwrap()).unwrap());
+        let mut peer = tokio::select! {
+            witness = listener.accept() => BufReader::new(witness.unwrap().0),
+            result = &mut work => panic!("probe returned before the real stdio child started: {result:?}"),
+        };
+        let mut pid = String::new();
+        peer.read_line(&mut pid).await.unwrap();
+        let pid = nix::unistd::Pid::from_raw(
+            peer.get_ref()
+                .peer_cred()
+                .unwrap()
+                .pid()
+                .unwrap_or_else(|| pid.trim_end().parse().unwrap()),
+        );
+        assert_eq!(nix::sys::signal::kill(pid, None), Ok(()));
         if timed_out {
             expire.notify_one();
         } else {
@@ -1170,8 +1187,12 @@ async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
             futures_util::poll!(&mut work).is_pending(),
             "caller must await physical owner"
         );
-        pause.release();
         let results = work.await;
+        assert_eq!(
+            peer.read(&mut [0]).await.unwrap(),
+            0,
+            "stdio child physically exited"
+        );
         let result = results
             .iter()
             .find(|result| result.target == "owned")

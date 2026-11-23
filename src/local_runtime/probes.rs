@@ -28,7 +28,6 @@ pub(super) struct ProbePlan {
 #[derive(Debug, Default)]
 pub(super) struct ProbeHooks {
     pub credentials: Option<crate::credentials::CredentialSnapshot>,
-    pub ownership_pause: Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>,
     pub close: Option<Arc<crate::tools::mcp::test_sync::CloseProbe>>,
     pub expire: Option<Arc<tokio::sync::Notify>>,
 }
@@ -181,9 +180,7 @@ pub(super) async fn execute(
     } else {
         None
     };
-    let scope = execution
-        .as_ref()
-        .map(super::session_runtime_manager::StandaloneExecution::scope);
+    let scope = execution.as_ref().map(|probe| probe.execution.scope());
     let workspace = scope.as_ref().map_or_else(
         || Workspace::new(&launch.workspace),
         |scope| Workspace::for_session(&launch.workspace, scope.clone()),
@@ -313,8 +310,6 @@ pub(super) async fn execute(
             Arc::new(McpInvalidationState::new()),
             owned.clone(),
         );
-        #[cfg(test)]
-        let connect = connect.with_ownership_pause(plan.hooks.ownership_pause.clone());
         let step = McpServerRuntime::connect_owned(connect);
         let deadline = async {
             #[cfg(test)]
@@ -375,17 +370,52 @@ pub(super) async fn execute(
     results
 }
 
-async fn start_probe_client(
-    launch: &ProspectiveSessionConfig,
-) -> Result<super::session_runtime_manager::StandaloneExecution, String> {
-    let root = crate::runtime::local_storage::ProductRoot::create(&launch.runtime_root)
+struct ProbeExecution {
+    execution: super::session_runtime_manager::StandaloneExecution,
+    root: tempfile::TempDir,
+}
+
+impl ProbeExecution {
+    async fn shutdown(self) -> Result<(), String> {
+        self.execution.shutdown().await?;
+        self.root.close().map_err(|error| error.to_string())
+    }
+}
+
+async fn start_probe_client(launch: &ProspectiveSessionConfig) -> Result<ProbeExecution, String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temporary = std::env::temp_dir()
+        .canonicalize()
         .map_err(|error| error.to_string())?;
-    super::session_runtime_manager::StandaloneExecution::start(
-        crate::runtime::identity::SessionId::generate(),
+    let root = tempfile::Builder::new()
+        .prefix("rustx-doctor-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .disable_cleanup(true)
+        .tempdir_in(temporary)
+        .map_err(|error| error.to_string())?;
+    let session = crate::runtime::identity::SessionId::generate();
+    let execution = super::session_runtime_manager::StandaloneExecution::start(
+        session.clone(),
         launch.workspace.clone(),
-        root.root().to_path_buf(),
+        root.path().to_path_buf(),
     )
-    .await
+    .await;
+    match execution {
+        Ok(execution) => Ok(ProbeExecution { execution, root }),
+        Err(error) => {
+            // A failed handshake can leave an admitted physical owner.
+            if rustx_execution_server::RecoveryFence::require_session_settled(
+                root.path(),
+                &rustx_execution_protocol::SessionId::new(session.as_str()),
+            )
+            .is_ok()
+            {
+                let _ = root.close();
+            }
+            Err(error)
+        }
+    }
 }
 
 fn unavailable_targets(plan: &ProbePlan, reason: &'static str) -> Vec<ProbeResult> {
