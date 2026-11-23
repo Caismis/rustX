@@ -191,8 +191,15 @@ impl Fixture {
                     return tool_call_reply("workflow", name, "{}").with_header_gate(server_gates[index].clone());
                 }
             }
+            if tool == Some("startup_echo")
+                && request["messages"].as_array().unwrap().last().is_some_and(|message| message["role"] == "user")
+            {
+                let call = if index == 0 { "old-credential" } else { "new-credential" };
+                return tool_call_reply(call, "startup_echo", r#"{"id":"rotation"}"#)
+                    .with_header_gate(server_gates[index].clone());
+            }
             if let Some(name) = tool
-                && !matches!(name, "review" | "delivery-child" | "title")
+                && !matches!(name, "review" | "delivery-child" | "title" | "startup_echo")
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[

@@ -79,12 +79,14 @@ tree publishes paths that its ordinary Read tool can open. A failed read
 of the Workspace collection rejects the candidate and retains the last
 adopted snapshot. An absent collection is an empty source.
 
-The Linux mount fixture places the only copy of the Skill and its 2,050
-assets in the Client view. Its first model request contains only Skill
-metadata and the real path. Native Read brings the body into the third
-request, and the ignored package stays absent. The local Skill group had
-27 passing tests and the configuration group had 359 passing tests and
-two opt-in cases.
+The Linux mount fixture places the only copy of the Skill, its reference
+and its script alongside 2,050 decoy assets in the Client view. Its first
+model request contains the metadata and real Skill path. Native Read brings
+the instructions into the third request, then reads the reference while
+Native Bash runs the script. The fourth request contains both results. Only
+the Client mount contains the script's single start marker, and the ignored
+package stays absent. The local Skill group had 27 passing tests and the
+configuration group had 359 passing tests and two opt-in cases.
 
 ## Workspace Agent and Workflow definitions
 
@@ -265,7 +267,7 @@ child path independently of the stdio relay fixture.
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |
 | T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. The real Client confirms both native disk exhaustion and cancellation after a physical Seal, with no publication or business replay in either case. |
 | T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. The lost-receipt case below composes a real Host publication, late receipt loss and same-instance recovery. A separate paired-Client test refuses the retired generation’s Save key on a replacement. The standalone Linux case below tests a real local Client generation change and a late publication receipt. |
-| T71, T72, T73 | A real HTTP fixture holds an old lease across activation with identical tool schemas. New and old leases send their respective credentials. A failed candidate preserves the previous version and the old connection closes after its last lease. Concurrent activation and cancellation across the full Session stack remain open. |
+| T71, T72, T73 | A real HTTP fixture holds an old lease across activation with identical tool schemas. A failed candidate preserves the previous version. `bound_credential_rotation_preserves_the_admitted_attempt_and_closes_after_last_lease` admits the original Attempt, captures a changed Workspace document through the Client and prepares it while the provider reply is held. The original Attempt makes one call with its original credential, and the next makes one with the rotated credential. The HTTP peer observes the original session's successful DELETE after its last lease. Four fake-provider requests contain both original business results and neither credential. This test covers ordinary rotation. Cancellation and remote refusal are exercised by the separate transport tests. |
 
 ## HTTP MCP and managed output
 
@@ -408,11 +410,12 @@ resource and cancellation combinations remain individually mapped below.
   conformance, real HTTP import, no-Client HTTP overflow, and HTTP over-limit
   no-replay tests passed. The isolated mount proof and committed artifact
   read after Client exit passed.
-- Existing focused regressions passed for model change resets, ordinary MCP
-  lease retirement, credential changes invalidating draft preparation, and
-  refusal of obsolete MCP background policy. These cover their existing
-  owners. Cross-entry model integration and credential rotation through the
-  full Session stack remain open.
+- Focused regressions passed for model change resets, ordinary MCP lease
+  retirement, credential changes invalidating draft preparation and refusal
+  of obsolete MCP background policy. The bound Session rotation test adds
+  four real requests to the fake provider, two MCP calls and successful
+  close receipts from the HTTP peer. The common cross-entry model trace
+  remains open.
 - The MCP adapter suite passed 162 tests. A non-foreground binding is
   rejected before the real stdio program can write a start marker. The
   adapter's legacy Server-local MCP output sink has been removed. An
