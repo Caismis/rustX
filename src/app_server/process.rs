@@ -401,7 +401,7 @@ async fn run(options: Request) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let shutdown = CancellationToken::new();
     let manager = host.manager();
-    let mut local_client = match (
+    let local_client = match (
         options.local_execution_session.as_deref(),
         options.local_execution_workspace.as_deref(),
     ) {
@@ -460,6 +460,16 @@ async fn run(options: Request) -> Result<(), String> {
     let mut serving = tokio::spawn(serve_transport(options, transport_host, transport_stop));
     let reaper_host = host.clone();
     let reaper_stop = CancellationToken::new();
+    #[cfg(target_os = "linux")]
+    let mut local_owner = local_client.map(|client| {
+        tokio::spawn(local_execution::maintain(
+            host.manager().clone(),
+            client,
+            reaper_stop.clone(),
+        ))
+    });
+    #[cfg(not(target_os = "linux"))]
+    let mut local_client = local_client;
     let stop = reaper_stop.clone();
     let reaper = tokio::spawn(async move { reaper_host.manager().run_idle_reaper(stop).await });
     // User and admitted Workspace source hints enter native application.
@@ -513,7 +523,17 @@ async fn run(options: Request) -> Result<(), String> {
         let client_exit = async {
             // The binding has been fenced. Give the owned Client time to
             // reclaim process-private scratch before reaping it.
-            if let Some(mut child) = local_client.take() {
+            #[cfg(target_os = "linux")]
+            let local_client = match local_owner.take() {
+                Some(owner) => owner
+                    .await
+                    .map_err(|error| format!("local Client owner failed: {error}"))?,
+                None => None,
+            };
+            #[cfg(not(target_os = "linux"))]
+            let local_client = local_client.take();
+            if let Some(local_client) = local_client {
+                let mut child = local_client.child;
                 let _ = host.settle_execution().await;
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 let exit = tokio::time::timeout(remaining / 2, child.wait()).await;
@@ -526,7 +546,7 @@ async fn run(options: Request) -> Result<(), String> {
                         return Err(format!("local execution: Client reap failed: {error}"));
                     }
                     Err(_) => {
-                        child.kill().await.map_err(|error| {
+                        child.terminate().await.map_err(|error| {
                             format!("local execution: Client reap failed: {error}")
                         })?;
                         return Err("local execution: Client needed forced termination".into());

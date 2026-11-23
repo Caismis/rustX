@@ -768,11 +768,9 @@ impl SessionRuntimeManager {
                 application.known_source_directories(),
             )
         };
-        let client_workspaces: std::collections::BTreeSet<_> = self
-            .bound_source_bindings()
-            .into_iter()
-            .map(|(_, endpoint)| endpoint.workspace().to_path_buf())
-            .collect();
+        // A replacement, detached or retiring binding still reserves the
+        // Client as the physical Workspace authority.
+        let client_workspaces = self.execution.reserved_workspaces();
         workspaces.retain(|directory| {
             !client_workspaces.contains(directory) || authored.contains(directory)
         });

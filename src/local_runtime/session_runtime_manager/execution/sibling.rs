@@ -2,12 +2,15 @@
 
 use super::{ExecutionListener, LocalExecutionEndpoint};
 use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
-use std::process::Stdio;
+use std::io;
+use std::path::Path;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
+use tokio::process::{Child, Command};
 
 pub(crate) async fn launch_sibling(
     endpoint: Arc<LocalExecutionEndpoint>,
-) -> Result<tokio::process::Child, String> {
+) -> Result<SiblingClient, String> {
     match start_sibling(endpoint.clone()).await {
         Ok(child) => Ok(child),
         Err(error) => match endpoint.settle().await {
@@ -19,37 +22,143 @@ pub(crate) async fn launch_sibling(
     }
 }
 
-fn spawn(
-    sibling: &std::path::Path,
-    endpoint: &LocalExecutionEndpoint,
-) -> Result<tokio::process::Child, String> {
-    // Local deployment contributes its trusted runtime discovery paths.
-    // The Session and model cannot add process environment entries here.
-    let mut command = tokio::process::Command::new(sibling);
+pub(crate) struct SiblingClient {
+    child: Child,
+    #[cfg(target_os = "linux")]
+    lease: Option<tokio::process::ChildStdin>,
+    #[cfg(target_os = "linux")]
+    reports: tokio::io::BufReader<tokio::process::ChildStdout>,
+    #[cfg(target_os = "linux")]
+    final_report: Vec<u8>,
+    #[cfg(target_os = "linux")]
+    exit: Option<ExitStatus>,
+}
+
+impl SiblingClient {
+    pub(crate) async fn wait(&mut self) -> io::Result<ExitStatus> {
+        #[cfg(target_os = "linux")]
+        if let Some(status) = self.exit {
+            return Ok(status);
+        }
+        let status = self.child.wait().await?;
+        #[cfg(target_os = "linux")]
+        if status.success() {
+            use std::os::unix::process::ExitStatusExt as _;
+            let code = report(&mut self.reports, "settled ", &mut self.final_report).await?;
+            let code = i32::try_from(code)
+                .ok()
+                .filter(|code| *code <= 255)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid Client exit status")
+                })?;
+            let status = ExitStatus::from_raw(code << 8);
+            self.exit = Some(status);
+            return Ok(status);
+        }
+        Ok(status)
+    }
+
+    pub(crate) async fn terminate(&mut self) -> io::Result<ExitStatus> {
+        #[cfg(target_os = "linux")]
+        drop(self.lease.take());
+        #[cfg(not(target_os = "linux"))]
+        if self.child.try_wait()?.is_none() {
+            self.child.start_kill()?;
+        }
+        self.wait().await
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn report(
+    reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
+    prefix: &str,
+    bytes: &mut Vec<u8>,
+) -> io::Result<u32> {
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _};
+    let remaining = 64u64.saturating_sub(bytes.len() as u64);
+    reader.take(remaining).read_until(b'\n', bytes).await?;
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|line| line.strip_prefix(prefix))
+        .and_then(|value| value.strip_suffix('\n'))
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid Client supervisor report",
+            )
+        })
+}
+
+fn client_arguments(command: &mut Command, endpoint: &LocalExecutionEndpoint) {
     command
         .arg("--binding-file")
         .arg(endpoint.bootstrap_path())
         .arg("--workspace")
         .arg(endpoint.workspace())
         .current_dir("/")
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+        .env_clear();
+    // Local deployment contributes its trusted runtime discovery paths.
+    // The Session and model cannot add process environment entries here.
     for key in ["HOME", "PATH", "XDG_DATA_HOME"] {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
         }
     }
-    command
-        .spawn()
-        .map_err(|error| format!("local execution: client spawn failed: {error}"))
 }
 
-async fn start_sibling(
-    endpoint: Arc<LocalExecutionEndpoint>,
-) -> Result<tokio::process::Child, String> {
+#[cfg(target_os = "linux")]
+async fn spawn(sibling: &Path, endpoint: &LocalExecutionEndpoint) -> io::Result<SiblingClient> {
+    use tokio::io::AsyncWriteExt as _;
+    let guardian = rustx_process_supervisor::invocation::companion_binary("interactive-supervisor");
+    let grant = endpoint.arm_local_domain()?;
+    let mut command = Command::new(guardian);
+    command
+        .arg("client-domain")
+        .arg(grant.receipt())
+        .arg(sibling);
+    client_arguments(&mut command, endpoint);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let mut lease = child.stdin.take().expect("piped domain lease");
+    let mut reports = tokio::io::BufReader::new(child.stdout.take().expect("piped domain reports"));
+    lease.write_all(grant.token()).await?;
+    if report(&mut reports, "ready ", &mut Vec::new()).await? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid Client namespace init",
+        ));
+    }
+    lease.write_all(b"G").await?;
+    // The lease stays outside Child so polling wait during authentication
+    // cannot close it. It is the only long-lived Server-owned writer.
+    Ok(SiblingClient {
+        child,
+        lease: Some(lease),
+        reports,
+        final_report: Vec::new(),
+        exit: None,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn(sibling: &Path, endpoint: &LocalExecutionEndpoint) -> io::Result<SiblingClient> {
+    let mut command = Command::new(sibling);
+    client_arguments(&mut command, endpoint);
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    Ok(SiblingClient { child })
+}
+
+async fn start_sibling(endpoint: Arc<LocalExecutionEndpoint>) -> Result<SiblingClient, String> {
     // Trusted resolution only: the executable shipped beside this Server.
     let sibling = rustx_process_supervisor::invocation::companion_binary("rustx-execution-client");
     if !sibling.is_file() {
@@ -66,24 +175,22 @@ async fn start_sibling(
         .map_err(|error| format!("local execution: {error}"))?;
     let listener = tokio::net::UnixListener::from_std(std_listener)
         .map_err(|error| format!("local execution: {error}"))?;
-    let mut child = spawn(&sibling, &endpoint)?;
-    // One bounded paired admission: the data lane's `Hello` earns a
-    // pairing challenge and `Pending`; the Client's control lane — a
-    // second connection carrying `ControlHello` with the challenge
-    // nonce — commits the pair `Live`. Both lanes share one absolute
-    // budget armed at the first accept, and an early Client exit fails
-    // the launch at any point.
-    let mut deadline = None;
+    // Namespace setup and both authenticated lanes share a finite startup cut.
+    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+    #[cfg(target_os = "linux")]
+    let child = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        spawn(&sibling, &endpoint),
+    )
+    .await
+    .map_err(|_| "local execution: Client supervisor did not report setup".to_owned())?;
+    #[cfg(not(target_os = "linux"))]
+    let child = spawn(&sibling, &endpoint);
+    let mut child =
+        child.map_err(|error| format!("local execution: client spawn failed: {error}"))?;
     loop {
-        let accept = match deadline {
-            // The budget is armed the instant the first stream exists —
-            // the same `Instant` forwarded into the binding — never one
-            // deadline per lane.
-            Some(deadline) => {
-                tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), listener.accept())
-            }
-            None => tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, listener.accept()),
-        };
+        let accept =
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), listener.accept());
         let stream = match tokio::select! {
             status = child.wait() => Err(format!(
                 "local execution: client exited before admission ({status:?})"
@@ -107,8 +214,6 @@ async fn start_sibling(
                 return Err(error);
             }
         };
-        let deadline =
-            *deadline.get_or_insert_with(|| std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT);
         match admit(endpoint.clone(), stream, deadline).await {
             Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Live) => {
                 let stop = endpoint.accept_stop.clone();
@@ -171,11 +276,8 @@ async fn admit(
     }
 }
 
-/// Kills and reaps a spawned Client unless it already exited. The child
-/// carries `kill_on_drop`, so this only bounds an honest peer's wait.
-async fn reap_failed(child: &mut tokio::process::Child) {
-    if child.try_wait().ok().flatten().is_none() {
-        let _ = child.start_kill();
-    }
-    let _ = child.wait().await;
+/// Release the exact owned Client after a failed admission. On Linux the
+/// independent helper retains reap ownership even if this deadline expires.
+async fn reap_failed(child: &mut SiblingClient) {
+    let _ = tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, child.terminate()).await;
 }

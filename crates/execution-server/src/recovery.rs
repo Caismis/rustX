@@ -164,6 +164,23 @@ impl RecoveryFence {
         self.owner.ptr_eq(&std::sync::Arc::downgrade(owner))
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn release_independent_domain(&self) -> io::Result<()> {
+        self.file.lock()?;
+        let result = (|| {
+            self.verify_marker()?;
+            if !self.domain.proved(&self.directory)? {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "previous Client namespace settlement is unconfirmed",
+                ));
+            }
+            self.remove_locked()
+        })();
+        let unlock = self.file.unlock();
+        result.and(unlock)
+    }
+
     fn verify_marker(&self) -> io::Result<()> {
         let retained = fstat(&self.file)?;
         let current = fstatat(
@@ -181,6 +198,13 @@ impl RecoveryFence {
     }
 
     pub(super) fn remove(&self) -> io::Result<()> {
+        self.file.lock()?;
+        let result = self.remove_locked();
+        let unlock = self.file.unlock();
+        result.and(unlock)
+    }
+
+    fn remove_locked(&self) -> io::Result<()> {
         self.verify_marker()?;
         unlinkat(
             &self.directory,

@@ -282,8 +282,47 @@ any phase, and `Live` always means a *committed pair* of lanes.
 - Logical Session deletion closes the execution route immediately and can
   retain a durable cleanup-pending record while the original Client is
   detached. A same-instance pair admitted to this closed route receives
-  Revoke only. A validated receipt permits the durable cleanup retry, and
-  no replacement can bypass the retained execution fence.
+  Revoke only. A validated receipt permits the durable cleanup retry.
+
+### Independent Linux local settlement
+
+The `interactive-supervisor client-domain` role owns a Bubblewrap PID
+namespace for the local sibling Client. The same Client becomes PID 1.
+Before it executes, the trusted init transfers its own pidfd over a private
+socket. The host holds that descriptor and the Server holds the only writer
+of a separate lifetime pipe. The Client inherits neither the writer nor the
+settlement capability. EOF on that pipe signals the pinned init through the
+pidfd. Linux completes namespace teardown, including descendants in other
+process groups or sessions, before the descriptor reports exit. The ordinary
+per-operation supervisor and START/cancellation gates still run inside the
+namespace.
+
+The independent helper retains the original private scratch directory
+descriptor. After namespace exit it removes that exact directory and
+publishes a durable receipt. The receipt authenticates the persisted
+reservation including Server incarnation, Session, Client instance,
+generation and Workspace. The helper's exit, a kill request and signals
+to a numeric PID cannot authorize replacement. The binding fence consumes
+the proof once. Revoke accepted through the authenticated pair remains a
+separate physical settlement path.
+
+The local App Server waits 1, 2 and 4 seconds before attempting successive
+replacements. It permits at most three attempts in a rolling 60 seconds,
+with backoff reset after five stable minutes. A failed replacement launch
+ends that owner. A replacement keeps the Session identity and advances its
+generation. A restarted Server establishes a fresh incarnation. Neither
+path reissues previous business input or reconstructs a missing outcome.
+
+A killed independent helper, a missing receipt or a scratch identity
+mismatch leaves the durable admission fence in place. The independent
+receipt covers the Linux process namespace and its private temporary output.
+It does not authorize deletion of arbitrary Workspace names or published
+Managed Python Store directories. Independently operated remote Clients and
+macOS local Clients still require authenticated settlement from their original
+owner. A remote provider cannot use a local domain receipt to clear its fence.
+
+### Binding status and bootstrap
+
 - `revoke()` is immediate and terminal; a revoked binding rejects every
   Hello and is never dispatchable again.
 - `status()` is observation only. Nothing may dispatch on a snapshot —

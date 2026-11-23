@@ -66,6 +66,7 @@ with an explicit native transport; see [App Server](docs/app-server-protocol.md)
 
 ```sh
 cargo build --locked -p rustx --bin rustx
+cargo build --locked -p rustx-process-supervisor --bins
 cargo build --locked -p rustx-execution-client --bin rustx-execution-client
 target/debug/rustx app-server \
   --runtime-root /absolute/path/runtime \
@@ -79,11 +80,17 @@ These flags launch exactly one Client for the named Session. Supplying only
 configured environment root. Bare `app-server` discovers and spawns
 nothing. The authorized Workspace path is validated lexically and must match
 the Session's reserved binding byte for byte. The Client executable is the
-`rustx-execution-client` built beside the `rustx` binary; it is never
-resolved from PATH or HOME. The child runs with an empty environment,
-`/` as its working directory, and sealed stdio — it receives only the
-binding file and workspace on its command line, and the Server owns and
-reaps it through drain.
+`rustx-execution-client` built beside the `rustx` binary. Trusted `HOME`,
+`PATH` and `XDG_DATA_HOME` are inherited for Client runtime discovery.
+The Client receives the binding file and Workspace, starts in `/`, and
+has no access to the App Server protocol pipes.
+
+Linux local composition requires `/usr/bin/bwrap` and a host policy that
+allows its user and PID namespace setup. On Ubuntu, load the distribution's
+Bubblewrap AppArmor profile and retain the system-wide namespace restriction.
+The sibling supervisor owns the original namespace through a private lease.
+The Server requires its independent settlement receipt before readmitting a
+Session after an unclean exit.
 
 **Remote WebSocket composition** — explicit opt-in, operator-provisioned
 Client:

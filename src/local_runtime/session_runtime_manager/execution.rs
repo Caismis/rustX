@@ -19,7 +19,7 @@ mod output;
 mod sibling;
 pub(crate) use mcp::StdioMcpBinding;
 pub(crate) use output::OutputBinding;
-pub(crate) use sibling::launch_sibling;
+pub(crate) use sibling::{SiblingClient, launch_sibling};
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -212,6 +212,14 @@ impl LocalExecutionEndpoint {
     /// normalized absolute path, or the OS error when the private
     /// directory, socket, or bootstrap bundle cannot be created.
     fn new(session: &SessionId, workspace: PathBuf) -> io::Result<Self> {
+        Self::new_local(session, workspace, Generation::new(NonZeroU64::MIN))
+    }
+
+    fn new_local(
+        session: &SessionId,
+        workspace: PathBuf,
+        generation: Generation,
+    ) -> io::Result<Self> {
         if !is_normalized_absolute_path(&workspace) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -229,7 +237,7 @@ impl LocalExecutionEndpoint {
             session: rustx_execution_protocol::SessionId::new(session.as_str()),
             environment: EnvironmentId::new(uuid::Uuid::now_v7().to_string()),
             instance: ClientInstanceId::new(uuid::Uuid::now_v7().to_string()),
-            generation: Generation::new(NonZeroU64::MIN),
+            generation,
             workspace: workspace.clone(),
             required_capabilities: BTreeSet::from([Capability::Connection]),
         };
@@ -337,6 +345,14 @@ impl LocalExecutionEndpoint {
                 .retain_recovery_fence(product_root)?,
         );
         Ok(self)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn arm_local_domain(&self) -> io::Result<rustx_execution_server::LocalDomainGrant> {
+        self.recovery_fence
+            .as_ref()
+            .ok_or_else(|| io::Error::other("local Client requires a durable ownership marker"))?
+            .arm_local_domain()
     }
 
     /// The exact logical workspace this binding reserved — the trusted
@@ -1446,6 +1462,16 @@ impl LocalExecutionEndpoint {
     fn revoke_and_close(&self, deadline: Instant) -> io::Result<()> {
         let binding = &self.reservation().binding;
         let result = binding.settle_revocation_by(deadline);
+        self.close_transport();
+        result?;
+        if let Some(fence) = &self.recovery_fence {
+            binding.release_recovery_fence(fence)?;
+        }
+        Ok(())
+    }
+
+    fn close_transport(&self) {
+        let binding = &self.reservation().binding;
         let fenced = binding.fence();
         self.accept_stop.cancel();
         match self.connection.try_lock() {
@@ -1466,11 +1492,39 @@ impl LocalExecutionEndpoint {
             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => fenced.shutdown(),
         }
         self.connection_released.notify_waiters();
-        result?;
-        if let Some(fence) = &self.recovery_fence {
-            binding.release_recovery_fence(fence)?;
+    }
+
+    /// Called only by the owner of the reaped local helper. Terminal wire
+    /// results and the helper's exit status supply no replacement authority.
+    #[cfg(target_os = "linux")]
+    fn retire_dead_local_domain(&self) -> io::Result<()> {
+        let mut state = self.settlement.lock().expect("execution settlement");
+        if matches!(*state, Settlement::Finished(Ok(()))) {
+            return Ok(());
         }
-        Ok(())
+        if matches!(*state, Settlement::Revoking) {
+            let previous = self.wait_for_settlement(
+                state,
+                Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT,
+            );
+            state = self.settlement.lock().expect("execution settlement");
+            if previous.is_ok() || matches!(*state, Settlement::Revoking) {
+                return previous;
+            }
+        }
+        *state = Settlement::Revoking;
+        drop(state);
+        self.close_transport();
+        let result = self
+            .recovery_fence
+            .as_ref()
+            .ok_or_else(|| io::Error::other("local domain has no durable owner"))
+            .and_then(|fence| self.reservation().binding.release_local_domain(fence))
+            .map_err(Arc::new);
+        let outcome = settlement_result(&result);
+        *self.settlement.lock().expect("execution settlement") = Settlement::Finished(result);
+        self.settlement_changed.notify_all();
+        outcome
     }
 
     /// Delivers one keyed cancellation on the control lane under one absolute
@@ -2878,7 +2932,7 @@ pub(super) struct SessionExecutionRegistry(Mutex<HashMap<SessionId, Arc<Slot>>>)
 pub(crate) struct StandaloneExecution {
     session: SessionId,
     registry: Arc<SessionExecutionRegistry>,
-    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    child: tokio::sync::Mutex<Option<SiblingClient>>,
 }
 
 impl StandaloneExecution {
@@ -2997,6 +3051,15 @@ impl StandaloneExecution {
 }
 
 impl SessionExecutionRegistry {
+    pub(super) fn reserved_workspaces(&self) -> BTreeSet<PathBuf> {
+        self.0
+            .lock()
+            .expect("execution registry mutex")
+            .values()
+            .map(|slot| slot.workspace.clone())
+            .collect()
+    }
+
     /// Claims the Session's execution slot under the registry mutex alone.
     /// An occupied slot must name the identical workspace *and* transport;
     /// an occupied claim is never swapped to a different path or mode — a
@@ -3007,6 +3070,16 @@ impl SessionExecutionRegistry {
         session: &SessionId,
         workspace: PathBuf,
         transport: ExecutionTransport,
+    ) -> Result<Claim, RuntimeManagerError> {
+        self.claim_with_replacement(session, workspace, transport, None)
+    }
+
+    fn claim_with_replacement(
+        &self,
+        session: &SessionId,
+        workspace: PathBuf,
+        transport: ExecutionTransport,
+        replaces: Option<&Arc<LocalExecutionEndpoint>>,
     ) -> Result<Claim, RuntimeManagerError> {
         let mut slots = self.0.lock().expect("execution registry mutex");
         if let Some(slot) = slots.get(session) {
@@ -3019,11 +3092,19 @@ impl SessionExecutionRegistry {
                 ));
             }
             let phase = slot.phase.lock().expect("execution slot phase");
-            return match &*phase {
-                Phase::Published(endpoint) => Ok(Claim::Existing(endpoint.clone())),
-                Phase::Preparing => Err(error("execution binding preparation in progress")),
-                Phase::Closed(_) => Err(error("execution binding is closed; recovery is required")),
-            };
+            match (&*phase, replaces) {
+                (Phase::Published(endpoint), Some(original)) if Arc::ptr_eq(endpoint, original) => {
+                    // The process owner already retired the exact physical
+                    // domain. The old endpoint remains fenced for its callers.
+                }
+                (Phase::Published(endpoint), None) => return Ok(Claim::Existing(endpoint.clone())),
+                (Phase::Preparing, _) => {
+                    return Err(error("execution binding preparation in progress"));
+                }
+                _ => return Err(error("execution binding is closed or has changed")),
+            }
+        } else if replaces.is_some() {
+            return Err(error("the original execution binding no longer exists"));
         }
         // The slot is installed before any credential or socket exists, so
         // exactly one claimant ever prepares.
@@ -3122,8 +3203,8 @@ impl SessionRuntimeManager {
     /// retirement never prepares a binding. At most one preparation runs —
     /// the slot is claimed synchronously before any credential, socket, or
     /// bootstrap exists — and every later claim of a published endpoint
-    /// returns the identical endpoint, never a replacement. A closed claim
-    /// stays closed; there is no recovery path.
+    /// returns the identical endpoint. Local replacement is owned by the
+    /// composer and requires independent settlement of that endpoint.
     ///
     /// # Errors
     ///
@@ -3139,10 +3220,63 @@ impl SessionRuntimeManager {
         &self,
         session: &SessionId,
     ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
-        self.reserve_execution(session, ExecutionTransport::Unix, |session, workspace| {
-            LocalExecutionEndpoint::new(session, workspace)
-        })
+        self.reserve_local_execution_for(session, None).await
+    }
+
+    pub(crate) async fn reserve_local_execution_for(
+        &self,
+        session: &SessionId,
+        workspace: Option<&Path>,
+    ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        self.reserve_execution(
+            session,
+            ExecutionTransport::Unix,
+            None,
+            workspace,
+            LocalExecutionEndpoint::new,
+        )
         .await
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn replace_dead_local_execution(
+        &self,
+        session: &SessionId,
+        original: Arc<LocalExecutionEndpoint>,
+    ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        let next = original
+            .admission()
+            .ok_or_else(|| error("the original local Client was never admitted"))?
+            .generation
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .map(Generation::new)
+            .ok_or_else(|| error("binding generation exhausted"))?;
+        if !matches!(
+            *original.settlement.lock().expect("execution settlement"),
+            Settlement::Finished(Ok(()))
+        ) {
+            return Err(error("the original local domain has not settled"));
+        }
+        self.reserve_execution(
+            session,
+            ExecutionTransport::Unix,
+            Some(&original),
+            Some(original.workspace()),
+            move |session, workspace| LocalExecutionEndpoint::new_local(session, workspace, next),
+        )
+        .await
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn retire_dead_local_execution(
+        original: Arc<LocalExecutionEndpoint>,
+    ) -> Result<(), RuntimeManagerError> {
+        tokio::task::spawn_blocking(move || original.retire_dead_local_domain())
+            .await
+            .map_err(error)?
+            .map_err(error)
     }
 
     /// Reserves the Session's execution endpoint for the remote
@@ -3171,6 +3305,8 @@ impl SessionRuntimeManager {
         self.reserve_execution(
             session,
             ExecutionTransport::WebSocket,
+            None,
+            None,
             move |session, workspace| {
                 LocalExecutionEndpoint::new_websocket(
                     session,
@@ -3192,11 +3328,16 @@ impl SessionRuntimeManager {
         &self,
         session: &SessionId,
         transport: ExecutionTransport,
+        replaces: Option<&Arc<LocalExecutionEndpoint>>,
+        expected_workspace: Option<&Path>,
         prepare: impl FnOnce(&SessionId, PathBuf) -> io::Result<LocalExecutionEndpoint> + Send + 'static,
     ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
         let claim = {
             let catalog = self.sessions.catalog.lock().await;
             let (_, settings) = catalog.lineage(session, None).map_err(error)?;
+            if expected_workspace.is_some_and(|path| path.as_os_str() != settings.cwd.as_os_str()) {
+                return Err(error("workspace is not the Session's reserved workspace"));
+            }
             // Under the same catalog visibility cut: residency admission is
             // the only authority that may fence a claim.
             let registry = self.registry.0.lock().expect("registry mutex");
@@ -3206,8 +3347,12 @@ impl SessionRuntimeManager {
             if registry.retiring_sessions.contains(session) {
                 return Err(error("Session retirement has fenced runtime admission"));
             }
-            self.execution
-                .claim(session, settings.cwd.clone(), transport)
+            self.execution.claim_with_replacement(
+                session,
+                settings.cwd.clone(),
+                transport,
+                replaces,
+            )
             // Both guards release here, before any I/O or await.
         };
         match claim? {

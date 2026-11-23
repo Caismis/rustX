@@ -1,63 +1,24 @@
 //! The local Linux execution domain is the namespace whose init is the
-//! exact Client process. The kernel completes namespace shutdown before
-//! publishing the exit of that init to its parent.
+//! exact Client process. A retained pidfd becomes readable only after the
+//! kernel finishes namespace shutdown.
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-use nix::sched::{CloneFlags, unshare};
-use nix::sys::prctl::{set_dumpable, set_pdeathsig};
-use nix::sys::signal::Signal;
-use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Pid, fork, getegid, geteuid, getpid};
+use nix::unistd::{geteuid, getpid};
+use rustix::net::{
+    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
+    SendAncillaryMessage, SendFlags, recvmsg, sendmsg, sockopt::set_socket_passcred,
+};
 use rustix::process::{PidfdFlags, Signal as KernelSignal, pidfd_open, pidfd_send_signal};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, IoSlice, IoSliceMut, Read, Write};
+use std::mem::MaybeUninit;
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
-use std::os::unix::{net::UnixStream, process::CommandExt as _};
+use std::os::unix::{net::UnixStream, process::CommandExt as _, process::ExitStatusExt as _};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
-
-fn enter_namespace() -> io::Result<()> {
-    let uid = geteuid().as_raw();
-    let gid = getegid().as_raw();
-    unshare(CloneFlags::CLONE_NEWUSER)?;
-    std::fs::write("/proc/self/setgroups", b"deny\n")?;
-    std::fs::write("/proc/self/uid_map", format!("{uid} {uid} 1\n"))?;
-    std::fs::write("/proc/self/gid_map", format!("{gid} {gid} 1\n"))?;
-    set_dumpable(false)?;
-    unshare(CloneFlags::CLONE_NEWPID)?;
-    Ok(())
-}
-
-fn prepare_client_mounts(receipt_directory: &Path) -> io::Result<()> {
-    use nix::mount::{MsFlags, mount};
-    unshare(CloneFlags::CLONE_NEWNS)?;
-    mount(
-        None::<&str>,
-        "/",
-        None::<&str>,
-        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
-        None::<&str>,
-    )?;
-    mount(
-        Some("proc"),
-        "/proc",
-        Some("proc"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
-        None::<&str>,
-    )?;
-    // The original authority and proof are visible only to the trusted host.
-    mount(
-        Some("tmpfs"),
-        receipt_directory,
-        Some("tmpfs"),
-        MsFlags::MS_RDONLY | MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
-        Some("size=4k,mode=000"),
-    )?;
-    Ok(())
-}
 
 struct Receipt<'a> {
     directory: File,
@@ -100,15 +61,46 @@ impl<'a> Receipt<'a> {
     }
 
     fn publish(&self) -> io::Result<()> {
-        use rustix::fs::{Mode, OFlags, openat};
+        use rustix::fs::{
+            AtFlags, Mode, OFlags, RenameFlags, fstat, openat, renameat_with, statat,
+        };
+        let authority = Path::new(self.name).with_extension("authority");
+        let authority_fd = match openat(
+            &self.directory,
+            &authority,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => File::from(descriptor),
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        authority_fd.lock()?;
+        let retained = fstat(&authority_fd)?;
+        let named = match statat(&self.directory, &authority, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(identity) => identity,
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if (named.st_dev, named.st_ino) != (retained.st_dev, retained.st_ino) {
+            return Err(io::Error::other("Client domain authority identity changed"));
+        }
+        let staged = Path::new(self.name).with_extension("staged-proof");
         let mut durable = File::from(openat(
             &self.directory,
-            self.name,
+            &staged,
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::RUSR | Mode::WUSR,
         )?);
         durable.write_all(&self.token)?;
         durable.sync_all()?;
+        renameat_with(
+            &self.directory,
+            &staged,
+            &self.directory,
+            self.name,
+            RenameFlags::NOREPLACE,
+        )?;
         self.directory.sync_all()
     }
 }
@@ -157,35 +149,78 @@ impl Scratch {
     }
 }
 
-#[allow(unsafe_code)]
-fn launch_init(gate: &mut UnixStream, command: &mut Command, receipt_directory: &Path) -> ! {
-    // A lost supervisor during setup closes the private gate. After the
-    // gate opens the kernel still owns the parent-death signal.
-    let mut grant = [0];
-    if getpid().as_raw() == 1
-        && set_pdeathsig(Some(Signal::SIGKILL)).is_ok()
-        && prepare_client_mounts(receipt_directory).is_ok()
-        && gate.write_all(b"R").is_ok()
-        && gate.read_exact(&mut grant).is_ok()
-        && grant == *b"G"
-    {
-        let _ = command.exec();
+/// Runs inside the private PID namespace before the Server grants launch.
+/// # Errors
+/// Fails if setup is incomplete or the private launch pipe loses its owner.
+pub fn launch_init(
+    program: &Path,
+    arguments: impl IntoIterator<Item = OsString>,
+) -> io::Result<()> {
+    if getpid().as_raw() != 1 {
+        return Err(io::Error::other(
+            "Client launch requires a private PID namespace",
+        ));
     }
-    // The process is a fork child. Skip Rust termination and retained parent IO.
-    unsafe { libc::_exit(125) }
+    let init = pidfd_open(rustix::process::getpid(), PidfdFlags::empty())?;
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut ancillary = SendAncillaryBuffer::new(&mut space);
+    let descriptors = [init.as_fd()];
+    if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors))
+        || sendmsg(
+            io::stdout(),
+            &[IoSlice::new(b"R")],
+            &mut ancillary,
+            SendFlags::NOSIGNAL,
+        )? != 1
+    {
+        return Err(io::Error::other("cannot send Client namespace descriptor"));
+    }
+    drop(init);
+    let mut grant = [0];
+    io::stdin().read_exact(&mut grant)?;
+    if grant != *b"G" {
+        return Err(io::Error::other("Client launch grant was refused"));
+    }
+    Err(Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .exec())
 }
 
-fn reap(init: Pid) -> io::Result<i32> {
-    loop {
-        match waitpid(init, None) {
-            Ok(WaitStatus::Exited(observed, code)) if observed == init => return Ok(code),
-            Ok(WaitStatus::Signaled(observed, signal, _)) if observed == init => {
-                return Ok(128 + signal as i32);
+fn namespace_init(channel: &UnixStream) -> io::Result<(OwnedFd, i32)> {
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1), ScmCredentials(1))];
+    let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+    let mut ready = [0];
+    let received = recvmsg(
+        channel,
+        &mut [IoSliceMut::new(&mut ready)],
+        &mut ancillary,
+        RecvFlags::CMSG_CLOEXEC,
+    )?;
+    let mut descriptor = None;
+    let mut sender = None;
+    for message in ancillary.drain() {
+        match message {
+            RecvAncillaryMessage::ScmRights(mut descriptors) if descriptor.is_none() => {
+                descriptor = descriptors.next();
+                if descriptors.next().is_some() {
+                    return Err(io::Error::other("unexpected namespace descriptors"));
+                }
             }
-            Err(Errno::EINTR) => {}
-            Err(error) => return Err(error.into()),
-            Ok(_) => return Err(io::Error::other("unexpected namespace init status")),
+            RecvAncillaryMessage::ScmCredentials(credentials)
+                if credentials.uid.as_raw() == geteuid().as_raw() =>
+            {
+                sender = Some(credentials.pid.as_raw_pid());
+            }
+            _ => return Err(io::Error::other("unexpected namespace setup message")),
         }
+    }
+    match (descriptor, sender) {
+        (Some(descriptor), Some(sender)) if received.bytes == 1 && ready == *b"R" => {
+            Ok((descriptor, sender))
+        }
+        _ => Err(io::Error::other("missing Client namespace identity")),
     }
 }
 
@@ -207,101 +242,135 @@ fn wait_for_exit(descriptor: &OwnedFd, channel: &io::Stdin) -> io::Result<()> {
             return Ok(());
         }
         if sources[1].any() == Some(true) {
-            return match pidfd_send_signal(descriptor, KernelSignal::KILL) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-                Err(error) => Err(error.into()),
-            };
+            return request_exit(descriptor);
         }
     }
 }
 
-/// Runs only as a dedicated, single-threaded supervisor role. A private
-/// launch grant precedes all Client execution. The final line reports the
-/// reaped namespace init, after Linux has killed and reaped its descendants.
-///
-/// # Errors
-/// Returns the first namespace, fork, supervisor transport or wait error.
-#[allow(unsafe_code)]
-pub fn supervise(
+fn request_exit(descriptor: &OwnedFd) -> io::Result<()> {
+    match pidfd_send_signal(descriptor, KernelSignal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn verify_exit(descriptor: &OwnedFd) -> io::Result<()> {
+    let mut sources = [PollFd::new(descriptor.as_fd(), PollFlags::POLLIN)];
+    loop {
+        match poll(&mut sources, PollTimeout::NONE) {
+            Ok(_)
+                if sources[0]
+                    .revents()
+                    .is_some_and(|events| events.contains(PollFlags::POLLIN)) =>
+            {
+                return Ok(());
+            }
+            Err(Errno::EINTR) => continue,
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err(io::Error::other("Client namespace exit was not confirmed")),
+        }
+    }
+}
+
+fn run_in_namespace(
     receipt_path: &Path,
+    scratch: &Scratch,
     program: &Path,
     arguments: impl IntoIterator<Item = OsString>,
-) -> io::Result<()> {
-    enter_namespace()?;
-    let mut input = io::stdin();
-    let mut token = [0; 32];
-    input.read_exact(&mut token)?;
-    let receipt = Receipt::open(receipt_path, token)?;
-    let mut command = Command::new(program);
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let (mut guardian, mut launch) = UnixStream::pair()?;
+    input: &mut io::Stdin,
+) -> io::Result<ExitStatus> {
+    let (mut guardian, launch) = UnixStream::pair()?;
     guardian.set_read_timeout(Some(Duration::from_secs(2)))?;
-    let scratch = Scratch::create()?;
-    command.env("TMPDIR", &scratch.logical_path);
-    // This binary enters this role before creating threads. The child uses
-    // only its private gate and replaces itself with the admitted Client.
-    let init = match unsafe { fork() } {
-        Ok(ForkResult::Parent { child }) => child,
-        Ok(ForkResult::Child) => {
-            drop(guardian);
-            launch_init(
-                &mut launch,
-                &mut command,
-                receipt_path.parent().expect("validated receipt directory"),
-            );
-        }
+    set_socket_passcred(&guardian, true)?;
+    let uid = geteuid().as_raw().to_string();
+    let receipt_directory = receipt_path.parent().expect("validated receipt directory");
+    let launcher_input = OwnedFd::from(launch.try_clone()?);
+    let launcher_output = OwnedFd::from(launch);
+    let mut launcher = Command::new("/usr/bin/bwrap")
+        .args([
+            "--unshare-user",
+            "--unshare-pid",
+            "--as-pid-1",
+            "--die-with-parent",
+            "--uid",
+        ])
+        .arg(uid)
+        .args(["--dev-bind", "/", "/", "--proc", "/proc", "--tmpfs"])
+        .arg(receipt_directory)
+        .arg("--remount-ro")
+        .arg(receipt_directory)
+        .arg("--")
+        .arg(std::env::current_exe()?)
+        .arg("client-domain-init")
+        .arg(program)
+        .args(arguments)
+        .env("TMPDIR", &scratch.logical_path)
+        .stdin(launcher_input)
+        .stdout(launcher_output)
+        .spawn()?;
+    let (descriptor, sender) = match namespace_init(&guardian) {
+        Ok(ready) => ready,
         Err(error) => {
-            scratch.release()?;
-            receipt.publish()?;
-            return Err(error.into());
-        }
-    };
-    drop(launch);
-    let kernel_init = rustix::process::Pid::from_raw(init.as_raw()).expect("child PID");
-    let descriptor = match pidfd_open(kernel_init, PidfdFlags::empty()) {
-        Ok(descriptor) => descriptor,
-        Err(error) => {
+            // No PID descriptor means the private launch grant was never sent.
             drop(guardian);
-            reap(init)?;
-            scratch.release()?;
-            receipt.publish()?;
-            return Err(error.into());
+            let status = launcher.wait()?;
+            eprintln!("Client namespace setup failed: {error}");
+            return Ok(status);
         }
     };
     let mut result = io::stdout().lock();
-    let boot = (|| -> io::Result<()> {
-        let mut ready = [0];
-        guardian.read_exact(&mut ready)?;
-        if ready != *b"R" {
-            return Err(io::Error::other("invalid namespace setup receipt"));
-        }
-        writeln!(result, "ready {}", init.as_raw())?;
+    let boot_and_wait = (|| -> io::Result<()> {
+        writeln!(result, "ready {sender}")?;
         result.flush()?;
         let mut grant = [0];
         input.read_exact(&mut grant)?;
         if grant != *b"G" {
             return Err(io::Error::other("Client launch grant was refused"));
         }
-        guardian.write_all(&grant)
+        guardian.write_all(&grant)?;
+        wait_for_exit(&descriptor, input)
     })();
     drop(guardian);
-    let wait = if boot.is_ok() {
-        wait_for_exit(&descriptor, &input)
-    } else {
-        Ok(())
-    };
-    if boot.is_err() || wait.is_err() {
-        let _ = pidfd_send_signal(&descriptor, KernelSignal::KILL);
+    if boot_and_wait.is_err() {
+        request_exit(&descriptor)?;
     }
-    let exit = reap(init)?;
+    let status = launcher.wait()?;
+    // Bubblewrap owns the launcher wait. Only the exact PID1 descriptor
+    // proves that all descendants and their writers have left this domain.
+    verify_exit(&descriptor)?;
+    if let Err(error) = boot_and_wait {
+        eprintln!("Client namespace lease closed: {error}");
+    }
+    Ok(status)
+}
+
+/// Keeps independent ownership of the local Client's exact Linux PID
+/// namespace. The private launch grant precedes all Client execution.
+///
+/// # Errors
+/// Returns the first setup, supervision or durable cleanup error.
+pub fn supervise(
+    receipt_path: &Path,
+    program: &Path,
+    arguments: impl IntoIterator<Item = OsString>,
+) -> io::Result<()> {
+    nix::sys::prctl::set_dumpable(false)?;
+    let mut input = io::stdin();
+    let mut token = [0; 32];
+    input.read_exact(&mut token)?;
+    let receipt = Receipt::open(receipt_path, token)?;
+    let scratch = Scratch::create()?;
+    let status = run_in_namespace(receipt_path, &scratch, program, arguments, &mut input)?;
     scratch.release()?;
     receipt.publish()?;
-    boot?;
-    wait?;
-    writeln!(result, "settled {exit}")?;
+    let exit = status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal));
+    let mut result = io::stdout().lock();
+    writeln!(
+        result,
+        "settled {}",
+        exit.ok_or_else(|| io::Error::other("invalid Client exit state"))?
+    )?;
     result.flush()
 }

@@ -405,10 +405,6 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         let (bin, rustx) = isolated_server_pair();
         let launcher = bin.path().join("rustx-execution-client");
         std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
-        for supervisor in ["bash-supervisor", "interactive-supervisor"] {
-            let staged = std::env::current_exe().unwrap().with_file_name(supervisor);
-            stage_binary(bin.path(), supervisor, &staged);
-        }
         let physical = bin.path().join("physical");
         std::fs::create_dir_all(physical.join(".agents")).unwrap();
         std::fs::write(physical.join(".agents/mcp.toml"), "[mcp_servers.overflow]\ncommand = '../fixture-server'\n").unwrap();
@@ -620,10 +616,6 @@ async fn managed_python_prepares_and_runs_in_the_bound_client_mount() {
         std::fs::write(settings, toml::to_string_pretty(&authored).unwrap()).unwrap();
         let launcher = bin.path().join("rustx-execution-client");
         std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
-        for supervisor in ["bash-supervisor", "interactive-supervisor"] {
-            let staged = std::env::current_exe().unwrap().with_file_name(supervisor);
-            stage_binary(bin.path(), supervisor, &staged);
-        }
         let physical = bin.path().join("physical");
         let package = physical.join(".agents/tools/echo");
         std::fs::create_dir_all(&package).unwrap();
@@ -974,6 +966,17 @@ fn stage_binary(bin: &std::path::Path, name: &str, source: &std::path::Path) -> 
     destination
 }
 
+fn stage_supervisors(bin: &std::path::Path) {
+    for supervisor in ["bash-supervisor", "interactive-supervisor"] {
+        let artifact = std::env::current_exe().unwrap().with_file_name(supervisor);
+        assert!(
+            artifact.is_file(),
+            "staged supervisor is absent: {artifact:?}"
+        );
+        stage_binary(bin, supervisor, &artifact);
+    }
+}
+
 fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
     let rustx = stage_binary(
@@ -996,6 +999,7 @@ fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
         "staged Execution Client is absent: {client:?}"
     );
     stage_binary(bin.path(), "rustx-execution-client", &client);
+    stage_supervisors(bin.path());
     let rustx = stage_binary(
         bin.path(),
         "rustx",
@@ -1160,6 +1164,10 @@ async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
         assert!(
             stderr.contains("not the Session's reserved workspace"),
             "{stderr}"
+        );
+        assert!(
+            !f.root.path().join("runtime/execution-pending").exists(),
+            "a refused Workspace must not leave a durable execution claim"
         );
     })
     .await;
@@ -2279,16 +2287,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             "staged Execution Client is absent: {staged:?}"
         );
         stage_binary(bin, "client-real", &staged);
-        // The Client's own sibling supervisor, staged beside it exactly as
-        // the production executable boundary resolves it.
-        let supervisor = std::env::current_exe()
-            .unwrap()
-            .with_file_name("bash-supervisor");
-        assert!(
-            supervisor.is_file(),
-            "staged bash-supervisor is absent: {supervisor:?}"
-        );
-        stage_binary(bin, "bash-supervisor", &supervisor);
+        stage_supervisors(bin);
         let physical = bin.join("physical");
         std::fs::create_dir(&physical).unwrap();
         let marker = b"mount-view proof marker";
@@ -5135,6 +5134,15 @@ async fn python_preparation_event(
     (reader.into_inner(), serde_json::from_str(&line).unwrap())
 }
 
+fn fixture_host_pid(stream: &tokio::net::UnixStream, reported: &serde_json::Value) -> Pid {
+    let pid = stream
+        .peer_cred()
+        .unwrap()
+        .pid()
+        .unwrap_or_else(|| i32::try_from(reported.as_i64().unwrap()).unwrap());
+    Pid::from_raw(pid)
+}
+
 #[tokio::test]
 async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
     bounded(async {
@@ -5150,6 +5158,7 @@ async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
             "rustx",
             std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
         );
+        stage_supervisors(bin.path());
         let staged_client = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
             .with_file_name("rustx-execution-client");
         let uv = bin.path().join("uv");
@@ -5173,22 +5182,24 @@ else:
         std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
         // Only the real Execution Client receives this fixture's uv. Each
         // trusted App Server launch enrolls one existing, exact Session.
-        let quote = |value: &std::path::Path| {
-            format!("'{}'", value.display().to_string().replace('\'', "'\\''"))
-        };
         let wrapper = bin.path().join("rustx-execution-client");
         let scratch = gate_dir.path().join("scratch");
-        let client_pids = gate_dir.path().join("client-pids");
         std::fs::create_dir(&scratch).unwrap();
         std::fs::write(
             &wrapper,
             format!(
-                "#!/bin/sh\nexport PATH={}:\"/usr/bin:/bin\" UV_TEST_GATE={} TMPDIR={}\nprintf '%s\\n' \"$$\" >> {}\nexec {} \"$@\"\n",
-                quote(bin.path()),
-                quote(&socket),
-                quote(&scratch),
-                quote(&client_pids),
-                quote(&staged_client),
+                r"#!/usr/bin/python3
+import json, os, socket, sys
+os.environ.update(PATH={path:?}, UV_TEST_GATE={socket:?}, TMPDIR={scratch:?})
+with socket.socket(socket.AF_UNIX) as peer:
+    peer.connect(os.environ['UV_TEST_GATE'])
+    peer.sendall((json.dumps(['client', os.getpid()]) + '\n').encode())
+os.execv({binary:?}, [{binary:?}, *sys.argv[1:]])
+",
+                path = format!("{0}:/usr/bin:/bin", bin.path().display()),
+                socket = socket.display().to_string(),
+                scratch = scratch.display().to_string(),
+                binary = staged_client.display().to_string(),
             ),
         )
         .unwrap();
@@ -5216,15 +5227,23 @@ else:
             running.push((child, client));
         }
         let mut versions = std::collections::BTreeMap::new();
-        for _ in 0..2 {
+        let mut client_pids = Vec::new();
+        for _ in 0..4 {
             let (stream, event) = python_preparation_event(&listener).await;
-            assert_eq!(event[0], "version");
-            versions.insert(
-                event[1].as_str().unwrap().to_owned(),
-                (stream, event[2].as_i64().unwrap()),
-            );
+            match event[0].as_str().unwrap() {
+                "client" => {
+                    let pid = fixture_host_pid(&stream, &event[1]);
+                    client_pids.push(pid);
+                }
+                "version" => {
+                    let pid = fixture_host_pid(&stream, &event[2]);
+                    versions.insert(event[1].as_str().unwrap().to_owned(), (stream, pid));
+                }
+                event => panic!("unexpected startup event: {event}"),
+            }
         }
         assert_eq!(versions.len(), 2);
+        assert_eq!(client_pids.len(), 2);
         let mut diagnostic_pipes = Vec::new();
         for (child, client) in &mut running {
             client.close_output().await;
@@ -5252,9 +5271,6 @@ else:
         assert_eq!(event[1], a);
         let discovery = PathBuf::from(event[2].as_str().unwrap());
         assert!(discovery.starts_with(&scratch) && discovery.is_dir());
-        let client_pids = std::fs::read_to_string(client_pids).unwrap();
-        let client_pids = client_pids.lines().map(|line| Pid::from_raw(line.parse().unwrap())).collect::<Vec<_>>();
-        assert_eq!(client_pids.len(), 2);
         for pid in &client_pids { assert_eq!(kill(*pid, None), Ok(())); }
         assert!(workspaces[0].join(".venv/pyvenv.cfg").is_file());
         assert!(!workspaces[1].join(".venv").exists());
@@ -5272,7 +5288,7 @@ else:
             client.close().await;
         }
         assert_eq!(
-            kill(Pid::from_raw(i32::try_from(pending_pid).unwrap()), None),
+            kill(pending_pid, None),
             Err(nix::errno::Errno::ESRCH),
             "shutdown joined the uv process"
         );
@@ -5287,7 +5303,378 @@ else:
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn namespace_receipt_covers_a_detached_session_and_requires_the_guardian() {
+    use futures_util::FutureExt as _;
+    use std::os::unix::fs::DirBuilderExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    bounded(async {
+        let script = r"
+import os, pathlib, signal, socket, sys
+assert os.getpid() == 1
+assert not pathlib.Path(sys.argv[2]).exists()
+scratch = pathlib.Path(os.environ['TMPDIR'])
+(scratch / 'candidate').write_bytes(b'private namespace output')
+child = os.fork()
+if child == 0:
+    os.setsid()
+    assert os.getsid(0) == os.getpid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with socket.socket(socket.AF_UNIX) as peer:
+        peer.connect(sys.argv[1])
+        peer.sendall(str(scratch).encode() + b'\n')
+        peer.recv(1)
+    os._exit(0)
+os.waitpid(child, 0)
+";
+        let executable = std::env::current_exe()
+            .unwrap()
+            .with_file_name("interactive-supervisor");
+        let mut unrelated = Command::new("/bin/sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        for kill_guardian in [false, true] {
+            let private = tempfile::tempdir_in("/tmp").unwrap();
+            let authority = private.path().join("authority");
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&authority)
+                .unwrap();
+            let verifier = authority.join("domain.authority");
+            let proof = authority.join("domain.proof");
+            std::fs::write(&verifier, b"private authority").unwrap();
+            let witness = private.path().join("witness");
+            let listener = tokio::net::UnixListener::bind(&witness).unwrap();
+            let mut guard = Command::new(&executable)
+                .arg("client-domain")
+                .arg(&proof)
+                .args(["/usr/bin/python3", "-c", script])
+                .arg(&witness)
+                .arg(&verifier)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut lease = guard.stdin.take().unwrap();
+            let mut reports = BufReader::new(guard.stdout.take().unwrap()).lines();
+            let token = [42; 32];
+            lease.write_all(&token).await.unwrap();
+            let ready = reports.next_line().await.unwrap().unwrap();
+            let init = Pid::from_raw(ready.strip_prefix("ready ").unwrap().parse().unwrap());
+            assert!(listener.accept().now_or_never().is_none());
+            assert!(!proof.exists());
+            lease.write_all(b"G").await.unwrap();
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut scratch = String::new();
+            peer.read_line(&mut scratch).await.unwrap();
+            let scratch = PathBuf::from(scratch.trim_end());
+            assert_eq!(
+                std::fs::read(scratch.join("candidate")).unwrap(),
+                b"private namespace output"
+            );
+            assert!(!proof.exists());
+            if kill_guardian {
+                guard.start_kill().unwrap();
+                assert_eq!(
+                    std::os::unix::process::ExitStatusExt::signal(&guard.wait().await.unwrap()),
+                    Some(libc::SIGKILL),
+                );
+                assert!(!proof.exists(), "dead owner emitted no receipt");
+            } else {
+                kill(init, Signal::SIGKILL).unwrap();
+                assert_eq!(
+                    reports.next_line().await.unwrap().as_deref(),
+                    Some("settled 137")
+                );
+                assert!(guard.wait().await.unwrap().success());
+                assert_eq!(std::fs::read(&proof).unwrap(), token);
+                assert!(!scratch.exists());
+            }
+            assert_eq!(
+                peer.read(&mut [0]).await.unwrap(),
+                0,
+                "the detached session lost its writer"
+            );
+            assert!(unrelated.try_wait().unwrap().is_none());
+            if kill_guardian {
+                // Only the test fixture can discard an exact scratch path
+                // after observing the fault. No product receipt was issued.
+                std::fs::remove_dir_all(scratch).unwrap();
+            }
+        }
+        unrelated.kill().await.unwrap();
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
+    use rustx::app_server::{command::ExecParams, protocol::Method};
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    struct ResumeOnDrop(Pid);
+    impl Drop for ResumeOnDrop {
+        fn drop(&mut self) {
+            let _ = kill(self.0, Signal::SIGCONT);
+        }
+    }
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let companion = bin.path().join("interactive-supervisor");
+        std::fs::rename(&companion, bin.path().join("domain-real")).unwrap();
+        std::fs::write(
+            &companion,
+            r#"#!/bin/sh
+set -eu
+if [ "$1" = client-domain ]; then
+    printf '%s' "$$" > "${0%/*}/guardian.pid"
+fi
+exec "${0%/*}/domain-real" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&companion, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("read-after-restart");
+        std::fs::write(&probe, b"original bytes").unwrap();
+        let socket_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = socket_dir.path().join("witness");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut original = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let driver = driver::jsonl(
+            original.stdout.take().unwrap(),
+            original.stdin.take().unwrap(),
+        );
+        initialize_client(&driver).await;
+        await_admission(&driver, session, &probe).await;
+        let script = r"
+import errno, os, signal, socket, sys
+with open('started', 'ab') as marker:
+    marker.write(b'one start\n')
+child = os.fork()
+if child == 0:
+    try:
+        os.setsid()
+        raise RuntimeError('ordinary command escaped per-operation supervisor')
+    except OSError as error:
+        assert error.errno == errno.EPERM
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with socket.socket(socket.AF_UNIX) as peer:
+        peer.connect(sys.argv[1])
+        peer.sendall(b'ready')
+        peer.recv(1)
+    os._exit(0)
+_, status = os.waitpid(child, 0)
+os._exit(os.waitstatus_to_exitcode(status))
+";
+        let mut command = Box::pin(result(
+            &driver,
+            Method::CommandExec(ExecParams {
+                session_id: session.clone(),
+                command: vec![
+                    "/usr/bin/python3".into(),
+                    "-c".into(),
+                    script.into(),
+                    socket.display().to_string(),
+                ],
+                cwd: workspace.display().to_string(),
+                env: std::collections::BTreeMap::new(),
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                timeout_ms: None,
+                size: None,
+            }),
+        ));
+        let mut peer = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            outcome = &mut command => panic!("physical operation settled before its descendant: {outcome:?}"),
+        };
+        let mut started = [0; 5];
+        peer.read_exact(&mut started).await.unwrap();
+        assert_eq!(&started, b"ready");
+        let guardian = std::fs::read_to_string(bin.path().join("guardian.pid"))
+            .unwrap()
+            .parse()
+            .map(Pid::from_raw)
+            .unwrap();
+        let resume = ResumeOnDrop(guardian);
+        kill(guardian, Signal::SIGSTOP).unwrap();
+        let status_path = format!("/proc/{guardian}/status");
+        loop {
+            let status = std::fs::read_to_string(&status_path).unwrap();
+            if status.lines().any(|line| line.starts_with("State:\tT")) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        kill(Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()), Signal::SIGKILL)
+            .unwrap();
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&original.wait().await.unwrap()),
+            Some(libc::SIGKILL)
+        );
+        drop(command);
+        driver.close().await;
+        let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .output()
+            .await
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("previous Session execution domain requires physical settlement"),
+            "{}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        let mut byte = [0];
+        assert_eq!(peer.try_read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        drop(resume);
+        assert_eq!(peer.read(&mut byte).await.unwrap(), 0, "original namespace closed the descendant's writer");
+
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        loop {
+            if std::fs::read_dir(&pending).unwrap().any(|entry| {
+                let path = entry.unwrap().path();
+                path.extension().is_some_and(|extension| extension == "proof")
+                    && path.metadata().is_ok_and(|identity| identity.len() == 32)
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        // Fully sealed publication and the fresh admission are both
+        // verified by the product. A proof never replays the old argv.
+        let mut replacement =
+            local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+                .spawn()
+                .unwrap();
+        let current = driver::jsonl(
+            replacement.stdout.take().unwrap(),
+            replacement.stdin.take().unwrap(),
+        );
+        initialize_client(&current).await;
+        await_admission(&current, session, &probe).await;
+        assert_eq!(std::fs::read(workspace.join("started")).unwrap(), b"one start\n");
+        assert_eq!(std::fs::read(probe).unwrap(), b"original bytes");
+        current.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+        assert_eq!(std::fs::read_dir(pending).unwrap().count(), 0);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn client_sigkill_advances_only_the_original_session_generation() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    async fn client_namespace_pid(listener: &tokio::net::UnixListener) -> Pid {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let pid = peer.peer_cred().unwrap().pid().unwrap();
+        let mut ready = [0; 11];
+        peer.read_exact(&mut ready).await.unwrap();
+        assert_eq!(&ready, b"client init");
+        Pid::from_raw(pid)
+    }
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let launcher = bin.path().join("rustx-execution-client");
+        std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+        let gate = tempfile::tempdir_in("/tmp").unwrap();
+        let witness = gate.path().join("witness");
+        let listener = tokio::net::UnixListener::bind(&witness).unwrap();
+        std::fs::write(
+            &launcher,
+            format!(
+                r"#!/usr/bin/python3
+import os, socket, sys
+assert os.getpid() == 1
+with socket.socket(socket.AF_UNIX) as peer:
+    peer.connect({witness:?})
+    peer.sendall(b'client init')
+os.execv({client:?}, [{client:?}, *sys.argv[1:]])
+",
+                witness = witness.display().to_string(),
+                client = bin.path().join("client-real").display().to_string(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("probe");
+        std::fs::write(&probe, b"physical Workspace").unwrap();
+        let mut server = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let first = client_namespace_pid(&listener).await;
+        let driver = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&driver).await;
+        await_admission(&driver, session, &probe).await;
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        let admission = || {
+            let paths = std::fs::read_dir(&pending)
+                .unwrap()
+                .map(|item| item.unwrap().path())
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(paths.len(), 1);
+            serde_json::from_slice::<rustx_execution_protocol::Admission>(
+                &std::fs::read(&paths[0]).unwrap(),
+            )
+            .unwrap()
+        };
+        let original = admission();
+        assert_eq!(original.generation.get(), 1);
+        kill(first, Signal::SIGKILL).unwrap();
+        let second = client_namespace_pid(&listener).await;
+        assert_ne!(first, second);
+        let recovered = admission();
+        assert_eq!(recovered.generation.get(), 2);
+        assert_eq!(recovered.server_incarnation, original.server_incarnation);
+        assert_eq!(recovered.session, original.session);
+        assert_ne!(recovered.instance, original.instance);
+        assert_eq!(recovered.workspace, original.workspace);
+        assert!(server.try_wait().unwrap().is_none());
+        await_admission(&driver, session, &probe).await;
+        assert_eq!(std::fs::read(&probe).unwrap(), b"physical Workspace");
+        driver.close().await;
+        detach_then_shutdown(&mut server).await;
+        assert!(server.wait().await.unwrap().success());
+        assert_eq!(std::fs::read_dir(pending).unwrap().count(), 0);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
+    use std::os::unix::fs::DirBuilderExt as _;
     bounded(async {
         let fixture = Fixture::new().await;
         let (_bin, executable) = isolated_server_pair();
@@ -5308,14 +5695,22 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         let other_probe = other_workspace.join("admitted");
         std::fs::write(&first_probe, b"a").unwrap();
         std::fs::write(&other_probe, b"b").unwrap();
-        let mut original = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
-            .spawn()
+        let private = fixture.root.path().join("remote-private");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&private)
             .unwrap();
+        let bundle = private.join("binding");
+        let mut original =
+            remote_exec_command(&executable, &fixture, Some(session.as_str()), &bundle)
+                .spawn()
+                .unwrap();
         let driver = driver::jsonl(
             original.stdout.take().unwrap(),
             original.stdin.take().unwrap(),
         );
         initialize_client(&driver).await;
+        let mut execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
         await_admission(&driver, session, &first_probe).await;
         kill(
             Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()),
@@ -5326,6 +5721,7 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             std::os::unix::process::ExitStatusExt::signal(&original.wait().await.unwrap()),
             Some(libc::SIGKILL)
         );
+        assert!(execution.0.try_wait().unwrap().is_none());
         driver.close().await;
 
         let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)

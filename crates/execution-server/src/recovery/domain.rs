@@ -10,6 +10,7 @@ use rustx_execution_protocol::{Admission, SessionId};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 /// The local-only bootstrap of a single independent physical domain. The
@@ -72,7 +73,7 @@ impl DomainKey {
         })
     }
 
-    fn proved(&self, directory: &File) -> io::Result<bool> {
+    pub(super) fn proved(&self, directory: &File) -> io::Result<bool> {
         let (Some(verifier), Some(receipt)) = (
             private_file(directory, self.verifier_name().as_str())?,
             private_file(directory, self.receipt_name().as_str())?,
@@ -92,7 +93,15 @@ impl DomainKey {
     }
 
     pub(super) fn cleanup(&self, directory: &File) -> io::Result<()> {
-        for name in [self.verifier_name(), self.receipt_name()] {
+        let authority = private_file(directory, self.verifier_name().as_str())?;
+        if let Some(authority) = &authority {
+            authority.lock()?;
+        }
+        for name in [
+            self.verifier_name(),
+            self.receipt_name(),
+            format!("{}.staged-proof", self.stem),
+        ] {
             match unlinkat(directory, name.as_str(), UnlinkatFlags::NoRemoveDir) {
                 Ok(()) | Err(nix::errno::Errno::ENOENT) => {}
                 Err(error) => return Err(error.into()),
@@ -116,7 +125,6 @@ fn private_file(directory: &File, name: &(impl nix::NixPath + ?Sized)) -> io::Re
         Err(error) => return Err(error.into()),
     };
     let identity = file.metadata()?;
-    use std::os::unix::fs::MetadataExt as _;
     Ok((identity.is_file()
         && identity.uid() == geteuid().as_raw()
         && identity.mode() & 0o777 == 0o600)
@@ -128,6 +136,7 @@ pub(super) fn reconcile(directory: &File, session: &SessionId) -> io::Result<boo
     let Some(mut marker) = private_file(directory, name.as_os_str())? else {
         return Ok(false);
     };
+    marker.lock()?;
     let mut bytes = Vec::new();
     (&mut marker).take(8193).read_to_end(&mut bytes)?;
     if bytes.len() > 8192
@@ -140,7 +149,11 @@ pub(super) fn reconcile(directory: &File, session: &SessionId) -> io::Result<boo
         return Ok(false);
     }
     let retained = fstat(&marker)?;
-    let current = fstatat(directory, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW)?;
+    let current = match fstatat(directory, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW) {
+        Ok(identity) => identity,
+        Err(nix::errno::Errno::ENOENT) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
     if (current.st_dev, current.st_ino) != (retained.st_dev, retained.st_ino) {
         return Ok(false);
     }

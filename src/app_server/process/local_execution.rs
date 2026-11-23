@@ -6,8 +6,8 @@
 //! is resolved through the catalog claim, and the workspace must equal
 //! the endpoint's reserved logical workspace byte-for-byte, and the Client
 //! executable is only ever the trusted sibling of the running Server —
-//! never PATH, HOME, or a caller-chosen path. There are no retries and no
-//! replacement clients.
+//! never PATH, HOME, or a caller-chosen path. On Linux a reaped local
+//! domain can be replaced only after independent physical settlement.
 
 use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::local_runtime::session::SessionId;
 use crate::local_runtime::session_runtime_manager::{
-    ExecutionListener, LocalExecutionEndpoint, SessionRuntimeManager,
+    ExecutionListener, LocalExecutionEndpoint, SessionRuntimeManager, SiblingClient,
 };
 
 /// Publish just the durable Session identity for an explicit process owner.
@@ -71,19 +71,167 @@ pub(super) async fn launch(
     manager: &SessionRuntimeManager,
     id: &str,
     workspace: &Path,
-) -> Result<tokio::process::Child, String> {
+) -> Result<LocalClient, String> {
     let session = SessionId::parse(id).map_err(|error| format!("local execution: {error}"))?;
-    let endpoint = manager
-        .reserve_local_execution(&session)
-        .await
-        .map_err(|error| format!("local execution: {error}"))?;
     if !is_normalized_absolute_path(workspace) {
         return Err("local execution: workspace must be a normalized absolute path".into());
     }
-    if workspace.as_os_str() != endpoint.workspace().as_os_str() {
-        return Err("local execution: workspace is not the Session's reserved workspace".into());
+    let endpoint = manager
+        .reserve_local_execution_for(&session, Some(workspace))
+        .await
+        .map_err(|error| format!("local execution: {error}"))?;
+    LocalClient::launch(session, endpoint).await
+}
+
+pub(super) struct LocalClient {
+    pub(super) child: SiblingClient,
+    #[cfg(target_os = "linux")]
+    session: SessionId,
+    #[cfg(target_os = "linux")]
+    endpoint: Arc<LocalExecutionEndpoint>,
+    #[cfg(target_os = "linux")]
+    admitted_at: tokio::time::Instant,
+}
+
+impl LocalClient {
+    async fn launch(
+        session: SessionId,
+        endpoint: Arc<LocalExecutionEndpoint>,
+    ) -> Result<Self, String> {
+        let child =
+            crate::local_runtime::session_runtime_manager::launch_sibling(endpoint.clone()).await?;
+        #[cfg(not(target_os = "linux"))]
+        let _ = session;
+        Ok(Self {
+            child,
+            #[cfg(target_os = "linux")]
+            session,
+            #[cfg(target_os = "linux")]
+            endpoint,
+            #[cfg(target_os = "linux")]
+            admitted_at: tokio::time::Instant::now(),
+        })
     }
-    crate::local_runtime::session_runtime_manager::launch_sibling(endpoint).await
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct RestartBudget {
+    attempted: Vec<tokio::time::Instant>,
+    consecutive: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl RestartBudget {
+    fn next_delay(
+        &mut self,
+        now: tokio::time::Instant,
+        admitted_at: tokio::time::Instant,
+    ) -> Option<std::time::Duration> {
+        use std::time::Duration;
+        self.attempted
+            .retain(|start| now.saturating_duration_since(*start) < Duration::from_secs(60));
+        if now.duration_since(admitted_at) >= Duration::from_mins(5) {
+            self.consecutive = 0;
+        }
+        if self.attempted.len() == 3 {
+            return None;
+        }
+        let delay = Duration::from_secs([1, 2, 4][self.consecutive.min(2)]);
+        self.consecutive = (self.consecutive + 1).min(2);
+        Some(delay)
+    }
+}
+
+/// The process owner watches for actual termination independently of lane
+/// detachment. On drain it hands any remaining owned child to the Host.
+#[cfg(target_os = "linux")]
+pub(super) async fn maintain(
+    manager: SessionRuntimeManager,
+    mut client: LocalClient,
+    stop: CancellationToken,
+) -> Option<LocalClient> {
+    let mut budget = RestartBudget::default();
+    loop {
+        let result = tokio::select! {
+            biased;
+            () = stop.cancelled() => return Some(client),
+            result = client.child.wait() => result,
+        };
+        if let Err(error) =
+            SessionRuntimeManager::retire_dead_local_execution(client.endpoint.clone()).await
+        {
+            eprintln!(
+                "rustx app-server: local Client {} remains unavailable after exit ({result:?}): {error}",
+                client.session
+            );
+            return None;
+        }
+        // Successful exit includes intentional Session closure. It does not
+        // authorize the process owner to synthesize a new foreground request.
+        if result.is_ok_and(|status| status.success()) {
+            return None;
+        }
+        let Some(delay) = budget.next_delay(tokio::time::Instant::now(), client.admitted_at) else {
+            eprintln!(
+                "rustx app-server: local Client {} exhausted the restart budget",
+                client.session
+            );
+            return None;
+        };
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => return None,
+            () = tokio::time::sleep(delay) => {}
+        }
+        budget.attempted.push(tokio::time::Instant::now());
+        let next = manager
+            .replace_dead_local_execution(&client.session, client.endpoint)
+            .await;
+        let replacement = match next {
+            Ok(endpoint) => LocalClient::launch(client.session, endpoint).await,
+            Err(error) => Err(error.to_string()),
+        };
+        // Failed authentication, configuration or version never loops.
+        match replacement {
+            Ok(next) => client = next,
+            Err(error) => {
+                eprintln!("rustx app-server: local Client replacement failed: {error}");
+                return None;
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::RestartBudget;
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    #[test]
+    fn local_restart_budget_honors_at_most_three_attempts_and_stable_reset() {
+        let base = Instant::now();
+        let mut budget = RestartBudget::default();
+        let mut now = base;
+        for delay in [1, 2, 4] {
+            assert_eq!(
+                budget.next_delay(now, now),
+                Some(Duration::from_secs(delay))
+            );
+            now += Duration::from_secs(delay);
+            budget.attempted.push(now);
+        }
+        assert_eq!(budget.next_delay(base + Duration::from_secs(60), now), None);
+        assert_eq!(
+            budget.next_delay(base + Duration::from_secs(61), now),
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(
+            budget.next_delay(now + Duration::from_mins(5), now),
+            Some(Duration::from_secs(1))
+        );
+    }
 }
 
 /// Reserves the Session's WebSocket execution binding — publishing the

@@ -955,6 +955,19 @@ impl Binding {
         fence.remove()
     }
 
+    /// Consumes the exact independent settlement receipt for this closed
+    /// local binding. Receipt validation and fence ownership are separate
+    /// from the Client's control-lane Revoke result.
+    /// # Errors
+    /// Refuses a foreign record, open admission, or missing settlement.
+    #[cfg(target_os = "linux")]
+    pub fn release_local_domain(&self, fence: &RecoveryFence) -> io::Result<()> {
+        if !fence.belongs_to(&self.inner) || self.status().phase != BindingPhase::Revoked {
+            return Err(io::Error::other("local domain admission must be closed"));
+        }
+        fence.release_independent_domain()
+    }
+
     fn closed_with_settlement(&self) -> bool {
         let state = self.inner();
         state.phase == BindingPhase::Revoked

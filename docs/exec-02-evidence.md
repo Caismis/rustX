@@ -51,8 +51,26 @@ unavailable execution scope while the fence is present. The conformance
 test `a_crash_after_the_request_start_commit_never_resends_the_request`
 reconstructs the frozen request after restart, observes its indeterminate
 settlement and asserts exactly one provider request.
-Independent attestation and cleanup-only
-reconnection remain open.
+The crash case uses a separately launched remote Client that remains alive
+after the Server dies. The original Client identity therefore stays fenced
+without independent proof from its physical host.
+
+### Linux local replacement and restart
+
+| IDs | Product evidence | Observation |
+| --- | --- | --- |
+| T27, T62, T65 | `local_restart_requires_namespace_settlement_after_server_sigkill` | A real command starts once and holds a descendant's socket. SIGSTOP pauses the independent helper, SIGKILL kills the Server, and a fresh App Server refuses the Session while the descendant still holds the socket. Resuming the helper closes that socket, publishes the original receipt and permits a fresh Server to read the unchanged Workspace. The old argv marker still occurs once. |
+| T09, T10, T61, T65 | `client_sigkill_advances_only_the_original_session_generation` | The kernel reports the original live Client's exact host PID. After SIGKILL a new PID proves admission, the same running Server keeps the Session and increases generation from 1 to 2, and its real Workspace read succeeds. This test does not deliver a late operation reply. |
+| T62–T64 | `namespace_receipt_covers_a_detached_session_and_requires_the_guardian` | A private Client-init fixture has no physical START before the grant. It creates a private candidate and a descendant in its own session which holds a socket and ignores TERM. Killing namespace init closes the socket and removes the exact scratch directory before the authenticated receipt. Killing the guardian also stops the descendant but emits no receipt. An unrelated process remains live. |
+| T62, T65 | `independent_domain_receipt_retires_only_the_original_session_incarnation`, `local_restart_budget_honors_at_most_three_attempts_and_stable_reset` | The durable fence rejects missing, incorrect and cross-generation evidence. A logical clock checks 1/2/4-second backoff, the rolling 60-second threshold and five-minute stable reset. |
+
+The independent receipt covers the Linux PID namespace and its exact private
+scratch directory. Retired output scope cannot recreate missing published
+files. Named mutation stages in Workspace and unpublished Python stages in
+the stable Store can outlive forced termination. The receipt does not claim
+those directories were deleted. The runner needs Bubblewrap and the host
+policy for its namespace setup. Native macOS tests and separate operator
+host attestation remain open.
 
 Client save expiry is owned by a maintenance thread outside the data and
 control lanes. An abandoned unpublished file is retried after its deadline
@@ -123,10 +141,10 @@ before reaching that barrier.
 
 ## Open gates
 
-- Replacement admission and post-restart environment recovery still require
-  independent attestation tied to the original physical domain. The durable
-  admission fence retains the unresolved identity. The Linux SIGKILL case
-  observes one business socket and exercises isolation between Sessions.
+- The Linux local proof uses the exact retained physical domain. The
+  deferred proofs include the remaining registration/spawn/handoff/ACK
+  fault matrix, interrupted durable stages, operator-provided remote host
+  receipts, and native macOS settlement.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
   run through the bound Client in EXEC-03. Full restart cleanup, the
   cross-role and foreground MCP interaction matrix, and Client Store race
