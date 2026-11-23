@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from '../../../locale/react';
 import { Modal } from '../../../presentation/primitives/Modal';
 import { Button } from '../../../presentation/primitives/Button';
+import css from './guard.module.css';
 
 /** One navigation guard shared by every surface that can hold unsaved
  * drafts (Settings pages, the resource surface, detail editors). Each mounted
@@ -62,6 +63,7 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
   return <GuardContext.Provider value={{ reportSurface, dirty, guard }}>
     {children}
     <Modal open={confirming} onClose={keepEditing} title={tx('settings:unsaved.title')}
+      rootClassName={css.aboveDialogs}
       description={tx('settings:unsaved.description')} closeLabel={tx('settings:aria.cancel')}
       footer={<>
         <Button variant="outline" onClick={keepEditing}>{tx('settings:unsaved.cancel')}</Button>

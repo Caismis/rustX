@@ -139,6 +139,9 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await modal.getByRole('button', { name: 'Move a-high up', exact: true }).click();
     await modal.getByRole('button', { name: 'Delete profile z-off', exact: true }).click();
     await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+    // Cancelling a dirty draft asks first; Discard and leave restores the committed values.
+    const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
     await open(); expect(await ids()).toEqual(['z-off', 'a-high']);
     await expect(modal.getByRole('button', { name: 'Profile z-off', exact: true })).toBeVisible();
     await list.scrollIntoViewIfNeeded();

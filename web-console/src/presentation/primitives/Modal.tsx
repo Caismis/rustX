@@ -16,6 +16,9 @@ interface ModalBaseProps {
   footer?: ReactNode
   className?: string
   contentClassName?: string
+  /* Optional class for the fixed full-viewport layer — e.g. a dialog that
+   * must sit above another dialog raises its stacking level here. */
+  rootClassName?: string
 }
 
 type ModalProps = ModalBaseProps & (
@@ -39,7 +42,7 @@ type ModalProps = ModalBaseProps & (
  * @returns null when closed; otherwise the overlay tree.
  */
 export function Modal({
-  open, onClose, title, closeLabel, description, children, footer, className, contentClassName, headless = false,
+  open, onClose, title, closeLabel, description, children, footer, className, contentClassName, rootClassName, headless = false,
 }: ModalProps) {
   const dialog = useRef<HTMLDivElement>(null);
   useModalFocus(open, dialog, onClose);
@@ -48,7 +51,7 @@ export function Modal({
   if (!open) return null
 
   return createPortal((
-    <div className={css.root} role="presentation">
+    <div className={clsx(css.root, rootClassName)} role="presentation">
       <div className={css.mask} aria-hidden="true" onClick={onClose} />
       <div
         className={clsx(css.dialog, className)}
