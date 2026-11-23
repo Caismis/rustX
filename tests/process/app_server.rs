@@ -4227,26 +4227,85 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let MethodResult::Sessions { sessions, .. } = result(&recovered, Method::SessionList { query: None, offset: 0, limit: 32 }).await else { panic!("catalog") };
         assert_eq!(sessions.len(), 5);
         assert_eq!(diagnostics(&recovered).await.loaded, 0, "listing never starts Sessions");
-        let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
-        let after = checkpoint_state(&recovered, &cold).await;
-        assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
-        assert!(after["messages"].to_string().contains("b:unset"));
-        assert!(!after["messages"].to_string().contains("fake-b"));
-        assert!(!after["messages"].to_string().contains("result-b"));
-        assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
+        let session = &targets[1].session_id;
+        let settings = || Method::SettingsRead { session_id: session.clone() };
+        let MethodResult::Settings { projection } = result(&recovered, settings()).await else { panic!("cold settings") };
+        assert_eq!(projection.inline.unwrap().model.as_ref(), Some(&selections[1]));
+        let history = || Method::SessionHistory {
+            session_id: session.clone(),
+            node_id: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
+            limit: 8,
+        };
+        let history_before = result(&recovered, history()).await;
+        let history_body = serde_json::to_string(&history_before).unwrap();
+        assert!(matches!(history_before, MethodResult::SessionHistory { .. }));
+        assert!(history_body.contains("b:unset"));
+        assert!(!history_body.contains("fake-b"));
+        assert!(!history_body.contains("result-b"));
+        let thread_id = app_server_conformance::thread_id(&recovered, session.clone()).await;
+        let Response::Failure(attach_failure) = rpc(&recovered, 3, Method::SessionAttach { thread_id }).await else {
+            panic!("bare Server cannot attach while the previous execution claim is outstanding");
+        };
+        assert!(attach_failure.error.message.contains("unsettled execution binding"));
+        assert_eq!(diagnostics(&recovered).await.loaded, 0);
+        let workspace = users[1].1.root.path().join("a");
+        let effect = workspace.join("host-effect");
+        assert_eq!(std::fs::read(&effect).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
         assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], completed["attempt"], "B's cold recovery cannot change A's completed attempt");
-        // Changing A's source is confined to A; B's admitted composition stays.
-        let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
-        let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
-        source["agent"]["plugins"]["todo"]["enabled"] = false.into();
-        std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
-        assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
-        assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
+        let edit_a_source = || {
+            let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
+            let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+            source["agent"]["plugins"]["todo"]["enabled"] = false.into();
+            std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
+        };
+        #[cfg(target_os = "linux")]
+        {
+            recovered.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+            let user = &users[1].1;
+            let pending = user.root.path().join("runtime/execution-pending");
+            wait_for_local_execution_receipt(&pending).await;
+            grant_environment_roots(user, std::slice::from_ref(&workspace));
+            let mut replacement = user.command("ws://127.0.0.1:0")
+                .arg("--token-file").arg(user.root.path().join("token"))
+                .arg("--local-execution-session").arg(session.as_str())
+                .arg("--local-execution-workspace").arg(&workspace)
+                .env("TEST_KEY", "fake-b")
+                .spawn().unwrap();
+            let (endpoint, _stderr) = websocket_startup(&mut replacement).await;
+            let recovered = driver::websocket(&endpoint).await;
+            initialize_client(&recovered).await;
+            await_admission(&recovered, session, &effect).await;
+            let cold = attach(&recovered, session.clone(), 3).await;
+            let after = checkpoint_state(&recovered, &cold).await;
+            assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
+            assert!(after["messages"].to_string().contains("b:unset"));
+            assert!(!after["messages"].to_string().contains("fake-b"));
+            assert!(!after["messages"].to_string().contains("result-b"));
+            edit_a_source();
+            assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
+            assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
+            recovered.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            edit_a_source();
+            assert_eq!(serde_json::to_string(&result(&recovered, history()).await).unwrap(), history_body);
+            let MethodResult::Settings { projection: after } = result(&recovered, settings()).await else { panic!("cold settings after editing A") };
+            assert_eq!(after.revision, projection.revision);
+            assert_eq!(after.inline.unwrap().model.as_ref(), Some(&selections[1]));
+            recovered.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+        }
+        assert_eq!(std::fs::read(effect).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
         assert_eq!(pa.requests().await.len(), 2);
-        recovered.close().await;
-        terminate(&replacement); assert!(replacement.wait().await.unwrap().success());
         for client in clients { client.close().await; }
         terminate(&processes[0]); assert!(processes[0].wait().await.unwrap().success());
         pa.finish().await; pb.finish().await;
@@ -5672,6 +5731,21 @@ os.waitpid(child, 0)
 }
 
 #[cfg(target_os = "linux")]
+async fn wait_for_local_execution_receipt(pending: &std::path::Path) {
+    loop {
+        if std::fs::read_dir(pending).unwrap().any(|entry| {
+            let path = entry.unwrap().path();
+            path.extension()
+                .is_some_and(|extension| extension == "proof")
+                && path.metadata().is_ok_and(|identity| identity.len() == 32)
+        }) {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
     use rustx::app_server::{
@@ -5812,16 +5886,7 @@ os._exit(os.waitstatus_to_exitcode(status))
         assert_eq!(peer.read(&mut byte).await.unwrap(), 0, "original namespace closed the descendant's writer");
 
         let pending = fixture.root.path().join("runtime/execution-pending");
-        loop {
-            if std::fs::read_dir(&pending).unwrap().any(|entry| {
-                let path = entry.unwrap().path();
-                path.extension().is_some_and(|extension| extension == "proof")
-                    && path.metadata().is_ok_and(|identity| identity.len() == 32)
-            }) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        wait_for_local_execution_receipt(&pending).await;
         // Fully sealed publication and the fresh admission are both
         // verified by the product. A proof never replays the old argv.
         let mut replacement =
@@ -5953,6 +6018,12 @@ os.execv({client:?}, [{client:?}, *sys.argv[1:]])
 async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
     use rustx::app_server::protocol::{ErrorData, Method, MethodResult, Response};
     use rustx::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+    use rustx::local_runtime::{
+        HeadlessConversationRuntime, HostEnvironment, LaunchRequest, LocalRuntimeDependencies,
+        StartupSession, launch,
+    };
+    use rustx::message::{content::TextBlock, types::UserContentBlock};
+    use sha2::{Digest as _, Sha256};
     use std::os::unix::fs::DirBuilderExt as _;
     bounded(async {
         let fixture = Fixture::new().await;
@@ -5970,6 +6041,18 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         let workspace = fixture.root.path().join("a");
         let other_workspace = fixture.root.path().join("b");
         grant_environment_roots(&fixture, &[workspace.clone(), other_workspace.clone()]);
+        let provider = crate::common::FixtureServer::start_with_body(|_, _, _| {
+            crate::common::sse_fixture("openai_chat", "plain_text.sse")
+        })
+        .await;
+        let home = fixture.root.path().join("home");
+        let user_config = home.join("rustx/rustx.toml");
+        let authored = std::fs::read_to_string(&user_config).unwrap();
+        std::fs::write(
+            user_config,
+            authored.replace("http://127.0.0.1:9/v1", &provider.url("/v1")),
+        )
+        .unwrap();
         let first_probe = workspace.join("admitted");
         let other_probe = other_workspace.join("admitted");
         std::fs::write(&first_probe, b"a").unwrap();
@@ -5991,6 +6074,13 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         initialize_client(&driver).await;
         let mut execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
         await_admission(&driver, session, &first_probe).await;
+        let history = || Method::SessionHistory {
+            session_id: session.clone(),
+            node_id: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
+            limit: 4,
+        };
+        let history_before = serde_json::to_value(result(&driver, history()).await).unwrap();
         kill(
             Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()),
             Signal::SIGKILL,
@@ -6002,6 +6092,59 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         );
         assert!(execution.0.try_wait().unwrap().is_none());
         driver.close().await;
+
+        let decoy = workspace.join("rustx.toml");
+        let decoy_bytes = b"[tool_deadline_policy]\nhard_deadline_ms = 23456\n";
+        std::fs::write(&decoy, decoy_bytes).unwrap();
+        let host = HostEnvironment::from_paths(workspace.clone(), home).unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            runtime_root: Some(fixture.root.path().join("runtime")),
+            ..LaunchRequest::default()
+        };
+        let paths = launch::analyze(&request, &host)
+            .unwrap()
+            .admit(|| {
+                rustx::credentials::CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())])
+            })
+            .unwrap();
+        let dependencies = LocalRuntimeDependencies {
+            startup_session: StartupSession::Select {
+                session: session.clone(),
+                node: None,
+            },
+            ..LocalRuntimeDependencies::default()
+        };
+        let failure = HeadlessConversationRuntime::compose_and_submit(
+            &paths,
+            &dependencies,
+            vec![UserContentBlock::Text(TextBlock {
+                text: "a new standalone turn".into(),
+            })],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            failure
+                .to_string()
+                .contains("previous Session execution domain requires physical settlement"),
+            "{failure}"
+        );
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        let database = rusqlite::Connection::open_with_flags(
+            &private_database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let attempts = database
+            .query_row(
+                "SELECT count(*) FROM events WHERE event_kind = 'attempt_started'",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap();
+        assert_eq!(attempts, 0);
+        drop(database);
 
         let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
             .output()
@@ -6026,21 +6169,66 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         );
         initialize_client(&driver).await;
         await_admission(&driver, other, &other_probe).await;
-        let history = result(
+        let cold_history = result(&driver, history()).await;
+        assert!(matches!(cold_history, MethodResult::SessionHistory { .. }));
+        assert_eq!(serde_json::to_value(cold_history).unwrap(), history_before);
+
+        let document = format!("[mcp_servers.decoy]\nurl = {:?}\n", provider.url("/mcp"));
+        let resources = workspace.join(".agents");
+        std::fs::create_dir(&resources).unwrap();
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
+        let MethodResult::SessionTransition {
+            session: alternate, ..
+        } = result(
             &driver,
-            Method::SessionHistory {
-                session_id: session.clone(),
-                node_id: None,
-                at: rustx::durable::reading::ConversationWindowAt::Latest,
-                limit: 4,
+            Method::SessionCreate {
+                settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                    workspace.clone(),
+                )),
+                input_references: None,
+                submission: None,
+                dynamic_tools: Vec::new(),
             },
         )
-        .await;
-        assert!(matches!(history, MethodResult::SessionHistory { .. }));
-
-        let decoy = workspace.join("rustx.toml");
-        let decoy_bytes = b"[tool_deadline_policy]\nhard_deadline_ms = 23456\n";
-        std::fs::write(&decoy, decoy_bytes).unwrap();
+        .await
+        else {
+            panic!("another unbound Session in the same Workspace");
+        };
+        let target = rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        for execution_session in [Some(session.clone()), Some(alternate.id), None] {
+            let id = rustx::runtime::identity::McpServerId::new("decoy");
+            for method in [
+                Method::WorkflowToolCatalog {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    source: None,
+                    cursor: None,
+                    expected_scope: None,
+                },
+                Method::McpProbe {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    id: id.clone(),
+                    expected_revision: revision.clone(),
+                },
+                Method::McpCatalog {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    id,
+                    expected_revision: revision.clone(),
+                    kind: rustx::tools::mcp::catalog::CatalogKind::Tools,
+                },
+            ] {
+                let Response::Failure(refused) = rpc(&driver, 80, method).await else {
+                    panic!("a prior physical owner bars the Server-authored Workspace catalog");
+                };
+                assert_eq!(refused.error.data, Some(ErrorData::ExecutionUnavailable));
+            }
+        }
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
         let thread_id = app_server_conformance::thread_id(&driver, session.clone()).await;
         let Response::Failure(attach) = rpc(&driver, 81, Method::SessionAttach { thread_id }).await
         else {

@@ -190,7 +190,7 @@ pub(crate) struct WorkspaceResourceIdentity {
 
 #[derive(Clone, Copy)]
 pub(crate) enum WorkspaceResourceAuthority {
-    Authored,
+    Authored(WorkspaceResourceIdentity),
     Bound,
 }
 

@@ -276,7 +276,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v5`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v6`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -2995,7 +2995,7 @@ pub(super) struct SessionExecutionRegistry(Mutex<HashMap<SessionId, Arc<Slot>>>)
 pub(crate) struct StandaloneExecution {
     session: SessionId,
     registry: Arc<SessionExecutionRegistry>,
-    child: tokio::sync::Mutex<Option<SiblingClient>>,
+    child: tokio::sync::Mutex<SiblingClient>,
 }
 
 impl StandaloneExecution {
@@ -3005,7 +3005,7 @@ impl StandaloneExecution {
         product_root: PathBuf,
     ) -> Result<Self, String> {
         let registry = Arc::new(SessionExecutionRegistry::default());
-        let admission = {
+        {
             let product_root = product_root.clone();
             let session = rustx_execution_protocol::SessionId::new(session.as_str());
             tokio::task::spawn_blocking(move || {
@@ -3016,19 +3016,7 @@ impl StandaloneExecution {
             })
             .await
             .map_err(|error| error.to_string())?
-        };
-        if let Err(error) = admission {
-            if error.kind() != io::ErrorKind::WouldBlock {
-                return Err(error.to_string());
-            }
-            tracing::warn!(%session, "previous Client execution is unconfirmed");
-            // Keep the native scope bound to an empty registry. Reopening
-            // canonical facts grants no filesystem or process authority.
-            return Ok(Self {
-                session,
-                registry,
-                child: tokio::sync::Mutex::new(None),
-            });
+            .map_err(|error| error.to_string())?;
         }
         let Claim::Create(slot) = registry
             .claim(&session, workspace, ExecutionTransport::Unix)
@@ -3048,7 +3036,7 @@ impl StandaloneExecution {
         Ok(Self {
             session,
             registry,
-            child: tokio::sync::Mutex::new(Some(child)),
+            child: tokio::sync::Mutex::new(child),
         })
     }
 
@@ -3063,21 +3051,17 @@ impl StandaloneExecution {
         &self,
         manager: super::super::configuration::UserConfigManager,
         input: super::super::configuration::SessionConfigInput,
-        authored: super::super::configuration::AdmittedSessionConfig,
+        credentials: crate::credentials::CredentialSnapshot,
     ) -> Result<super::super::configuration::AdmittedSessionConfig, String> {
-        let Some(endpoint) = self
+        let endpoint = self
             .registry
-            .configuration_endpoint(&self.session)
-            .map_err(|error| error.to_string())?
-        else {
-            // The durable fence still permits reopening the canonical view.
-            return Ok(authored);
-        };
+            .endpoint(&self.session)
+            .map_err(|error| error.to_string())?;
         tokio::task::spawn_blocking(move || {
             super::super::configuration::application::ApplicationState::initial_bound_session(
                 &manager,
                 &input,
-                &authored.credentials,
+                &credentials,
                 &endpoint,
             )
         })
@@ -3092,12 +3076,7 @@ impl StandaloneExecution {
         } else {
             Ok(())
         };
-        let mut owned = self.child.lock().await;
-        let Some(child) = owned.as_mut() else {
-            return Err(
-                "previous Session execution domain requires physical settlement".to_owned(),
-            );
-        };
+        let mut child = self.child.lock().await;
         let status = tokio::time::timeout(
             rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT,
             child.wait(),
@@ -3554,8 +3533,16 @@ impl SessionRuntimeManager {
             return Err(error("the reserved Workspace requires its exact Session"));
         }
         drop(slots);
-        if let (Some(session), Some(_)) = (session, workspace) {
-            self.require_unclaimed_workspace(session)?;
+        if let Some(workspace) = workspace
+            && rustx_execution_server::RecoveryFence::workspace_pending(
+                self.configuration.runtime_root(),
+                workspace,
+            )
+            .map_err(error)?
+        {
+            return Err(error(
+                "the selected Workspace has an unsettled execution binding",
+            ));
         }
         Ok(None)
     }

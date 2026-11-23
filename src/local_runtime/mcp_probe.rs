@@ -211,6 +211,12 @@ async fn probe_query(
                     _runtime: unsettled,
                     _permit: probe_permit,
                 });
+            return Ok(McpProbeResult {
+                id,
+                revision,
+                outcome,
+                page: None,
+            });
         }
         // A changed definition cannot receive a successful result for old bytes.
         let check_id = id.clone();
@@ -827,6 +833,55 @@ os.execv(sys.argv[2], sys.argv[2:])
                 }
             );
         }
+        fixture.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn bound_probe_reports_unsettled_close_after_client_loss() {
+        use crate::local_runtime::session_runtime_manager::StandaloneExecution;
+        use crate::tools::mcp::{catalog::CatalogKind, test_sync::CloseProbe};
+
+        let fixture = HttpFixture::start(HttpFixtureControl::default()).await;
+        let directory = tempfile::tempdir().unwrap();
+        let owner = owner(directory.path());
+        let workspace = directory.path().canonicalize().unwrap();
+        let source = SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let revision = write(
+            &owner,
+            &source,
+            &format!("[mcp_servers.close]\nurl = {:?}\n", fixture.endpoint),
+        );
+        let execution =
+            StandaloneExecution::start(SessionId::generate(), workspace.clone(), workspace)
+                .await
+                .unwrap();
+        let close = Arc::new(CloseProbe::parking_with_failure("injected unproven close"));
+        install_close_probe(owner.sources.config_path.clone(), close.clone());
+        let scope = execution.scope();
+        let registry = Arc::<McpProbeRegistry>::default();
+        let available = registry.capacity.available_permits();
+        let query = tokio::spawn(probe_query(
+            owner,
+            source,
+            move |_| Ok(Some(scope.clone())),
+            McpServerId::new("close"),
+            revision.clone(),
+            Some(CatalogKind::Tools),
+            (),
+            registry.clone(),
+        ));
+        close.wait_entered().await;
+        execution.shutdown().await.unwrap();
+        close.release();
+        let result = query.await.unwrap().unwrap();
+        assert_eq!(result.outcome, McpProbeOutcome::SettlementFailed);
+        assert_eq!(result.revision, revision);
+        assert!(result.page.is_none());
+        assert_eq!(registry.capacity.available_permits(), available - 1);
+        assert!(!registry.is_settled());
+        assert_eq!(fixture.control.accepted_calls(), 0);
         fixture.shutdown().await;
     }
 

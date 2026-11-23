@@ -1,7 +1,7 @@
 //! Independent execution-domain settlement from a trusted physical owner.
 //! The durable scope is the exact Admission, including its original incarnation.
 
-use super::marker_name;
+use super::{MAX_MARKER_BYTES, marker_name};
 use constant_time_eq::constant_time_eq_32;
 use nix::fcntl::{AtFlags, OFlag, openat};
 use nix::sys::stat::{Mode, fstat, fstatat};
@@ -117,7 +117,10 @@ fn exact_token(file: File) -> io::Result<Option<[u8; 32]>> {
     Ok(bytes.try_into().ok())
 }
 
-fn private_file(directory: &File, name: &(impl nix::NixPath + ?Sized)) -> io::Result<Option<File>> {
+pub(super) fn private_file(
+    directory: &File,
+    name: &(impl nix::NixPath + ?Sized),
+) -> io::Result<Option<File>> {
     let flags = OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK;
     let file = match openat(directory, name, flags, Mode::empty()) {
         Ok(file) => File::from(file),
@@ -138,8 +141,10 @@ pub(super) fn reconcile(directory: &File, session: &SessionId) -> io::Result<boo
     };
     marker.lock()?;
     let mut bytes = Vec::new();
-    (&mut marker).take(8193).read_to_end(&mut bytes)?;
-    if bytes.len() > 8192
+    (&mut marker)
+        .take(MAX_MARKER_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_MARKER_BYTES
         || !serde_json::from_slice::<Admission>(&bytes).is_ok_and(|owner| owner.session == *session)
     {
         return Ok(false);

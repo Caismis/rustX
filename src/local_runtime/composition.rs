@@ -482,14 +482,7 @@ impl LocalConversationCore {
         }
         let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        let current = manager
-            .resolve_session(&intent.input())
-            .map_err(|error| LocalRuntimeError::SessionConfiguration {
-                session_id: session_id.clone(),
-                diagnostic: error.diagnostic,
-            })?
-            .admit(|| standalone_credentials(paths, dependencies))
-            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let input = intent.input();
         let database = catalog.database_path(&session_id, &node.conversation_id);
         let allocation = database
             .parent()
@@ -497,7 +490,7 @@ impl LocalConversationCore {
             .to_path_buf();
         let execution = super::session_runtime_manager::StandaloneExecution::start(
             session_id.clone(),
-            current.locations.workspace.clone(),
+            input.cwd.clone(),
             lifecycle.root().to_path_buf(),
         )
         .await
@@ -505,8 +498,8 @@ impl LocalConversationCore {
         let (current, registry) = prepare_standalone_configuration(
             &execution,
             manager,
-            intent.input(),
-            current,
+            input,
+            standalone_credentials(paths, dependencies),
             &startup,
         )
         .await?;
@@ -1114,11 +1107,11 @@ async fn prepare_standalone_configuration(
     execution: &super::session_runtime_manager::StandaloneExecution,
     manager: super::configuration::UserConfigManager,
     input: super::configuration::SessionConfigInput,
-    authored: AdmittedSessionConfig,
+    credentials: crate::credentials::CredentialSnapshot,
     startup: &McpInitialSubmission,
 ) -> Result<(AdmittedSessionConfig, ModelBindingRegistry), LocalRuntimeError> {
     let prepared = execution
-        .capture_configuration(manager, input, authored)
+        .capture_configuration(manager, input, credentials)
         .await
         .map_err(|detail| LocalRuntimeError::Capability { detail })
         .and_then(|current| {
@@ -1163,11 +1156,6 @@ pub(crate) fn load_model_registry(
 pub enum LocalRuntimeError {
     /// The composition owner cancelled and settled initial preparation.
     Cancelled,
-    /// Current sources rejected an explicitly persisted Session selection.
-    SessionConfiguration {
-        session_id: SessionId,
-        diagnostic: Box<super::diagnostics::Diagnostic>,
-    },
     /// A startup file could not be read.
     Io {
         /// The path that failed.
@@ -1231,14 +1219,6 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::Observation { detail } => {
                 write!(f, "runtime observation subscription: {detail}")
             }
-            Self::SessionConfiguration {
-                session_id,
-                diagnostic,
-            } => write!(
-                f,
-                "Session {session_id} configuration at {}: {} ({})",
-                diagnostic.path, diagnostic.reason, diagnostic.correction
-            ),
             Self::SessionCatalog(error) => write!(f, "session catalog: {error}"),
         }
     }

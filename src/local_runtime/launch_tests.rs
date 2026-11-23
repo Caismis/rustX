@@ -1100,6 +1100,48 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
     fixture.shutdown().await;
 }
 
+#[tokio::test]
+async fn doctor_refuses_replaced_workspace_before_preparation() {
+    use super::probes::{ProbeState, execute, plan};
+
+    let fixture = Fixture::new();
+    let workspace = &fixture.host.launch_directory;
+    let marker = fixture.root.path().join("probe-started");
+    fixture.mcp(false, json!({
+        "local": {"command": "/bin/sh", "args": ["-c", format!("touch -- {}", marker.display())]}
+    }));
+    fixture.project(json!({"agent": {"tools": {"sources": {"local": "all"}}}}));
+    let launch = analyze(&fixture.request, &fixture.host).unwrap();
+    let prepared = plan(&launch, false);
+    assert!(
+        prepared
+            .targets
+            .iter()
+            .any(|target| target.target == "local" && target.spawn_process)
+    );
+    std::fs::rename(workspace, fixture.root.path().join("retained")).unwrap();
+    std::fs::create_dir(workspace).unwrap();
+
+    let mut effect = std::pin::pin!(execute(
+        &launch,
+        &prepared,
+        crate::runtime::CancellationSignal::new()
+    ));
+    let std::task::Poll::Ready(results) = futures_util::poll!(&mut effect) else {
+        panic!("a replaced Workspace must fail before Client admission");
+    };
+    let local = results
+        .iter()
+        .find(|result| result.target == "local")
+        .unwrap();
+    assert_eq!(local.state, ProbeState::Unavailable);
+    assert_eq!(
+        local.reason,
+        "workspace resource authority changed before effects"
+    );
+    assert!(!marker.exists());
+}
+
 #[test]
 fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
     let f = Fixture::new();

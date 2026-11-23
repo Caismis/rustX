@@ -1,7 +1,8 @@
 //! Durable admission fence for a physical binding which might outlive Server
 //! memory. Only exact, confirmed binding settlement may remove this record.
 use std::fs::File;
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
@@ -17,6 +18,8 @@ mod domain;
 pub use domain::LocalDomainGrant;
 
 const DIRECTORY: &str = "execution-pending";
+const MAX_MARKER_BYTES: usize = 8192;
+const MAX_INVENTORY_ENTRIES: usize = 4096;
 
 fn pending_directory(root: &File) -> io::Result<File> {
     let directory = File::from(openat(
@@ -74,6 +77,65 @@ impl RecoveryFence {
             Err(nix::errno::Errno::ENOENT) => Ok(false),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Checks authored Workspace authority without consuming any settlement.
+    ///
+    /// # Errors
+    /// Refuses an unreadable owner record or inventory beyond the scan bound.
+    pub fn workspace_pending(product_root: &Path, workspace: &Path) -> io::Result<bool> {
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        let directory = match pending_directory(&root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let mut entries = nix::dir::Dir::from_fd(directory.try_clone()?.into())?;
+        for (index, entry) in entries.iter().enumerate() {
+            if index == MAX_INVENTORY_ENTRIES {
+                return Err(io::Error::other(
+                    "execution recovery inventory exceeds scan bound",
+                ));
+            }
+            let entry = entry?;
+            let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+            if Path::new(name)
+                .extension()
+                .is_none_or(|extension| extension != "json")
+            {
+                continue;
+            }
+            let invalid = || {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid execution recovery owner",
+                )
+            };
+            let Some(file) = domain::private_file(&directory, name)? else {
+                if matches!(
+                    fstatat(&directory, name, AtFlags::AT_SYMLINK_NOFOLLOW),
+                    Err(nix::errno::Errno::ENOENT)
+                ) {
+                    continue;
+                }
+                return Err(invalid());
+            };
+            let mut bytes = Vec::new();
+            file.take(MAX_MARKER_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > MAX_MARKER_BYTES {
+                return Err(invalid());
+            }
+            let owner: rustx_execution_protocol::Admission =
+                serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+            if marker_name(&owner.session) != name {
+                return Err(invalid());
+            }
+            if owner.workspace.as_os_str() == workspace.as_os_str() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(super) fn create(

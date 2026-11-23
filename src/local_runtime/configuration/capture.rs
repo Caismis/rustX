@@ -1239,10 +1239,10 @@ impl UserConfigManager {
             agent_root,
             role_sources,
             locations,
-            workspace_resources: match resource_source {
-                ResourceSource::Authored => WorkspaceResourceAuthority::Authored,
-                ResourceSource::Bound(_) => WorkspaceResourceAuthority::Bound,
-            },
+            workspace_resources: authored_identity.map_or(
+                WorkspaceResourceAuthority::Bound,
+                WorkspaceResourceAuthority::Authored,
+            ),
             config: std::sync::Arc::new(config),
             models,
             provenance,
@@ -1279,7 +1279,9 @@ pub(in crate::local_runtime) fn canonical_directory(path: &Path) -> Result<PathB
     Ok(path)
 }
 
-fn authored_workspace_identity(path: &Path) -> Result<WorkspaceResourceIdentity, LaunchFailure> {
+pub(super) fn authored_workspace_identity(
+    path: &Path,
+) -> Result<WorkspaceResourceIdentity, LaunchFailure> {
     use std::os::unix::fs::MetadataExt as _;
     let metadata =
         std::fs::symlink_metadata(path).map_err(|error| workspace_resource_failure(path, error))?;

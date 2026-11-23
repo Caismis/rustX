@@ -548,11 +548,8 @@ impl ProspectiveSessionConfig {
     /// Recheck physical targets immediately before resource preparation. This
     /// never rereads launch documents and is not an execution filesystem sandbox.
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
-        if let super::WorkspaceResourceAuthority::Authored = self.workspace_resources
-            && super::capture::canonical_directory(&self.workspace)
-                .ok()
-                .as_ref()
-                != Some(&self.workspace)
+        if let super::WorkspaceResourceAuthority::Authored(identity) = self.workspace_resources
+            && super::capture::authored_workspace_identity(&self.workspace).ok() != Some(identity)
         {
             return Err("Workspace physical binding changed after capture".into());
         }
