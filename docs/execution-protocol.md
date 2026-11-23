@@ -605,13 +605,14 @@ pairs the `FileStamp` descriptor with an explicit `EntryKind`
 `fstatat` with `AT_SYMLINK_NOFOLLOW` through the retained
 `PackageDirectory` so a leaf symlink reports itself, never its target.
 `ClientRequest::ReadDirectory { relative_path, offset: u32,
-limit: u32, expected_revision }` is answered by `ClientReply::Directory
-{ revision, entries, next_offset }`: at most `limit` (never more than
+limit: u32, expected_revision, skip_hidden }` is answered by
+`ClientReply::Directory { revision, entries, next_offset, skipped }`: at most `limit` (never more than
 `MAX_DIRECTORY_PAGE_ENTRIES`, 128) `PageEntry` records carrying a
 sorted name plus its own `EntryStamp`, a directory `FileStamp`
 revision for the expected-revision check, and a continuation cursor
-that is exactly `offset + entries.len()` while a full page is
-delivered. For both, an empty `relative_path` names the workspace root
+that is exactly `offset + entries.len() + skipped` while a full page is
+consumed. Only Skill discovery may request hidden names be skipped. Those
+names still count toward both the cursor and the physical listing budget. For both, an empty `relative_path` names the workspace root
 itself — the only path that may; every other path is validated to
 normal components, intermediate symlinks are refused, and the Server
 side applies the same name discipline on the reply: strictly
@@ -624,6 +625,13 @@ the wire shape cannot honestly carry — a non-UTF-8 member — is
 reported `invalid` by the Client rather than emitted. Malformed replies — wrong cursor,
 unordered or illegal names, bad stamps — retire the stream and detach
 the binding exactly like a malformed `Range`.
+
+`ResolveResourceEntry` is used by Workspace Skill discovery. The Client
+resolves at most 32 links under the admitted directory using descriptor-relative
+metadata and link reads. Broken, cyclic and external targets are treated as
+missing. The reply carries the verified physical path relative to the
+admitted Workspace, its entry stamp and whether resolution crossed a link.
+Ordinary environment queries and file tools use their no-follow operations.
 
 ### Logical text pages (implemented)
 
@@ -1095,8 +1103,13 @@ then uses the existing ToolCall, Tasks and interaction owners. A process close
 is acknowledged only after supervision proves physical settlement. A transport
 failure after dispatch leaves the effect unknown and does not replay the call.
 
-Each binding has eight retained MCP sessions and 4,096 stdio identities. A
-session has four queued outbound records of at most 512 KiB, one send in flight
+One effective capability generation admits up to eight Client-owned stdio
+sources, including Managed Python. A binding retains at most sixteen physical
+sessions and 4,096 stdio identities. This fits a complete candidate alongside
+its predecessor and lets admitted old leases finish before physical close.
+Retiring sessions and other callers still consume physical slots. A candidate
+that exceeds remaining physical capacity cannot displace a last-good source.
+A session has four queued outbound records of at most 512 KiB, one send in flight
 and a five-second physical send bound. The Client limits each inbound JSON
 record to 16 MiB before parsing. It retains one incoming queue entry, one
 pending record and one paged record. The Server assembles at most one 16 MiB

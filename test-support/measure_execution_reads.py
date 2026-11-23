@@ -38,8 +38,8 @@ import time
 FRAME = 1024 * 1024
 WIDTH = 128
 MARKER = 'needle:"\\\t' + chr(0x96EA)
-PROBE_REVISION = "paired-v4"
-WIRE_VERSION = 4
+PROBE_REVISION = "paired-v5"
+WIRE_VERSION = 5
 WRITE_CHUNK_BYTES = 64 * 1024
 
 

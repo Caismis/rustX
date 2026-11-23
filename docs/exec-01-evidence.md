@@ -644,6 +644,30 @@ the wire: a range-read comparison would measure different work.
 
 Before changing selection or buffering algorithms, retain `a24cbf6e6` as the read-only comparison revision. Do not equate selecting a byte range with selecting lines or matches. Use the same release toolchain/profile, host, private roots and file generator for both variants. Record the generator seed, file byte lengths, offsets, UTF-8/escaping distribution and expected selected bytes. Use growing inputs and a fixed selected result, including near EOF. Count bytes at the Client file reader and complete encoded frames in both directions (including prefix), not just decoded result size. Count requests, not syscalls. Record Server and Client peak memory separately, data/control high-water marks and elapsed time per repetition. Report unsupported baseline operations as not comparable. No before/after delta or end-to-end performance result has yet been measured.
 
+### Revision-five Linux paired probe
+
+The updated probe ran three fresh debug Client processes per workload from
+binary SHA-256
+`18b9ada2a74357316621d27f4c009137368b85687de03776f03770056f50bf10`.
+Each sample verified both authenticated lanes and Ping, then required a
+physical Revoke receipt and a successful Client exit. Build activity ran
+on the same host. These figures describe the debug probe with one
+in-flight request and have a different profile and load from the
+revision-four release figures above.
+
+| Workload | Data RPCs | Client logical I/O | TX/RX framed bytes | Client peak KiB | Startup median ms | Transfer median ms | Shutdown median ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ReadLines, 64 MiB and 13 selected bytes | 1 | 67,108,877 read | 99/265 | 26,496 | 5.46 | 525.11 | 80.49 |
+| Grep, 64 MiB and 27 selected bytes | 1 | 134,217,897 read | 149/132 | 29,724 | 5.53 | 245.46 | 59.72 |
+| Write, 2 MiB | 34 | 2,097,152 written | 2,798,628/2,212 | 27,324 | 9.67 | 1,322.24 | 49.72 |
+
+The median source rates were 122 MiB/s for ReadLines, 261 MiB/s for Grep
+and 1.51 MiB/s for Write including commit. The Python measuring peer peaked
+at 18,824 KiB. Workload control traffic ranged from 133 to 1,872 bytes.
+The probe's one in-flight request measures its own scheduling limit.
+The product Server memory and queue saturation measurements use the
+separate App Server fixtures.
+
 ### Paired read probe during Agent Bash development
 
 Collected with the debug Client binary

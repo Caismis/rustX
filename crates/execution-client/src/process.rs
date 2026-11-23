@@ -1787,6 +1787,7 @@ async fn run_operation(
             }
         }
         tokio::select! {
+            () = witness.changed(), if !exit_published => {}
             result = &mut settlement, if termination.is_none() => {
                 termination = result.ok();
                 let Some(proof) = &termination else {
@@ -2159,6 +2160,125 @@ mod tests {
     };
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "fixture child and its independent guardian share the exact gate"
+    )]
+    fn client_death_after_supervisor_handoff_cannot_start_business() {
+        const FIXTURE: &str = "RUSTX_TEST_CLIENT_HANDOFF_DIRECTORY";
+        const TEST: &str =
+            "process::tests::client_death_after_supervisor_handoff_cannot_start_business";
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            let root = PathBuf::from(root);
+            let admission = admission(&root.join("workspace"));
+            let operations = Arc::new(Operations::new(admission.clone()).unwrap());
+            let key = fresh_key(&admission);
+            let invocation = spec(&["/bin/sh", "-c", "printf 'unexpected start' > started"]);
+            assert_eq!(
+                register(&operations, &key, &invocation),
+                ProcessReply::Registered { key: key.clone() }
+            );
+            let hold = arm_start_hold(&operations, &key);
+            operations.dispatch(ProcessRequest::Start { key });
+            runtime.block_on(async {
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+                hold.await_entered().await;
+                assert!(!admission.workspace.join("started").exists());
+                let mut peer = tokio::net::UnixStream::connect(root.join("witness"))
+                    .await
+                    .unwrap();
+                peer.write_all(b"handoff").await.unwrap();
+                peer.read_exact(&mut [0_u8]).await.unwrap();
+                panic!("the original Client must be killed with the START gate still held");
+            });
+            return;
+        }
+
+        assert!(supervisor_staged());
+        runtime.block_on(async {
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+            use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+            use tokio::io::{
+                AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader,
+            };
+
+            let executable = std::env::current_exe().unwrap();
+            let supervisor = executable.with_file_name("interactive-supervisor");
+            assert!(
+                supervisor.is_file(),
+                "the native test helper stages the guardian"
+            );
+            let root = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir_in("/tmp")
+                .unwrap();
+            std::fs::create_dir(root.path().join("workspace")).unwrap();
+            let authority = root.path().join("authority");
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&authority)
+                .unwrap();
+            let proof = authority.join("domain.proof");
+            std::fs::write(proof.with_extension("authority"), b"private test authority").unwrap();
+            let witness = tokio::net::UnixListener::bind(root.path().join("witness")).unwrap();
+            let mut expected = tokio::process::Command::new(supervisor)
+                .arg("client-domain")
+                .arg(&proof)
+                .arg(executable)
+                .args(["--exact", TEST, "--nocapture"])
+                .env(FIXTURE, root.path())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut lease = expected.stdin.take().unwrap();
+            let mut custody = BufReader::new(expected.stdout.take().unwrap()).lines();
+            let token = [83_u8; 32];
+            let proof = &proof;
+            tokio::time::timeout(Duration::from_secs(20), async {
+                lease.write_all(&token).await.unwrap();
+                let identity = custody.next_line().await.unwrap().unwrap();
+                let pid = Pid::from_raw(identity.strip_prefix("ready ").unwrap().parse().unwrap());
+                assert!(!proof.exists());
+                lease.write_all(b"G").await.unwrap();
+                let (mut connection, _) = witness.accept().await.unwrap();
+                let mut observed = [0; 7];
+                connection.read_exact(&mut observed).await.unwrap();
+                assert_eq!(&observed, b"handoff");
+                assert!(!root.path().join("workspace/started").exists());
+                assert!(!proof.exists());
+                kill(pid, Signal::SIGKILL).unwrap();
+                assert_eq!(connection.read(&mut [0]).await.unwrap(), 0);
+                loop {
+                    let record = custody
+                        .next_line()
+                        .await
+                        .unwrap()
+                        .expect("guardian custody receipt");
+                    if record.starts_with("settled ") {
+                        assert_eq!(record, "settled 137");
+                        break;
+                    }
+                }
+                assert!(expected.wait().await.unwrap().success());
+                assert_eq!(std::fs::read(proof).unwrap(), token);
+                assert!(!root.path().join("workspace/started").exists());
+            })
+            .await
+            .expect("the guardian reaps a Client killed after supervisor handoff");
+        });
+    }
 
     /// Whether the physical `bash-supervisor` sibling is staged beside
     /// this test binary — the tests exercise real spawn, so they require

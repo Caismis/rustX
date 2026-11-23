@@ -846,6 +846,7 @@ struct WitnessState {
     exited: std::sync::atomic::AtomicBool,
     /// -1 = no code observed (signal or unset), otherwise the exit code.
     exit_code: std::sync::atomic::AtomicI64,
+    progress: tokio::sync::Notify,
 }
 
 impl ProcessWitness {
@@ -867,11 +868,20 @@ impl ProcessWitness {
     /// platform reported no code.
     #[must_use]
     pub fn exit_code(&self) -> Option<i32> {
-        let code = self
-            .inner
-            .exit_code
-            .load(std::sync::atomic::Ordering::Acquire);
-        self.exited().then(|| i32::try_from(code).ok()).flatten()
+        self.exited()
+            .then(|| {
+                self.inner
+                    .exit_code
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            })
+            .and_then(|code| i32::try_from(code).ok())
+            .filter(|code| *code >= 0)
+    }
+
+    /// Wakes the lifecycle driver after a START or exit observation. The
+    /// driver reads both flags again since consecutive observations may merge.
+    pub async fn changed(&self) {
+        self.inner.progress.notified().await;
     }
 }
 
@@ -910,6 +920,7 @@ impl SupervisedCommandRunner {
                         .inner
                         .start_crossed
                         .store(true, std::sync::atomic::Ordering::Release);
+                    witness.inner.progress.notify_one();
                 }
                 written
             })
@@ -1239,6 +1250,7 @@ impl SupervisedCommandRunner {
                             .inner
                             .exited
                             .store(true, std::sync::atomic::Ordering::Release);
+                        self.witness.inner.progress.notify_one();
                         #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
                         if let Some(control) = self.control.as_ref()
                             && control.pause_at_shell_exit

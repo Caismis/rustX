@@ -1,4 +1,4 @@
-//! Loss of a real published Host result during a local Client generation change.
+//! Hosted output custody across real Client death at the storage and canonical cuts.
 
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -34,10 +34,59 @@ struct Launch {
     scratch: PathBuf,
 }
 
-struct HeldPublish {
+mod process_cuts;
+
+const START: &str = "start-of-host-output";
+const END: &str = "end-of-host-output";
+const FILL: usize = 240_000;
+const LENGTH: u64 = (START.len() + FILL + END.len()) as u64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrashCut {
+    Allocated,
+    LastWrite,
+    Sealed,
+    PublishReceipt,
+    Canonical,
+}
+
+impl CrashCut {
+    fn physical_length(self, request: &ClientRequest, reply: &SaveReply) -> Option<u64> {
+        match (self, request, reply) {
+            (
+                Self::Allocated,
+                ClientRequest::Save(SaveRequest::Begin { .. }),
+                SaveReply::Begun { .. },
+            ) => Some(0),
+            (
+                Self::LastWrite,
+                ClientRequest::Save(SaveRequest::Chunk { .. }),
+                SaveReply::Chunked { next_offset, .. },
+            ) if next_offset.get() == LENGTH => Some(LENGTH),
+            (
+                Self::Sealed,
+                ClientRequest::Save(SaveRequest::Seal { .. }),
+                SaveReply::Sealed { length, .. },
+            )
+            | (
+                Self::PublishReceipt | Self::Canonical,
+                ClientRequest::Save(SaveRequest::Publish { .. }),
+                SaveReply::Published { length, .. },
+            ) => Some(length.get()),
+            _ => None,
+        }
+    }
+}
+
+struct ObservedSave {
     receipt: SaveReply,
+    length: u64,
+    late_delivery: Option<LateDelivery>,
+}
+
+struct LateDelivery {
     resume: oneshot::Sender<()>,
-    observed_late: oneshot::Receiver<io::Result<()>>,
+    observed: oneshot::Receiver<io::Result<()>>,
 }
 
 async fn read<T: serde::de::DeserializeOwned>(lane: &mut UnixStream) -> io::Result<T> {
@@ -164,50 +213,70 @@ async fn proxy_launch(
     )
 }
 
-async fn hold_publication(
+async fn observe_save_cut(
     mut client: UnixStream,
     mut server: UnixStream,
     offsets: watch::Sender<u64>,
-    published: oneshot::Sender<HeldPublish>,
+    cut: CrashCut,
+    observed: oneshot::Sender<ObservedSave>,
 ) {
-    loop {
-        let request = read::<ClientRequest>(&mut server).await.unwrap();
-        write(&mut client, &request).await.unwrap();
-        let reply = read::<ClientReply>(&mut client).await.unwrap();
-        if let ClientReply::Save(receipt @ SaveReply::Published { .. }) = reply {
-            assert!(matches!(
-                request,
-                ClientRequest::Save(SaveRequest::Publish { .. })
-            ));
+    let mut observed = Some(observed);
+    while let Ok(request) = read::<ClientRequest>(&mut server).await {
+        if write(&mut client, &request).await.is_err() {
+            break;
+        }
+        let Ok(reply) = read::<ClientReply>(&mut client).await else {
+            break;
+        };
+        let ClientReply::Save(receipt) = &reply else {
+            write(&mut server, &reply).await.unwrap();
+            continue;
+        };
+        if let SaveReply::Chunked {
+            next_offset,
+            duplicate,
+            ..
+        } = receipt
+        {
+            assert!(!duplicate);
+            offsets.send_replace(next_offset.get());
+        }
+        if let Some(length) = cut.physical_length(&request, receipt) {
+            let observed = observed.take().expect("one physical cut");
+            if cut == CrashCut::Canonical {
+                write(&mut server, &reply).await.unwrap();
+                observed
+                    .send(ObservedSave {
+                        receipt: receipt.clone(),
+                        length,
+                        late_delivery: None,
+                    })
+                    .ok()
+                    .unwrap();
+                continue;
+            }
             let (resume, release) = oneshot::channel();
-            let (late, observed_late) = oneshot::channel();
-            published
-                .send(HeldPublish {
+            let (late, late_receipt) = oneshot::channel();
+            observed
+                .send(ObservedSave {
                     receipt: receipt.clone(),
-                    resume,
-                    observed_late,
+                    length,
+                    late_delivery: Some(LateDelivery {
+                        resume,
+                        observed: late_receipt,
+                    }),
                 })
                 .ok()
                 .unwrap();
             release.await.unwrap();
-            late.send(write(&mut server, &ClientReply::Save(receipt)).await)
-                .ok()
-                .unwrap();
+            late.send(write(&mut server, &reply).await).ok().unwrap();
             let mut trailing = [0];
             assert!(matches!(server.read(&mut trailing).await, Ok(0) | Err(_)));
             return;
         }
         write(&mut server, &reply).await.unwrap();
-        if let ClientReply::Save(SaveReply::Chunked {
-            next_offset,
-            duplicate,
-            ..
-        }) = reply
-        {
-            assert!(!duplicate);
-            offsets.send_replace(next_offset.get());
-        }
     }
+    assert!(observed.is_none(), "the original Client reached {cut:?}");
 }
 
 async fn reject_save_replay(mut client: UnixStream, mut server: UnixStream) {
@@ -258,7 +327,7 @@ async fn upload(peer: &mut Peer, verb: &str, params: Value) {
 async fn upload_result(
     peer: &mut Peer,
     request: &ServerRequest,
-    mut offsets: watch::Receiver<u64>,
+    mut progress: Option<watch::Receiver<u64>>,
 ) -> usize {
     let ServerRequestMethod::ToolCall(call) = &request.call else {
         panic!("Host callback");
@@ -269,10 +338,7 @@ async fn upload_result(
     candidate["turnId"] = json!(call.turn_id);
     candidate["callId"] = json!(call.call_id);
     candidate["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
-    let body = format!(
-        "start-of-host-output{}end-of-host-output",
-        "x".repeat(240_000)
-    );
+    let body = format!("{START}{}{END}", "x".repeat(FILL));
     let items = json!([{"typeTag": 1, "length": body.len().to_string()}]);
     upload(
         peer,
@@ -293,7 +359,9 @@ async fn upload_result(
         )
         .await;
         offset += chunk.len();
-        if offset > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES {
+        if offset > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+            && let Some(offsets) = &mut progress
+        {
             offsets
                 .wait_for(|written| *written >= offset as u64)
                 .await
@@ -360,6 +428,22 @@ async fn create_host_session(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_published_host_output_cannot_cross_a_local_client_generation() {
+    crash_during_output(CrashCut::PublishReceipt).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_result_after_client_death_at_private_save_cuts() {
+    for cut in [CrashCut::Allocated, CrashCut::LastWrite, CrashCut::Sealed] {
+        crash_during_output(cut).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_death_after_canonical_host_result_cannot_rewrite_saved_history() {
+    crash_during_output(CrashCut::Canonical).await;
+}
+
+async fn crash_during_output(cut: CrashCut) {
     tokio::time::timeout(Duration::from_secs(90), async {
         let Some(provider) = ProviderEmulator::start("app_server_host_broadcast").await else {
             return;
@@ -379,13 +463,14 @@ async fn a_published_host_output_cannot_cross_a_local_client_generation() {
         stage_wrapper(&binary, &witness_path);
         let (start_old, old_started) = oneshot::channel();
         let (start_new, new_started) = oneshot::channel();
-        let (saw_publish, published) = oneshot::channel();
+        let (saw_save, reached_cut) = oneshot::channel();
         let (offsets, progress) = watch::channel(0);
         let relay = tokio::spawn(async move {
             let (old, (data, server_data), (mut control, mut server_control)) =
                 proxy_launch(&witness, scratch.path(), 1).await;
             start_old.send(old).ok().unwrap();
-            let old_data = tokio::spawn(hold_publication(data, server_data, offsets, saw_publish));
+            let old_data =
+                tokio::spawn(observe_save_cut(data, server_data, offsets, cut, saw_save));
             let old_control = tokio::spawn(async move {
                 let _ = tokio::io::copy_bidirectional(&mut control, &mut server_control).await;
             });
@@ -431,12 +516,25 @@ async fn a_published_host_output_cannot_cross_a_local_client_generation() {
         let ServerMessage::Request(request) = peer.callback().await else {
             panic!("Host callback");
         };
+        let progress = (cut != CrashCut::Allocated).then_some(progress);
         let bytes = upload_result(&mut peer, &request, progress).await;
-        let held = published.await.unwrap();
-        let SaveReply::Published { key, length, .. } = held.receipt else {
-            panic!("physically published");
+        assert_eq!(bytes as u64, LENGTH);
+        let held = reached_cut.await.unwrap();
+        let key = match &held.receipt {
+            SaveReply::Begun { key }
+            | SaveReply::Chunked { key, .. }
+            | SaveReply::Sealed { key, .. }
+            | SaveReply::Published { key, .. } => key,
+            reply => panic!("observed the actual save receipt: {reply:?}"),
         };
-        assert_eq!(length.get(), bytes as u64);
+        assert_eq!(
+            held.length,
+            if cut == CrashCut::Allocated {
+                0
+            } else {
+                LENGTH
+            }
+        );
         assert_eq!(key.owner.generation, old.admission.generation);
         assert_eq!(key.owner.instance, old.admission.instance);
         let captures = std::fs::read_dir(&old.scratch)
@@ -450,7 +548,7 @@ async fn a_published_host_output_cannot_cross_a_local_client_generation() {
             })
             .collect::<Vec<_>>();
         let [capture] = captures.as_slice() else {
-            panic!("one published output: {captures:?}");
+            panic!("one Client-owned output at {cut:?}: {captures:?}");
         };
         let [file] = std::fs::read_dir(capture)
             .unwrap()
@@ -458,10 +556,15 @@ async fn a_published_host_output_cannot_cross_a_local_client_generation() {
             .unwrap()
             .try_into()
             .unwrap();
-        assert_eq!(file.metadata().unwrap().len(), bytes as u64);
+        assert_eq!(file.metadata().unwrap().len(), held.length);
+        if cut == CrashCut::Canonical {
+            peer.settled(&turn_id).await;
+        }
         kill(old.pid, Signal::SIGKILL).unwrap();
 
-        peer.settled(&turn_id).await;
+        if cut != CrashCut::Canonical {
+            peer.settled(&turn_id).await;
+        }
         let new = new_started.await.unwrap();
         assert_ne!(old.pid, new.pid);
         assert_eq!(new.admission.session, old.admission.session);
@@ -474,12 +577,14 @@ async fn a_published_host_output_cannot_cross_a_local_client_generation() {
             !old.scratch.exists(),
             "the independent guardian removed exact old storage"
         );
-        held.resume.send(()).unwrap();
-        if let Err(error) = held.observed_late.await.unwrap() {
-            assert!(
-                rustx_execution_protocol::transport::recoverable_lane_loss(&error),
-                "{error}"
-            );
+        if let Some(late) = held.late_delivery {
+            late.resume.send(()).unwrap();
+            if let Err(error) = late.observed.await.unwrap() {
+                assert!(
+                    rustx_execution_protocol::transport::recoverable_lane_loss(&error),
+                    "{error}"
+                );
+            }
         }
         let MethodResult::FileChunk { chunk } = peer
             .rpc(Method::FsReadFile {
@@ -524,10 +629,17 @@ async fn a_published_host_output_cannot_cross_a_local_client_generation() {
             panic!("expected one canonical Host result");
         };
         assert_eq!(result.status, ToolExecutionStatus::Success);
-        assert!(matches!(
-            result.managed_output.as_deref(),
-            Some(ManagedOutputContinuation::Unavailable { .. })
-        ));
+        if cut == CrashCut::Canonical {
+            assert!(matches!(
+                result.managed_output.as_deref(),
+                Some(ManagedOutputContinuation::Complete { .. })
+            ));
+        } else {
+            assert!(matches!(
+                result.managed_output.as_deref(),
+                Some(ManagedOutputContinuation::Unavailable { .. })
+            ));
+        }
         provider.finish().await;
     })
     .await

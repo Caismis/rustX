@@ -63,6 +63,8 @@ without independent proof from its physical host.
 | T27, T62, T65 | `local_restart_requires_namespace_settlement_after_server_sigkill` | A real command starts once and holds a descendant's socket. SIGSTOP pauses the independent helper, SIGKILL kills the Server, and a fresh App Server refuses the Session while the descendant still holds the socket. Resuming the helper closes that socket, publishes the original receipt and permits a fresh Server to read the unchanged Workspace. The old argv marker still occurs once. |
 | T09, T10, T61, T65 | `client_sigkill_advances_only_the_original_session_generation` | The kernel reports the original live Client's exact host PID. After SIGKILL a new PID proves admission, the same running Server keeps the Session and increases generation from 1 to 2, and its real Workspace read succeeds. This test does not deliver a late operation reply. |
 | T62–T64 | `namespace_receipt_covers_a_detached_session_and_requires_the_guardian` | A private Client-init fixture has no physical START before the grant. It creates a private candidate and a descendant in its own session which holds a socket and ignores TERM. Killing namespace init closes the socket and removes the exact scratch directory before the authenticated receipt. The fixture clears the launcher’s parent-death signal. Killing the guardian still closes the descendant’s socket through the acknowledged pidfd watcher and produces no receipt. An unrelated process remains live. |
+| T62 | `client_death_at_wire_and_companion_boundaries_never_replays_start` | The standalone App Server loses the real Client after registration, at the companion's exec-entry gate, while a silent command holds an independent TCP socket, and after the real terminal snapshot. The first two cuts have zero business starts. The last two have one. Post-START loss returns OutcomeUnknown and admits a new Client only after the old scratch directory is gone. The new Client reads the original Workspace and receives zero old process requests. No Agent model request or ToolResult is created. |
+| T62 | `client_death_after_supervisor_handoff_cannot_start_business` | The real supervisor hands off its retained anchor to a Client test process under the product guardian. An existing test seam holds the physical START grant. SIGKILL closes the original witness and yields the authenticated domain receipt while the business marker remains absent. |
 | T62, T65 | `independent_domain_receipt_retires_only_the_original_session_incarnation`, `local_restart_budget_honors_at_most_three_attempts_and_stable_reset` | The durable fence rejects missing, incorrect and cross-generation evidence. A logical clock checks 1/2/4-second backoff, the rolling 60-second threshold and five-minute stable reset. |
 | T57 (Client) | `a_replacement_client_refuses_the_retired_generation_save_identity` | A real Client receives a physical Chunk and then exits. On the new generation, its old Begin, Chunk, Publish and Abort are all refused, including when the new candidate deliberately reuses the operation bytes. Its first legitimate Chunk still starts at offset zero. |
 
@@ -100,6 +102,13 @@ file is excluded from expiry, including when its publication reply was
 lost. The storage regression injects one unlink failure, verifies retained
 capacity, then proves retry releases exactly one slot and the published
 file remains readable.
+
+The EXEC-03 Hosted crash tests exercise allocation, final write, seal,
+publication receipt and canonical commit with a real supervised Client.
+Each old physical directory is removed before replacement admission, the
+replacement receives no Save replay, and the resulting history contains
+one business result. The final-commit case retains its historical
+publication evidence after the original Client's storage is gone.
 
 ## Same-instance reattachment
 
@@ -181,14 +190,9 @@ settlement or process-exit assertions.
 
 ## Open gates
 
-- The Linux local proof uses the exact retained physical domain. The
-  deferred proofs include the remaining registration/spawn/handoff/ACK
-  fault matrix, remaining interrupted durable stages, and native macOS
-  settlement.
-- The physical candidate Spill writer, Root stdio and delegated stdio relay
-  run through the bound Client in EXEC-03. Three real stdio boundary tests
-  cover MRTR continuation, the original Questionnaire owner and cancellation
-  before the next task poll. They confirm physical close and reap the Client.
-  Full restart cleanup and additional cross-role and Client Store fault
-  coverage remain open, along with native macOS fault injection and final
-  exact-head verification.
+- The Linux crash proofs cover registration, companion launch, retained
+  supervisor handoff, Running, and the terminal reply. Native macOS
+  settlement and fault injection are deferred.
+- The Client-owned Store, offline cleanup owner, same-instance recovery
+  and delegated stdio paths each have Linux coverage above. The final
+  exact-head FULL and Merge verification are recorded separately.

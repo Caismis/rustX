@@ -80,7 +80,10 @@ of the Workspace collection rejects the candidate and retains the last
 adopted snapshot. An absent collection is an empty source.
 
 The Linux mount fixture places the only copy of the Skill, its reference
-and its script alongside 2,050 decoy assets in the Client view. Its first
+and its script alongside 2,050 decoy assets in the Client view. It follows
+the linked collection, package and marker only within that Workspace.
+An external link is skipped and a hidden non-UTF-8 name consumes one scan
+slot without reaching the Server. Its first
 model request contains the metadata and real Skill path. Native Read brings
 the instructions into the third request, then reads the reference while
 Native Bash runs the script. The fourth request contains both results. Only
@@ -262,6 +265,21 @@ passed 82 tests, including the new START cut. Strict workspace Clippy and
 eight Managed Python tool regressions passed. The latter exercise stdio and
 the existing fingerprinted Store and do not measure Client-side preparation.
 
+The Client resolves a Workspace-authored relative command from the
+document's source base. A contained sibling path may reach an executable
+linked within the admitted Workspace. The process fixture uses a sibling
+program and a Client-only link, and the physical unit test rejects links
+and relative commands that leave the Workspace. User-authored relative
+commands and cwd are interpreted by the admitted Client. Absolute system
+executables and PATH discovery retain their Client-side meaning.
+
+A real rotation fixture opens eight Client-owned stdio peers, admits an
+old lease, then replaces all eight with the same model-facing schemas.
+Sixteen distinct physical starts coexist under the allocation bound.
+The old lease can reach its original eight peers until it is dropped.
+Retirement physically closes those peers and a ninth demanded source is
+refused before starting a process or replacing the adopted snapshot.
+
 A separate Linux debug run of the same mount fixture took 2.046 seconds
 including startup and teardown. Sampling procfs every 10 ms recorded peak
 RSS of 185,232 KiB for the App Server and 35,008 KiB for the Execution Client.
@@ -309,15 +327,17 @@ child path independently of the stdio relay fixture.
 ## HTTP MCP and managed output
 
 The existing rmcp streamable HTTP transport stays on the Server. It bounds
-SSE events at 16 MiB, runs up to 16 ordinary POSTs per transport, and retains
-a separate control POST with a five-second timeout. The pinned reqwest
+SSE events at 16 MiB and runs up to 16 ordinary POSTs per transport. The
+Server shares sixteen ordinary POST slots across all transports. A slot is
+held through complete JSON reads or until the POST SSE stream is released.
+The separate control POST keeps its five-second timeout. The pinned reqwest
 adapter independently caps successful JSON bodies at 16 MiB and error bodies
 at 64 KiB. A declared excess is rejected before reading. A chunked excess is rejected before extending
 the bounded accumulation. The decoder may hold
 the response bytes alongside the parsed result and its allocations. Sixteen
-ordinary requests could therefore buffer up to 256 MiB of JSON bodies per
-transport in addition to decode and transport overhead. These bounds cover
-retained body bytes.
+ordinary requests can concurrently buffer up to 256 MiB of JSON body bytes
+across the Server, plus decoding and transport overhead. Unsolicited GET
+streams and the control exchanges have their independent per-stream limits.
 
 Three real Linux Server-only fixtures ran against the same HTTP implementation.
 Procfs was sampled every 5 ms, excluding the separate `rustx init` enrollment
@@ -398,6 +418,13 @@ released against the old lane after canonical completion. The replacement
 reads the original Workspace and receives zero Save requests. The durable
 result counts one successful Host ToolResult with an unavailable locator,
 and the provider counts one tool call and one bounded model continuation.
+The private save matrix also kills the real Client after allocation,
+after its last accepted write and after sealing. None has an authoritative
+publication, and each produces one successful bounded business result with
+unavailable storage. A separate cut kills the Client after canonical
+commit. The historical Complete receipt is preserved while the old
+physical directory is removed. Neither the replacement nor late old
+receipts can turn any of these into another Save or ToolResult.
 
 On `010da0b9c`, a Linux debug run of that standalone scenario took 2.831 s
 including enrollment and fixture teardown. The active App Server peaked at
@@ -416,6 +443,12 @@ startup and teardown. The Host harness memory includes test peers and
 payload generation. Installed-product latency, Linux standalone Hosted peak
 RSS, internal queue high-water and profiling across multiple concurrent
 Sessions remain open.
+
+A live HTTP test shares one response slot between independent client
+owners. One POST holds a real response body. A second request is cancelled
+while waiting for its slot and never reaches the peer. An existing control
+notification succeeds during the hold. Closing the first body lets the
+next request enter and return the slot.
 
 The standalone HTTP process fixture reused the same measure for a 327,680-byte
 result. Its App Server peaked at 188,688 KiB (0.79 s user and 0.03 s system
