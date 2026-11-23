@@ -757,6 +757,12 @@ skip:
   `RUSTX_REQUIRE_PROVIDER_EMULATOR` set a missing uv fails. CI sets it on
   every step that runs such a boundary. The TUI integration suite applies
   the same variable to uv and to the built `rustx` binary.
+  Managed Python acceptance can also use
+  `RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE` with a pre-seeded uv cache for the
+  test interpreter. Seed both `fastmcp==4.0.3` and
+  `fastmcp-tasks==4.0.3` for the full boundary suite. The real Client
+  fixtures copy the cache into each private Store and run actual offline
+  resolution and installation before the MCP assertions.
 - **`python3` on the supervised PATH** — required, never skipped, by the
   Linux process-containment escape regressions.
 - **Container engine** — `pnpm test:e2e` requires Docker or Podman

@@ -169,6 +169,12 @@ environment and exercised all three exposure selections with the original
 publication barrier. Two earlier cold Linux runs stopped during PyPI downloads
 before reaching that barrier.
 
+The real Client MRTR and Tasks boundary fixtures also copy a seeded uv
+cache into each owner-only Store and run uv offline. The cache contains
+the FastMCP pin and the Tasks extension. Both fixtures and five related
+contract tests passed without changing the physical startup, invocation,
+settlement or process-exit assertions.
+
 ## Open gates
 
 - The Linux local proof uses the exact retained physical domain. The

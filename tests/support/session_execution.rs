@@ -18,7 +18,10 @@
 //! outer runtime flavor matters.
 
 use std::io;
-use std::os::unix::process::CommandExt as _;
+use std::os::unix::{
+    fs::{DirBuilderExt as _, PermissionsExt as _},
+    process::CommandExt as _,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -35,6 +38,54 @@ use rustx::local_runtime::session_runtime_manager::{
 };
 use rustx::runtime::identity::SessionId;
 use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+
+const MANAGED_STORE: &str = ".local/share/rustx/environments/python-tools";
+
+fn managed_python_path(home: &Path) -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").expect("the test runner has a PATH");
+    let Some(warmed) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE") else {
+        return path;
+    };
+    // The Client still creates the project and materializes its own Store.
+    // Supplying cached wheels lets the physical test run without PyPI.
+    let cache = home.join(MANAGED_STORE).join("uv-cache");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&cache)
+        .expect("private Store cache");
+    let copy = Command::new("/bin/cp")
+        .arg("-a")
+        .arg(PathBuf::from(warmed).join("."))
+        .arg(cache)
+        .output()
+        .expect("copy the prepared wheels");
+    assert!(
+        copy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&copy.stderr)
+    );
+
+    let uv = std::env::split_paths(&path)
+        .map(|directory| directory.join("uv"))
+        .find(|binary| binary.is_file())
+        .expect("the test runner has uv")
+        .canonicalize()
+        .expect("canonical uv");
+    let bin = home.join("bin");
+    std::fs::create_dir(&bin).expect("private fixture binaries");
+    let wrapper = bin.join("uv");
+    let uv = uv.to_str().expect("UTF-8 uv path").replace('\'', "'\\''");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec '{uv}' --offline \"$@\"\n"),
+    )
+    .expect("offline uv launcher");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))
+        .expect("executable uv launcher");
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path)))
+        .expect("Client fixture PATH")
+}
 
 /// The staged `rustx-execution-client` sibling this test binary was
 /// prepared with — the same real binary deployment the production
@@ -208,9 +259,7 @@ impl ExecutionFixture {
 
     #[allow(dead_code)] // used by the tools integration harness
     pub fn managed_store(&self) -> PathBuf {
-        self.temporary
-            .path()
-            .join("home/.local/share/rustx/environments/python-tools")
+        self.temporary.path().join("home").join(MANAGED_STORE)
     }
 
     #[allow(dead_code)] // used by the native Managed Python boundary suites
@@ -300,7 +349,7 @@ impl ExecutionFixture {
             };
             command.env_clear();
             if prepare_python {
-                command.env("HOME", &home).env("PATH", std::env::var_os("PATH").unwrap_or_default());
+                command.env("HOME", &home).env("PATH", managed_python_path(&home));
             }
             let mut child = ChildGuard(
                 command

@@ -666,7 +666,8 @@ request_params = '{"temperature":0.37,"seed":17}'
 max_output_tokens = { mode = "limit", tokens = 333 }"#,
     );
     if explicit_model {
-        session.push_str("\n[subagents.roles.explore.model]\nmodel = \"fixture/delegated-model\"\n");
+        session
+            .push_str("\n[subagents.roles.explore.model]\nmodel = \"fixture/delegated-model\"\n");
     }
     let mut process = spawn_parent(root.path(), &models, &session, "subagent-secret").await;
 
@@ -762,7 +763,9 @@ max_output_tokens = { mode = "limit", tokens = 333 }"#,
             body.contains("count the workspace files") && !body.contains("please delegate")
         })
         .expect("the child's own model request was observed");
-    let parent_requests = bodies.iter().filter(|body| body.contains("please delegate"));
+    let parent_requests = bodies
+        .iter()
+        .filter(|body| body.contains("please delegate"));
     assert_eq!(bodies.len(), 4);
     assert_eq!(parent_requests.clone().count(), 3);
     let budget = |request: &serde_json::Value| {
