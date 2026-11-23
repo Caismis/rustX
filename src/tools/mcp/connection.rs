@@ -258,7 +258,7 @@ impl McpConnection {
         let _ = self.declaration_key.set(key);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn forget_cached_declarations(&self) {
         if let Some(key) = self.declaration_key.get() {
             super::declaration_cache::invalidate(key.domain);

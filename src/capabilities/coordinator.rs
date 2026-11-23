@@ -634,7 +634,7 @@ impl CapabilityCoordinator {
         self.inner.extension_tools.shape()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn forget_cached_declarations(&self) {
         let state = self.inner.state.lock().expect("capability state");
         for generation in &state.mcp_runtimes {
