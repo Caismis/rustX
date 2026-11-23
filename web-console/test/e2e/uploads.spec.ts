@@ -141,7 +141,15 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
 
 test('24 files including a six MiB document use the binary lane without a model request', async ({ page }) => {
   const fixture = await startDogfood('web_upload_conformance');
-  const wire = await wireProbe(page);
+  const confirmed = new Set<string>();
+  let confirmAll!: (failure?: string) => void;
+  const nativeReady = new Promise<string | undefined>(resolve => { confirmAll = resolve; });
+  const wire = await wireProbe(page, { result(result) {
+    if (result.type !== 'upload_status') return;
+    if (result.outcome.state !== 'ready') { confirmAll(result.outcome.state); return; }
+    for (const upload of result.outcome.files) confirmed.add(upload.file.name);
+    if (confirmed.size === 24) confirmAll();
+  } });
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
@@ -150,6 +158,7 @@ test('24 files including a six MiB document use the binary lane without a model 
     const session = await selectedSessionId(page);
     const document = Buffer.alloc(6 * 1024 * 1024, 'a'); document.write('# Ordinary Markdown document\n');
     await page.getByLabel('Attach files').setInputFiles([{ name: 'large-document.md', mimeType: 'text/markdown', buffer: document }, ...Array.from({ length: 23 }, (_, index) => ({ name: `note-${index}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`note ${index}`) }))]);
+    expect(await nativeReady).toBeUndefined();
     await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(24);
     const root = join(fixture.workspaceA, '.agents/uploads', session); const batches = readdirSync(root);
     expect(batches).toHaveLength(24);
