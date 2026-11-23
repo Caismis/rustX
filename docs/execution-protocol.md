@@ -2,9 +2,10 @@
 
 Status: accepted. The current implementation includes binding arbitration,
 authenticated local and WebSocket bootstrap, bounded filesystem queries and
-mutations, watches, and supervised process execution. The
-[acceptance ledger](exec-01-evidence.md) records the evidence and open #576
-requirements for the current PR.
+mutations, watches, supervised process execution, bounded same-instance
+recovery, Client-owned storage and stdio MCP, and streamed Hosted reception.
+The [EXEC-01](exec-01-evidence.md), [EXEC-02](exec-02-evidence.md) and
+[EXEC-03](exec-03-evidence.md) ledgers record the evidence and verification gates.
 
 This ADR grounds its decisions in the verified server/client separation
 plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
@@ -15,9 +16,9 @@ and in these issues:
   <https://github.com/Caismis/rustX/issues/576>
 - Live-instance recovery and re-admission proof:
   <https://github.com/Caismis/rustX/issues/577>
-- Follow-on execution boundary work:
+- Hosted, configuration and MCP integration:
   <https://github.com/Caismis/rustX/issues/578>
-- Follow-on integration work:
+- Installed-product integration:
   <https://github.com/Caismis/rustX/issues/579>
 - Earlier Server/Client groundwork
   (<https://github.com/Caismis/rustX/issues/571>) is still open at this
@@ -27,14 +28,16 @@ Fixed reference commits from the plan (frozen snapshots, not
 "current HEAD" claims; only the plan hash above was re-verified): rustX
 `d82d7f9b8d9dd4f5064dba8d377103c8c6049d28`, Codex
 `ee344ca9458351a6ea102795fa73110ad3ede5dc`, Pi
-`22fc026b872b4a7df22ffa94e8fa00b873128054`. The actual implementation
-base of this branch is `f0cd4f59d`.
+`22fc026b872b4a7df22ffa94e8fa00b873128054`. EXEC-01 began on
+`f0cd4f59d`. The stacked EXEC-03 branch starts at
+`5ff54d8327917bca2cdbc9647d7da197afe8beed` on the EXEC-01 branch
+after it incorporated EXEC-02.
 
 ## Decision
 
 ### Crate and naming boundary
 
-The workspace has four execution members; the names are fixed.
+The execution boundary uses these workspace members.
 
 - `rustx-execution-protocol` (`crates/execution-protocol`): the single
   wire definition — identity newtypes, `Hello`, `Admission`, `Reject`,
@@ -42,6 +45,8 @@ The workspace has four execution members; the names are fixed.
   `Bootstrap`, the `Capability` vocabulary, the `transport` record
   framing, and the frozen resource bounds. Both sides serialize these
   exact DTOs; there is no duplicated contract type.
+- `rustx-execution-transport` (`crates/execution-transport`): paired
+  channel transport, TLS and frame deadlines, shared by both processes.
 - `rustx-execution-server` (`crates/execution-server`): a library for
   binding arbitration and local acceptance owned by the Agent Server.
   It is not a new Agent, not a binary, and not a transport deployment.
@@ -59,9 +64,9 @@ and directory-page readers —
   include the protocol and transport crates, descriptor-relative filesystem
   and document readers, and the physical process supervisor. The production
   dependency tree excludes the Agent Server, canonical store and model adapters.
-- The main Agent Server remains the existing `rustx` package; its
-  `package_io` module and environment file readers are thin wrappers
-  over `rustx-confined-fs`, preserving every existing semantic.
+- The main Agent Server remains the existing `rustx` package. Its
+  `package_io` module uses `rustx-confined-fs` for Server-owned files.
+  Physical queries on an admitted Workspace use the Client.
 
 The implemented Client supports authenticated local and WebSocket binding,
 bounded file queries and tree mutations, conditional writes and edits,
@@ -1063,10 +1068,10 @@ connection. The 5-second save deadline is an independent finite budget for
 one optional save; it never extends the calling operation's remaining
 deadline and never re-arms on slow writes.
 
-## Frozen pending contracts
+## Operation and publication contracts
 
-These are normative shapes frozen by this ADR. They are not implemented in
-this layer, and code must not fake them.
+The Server and Client implement the following contracts on the negotiated
+execution binding.
 
 ### START: pre-execution atomic registration
 
@@ -1091,6 +1096,15 @@ starting the process; `START` verifies acceptance evidence at the same
 registration.
 
 ### Server → Client optional save
+
+The Client negotiates `ManagedOutput` and admits at most 16 candidates,
+17 MiB per file and 4,096 identities per binding. It appends validated,
+contiguous new bytes. Seal fixes the raw length and SHA-256. Publish
+makes the opaque locator readable only by the owning Conversation. Abort
+and expiry hold the file and quota until unlink is proved. Graceful data
+teardown and Revoke attempt cleanup. Offline cleanup after Client death
+requires physical-domain attestation. See the Hosted reception contract
+and [EXEC-03 evidence](exec-03-evidence.md).
 
 ### Client-owned stdio MCP
 
@@ -1218,40 +1232,18 @@ fixed at `Begin`, verified again at `End`, and bounded. Chunk bytes
 append to the incremental digest; re-derived metadata never mutates the
 envelope.
 
-## Explicitly not claimed
+## Production routing and settlement
 
-- The remote transport is a real authenticated WebSocket channel with
-  identical record/Session semantics as the Unix socket, bound to
-  a loopback `wss` listener with a per-reservation pinned certificate or
-  an operator-provisioned `wss` ingress with a trusted local forwarding
-  hop. Recovery stays #577. The paired control lane —
-  health, `CancelMutation`, `Revoke` on an independent channel — is
-  implemented and exercised at member and endpoint level including
-  real physical congestion proofs; what remains open under T11 is
-  end-to-end proof at the product Agent-flow level (a real mid-commit
-  cancel raced against a live composed Client), not the mechanism.
-- Optional save (EXEC-03) reuses the EXEC-01 Save envelope and validation
-  state machine. The real Client negotiates `ManagedOutput` and admits at
-  most 16 candidates, 17 MiB per file and 4,096 identities per binding.
-  It appends only validated, contiguous new bytes. Seal fixes the raw
-  length and SHA-256. Publish makes the opaque locator readable only by the
-  owner. Abort and expiry hold the file and quota until unlink is proved.
-  Graceful data teardown and Revoke attempt cleanup; offline cleanup after
-  Client death still requires physical-domain attestation. See the
-  Hosted reception contract and [EXEC-03 evidence](exec-03-evidence.md).
-- No MCP session or file
-  operation beyond the range read, the two query operations, the
-  two-phase conditional write, the conditional edit, the two
-  logical-text page
-  operations, the bounded search, and the typed process-operation
-  family (`Register`/`Start`/`Query`/`OutputPage`/`WriteStdin`/
-  `CloseStdin`/`Resize`/`InputReceipt`/`ReleaseOutput` on
-  `ClientRequest::Process`, with `ControlRequest::CancelProcess` on
-  the control lane) exists
-  behind `Admission`;
-  `Binding::status()` is observation only, and a `Live` phase is a
-  connection fact, not an integration claim. `Capability::Files` and
-  everything it implies stay unadvertised until that capability lands.
+- The authenticated WebSocket and Unix socket transports use the same
+  Session, operation and recovery contracts. An independent control lane
+  carries health, process and mutation cancellation, and Revoke. The
+  Linux UI-detach test holds a data reply, occupies all four control slots
+  and verifies Client settlement and exact output release. The Client
+  file-publication test verifies the physical mutation cancellation cut.
+  The Hosted saturation test holds a Save reply while receiving Host
+  chunks and completing Client Health.
+- `Binding::status()` observes the connection. Dispatch depends on the
+  individual negotiated capability and the readiness of the named service.
   App Server's `command/exec` registers one
   operation per UI `processId` on the Session's admitted endpoint,
   drives it through the typed exchanges on the data lane, and cancels
@@ -1369,7 +1361,8 @@ envelope.
 - The App Server reserves one endpoint from the Session catalog under the
   residency owner. The explicitly local Agent entry and the App Server's
   local execution option launch the trusted sibling over that same paired
-  Unix protocol. They pass an empty environment and seal standard I/O.
+  Unix protocol. They pass an allowlist for runtime discovery and seal
+  standard I/O.
   Normal shutdown confirms Client-side revocation, closes the data transport
   and reaps an owned sibling. A busy data exchange is interrupted by the
   binding fence.
@@ -1720,26 +1713,37 @@ Optional O-SUM (only if explicitly selected; not a release gate):
 
 ## Verification
 
-Commands for this layer (run from the repository root):
+Workspace verification commands from the repository root:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy -p rustx-execution-client -p rustx-execution-server -p rustx-execution-protocol -p rustx-confined-fs --all-targets --locked -- -D warnings
-cargo test -p rustx-execution-client -p rustx-execution-server -p rustx-execution-protocol -p rustx-confined-fs --locked
-cargo check -p rustx --all-targets --all-features --locked
-cargo tree -p rustx-execution-client -e normal --locked
-cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
+cargo check --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+python3 test-support/prepare_native_tests.py -- cargo test --workspace --all-features --locked --no-run
+cargo test --workspace --all-features --locked
+cargo test --workspace --all-features --doc --locked
+cargo build --workspace --bins --release --locked
+pnpm --dir protocol/app-server check
+pnpm --dir protocol/app-server typecheck
 ```
 
-Distinct mount-view evidence (Linux, opt-in, requires bubblewrap — a
-read-only T02 fragment, not a CI gate). One script runs both proofs:
-the boundary-layer RPC and the product-entrance composition:
+The independent builds use `cargo build -p rustx --bin rustx --release
+--locked` and `cargo build -p rustx-execution-client --bin
+rustx-execution-client --release --locked`. Compare their production
+dependencies with `cargo tree -p rustx --edges normal --locked` and
+`cargo tree -p rustx-execution-client --edges normal --locked`.
+The repository's [test guide](../tests/README.md) describes the actual
+FULL jobs and Merge verification.
+
+The opt-in Linux mount script requires Bubblewrap. It runs the standalone
+Client proof and the App Server composition, including native Read,
+Write, Bash, Managed Python, stdio MCP, configuration and child routing.
 
 ```sh
 test-support/prove_execution_mount_view.sh
 ```
 
-Landed evidence: canonical generation parsing; exact credential wire
+Initial EXEC-01 evidence: canonical generation parsing; exact credential wire
 form with redaction and no echo in errors; workspace normalization; the
 credential verifier checked before any field probe; literal `OsStr`
 workspace comparison rejecting `/work//root`; wrong-field rejection
@@ -1814,7 +1818,7 @@ stdin bytes and close, resize, cap/timeout, output-before-final
 ordering, UI detach cancelling only the issuing connection's
 operation, host drain cancelling commands before waiting for request
 settlement, and `revocation_before_native_start` — the Server-side
-dispatch hold plus the supervisor's own diagnostics trace proving
+dispatch hold plus the business process's own marker and PID proving
 zero business spawn when revocation wins and exactly one when START
 does. This is a T05 fragment (cancel before dispatch → zero
 execution) and the first T29 implementation evidence (UI-direct
@@ -1822,12 +1826,10 @@ commands create no Attempt; disconnect cleans only the issuing
 connection's operations); the process kernel's independent build and
 the supervisor-helper staging are a further T24 fragment, with Agent
 Server retains canonical Bash settlement and projection.
-T03/T24/T28's connection-singularity,
-dependency-boundary, and cross-instance rejection portions and T42's
-bounded-read portion have their first coverage here; the remainder of
-the matrix is pending in its owning layer. The process-owned Session
-claim adds a further limited T03/T28 fragment — registry-level proof
+These cases establish initial T03/T24/T28 connection-singularity,
+dependency-boundary and cross-instance rejection proofs, and T42
+bounded-read evidence. The process-owned Session claim adds registry proof
 that one claimant wins preparation, that a dropped waiter never strands
 the claim, that two Sessions never share binding material, and that
-delete/drain revokes — but it dispatches no work and proves no recovery,
-so the full contracts stay pending in their owning layers.
+delete and drain revoke. The three evidence ledgers above record the
+product execution and recovery proofs and the verification results.
