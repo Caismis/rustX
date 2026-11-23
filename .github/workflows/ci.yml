@@ -800,20 +800,23 @@ jobs:
       - name: Compile unit and in-crate boundary test harnesses and stage the real executables
         run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
 
+      # macOS runners start with a 256-descriptor soft limit while the lib
+      # test binary drives ~4400 unit tests concurrently, each holding
+      # tempdirs, watchers and collection locks; the exhaustion surfaces as
+      # transient `Io` failures. `ulimit` must run inside the step's shell, so
+      # append it to $BASH_ENV — GitHub sources that file for every later bash
+      # step in this job, which also keeps the cargo test steps single-line as
+      # the lane checker requires.
+      - name: Raise the file-descriptor ceiling for test steps
+        run: printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' >> "$BASH_ENV"
+
       - name: Run unit tests and the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         # The scripted contract suites are `cfg(target_os = "linux")` and are
         # not compiled on macOS, so no `scripted_suites::` skip belongs here:
         # a skip that excludes nothing fails the lane checker.
-        run: |
-          # macOS runners start with a 256-descriptor soft limit while this
-          # single test binary drives ~4400 unit tests concurrently, each
-          # holding tempdirs, watchers and collection locks; the exhaustion
-          # surfaces as transient `Io` failures. Raise the ceiling before
-          # running the suite.
-          ulimit -n 10240 || ulimit -n 4096
-          /usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
