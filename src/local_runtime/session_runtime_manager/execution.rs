@@ -276,7 +276,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v4`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v5`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -2183,7 +2183,7 @@ impl SessionExecutionScope {
         .await
         .map(|page| match page {
             rustx_execution_server::ContinuationPage::Lines(lines) => project_lines(lines).1,
-            rustx_execution_server::ContinuationPage::Search(_) => {
+            _ => {
                 unreachable!("validated Bash Read reply")
             }
         })

@@ -147,6 +147,15 @@ new pair and the runtime applies the new values. Releasing the old capture
 leaves the new values intact, without any model request. Drain reaps the
 Client.
 
+Saved-output byte paging uses the same admitted locator and Conversation
+as line reads. The real Native Read fixture imports a single long line
+with a four-byte UTF-8 character split by the first range boundary. The
+first result provides the next valid offset, the second returns the whole
+character and remaining bytes, and a caller pointing inside the character
+receives a typed failure. The paired wire fixture rejects a second
+Conversation and matches Grep by the published filename. Revision 4 is
+refused on both handshake lanes before any business request can run.
+
 The Workflow editor can list an authored HTTP source for an unclaimed
 Workspace, including when an unbound Session is selected. The authoring
 catalog starts no stdio or Managed Python process in that state. A reserved

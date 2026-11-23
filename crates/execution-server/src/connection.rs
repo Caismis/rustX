@@ -60,6 +60,8 @@ pub struct DirectoryListing {
 pub enum ContinuationPage {
     /// A checked logical-text page.
     Lines(LinesPage),
+    /// A checked byte range of a saved output.
+    Range(RangeRead),
     /// A checked search page.
     Search(SearchResult),
 }
@@ -868,6 +870,7 @@ impl LocalConnection {
                 ..
             } => Capability::AgentBash,
             ClientRequest::ReadSavedOutput { .. }
+            | ClientRequest::ReadSavedOutputRange { .. }
             | ClientRequest::SearchSavedOutput {
                 spec: SearchSpec::Grep { .. },
                 ..
@@ -886,6 +889,14 @@ impl LocalConnection {
             | ClientRequest::ReadSavedOutput { offset, limit, .. } => self
                 .validate_lines(offset.get(), limit.map(DecimalU64::get), None, &reply)
                 .map(ContinuationPage::Lines),
+            ClientRequest::ReadSavedOutputRange { offset, .. } => self
+                .validate_range(
+                    offset.get(),
+                    rustx_execution_protocol::MAX_TEXT_BYTES,
+                    None,
+                    &reply,
+                )
+                .map(ContinuationPage::Range),
             ClientRequest::SearchBashOutput {
                 spec: SearchSpec::Grep { context, limit, .. },
                 ..

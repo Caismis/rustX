@@ -28,10 +28,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v4";
+pub const EXECUTION_PATH: &str = "/execution/v5";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -1106,6 +1106,15 @@ pub enum ClientRequest {
         /// Optional positive line limit.
         limit: Option<DecimalU64>,
     },
+    /// Read up to `MAX_TEXT_BYTES` saved bytes at a zero-based offset.
+    ReadSavedOutputRange {
+        /// The published locator under this binding.
+        locator: crate::save::Locator,
+        /// The Conversation making the read.
+        conversation: crate::save::ConversationId,
+        /// The byte offset to start at.
+        offset: DecimalU64,
+    },
     /// Search one published Client-owned import.
     SearchSavedOutput {
         /// The published locator under this binding.
@@ -1680,7 +1689,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v4` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v5` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

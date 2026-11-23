@@ -158,7 +158,7 @@ async fn run_grep(
             .await
             .map(|page| match page {
                 rustx_execution_server::ContinuationPage::Search(search) => search,
-                rustx_execution_server::ContinuationPage::Lines(_) => {
+                _ => {
                     unreachable!("validated Bash Grep reply")
                 }
             })

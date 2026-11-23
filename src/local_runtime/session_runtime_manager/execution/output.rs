@@ -62,7 +62,29 @@ impl SessionExecutionScope {
         .await
         .map(|page| match page {
             ContinuationPage::Lines(lines) => super::project_lines(lines).1,
-            ContinuationPage::Search(_) => unreachable!("validated saved output Read reply"),
+            _ => unreachable!("validated saved output Read reply"),
+        })
+    }
+
+    pub(crate) async fn read_saved_output_range(
+        &self,
+        locator: Locator,
+        conversation: ConversationId,
+        offset: u64,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_execution_server::RangeRead> {
+        self.inspect_saved_output(
+            ClientRequest::ReadSavedOutputRange {
+                locator,
+                conversation,
+                offset: offset.into(),
+            },
+            cancellation,
+        )
+        .await
+        .map(|page| match page {
+            ContinuationPage::Range(range) => range,
+            _ => unreachable!("validated saved output range"),
         })
     }
 
@@ -84,7 +106,7 @@ impl SessionExecutionScope {
         .await
         .map(|page| match page {
             ContinuationPage::Search(search) => search,
-            ContinuationPage::Lines(_) => unreachable!("validated saved output Grep reply"),
+            _ => unreachable!("validated saved output Grep reply"),
         })
     }
 

@@ -535,7 +535,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v4"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v5"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -688,14 +688,14 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 }
 
 #[test]
-fn revision_two_cannot_admit_either_lane_in_revision_three() {
+fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
     let (binding, credential) = Binding::reserve(reservation()).unwrap();
     let hello = valid_hello(&credential);
     let mut old = hello.clone();
-    old.version = 3;
+    old.version = 4;
     let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
     write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
     write_record(
@@ -742,9 +742,9 @@ fn revision_two_cannot_admit_either_lane_in_revision_three() {
         Err(Reject::UnsupportedVersion)
     );
     assert_eq!(binding.status().phase, BindingPhase::Reserved);
-    // Only a matched revision-three pair can yield a business dispatch lane.
+    // Only a matched pair on the current revision can admit business work.
     let connection = pair_control_half(&binding, &hello, &challenge);
-    assert_eq!(connection.admission().version, 3);
+    assert_eq!(connection.admission().version, PROTOCOL_VERSION);
     assert_eq!(binding.status().phase, BindingPhase::Live);
 }
 
@@ -3232,7 +3232,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v4"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v5"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {

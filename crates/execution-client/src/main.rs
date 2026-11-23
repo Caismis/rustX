@@ -991,6 +991,26 @@ fn serve_requests(
                 .unwrap_or_else(|error| ClientReply::Error {
                     kind: read_error(&error),
                 }),
+            ClientRequest::ReadSavedOutputRange {
+                locator,
+                conversation,
+                offset,
+            } => saves
+                .lock()
+                .expect("managed output")
+                .with_published(&locator, &conversation, |root, path| {
+                    read_range(
+                        root,
+                        path,
+                        offset,
+                        u32::try_from(rustx_execution_protocol::MAX_TEXT_BYTES)
+                            .expect("bounded saved-output page"),
+                        None,
+                    )
+                })
+                .unwrap_or_else(|error| ClientReply::Error {
+                    kind: read_error(&error),
+                }),
             ClientRequest::SearchSavedOutput {
                 locator,
                 conversation,

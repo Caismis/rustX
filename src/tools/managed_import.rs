@@ -39,11 +39,6 @@ pub(crate) fn locator_at(path: &Path) -> Option<Locator> {
     Locator::parse(&format!("save:{token}"))
 }
 
-fn locator_path(locator: Locator) -> Option<PathBuf> {
-    let name = String::from(locator);
-    Some(Path::new(OUTPUT_ROOT).join(name.strip_prefix("save:")?))
-}
-
 pub(crate) enum Import {
     Prefix {
         scope: SessionExecutionScope,
@@ -149,7 +144,7 @@ impl Import {
                 .await
                 .ok()
                 .flatten()
-                .and_then(locator_path)
+                .map(|locator| Path::new(OUTPUT_ROOT).join(locator.file_name()))
         })
         .await
         .ok()

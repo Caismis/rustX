@@ -2669,6 +2669,27 @@ fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
             .kind(),
         std::io::ErrorKind::NotFound,
     );
+    let range = |conversation| ClientRequest::ReadSavedOutputRange {
+        conversation,
+        locator: locator.clone(),
+        offset: 7.into(),
+    };
+    assert!(matches!(
+        connection.inspect_output(&range(owner.conversation.clone()), deadline, || Ok(())).unwrap(),
+        ContinuationPage::Range(page) if page.bytes == &data[7..] && page.next_offset.is_none(),
+    ));
+    assert_eq!(
+        connection
+            .inspect_output(
+                &range(ConversationId::parse("conv-2").unwrap()),
+                deadline,
+                || Ok(())
+            )
+            .err()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::NotFound,
+    );
     let name = locator.file_name().to_owned();
     let grep = ClientRequest::SearchSavedOutput {
         conversation: owner.conversation.clone(),

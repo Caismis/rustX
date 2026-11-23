@@ -478,7 +478,7 @@ fn upgrade<S: IoStream + Send + 'static>(
 }
 
 /// Server-side upgrade of an accepted TCP peer under one absolute
-/// deadline. The request must target exactly `/execution/v4` and must not
+/// deadline. The request must target exactly `/execution/v5` and must not
 /// carry a browser `Origin` header — this channel speaks only to the
 /// authenticated Execution Client, never to a browser context.
 ///
@@ -572,7 +572,7 @@ fn accept_with_tls(
             };
             // Origin-form only: an absolute-form request-target carries a
             // scheme/authority and is refused outright, and path+query
-            // must be exactly `/execution/v4` — a query or fragment is
+            // must be exactly `/execution/v5` — a query or fragment is
             // never tolerated.
             let exact_path = request.uri().scheme().is_none()
                 && request.uri().authority().is_none()
