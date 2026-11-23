@@ -275,6 +275,8 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
     await editor(page).getByLabel('Workflow Start', { exact: true }).focus(); await editor(page).getByLabel('Workflow Start', { exact: true }).press('Enter');
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Add parallel node');
+    // Park the cursor: a hover left over the bare description field paints it.
+    await page.mouse.move(0, 0);
     await expectStableScreenshot(page.locator('[data-workflows-level="editor"]'), 'workflow-editor.png');
     await accessible(page, '[data-workflows-level="editor"] header');
     await accessible(page, '[aria-label="Inspector"]');
@@ -330,6 +332,7 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     const predicates = page.getByRole('complementary', { name: 'Inspector' }).getByRole('combobox', { name: 'Predicate', exact: true });
     await expect(predicates).toHaveCount(2);
     for (const predicate of await predicates.all()) await expect(predicate).toHaveValue('boolean');
+    await page.mouse.move(0, 0);
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
   } finally { await stopDogfoodPage(page, fixture, false); }
 });
