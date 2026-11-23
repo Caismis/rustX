@@ -187,7 +187,16 @@ fn write_executable(path: &Path, body: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("parent");
     }
-    std::fs::write(path, body).expect("script");
+    // Keep the writable descriptor in a child and reap it before exec.
+    // A parallel spawn from libtest could otherwise inherit the writer
+    // until that spawn reaches exec and temporarily make this script busy.
+    let status = std::process::Command::new("/bin/sh")
+        .args(["-c", "printf '%s' \"$2\" > \"$1\"", "write-fixture-script"])
+        .arg(path)
+        .arg(body)
+        .status()
+        .expect("write script");
+    assert!(status.success(), "write fixture script {path:?}: {status}");
     let mut permissions = std::fs::metadata(path).expect("meta").permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions).expect("mode");

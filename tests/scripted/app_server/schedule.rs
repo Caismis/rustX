@@ -870,16 +870,34 @@ async fn hot_schedule_operation_lease_is_joined_before_runtime_writer_retirement
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bounded_scan_skips_a_stalled_reader_and_drain_retains_its_physical_tail() {
     bounded(async {
+        struct ReleaseParked<'a> {
+            read: &'a AsyncGate,
+            response: &'a HeaderGate,
+        }
+        impl Drop for ReleaseParked<'_> {
+            fn drop(&mut self) {
+                self.read.release();
+                self.response.release();
+            }
+        }
+
         let mut f = Fixture::new().await;
         let (utc, monotonic, _waiting) = manual_driver(&mut f);
         let a = f.sessions[0].active_conversation_id.clone();
         let probe = f.manager.probe(&a);
         probe.schedule_native_read.arm();
+        let release = ReleaseParked {
+            read: &probe.schedule_native_read,
+            response: &f.gates[0],
+        };
+        let mut phases = FixturePhase::new("stalled Scheduler reader");
         receipt(start(&f, 1, "due-b").await.unwrap().unwrap());
         utc.add(60);
         let task = driver(&f);
+        phases.enter("park original native reader");
         probe.schedule_native_read.entered().await;
         monotonic.advance(super::super::schedule_driver::READ_MS);
+        phases.enter("observe independent model request");
         f.gates[0].wait_entered().await;
         let health = f.manager.schedule_driver_diagnostics();
         assert!(!health.sources[&a].available);
@@ -894,15 +912,30 @@ async fn bounded_scan_skips_a_stalled_reader_and_drain_retains_its_physical_tail
         assert_eq!(health.pass_overruns, 0);
         assert_eq!(health.discovery_bound_ms, health.pass_bound_ms * 2 + 30_000);
         assert!(health.last_pass_ms <= health.pass_bound_ms);
+        phases.enter("join closed Scheduler admission");
         f.host.begin_drain();
         assert!(task.await.unwrap().is_ok());
+        let mut reads = f
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .schedule_reads
+            .subscribe();
+        // A losing read can outlive the driver. Wait for the sole
+        // deliberately stalled reader while its physical gate stays closed.
+        phases.enter("settle other native readers");
+        reads.wait_for(|count| *count == 1).await.unwrap();
+        probe.schedule_native_read.parked(1).await;
         assert_eq!(f.manager.diagnostics().schedule_reads, 1);
         assert!(!f.manager.is_empty());
-        probe.schedule_native_read.release();
-        f.gates[0].release();
+        phases.enter("release the stalled reader and drain");
+        drop(release);
         assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         assert!(f.manager.is_empty());
         f.close().await;
+        phases.finish();
     })
     .await;
 }

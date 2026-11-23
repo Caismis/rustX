@@ -730,5 +730,17 @@ flags compiled and staged the entire Boundary target set in a 20 GiB
 cgroup in 12m 28s, with a 17,680,314,368-byte cgroup peak and zero OOM
 kills. The successful hosted Boundary job kept its original settings.
 
+Later concurrent local verification exposed two test-fixture races. The
+Scheduler drain fixture waits for the read counter to settle to the one
+deliberately parked reader after the driver exits. The test verifies
+that reader's gate is still occupied and releases both gates on unwind
+so a failed assertion can finish reporting. The repaired case passed 16
+individual runs, the 42-case concurrent Scheduler slice and the full
+Server library run. The Workspace Python alias fixture encountered
+`ETXTBSY` on a newly written executable under parallel process launch.
+A separate writer process now finishes before the harness invokes the
+fixture executable. All 67 Workspace Python tests passed six consecutive
+runs with their original interpreter and witness assertions.
+
 The fixture and evidence follow-ups require their own exact-head FULL
 and Merge verification. Native macOS verification is deferred.
