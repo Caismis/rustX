@@ -38,7 +38,6 @@ pub mod inbound;
 pub(crate) mod interaction;
 /// The rustX-side driver of one long-lived interactive process (MCP stdio
 /// servers), owning physical settlement of the interactive supervisor unit.
-pub(crate) mod interactive_process;
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
 pub mod monotonic;

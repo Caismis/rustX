@@ -80,6 +80,7 @@ impl ChildExecutionGrant {
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             managed_output: std::sync::OnceLock::from(false),
+            stdio_mcp: std::sync::OnceLock::from(false),
             workspace: workspace.to_path_buf(),
         };
         Ok(SessionExecutionScope {

@@ -73,7 +73,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -301,7 +301,7 @@ mod unix_tests {
                 permissions: None,
                 tool_permissions: std::collections::BTreeMap::new(),
             };
-            let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+            let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
                 &server_id,
                 &binding,
                 &workspace,
@@ -497,7 +497,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let mcp_runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let mcp_runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -650,7 +650,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -837,7 +837,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -1050,7 +1050,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,

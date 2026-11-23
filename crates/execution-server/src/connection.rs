@@ -732,6 +732,56 @@ impl LocalConnection {
         }
     }
 
+    /// Exchanges one message with this binding's stdio MCP session.
+    ///
+    /// # Errors
+    ///
+    /// Missing capability, a pre-dispatch refusal, lost connection or
+    /// contradictory operation identity.
+    pub fn mcp_by(
+        &mut self,
+        request: rustx_execution_protocol::mcp::Request,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::mcp::Reply> {
+        use rustx_execution_protocol::mcp::{Reply, Request};
+
+        if !self.supports(Capability::StdioMcp) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let key = request.key().clone();
+        let state = matches!(&request, Request::Open { .. } | Request::State { .. });
+        let close = matches!(&request, Request::Close { .. });
+        let send = matches!(&request, Request::Send { .. });
+        let page = match &request {
+            Request::Receive {
+                sequence, offset, ..
+            } => Some((*sequence, *offset)),
+            _ => None,
+        };
+        let reply =
+            self.exchange_admitted(&ClientRequest::Mcp(request), Some(deadline), admit, || ())?;
+        if let ClientReply::Mcp(response) = reply
+            && response.key == key
+            && match &response.reply {
+                Reply::Failed(_) | Reply::Closed => true,
+                Reply::Opening | Reply::Ready { .. } => state,
+                Reply::Closing => close || state,
+                Reply::Queued => send,
+                Reply::Pending => page.is_some(),
+                Reply::Page {
+                    sequence, offset, ..
+                } => page == Some((*sequence, *offset)),
+            }
+        {
+            return Ok(response.reply);
+        }
+        Err(self.retire(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "stdio MCP reply contradicts its request",
+        )))
+    }
+
     /// Run one bounded Read or Grep over the authorized Client-owned continuation.
     ///
     /// # Errors

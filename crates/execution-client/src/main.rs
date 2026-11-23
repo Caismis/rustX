@@ -54,6 +54,7 @@ use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
 mod bash_capture;
 mod changes;
+mod mcp;
 mod mutation;
 mod process;
 mod saves;
@@ -226,6 +227,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::Process,
             Capability::AgentBash,
             Capability::ManagedOutput,
+            Capability::StdioMcp,
         ]),
         credential: bootstrap.credential,
     };
@@ -676,6 +678,7 @@ fn serve(
     watches: &watch::Watches,
     saves: &std::sync::Mutex<saves::Saves>,
 ) -> Result<(), String> {
+    let mut mcp = mcp::Sessions::default();
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
     // private stage — when the owner is dropped at EOF or revoke.
@@ -746,6 +749,7 @@ fn serve(
                     }
                 }
             }
+            ClientRequest::Mcp(request) => ClientReply::Mcp(mcp.exchange(request, operations)),
             ClientRequest::Save(request) => ClientReply::Save(if arbitration.is_revoked() {
                 rustx_execution_protocol::save::SaveReply::Refused {
                     code: rustx_execution_protocol::save::SaveCode::StaleOwner,

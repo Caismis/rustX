@@ -1,0 +1,215 @@
+//! Execution transport for an admitted Client-owned stdio MCP session.
+//! The application peer's protocol is distinct from the `RustX` binding.
+
+use std::{collections::BTreeMap, fmt, path::PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{DecimalU64, process::ProcessOperationKey};
+
+/// Maximum simultaneous stdio sessions on a binding.
+pub const MAX_SESSIONS: usize = 8;
+/// Maximum negotiated or inbound MCP record before splitting it into pages.
+pub const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
+/// A complete outbound record fits in one Execution frame after base64.
+pub const MAX_SEND_BYTES: usize = 512 * 1024;
+/// Pending outbound records per session.
+pub const MAX_PENDING_SENDS: usize = 4;
+
+/// Immutable Client-side launch parameters. Cwd is relative to the bound root.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Launch {
+    /// Executable name or a Workspace-relative or absolute Client path.
+    pub program: PathBuf,
+    /// Original arguments.
+    pub args: Vec<String>,
+    /// Workspace-relative cwd. Empty denotes the bound root.
+    pub cwd: PathBuf,
+    /// Explicit stdio process environment.
+    pub environment: BTreeMap<String, String>,
+    /// The ordered protocol versions authorized for this source.
+    pub versions: Vec<String>,
+    /// The authorized legacy handshake version for an external source.
+    /// A managed package uses discovery only.
+    pub legacy_version: Option<String>,
+}
+
+impl fmt::Debug for Launch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Launch")
+            .field("program_configured", &!self.program.as_os_str().is_empty())
+            .field("args", &self.args.len())
+            .field("cwd", &self.cwd)
+            .field(
+                "environment_keys",
+                &self.environment.keys().collect::<Vec<_>>(),
+            )
+            .field("versions", &self.versions)
+            .field("legacy_version", &self.legacy_version)
+            .finish()
+    }
+}
+
+/// The authenticated Server's view of a single physical MCP session.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Request {
+    /// Register the identity and enqueue the first and only handshake.
+    Open {
+        /// Full binding identity plus a fresh operation ID.
+        key: ProcessOperationKey,
+        /// Frozen Client-side inputs.
+        launch: Launch,
+    },
+    /// Get the state and, if ready, negotiation evidence.
+    State {
+        /// The originally registered operation.
+        key: ProcessOperationKey,
+    },
+    /// Queue exactly one complete post-handshake MCP message.
+    Send {
+        /// The originally registered operation.
+        key: ProcessOperationKey,
+        /// The serialized message in canonical base64.
+        data_base64: String,
+    },
+    /// Observe the next page of the next Client-owned MCP record.
+    Receive {
+        /// The originally registered operation.
+        key: ProcessOperationKey,
+        /// The expected message number, starting at one.
+        sequence: DecimalU64,
+        /// Offset in that message. Zero for the first page.
+        offset: DecimalU64,
+    },
+    /// Stop a session and take its settlement evidence once available.
+    Close {
+        /// The originally registered operation.
+        key: ProcessOperationKey,
+    },
+}
+
+impl fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match self {
+            Self::Open { .. } => "Open",
+            Self::State { .. } => "State",
+            Self::Send { .. } => "Send",
+            Self::Receive { .. } => "Receive",
+            Self::Close { .. } => "Close",
+        };
+        formatter
+            .debug_struct(kind)
+            .field("key", self.key())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Request {
+    /// The exact identity carried by every request.
+    #[must_use]
+    pub const fn key(&self) -> &ProcessOperationKey {
+        match self {
+            Self::Open { key, .. }
+            | Self::State { key }
+            | Self::Send { key, .. }
+            | Self::Receive { key, .. }
+            | Self::Close { key } => key,
+        }
+    }
+}
+
+/// MCP startup refusal or transport failure, without peer-controlled text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Failure {
+    /// Invalid or conflicting launch or traffic.
+    Invalid,
+    /// Another binding owns the operation.
+    Foreign,
+    /// No slot is available.
+    Capacity,
+    /// The session has closed or does not exist.
+    Unavailable,
+    /// The peer negotiated no compatible revision.
+    UnsupportedRevision,
+    /// The handshake failed or expired.
+    Handshake,
+    /// A malformed or oversized MCP record closed the stream.
+    InvalidRecord,
+    /// A stream operation did not complete.
+    Transport,
+    /// The physical unit could not be proved terminal.
+    SettlementUnconfirmed,
+}
+
+/// One typed reply that echoes the whole operation identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Response {
+    /// Binding and operation being observed.
+    pub key: ProcessOperationKey,
+    /// The outcome reported by its owner.
+    pub reply: Reply,
+}
+
+/// A correlated reply from the physical session owner.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Reply {
+    /// An operation was registered. Query State for the outcome.
+    Opening,
+    /// The exact negotiated SDK peer information and next unused request ID.
+    Ready {
+        /// JSON-encoded `ClientTransportAdmission` in canonical base64.
+        admission_base64: String,
+    },
+    /// Nothing is waiting on this bounded lane.
+    Pending,
+    /// A complete outbound record entered the private queue.
+    Queued,
+    /// One page of one inbound message.
+    Page {
+        /// The expected message number.
+        sequence: DecimalU64,
+        /// The requested byte offset.
+        offset: DecimalU64,
+        /// At most one raw execution chunk, base64 encoded.
+        data_base64: String,
+        /// The final page ends this message.
+        last: bool,
+    },
+    /// Shutdown was requested and the physical owner is still settling.
+    Closing,
+    /// The physical unit is proved terminal.
+    Closed,
+    /// Request refused or the owner retained a failure.
+    Failed(Failure),
+}
+
+impl fmt::Debug for Reply {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Opening => formatter.write_str("Opening"),
+            Self::Ready { .. } => formatter.write_str("Ready"),
+            Self::Pending => formatter.write_str("Pending"),
+            Self::Queued => formatter.write_str("Queued"),
+            Self::Page {
+                sequence,
+                offset,
+                last,
+                ..
+            } => formatter
+                .debug_struct("Page")
+                .field("sequence", sequence)
+                .field("offset", offset)
+                .field("last", last)
+                .finish_non_exhaustive(),
+            Self::Closing => formatter.write_str("Closing"),
+            Self::Closed => formatter.write_str("Closed"),
+            Self::Failed(failure) => formatter.debug_tuple("Failed").field(failure).finish(),
+        }
+    }
+}

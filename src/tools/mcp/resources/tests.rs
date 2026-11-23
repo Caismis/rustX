@@ -79,7 +79,7 @@ impl HttpPeer {
         name: &str,
     ) -> Arc<McpConnection> {
         let invalidation = Arc::new(McpInvalidationState::default());
-        let connected = McpServerRuntime::connect(
+        let connected = McpServerRuntime::connect_fixture(
             &McpServerId::new(name),
             &self.binding,
             tools.workspace(),
@@ -482,7 +482,7 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
                 environment,
             },
         };
-        let connected = McpServerRuntime::connect(
+        let connected = McpServerRuntime::connect_fixture(
             &McpServerId::new("resource-stdio"),
             &binding,
             tools.workspace(),

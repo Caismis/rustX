@@ -251,24 +251,29 @@ impl UserConfigManager {
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
         let (context, read) = crate::bounded_file::recording_reads(|| {
-            self.resolve_captured_layers(layers, true, credentials)
-                .and_then(|capture| {
-                    capture
-                        .config
-                        .validate_resources()
-                        .map_err(|e| e.to_string())?;
-                    Ok(capture)
-                })
-                .and_then(|capture| {
-                    self.resolve_resources(
-                        request,
-                        capture,
-                        workspace.map_or(ResourceSource::Authored, |(endpoint, retained)| {
-                            ResourceSource::Bound { endpoint, retained }
-                        }),
-                    )
-                })
-                .map_err(|error| error.diagnostic.reason)
+            self.resolve_captured_layers(
+                layers,
+                true,
+                credentials,
+                workspace.map(|(endpoint, _)| endpoint),
+            )
+            .and_then(|capture| {
+                capture
+                    .config
+                    .validate_resources()
+                    .map_err(|e| e.to_string())?;
+                Ok(capture)
+            })
+            .and_then(|capture| {
+                self.resolve_resources(
+                    request,
+                    capture,
+                    workspace.map_or(ResourceSource::Authored, |(endpoint, retained)| {
+                        ResourceSource::Bound { endpoint, retained }
+                    }),
+                )
+            })
+            .map_err(|error| error.diagnostic.reason)
         });
         self.verify_documents(&documents, &revisions)
             .map_err(|error| error.to_string())?;
@@ -313,7 +318,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.resolve_captured_layers(layers, false, None)?;
+        let capture = self.resolve_captured_layers(layers, false, None, None)?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -515,6 +520,7 @@ impl UserConfigManager {
         capture: LayerCapture,
         allow_unselected: bool,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
+        workspace_endpoint: Option<&LocalExecutionEndpoint>,
     ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
@@ -657,9 +663,17 @@ impl UserConfigManager {
                 })
                 .transpose()?;
         }
-        let mcp = super::super::mcp_resources::load(
+        let mcp = super::super::mcp_resources::load_with_workspace(
             &self.sources.home_directory.join("rustx/.agents"),
             Some(&locations.workspace),
+            |path| match workspace_endpoint {
+                Some(endpoint) => read_bound_mcp(endpoint).map_err(|error| {
+                    crate::runtime_client::types::RuntimeClientError::InvalidRequest {
+                        message: error.to_string(),
+                    }
+                }),
+                None => super::super::settings::read_document(path),
+            },
         );
         let mut diagnostics: Vec<_> = mcp
             .invalid_scopes
@@ -1062,10 +1076,19 @@ impl UserConfigManager {
             {
                 continue;
             }
-            let bytes = match read_bounded(path) {
-                Ok(bytes) => Some(bytes),
-                Err(_) if !path.exists() => None,
-                Err(error) => return Err(error.into()),
+            let bytes = if let Some(endpoint) = workspace_endpoint
+                && path
+                    == &locations
+                        .workspace
+                        .join(super::super::mcp_resources::WORKSPACE_DOCUMENT)
+            {
+                read_bound_mcp(endpoint).map_err(|error| unavailable(path, error.to_string()))?
+            } else {
+                match read_bounded(path) {
+                    Ok(bytes) => Some(bytes),
+                    Err(_) if !path.exists() => None,
+                    Err(error) => return Err(error.into()),
+                }
             };
             if super::super::settings::revision(bytes.as_deref()) != *expected {
                 return Err("configuration inputs changed during capture; rescan to retry".into());
@@ -1267,6 +1290,13 @@ fn read_bound_document(
     endpoint
         .workspace_document(Path::new(name))
         .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
+}
+
+fn read_bound_mcp(endpoint: &LocalExecutionEndpoint) -> std::io::Result<Option<Vec<u8>>> {
+    let name = super::super::mcp_resources::WORKSPACE_DOCUMENT;
+    endpoint
+        .workspace_document(Path::new(name))
+        .map(|snapshot| snapshot.document.map(|(bytes, _)| bytes))
 }
 
 struct BoundInstructions<'a> {

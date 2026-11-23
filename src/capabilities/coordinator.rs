@@ -4314,7 +4314,7 @@ mod mcp_race_tests {
             let admission = lifecycle
                 .try_enter_preparation()
                 .expect("generation admission");
-            let runtime = crate::tools::mcp::McpServerRuntime::connect(
+            let runtime = crate::tools::mcp::McpServerRuntime::connect_fixture(
                 server_id,
                 &binding,
                 &workspace,

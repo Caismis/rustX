@@ -92,10 +92,10 @@ impl Workspace {
 
     /// Constructs a Session workspace from its catalog path without opening
     /// that path in the Server filesystem.
-    pub(crate) fn for_session(
-        root: &Path,
-        scope: SessionExecutionScope,
-    ) -> Result<Self, WorkspaceError> {
+    ///
+    /// # Errors
+    /// Returns an error when the catalog path is not normalized and absolute.
+    pub fn for_session(root: &Path, scope: SessionExecutionScope) -> Result<Self, WorkspaceError> {
         if !rustx_execution_protocol::is_normalized_absolute_path(root) {
             return Err(WorkspaceError::RootUnavailable(
                 root.to_path_buf(),

@@ -488,6 +488,14 @@ impl Operations {
         &self,
         future: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> bool {
+        self.start_auxiliary_owned(move |_guard| future)
+    }
+
+    pub(crate) fn start_auxiliary_owned<F, Fut>(&self, run: F) -> bool
+    where
+        F: FnOnce(WorkerGuard) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         let runtime = self.runtime.lock().expect("Client runtime");
         let Some(runtime) = runtime.as_ref() else {
             return false;
@@ -495,10 +503,7 @@ impl Operations {
         let Some(guard) = self.admit_auxiliary() else {
             return false;
         };
-        runtime.spawn(async move {
-            let _guard = guard;
-            future.await;
-        });
+        runtime.spawn(async move { run(guard).await });
         true
     }
 
@@ -1498,6 +1503,12 @@ impl Drop for Operations {
 pub(crate) struct WorkerGuard {
     workers: Arc<WorkerCount>,
     unconfirmed: bool,
+}
+
+impl WorkerGuard {
+    pub(crate) fn physical_settlement(&mut self, proven: bool) {
+        self.unconfirmed = !proven;
+    }
 }
 
 impl Drop for WorkerGuard {

@@ -15,7 +15,7 @@ use rmcp::model::ProtocolVersion;
 use rmcp::service::{RoleClient, RunningService};
 
 use crate::runtime::identity::McpServerId;
-use crate::runtime::interactive_process::SupervisedInteractiveProcess;
+use rustx_process_supervisor::interactive_process::SupervisedInteractiveProcess;
 
 use super::executor::CanonicalMcpTool;
 use super::handler::McpClientHandler;
@@ -63,6 +63,7 @@ pub struct McpServerRuntime {
         Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, McpClientHandler>>>>,
     pub(super) handler: McpClientHandler,
     pub(super) process: Option<Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
+    pub(super) remote_stdio: Option<Arc<super::stdio::Session>>,
     /// Closed by the owning capability drain before physical process
     /// settlement is awaited. Stale executor handles cannot start another
     /// remote request after the runtime's process boundary closes.
@@ -435,6 +436,10 @@ impl McpServerRuntime {
         let process_settlement = match &self.process {
             Some(process) => process.lock().await.wait_for_settlement().await,
             None => Ok(()),
+        };
+        let process_settlement = match &self.remote_stdio {
+            Some(owner) => owner.close().await.map_err(|error| error.to_string()),
+            None => process_settlement,
         };
         let subscription = self.subscription.lock().await.take();
         let subscription_settlement = if let Some(subscription) = subscription {

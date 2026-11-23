@@ -20,6 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 pub mod changes;
+pub mod mcp;
 pub mod process;
 pub mod save;
 pub mod transport;
@@ -1046,6 +1047,8 @@ pub enum ClientRequest {
     /// One managed-process operation request — register, start, query,
     /// ordered output paging, stdin, resize, close, release.
     Process(crate::process::ProcessRequest),
+    /// One operation on a Client-owned stdio MCP session.
+    Mcp(crate::mcp::Request),
     /// Read lines of a Client-owned Bash continuation.
     ReadBashOutput {
         /// The operation under the current binding.
@@ -1358,6 +1361,8 @@ pub enum ClientReply {
     Pong,
     /// The reply to a `Process` request.
     Process(crate::process::ProcessReply),
+    /// A reply from the Client-owned stdio MCP session.
+    Mcp(crate::mcp::Response),
     /// The reply to a `Save` request.
     Save(crate::save::SaveReply),
     /// The verified range the Client physically read.

@@ -94,7 +94,7 @@ chat_reasoning_replay = "omit"
         workspace_dir: &tempfile::TempDir,
     ) -> Result<Arc<McpServerRuntime>, McpError> {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-        McpServerRuntime::connect(
+        McpServerRuntime::connect_fixture(
             &McpServerId::new("fixture"),
             &fixture_binding(test_name, environment),
             &workspace,
@@ -355,7 +355,7 @@ chat_reasoning_replay = "omit"
             tool_permissions: std::collections::BTreeMap::new(),
         };
 
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -538,7 +538,7 @@ chat_reasoning_replay = "omit"
             tool_permissions: std::collections::BTreeMap::new(),
         };
 
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -629,7 +629,7 @@ chat_reasoning_replay = "omit"
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let error = McpServerRuntime::connect(
+        let error = McpServerRuntime::connect_fixture(
             &McpServerId::new("legacy-no-overlap"),
             &binding,
             &workspace,
@@ -756,7 +756,7 @@ chat_reasoning_replay = "omit"
                 let binding = revision_redaction_binding(legacy, case, &pid_file);
                 let error = tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    McpServerRuntime::connect(
+                    McpServerRuntime::connect_fixture(
                         &McpServerId::new("revision-redaction"),
                         &binding,
                         &workspace,
@@ -933,7 +933,7 @@ chat_reasoning_replay = "omit"
 
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new("http-fixture"),
             &McpServerBinding {
                 credentials: rustx::credentials::SourceCredentials::default(),
@@ -1031,7 +1031,7 @@ chat_reasoning_replay = "omit"
         workspace_dir: &tempfile::TempDir,
     ) -> Result<Arc<McpServerRuntime>, McpError> {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-        McpServerRuntime::connect(
+        McpServerRuntime::connect_fixture(
             &McpServerId::new("raw-fixture"),
             &raw_fixture_binding(
                 test_name,
@@ -1473,7 +1473,7 @@ chat_reasoning_replay = "omit"
 
         async fn connect(&self, workspace_dir: &tempfile::TempDir) -> Arc<McpServerRuntime> {
             let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-            McpServerRuntime::connect(
+            McpServerRuntime::connect_fixture(
                 &McpServerId::new("http-fixture"),
                 &self.binding(),
                 &workspace,
@@ -1922,7 +1922,7 @@ async fn measure_configured_http_mcp() {
     };
     for sample in 1..=3 {
         let started = Instant::now();
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new("measurement"),
             &binding,
             &workspace,

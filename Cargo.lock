@@ -4490,7 +4490,7 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "3.2.0"
-source = "git+https://github.com/Caismis/rust-sdk.git?rev=9cfd78ac790c0764dc404c5c20acfc9128cba071#9cfd78ac790c0764dc404c5c20acfc9128cba071"
+source = "git+https://github.com/Caismis/rust-sdk.git?rev=53f7aaef44d40d769ab1c274819019c6c457eead#53f7aaef44d40d769ab1c274819019c6c457eead"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -4806,6 +4806,7 @@ dependencies = [
  "nix",
  "notify",
  "pep440_rs",
+ "rmcp",
  "rustix",
  "rustx-confined-fs",
  "rustx-document-reader",
@@ -4814,6 +4815,7 @@ dependencies = [
  "rustx-execution-transport",
  "rustx-process-supervisor",
  "rustx-text-edit",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "similar 3.2.0",

@@ -14,8 +14,10 @@
 //! exchange runs at a time and a concurrent dispatch is refused as busy,
 //! never queued.
 
+mod mcp;
 mod output;
 mod sibling;
+pub(crate) use mcp::StdioMcpBinding;
 pub(crate) use output::OutputBinding;
 pub(crate) use sibling::launch_sibling;
 
@@ -91,6 +93,7 @@ pub struct LocalExecutionEndpoint {
     /// managed process this endpoint dispatches.
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
     managed_output: std::sync::OnceLock<bool>,
+    stdio_mcp: std::sync::OnceLock<bool>,
 }
 
 enum Settlement {
@@ -251,6 +254,7 @@ impl LocalExecutionEndpoint {
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
+            stdio_mcp: std::sync::OnceLock::new(),
             workspace,
         })
     }
@@ -307,6 +311,7 @@ impl LocalExecutionEndpoint {
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
+            stdio_mcp: std::sync::OnceLock::new(),
             workspace,
         })
     }
@@ -434,6 +439,9 @@ impl LocalExecutionEndpoint {
                 let _ = self
                     .managed_output
                     .set(connection.supports(Capability::ManagedOutput));
+                let _ = self
+                    .stdio_mcp
+                    .set(connection.supports(Capability::StdioMcp));
                 let _ = self.admission.set(connection.admission().clone());
                 let mut slot = self.connection.lock().expect("endpoint connection");
                 assert!(

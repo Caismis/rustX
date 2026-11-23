@@ -50,6 +50,8 @@
 #    inspect the committed prefix. The final output uses the same locator.
 #  - Workspace Python resolves and runs the interpreter from a Client-only
 #    overlay, using an actual uv and the existing supervisor.
+#  - Stdio MCP reads the Client-only source declaration and launches the peer
+#    in that same mount. One foreground call crosses multiple execution pages.
 #
 # The product proof runs only against the real prepared artifacts — the
 # process harness plus its metadata-verified sibling Execution Client — so
@@ -74,6 +76,9 @@ cargo test -p rustx-execution-client --locked \
     -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked \
     --test process app_server::explicit_composition_reads_from_client_mount_namespace \
+    -- --exact --ignored --nocapture
+cargo test -p rustx --all-features --locked \
+    --test process app_server::stdio_mcp_session_runs_and_publishes_from_the_client_mount_view \
     -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
     tools::background::tests::background_live_output_is_readable_while_running_and_reused_at_settlement \

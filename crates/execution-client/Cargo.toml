@@ -22,7 +22,9 @@ similar = "3.2.0"
 tracing = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 sha2 = "0.10"
+serde = "1"
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "53f7aaef44d40d769ab1c274819019c6c457eead", default-features = false, features = ["client", "transport-async-rw"] }
 rustx-execution-protocol = { path = "../execution-protocol" }
 rustx-execution-transport = { path = "../execution-transport" }
 rustx-confined-fs = { path = "../confined-fs" }

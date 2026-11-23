@@ -293,7 +293,7 @@ impl Harness {
             tool_permissions: std::collections::BTreeMap::new(),
         };
         let workspace = Workspace::new(&workspace_root).expect("workspace");
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new("mrtr-fixture"),
             &binding,
             &workspace,

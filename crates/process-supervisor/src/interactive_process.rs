@@ -44,21 +44,19 @@
 //! - dropping the business-facing handle requests shutdown but never
 //!   abandons the physical process owner.
 
+#![deny(unsafe_code)]
+#![warn(clippy::all, clippy::pedantic)]
+
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use tokio::io::AsyncReadExt;
 
-use rustx_process_supervisor::interactive_supervisor::RUSTX_CONTROL_ENV;
-use rustx_process_supervisor::process_runner::{
-    MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, SupervisorEventReader,
-};
-use rustx_process_supervisor::supervised_unit::{EmergencyContainment, emergency_contain_group};
-use rustx_process_supervisor::supervised_unit::{
-    send_owner_attached, send_start, send_terminal_ack, send_terminate,
-};
+use crate::interactive_supervisor::RUSTX_CONTROL_ENV;
+use crate::process_runner::{MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, SupervisorEventReader};
+use crate::supervised_unit::{EmergencyContainment, emergency_contain_group};
+use crate::supervised_unit::{MSG_START, send_owner_attached, send_terminal_ack, send_terminate};
 
 /// The published physical settlement of one interactive supervisor unit.
 ///
@@ -68,7 +66,7 @@ use rustx_process_supervisor::supervised_unit::{
 /// reason, never as a successful settlement.
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum UnitSettlement {
+enum UnitSettlement {
     /// The owned process tree is provably terminal and the direct
     /// supervisor child was reaped: the authoritative `AllChildrenReaped`
     /// event was received, emergency containment returned
@@ -143,7 +141,7 @@ impl SettlementCell {
 /// mocking framework.
 #[cfg(unix)]
 #[derive(Clone)]
-pub(crate) struct InteractiveTestControl {
+struct InteractiveTestControl {
     #[cfg(test)]
     outer_fail: Option<String>,
     #[cfg(test)]
@@ -175,8 +173,7 @@ pub(crate) struct InteractiveTestControl {
     /// Scopes a nested containment authority to exactly this unit
     /// (Issue #145); see the equivalent seam on `RunnerTestControl`.
     #[cfg(test)]
-    pub(crate) nested_authority:
-        Option<Arc<dyn rustx_process_supervisor::nested_containment::NestedAnchorAuthority>>,
+    pub(crate) nested_authority: Option<Arc<dyn crate::nested_containment::NestedAnchorAuthority>>,
 }
 
 #[cfg(unix)]
@@ -210,52 +207,34 @@ impl InteractiveTestControl {
     #[cfg(test)]
     fn configure_supervisor(&self, supervisor: &mut tokio::process::Command) {
         if let Some(value) = &self.outer_fail {
-            supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::OUTER_FAIL_ENV,
-                value,
-            );
+            supervisor.env(crate::interactive_supervisor::OUTER_FAIL_ENV, value);
         }
         if let Some(value) = &self.fail_signal {
-            supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::FAIL_SIGNAL_ENV,
-                value,
-            );
+            supervisor.env(crate::interactive_supervisor::FAIL_SIGNAL_ENV, value);
         }
         if let Some(value) = &self.anchor_pid_file {
-            supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::ANCHOR_PID_FILE_ENV,
-                value,
-            );
+            supervisor.env(crate::interactive_supervisor::ANCHOR_PID_FILE_ENV, value);
         }
         if let Some(value) = &self.inner_exit_before_connect {
             supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::INNER_EXIT_BEFORE_CONNECT_ENV,
+                crate::interactive_supervisor::INNER_EXIT_BEFORE_CONNECT_ENV,
                 value,
             );
         }
         if let Some(value) = &self.fail_setsid {
-            supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::FAIL_SETSID_ENV,
-                value,
-            );
+            supervisor.env(crate::interactive_supervisor::FAIL_SETSID_ENV, value);
         }
         if let Some(value) = &self.inner_stall_before_anchor {
             supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV,
+                crate::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV,
                 value,
             );
         }
         if self.fail_pre_anchor_reap {
-            supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
-                "1",
-            );
+            supervisor.env(crate::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV, "1");
         }
         if self.trace {
-            supervisor.env(
-                rustx_process_supervisor::interactive_supervisor::TRACE_ENV,
-                "1",
-            );
+            supervisor.env(crate::interactive_supervisor::TRACE_ENV, "1");
         }
     }
 
@@ -302,7 +281,7 @@ fn record_no_ownership(_control: &InteractiveTestControl, _reaped_child: Option<
 /// socket.
 #[cfg(unix)]
 #[derive(Clone)]
-pub(crate) struct InteractiveProcessSpec {
+pub struct InteractiveProcessSpec {
     /// The executable to run inside the owned process group.
     pub program: PathBuf,
     /// Explicit program arguments.
@@ -342,19 +321,19 @@ impl std::fmt::Debug for InteractiveProcessSpec {
 /// shutdown; the driver waits for the supervisor's terminal event and then
 /// reaps its direct child.
 #[cfg(unix)]
-pub(crate) struct SupervisedInteractiveProcess {
+pub struct SupervisedInteractiveProcess {
     pub stdin: Option<tokio::process::ChildStdin>,
     pub stdout: Option<tokio::process::ChildStdout>,
     /// The bounded stderr preview; the drain task reads until EOF regardless
     /// of the preview bound.
-    pub(crate) stderr_preview: Arc<Mutex<Vec<u8>>>,
+    stderr_preview: Arc<Mutex<Vec<u8>>>,
     stderr_complete: tokio::sync::watch::Receiver<Option<bool>>,
     settlement: Arc<SettlementCell>,
     shutdown: Option<tokio::sync::mpsc::Sender<()>>,
     /// Test-only: the pid of the direct supervisor child (observability for
     /// the direct-reap regression).
-    #[cfg(test)]
-    pub(crate) supervisor_child_pid: Option<u32>,
+    #[cfg(any(test, feature = "test-support"))]
+    supervisor_child_pid: Option<u32>,
 }
 
 #[cfg(unix)]
@@ -409,23 +388,48 @@ fn spawn_stderr_drain(
 #[cfg(unix)]
 impl SupervisedInteractiveProcess {
     /// Starts one interactive process under the dedicated long-lived owner.
-    pub(crate) fn spawn(spec: InteractiveProcessSpec) -> Result<Self, String> {
-        Self::spawn_with_control(spec, InteractiveTestControl::new())
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the supervision prerequisite or gated supervisor
+    /// cannot be established.
+    ///
+    /// # Panics
+    ///
+    /// Requires a Tokio runtime with process and I/O support.
+    pub fn spawn(spec: InteractiveProcessSpec) -> Result<Self, String> {
+        Self::spawn_cancellable(spec, crate::signal::ProcessSignal::new())
     }
 
-    /// Starts one interactive process with the given control seams.
+    /// Shares the owning operation's cancellation boundary with physical START.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal when admission is cancelled or the gated supervisor
+    /// cannot be established.
+    ///
+    /// # Panics
+    ///
+    /// Requires a Tokio runtime with process and I/O support.
+    pub fn spawn_cancellable(
+        spec: InteractiveProcessSpec,
+        signal: crate::signal::ProcessSignal,
+    ) -> Result<Self, String> {
+        Self::spawn_with_control(spec, InteractiveTestControl::new(), signal)
+    }
+
     fn spawn_with_control(
         spec: InteractiveProcessSpec,
         test_control: InteractiveTestControl,
+        signal: crate::signal::ProcessSignal,
     ) -> Result<Self, String> {
-        use std::sync::atomic::AtomicU64;
-        static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
+        use std::os::unix::fs::PermissionsExt as _;
 
         // The runtime child-subreaper capability is a pre-ownership
         // prerequisite: the catastrophic fallback authority must exist
         // before the supervisor unit spawns (mirrors the short-lived
         // supervised-command runner).
-        rustx_process_supervisor::process_supervision::ensure_child_subreaper()?;
+        crate::process_supervision::ensure_child_subreaper()?;
 
         let InteractiveProcessSpec {
             program,
@@ -433,14 +437,17 @@ impl SupervisedInteractiveProcess {
             cwd,
             environment,
         } = spec;
-        let socket_path = std::env::temp_dir().join(format!(
-            "rustx-interactive-{}-{}.sock",
-            std::process::id(),
-            NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
-        ));
+        let control_directory = tempfile::Builder::new()
+            .prefix("rx-i")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .map_err(|error| {
+                format!("cannot create private interactive control directory: {error}")
+            })?;
+        let socket_path = control_directory.path().join("s");
         let listener = tokio::net::UnixListener::bind(&socket_path)
             .map_err(|error| format!("cannot bind interactive control socket: {error}"))?;
-        let supervisor_path = rustx_process_supervisor::invocation::interactive_supervisor_binary();
+        let supervisor_path = crate::invocation::interactive_supervisor_binary();
         let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.arg("outer").arg(&program).args(&args);
         supervisor
@@ -450,27 +457,30 @@ impl SupervisedInteractiveProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let environment_snapshot =
-            rustx_process_supervisor::supervised_unit::snapshot_command_environment(&environment)?;
+            crate::supervised_unit::snapshot_command_environment(&environment)?;
         supervisor.env(
-            rustx_process_supervisor::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
             environment_snapshot.path(),
         );
         #[cfg(test)]
         test_control.configure_supervisor(&mut supervisor);
         supervisor.env(RUSTX_CONTROL_ENV, &socket_path);
-        let mut child = supervisor.spawn().map_err(|error| {
-            format!(
-                "cannot spawn interactive supervisor at {}: {error}",
-                supervisor_path.display()
-            )
-        })?;
+        let mut child = signal
+            .with_active(|| supervisor.spawn())
+            .ok_or_else(|| "interactive admission was cancelled".to_owned())?
+            .map_err(|error| {
+                format!(
+                    "cannot spawn interactive supervisor at {}: {error}",
+                    supervisor_path.display()
+                )
+            })?;
         drop(supervisor);
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let (stderr_capture, stderr_complete) = spawn_stderr_drain(child.stderr.take());
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
         let settlement = Arc::new(SettlementCell::new());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let supervisor_child_pid = child.id().expect("the spawned supervisor child has a pid");
         // The runtime-owned driver is the physical settlement owner from
         // the moment the spawn succeeded. Dropping the JoinHandle detaches
@@ -484,8 +494,12 @@ impl SupervisedInteractiveProcess {
                 shutdown_rx,
                 settlement.clone(),
                 test_control,
+                signal,
             ),
-            move |()| drop(environment_snapshot),
+            move |()| {
+                drop(environment_snapshot);
+                drop(control_directory);
+            },
         )));
         Ok(Self {
             stdin,
@@ -494,7 +508,7 @@ impl SupervisedInteractiveProcess {
             stderr_complete,
             settlement,
             shutdown: Some(shutdown_tx),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             supervisor_child_pid: Some(supervisor_child_pid),
         })
     }
@@ -503,7 +517,7 @@ impl SupervisedInteractiveProcess {
     ///
     /// The drain task reads the pipe until EOF regardless of this bound, so
     /// reading this never affects the server's ability to keep writing.
-    pub(crate) fn stderr_preview(&self) -> String {
+    fn stderr_preview(&self) -> String {
         let bytes = self.stderr_preview.lock().expect("interactive stderr lock");
         String::from_utf8_lossy(&bytes).trim().to_owned()
     }
@@ -511,13 +525,26 @@ impl SupervisedInteractiveProcess {
     /// Only an already-observed EOF without clipping is safe for credential
     /// diagnostics. Optional evidence never waits for a remaining pipe holder
     /// after the supervised unit's physical outcome is known.
-    pub(crate) fn complete_stderr_preview(&self) -> Option<String> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal stderr preview mutex is poisoned.
+    #[must_use]
+    pub fn complete_stderr_preview(&self) -> Option<String> {
         (*self.stderr_complete.borrow()).filter(|complete| *complete)?;
         Some(self.stderr_preview())
     }
 
+    /// Observes the direct child of this owner for process fixtures.
+    #[doc(hidden)]
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub const fn supervisor_child_pid(&self) -> Option<u32> {
+        self.supervisor_child_pid
+    }
+
     /// Requests orderly server retirement without using the business stdin.
-    pub(crate) fn request_shutdown(&self) {
+    pub fn request_shutdown(&self) {
         if let Some(shutdown) = &self.shutdown {
             let _ = shutdown.try_send(());
         }
@@ -537,7 +564,11 @@ impl SupervisedInteractiveProcess {
     ///
     /// Returns the reason the owned process tree could not be proven
     /// terminal.
-    pub(crate) async fn wait_for_settlement(&self) -> Result<(), String> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal settlement mutex is poisoned.
+    pub async fn wait_for_settlement(&self) -> Result<(), String> {
         let settlement = loop {
             let notified = self.settlement.notify.notified();
             if let Some(settlement) = self.settlement.observed() {
@@ -571,6 +602,7 @@ async fn drive_interactive_unit(
     mut shutdown_rx: tokio::sync::mpsc::Receiver<()>,
     settlement: Arc<SettlementCell>,
     test_control: InteractiveTestControl,
+    signal: crate::signal::ProcessSignal,
 ) {
     let outcome = run_interactive_unit(
         &mut child,
@@ -578,6 +610,7 @@ async fn drive_interactive_unit(
         &socket_path,
         &mut shutdown_rx,
         &test_control,
+        &signal,
     )
     .await;
     let _ = std::fs::remove_file(&socket_path);
@@ -701,6 +734,37 @@ async fn contain_gated_outer(child: &mut tokio::process::Child, cause: &str) -> 
     }
 }
 
+/// A complete START frame and cancellation exclude one another under
+/// the same gate. Readiness polling cannot consume the grant.
+async fn guarded_start(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    signal: &crate::signal::ProcessSignal,
+) -> Result<(), String> {
+    let frame = [1, 0, 0, 0, MSG_START];
+    loop {
+        let ready = tokio::select! {
+            biased;
+            () = signal.cancelled() => false,
+            ready = writer.writable() => {
+                ready.map_err(|error| format!("interactive START readiness: {error}"))?;
+                true
+            }
+        };
+        let sent = ready
+            .then(|| signal.with_active(|| writer.try_write(&frame)))
+            .flatten();
+        match sent {
+            None => {
+                let _ = send_terminate(writer).await;
+                return Ok(());
+            }
+            Some(Ok(size)) if size == frame.len() => return Ok(()),
+            Some(Err(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            _ => return Err("incomplete interactive START frame".into()),
+        }
+    }
+}
+
 /// Runs one interactive supervisor unit to its single settlement.
 #[cfg(unix)]
 #[allow(clippy::too_many_lines)] // one coherent accept/relay/contain/reap pipeline
@@ -710,13 +774,14 @@ async fn run_interactive_unit(
     socket_path: &PathBuf,
     shutdown_rx: &mut tokio::sync::mpsc::Receiver<()>,
     test_control: &InteractiveTestControl,
+    signal: &crate::signal::ProcessSignal,
 ) -> UnitSettlement {
     let control = match establish_outer_control(child, listener, test_control).await {
         StartupOutcome::Attached(control) => control,
         StartupOutcome::Concluded(settlement) => return settlement,
     };
     let _ = std::fs::remove_file(socket_path);
-    let (mut control_read, mut control_write) = tokio::io::split(control);
+    let (mut control_read, mut control_write) = control.into_split();
     let mut event_reader = SupervisorEventReader::default();
     let mut lifecycle = UnitLifecycle::PreOwnership;
     let mut started = false;
@@ -726,7 +791,7 @@ async fn run_interactive_unit(
     // holds START closed until the top-level parent has acknowledged
     // retention of this exact anchor. MCP stdio therefore uses exactly the
     // same generic mechanism as Bash and Managed Python.
-    let mut anchor_gate = rustx_process_supervisor::nested_containment::AnchorGate::Idle;
+    let mut anchor_gate = crate::nested_containment::AnchorGate::Idle;
     loop {
         tokio::select! {
             biased;
@@ -741,10 +806,9 @@ async fn run_interactive_unit(
                 started = true;
                 match anchored {
                     Ok(()) => {
-                        if let Err(error) = send_start(&mut control_write).await
-                            && control_failure.is_none()
-                        {
-                            control_failure = Some(error);
+                        if let Err(error) = guarded_start(&mut control_write, signal).await {
+                            control_failure.get_or_insert(error);
+                            break;
                         }
                     }
                     Err(error) => {
@@ -774,16 +838,12 @@ async fn run_interactive_unit(
                         let authority = test_control.nested_authority.clone();
                         #[cfg(not(test))]
                         let authority: Option<
-                            Arc<dyn rustx_process_supervisor::nested_containment::NestedAnchorAuthority>,
+                            Arc<dyn crate::nested_containment::NestedAnchorAuthority>,
                         > = None;
                         anchor_gate.offer_with(pgid, authority);
                     } else if !started {
                         started = true;
-                        if let Err(error) = send_start(&mut control_write).await
-                            && control_failure.is_none()
-                        {
-                            control_failure = Some(error);
-                        }
+                        let _ = send_terminate(&mut control_write).await;
                     }
                 }
                 Ok(Some(SupervisorEvent::OwnershipEstablished)) => {
@@ -857,6 +917,8 @@ async fn run_interactive_unit(
             },
         }
     }
+    drop(control_read);
+    drop(control_write);
     // The direct supervisor child is reaped before physical settlement is
     // published, on every path.
     record_event(test_control, "direct_child_wait");
@@ -984,7 +1046,7 @@ mod interactive_tests {
     use std::time::{Duration, Instant};
 
     use super::{InteractiveProcessSpec, InteractiveTestControl, SupervisedInteractiveProcess};
-    use rustx_process_supervisor::process_runner::MAX_PROCESS_OUTPUT_BYTES;
+    use crate::process_runner::MAX_PROCESS_OUTPUT_BYTES;
     use std::sync::Arc;
 
     const DEADLINE: Duration = Duration::from_secs(20);
@@ -1057,7 +1119,11 @@ mod interactive_tests {
                 cwd: self.dir.path().to_path_buf(),
                 environment,
             };
-            SupervisedInteractiveProcess::spawn_with_control(spec, control)
+            SupervisedInteractiveProcess::spawn_with_control(
+                spec,
+                control,
+                crate::signal::ProcessSignal::new(),
+            )
         }
     }
 
@@ -1070,34 +1136,26 @@ mod interactive_tests {
     /// future had not been polled yet.
     #[derive(Debug)]
     struct GatedAuthority {
-        offers: tokio::sync::mpsc::UnboundedSender<(
-            rustx_process_supervisor::identity::ProcessUnitId,
-            i32,
-        )>,
-        releases: tokio::sync::mpsc::UnboundedSender<(
-            rustx_process_supervisor::identity::ProcessUnitId,
-            i32,
-        )>,
+        offers: tokio::sync::mpsc::UnboundedSender<(crate::identity::ProcessUnitId, i32)>,
+        releases: tokio::sync::mpsc::UnboundedSender<(crate::identity::ProcessUnitId, i32)>,
         gate: tokio::sync::watch::Sender<bool>,
     }
 
-    impl rustx_process_supervisor::nested_containment::NestedAnchorAuthority for GatedAuthority {
+    impl crate::nested_containment::NestedAnchorAuthority for GatedAuthority {
         fn offer(
             &self,
-            unit: rustx_process_supervisor::identity::ProcessUnitId,
+            unit: crate::identity::ProcessUnitId,
             pgid: i32,
         ) -> futures_util::future::BoxFuture<
             'static,
-            Result<(), rustx_process_supervisor::nested_containment::AnchorError>,
+            Result<(), crate::nested_containment::AnchorError>,
         > {
             let mut gate = self.gate.subscribe();
             let _ = self.offers.send((unit, pgid));
             Box::pin(async move {
                 while !*gate.borrow_and_update() {
                     if gate.changed().await.is_err() {
-                        return Err(
-                            rustx_process_supervisor::nested_containment::AnchorError::ParentLost,
-                        );
+                        return Err(crate::nested_containment::AnchorError::ParentLost);
                     }
                 }
                 Ok(())
@@ -1106,12 +1164,54 @@ mod interactive_tests {
 
         fn release(
             &self,
-            unit: rustx_process_supervisor::identity::ProcessUnitId,
+            unit: crate::identity::ProcessUnitId,
             pgid: i32,
         ) -> futures_util::future::BoxFuture<'static, ()> {
             let _ = self.releases.send((unit, pgid));
             Box::pin(std::future::ready(()))
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_at_the_retained_anchor_prevents_interactive_start() {
+        let fixture = Fixture::new();
+        let marker = fixture.path("started");
+        let (offers_tx, mut offers) = tokio::sync::mpsc::unbounded_channel();
+        let (releases_tx, mut releases) = tokio::sync::mpsc::unbounded_channel();
+        let (gate, _) = tokio::sync::watch::channel(false);
+        let mut control = InteractiveTestControl::new();
+        control.nested_authority = Some(Arc::new(GatedAuthority {
+            offers: offers_tx,
+            releases: releases_tx,
+            gate: gate.clone(),
+        }));
+        let signal = crate::signal::ProcessSignal::new();
+        let process = SupervisedInteractiveProcess::spawn_with_control(
+            InteractiveProcessSpec {
+                program: "/bin/sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!("echo started > '{}'", marker.display()),
+                ],
+                cwd: marker.parent().unwrap().to_path_buf(),
+                environment: Vec::new(),
+            },
+            control,
+            signal.clone(),
+        )
+        .expect("spawn");
+        let anchor = tokio::time::timeout(DEADLINE, offers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        signal.cancel();
+        gate.send_replace(true);
+        tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(releases.try_recv().unwrap(), anchor);
+        assert!(!marker.exists());
     }
 
     /// The MCP stdio path is a **supervised interactive unit**, and #145
@@ -1319,7 +1419,6 @@ mod interactive_tests {
 
     #[tokio::test]
     async fn command_environment_cannot_configure_interactive_supervisor() {
-        use crate::tools::environment::ToolEnvironment;
         use std::fmt::Write;
         use tokio::io::AsyncReadExt;
         let fixture = Fixture::new();
@@ -1339,11 +1438,10 @@ mod interactive_tests {
             "RUSTX_COMMAND_ENVIRONMENT_FILE",
             "RUSTX_PHYSICAL_CONTINUATION",
         ];
-        let environment = ToolEnvironment::from_authorized(
-            keys.iter()
-                .map(|key| ((*key).to_owned(), "user-value".to_owned())),
-        )
-        .unwrap();
+        let environment = keys
+            .iter()
+            .map(|key| ((*key).to_owned(), "user-value".to_owned()))
+            .collect();
         let mut script = String::new();
         for key in keys {
             write!(script, "test \"${key}\" = user-value || exit 9; ").unwrap();
@@ -1353,7 +1451,7 @@ mod interactive_tests {
             program: PathBuf::from("/bin/sh"),
             args: vec!["-c".into(), script],
             cwd: fixture.dir.path().to_path_buf(),
-            environment: environment.child_environment(fixture.dir.path()),
+            environment,
         })
         .unwrap();
         let mut output = String::new();
@@ -2010,9 +2108,7 @@ mod interactive_tests {
     /// import turned one match arm into a catch-all binding on macOS.
     #[test]
     fn fixture_controls_configure_exactly_the_selected_supervisor_seams() {
-        use rustx_process_supervisor::interactive_supervisor::{
-            FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV,
-        };
+        use crate::interactive_supervisor::{FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV};
         use std::collections::BTreeMap;
         let mut control = InteractiveTestControl::new();
         control.fail_setsid = Some("/fixture/inner.pid".to_owned());
@@ -2072,8 +2168,8 @@ mod interactive_tests {
                     "pre-anchor owner did not settle; inner_pid_file_exists: {}; outer_pid: \
                      {outer_pid}; outer_observation: {:?}; driver: {:?}; stderr:\n{}\nprocesses:\n{}",
                     inner_pid_file.exists(),
-                    rustx_process_supervisor::process_wait::waitid(
-                        rustx_process_supervisor::process_wait::Id::Pid(nix::unistd::Pid::from_raw(
+                    crate::process_wait::waitid(
+                        crate::process_wait::Id::Pid(nix::unistd::Pid::from_raw(
                             i32::try_from(outer_pid).unwrap()
                         )),
                         nix::sys::wait::WaitPidFlag::WNOHANG

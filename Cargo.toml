@@ -130,7 +130,7 @@ httpdate = "1"
 sse-stream = "0.2.5"
 # Observe queued SSE tools/list responses before publishing them (SEP-2243).
 # Bound buffered HTTP JSON and error bodies before parsing. See docs/exec-03-evidence.md.
-rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "9cfd78ac790c0764dc404c5c20acfc9128cba071", default-features = false, features = [
+rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "53f7aaef44d40d769ab1c274819019c6c457eead", default-features = false, features = [
     "client",
     "transport-async-rw",
     "transport-streamable-http-client-reqwest",

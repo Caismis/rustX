@@ -633,7 +633,8 @@ impl SessionRuntimeManager {
             failure => error(failure),
         })?;
         core.runtime()
-            .restore_configuration_binding(paths.binding_revision);
+            .restore_configuration_binding(paths.binding_revision)
+            .map_err(error)?;
         core.runtime()
             .tool_runtime()
             .schedule()

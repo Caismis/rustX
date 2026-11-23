@@ -120,7 +120,7 @@ async fn a_real_managed_fastmcp_task_completes_through_one_tool_result() {
     );
 
     let server_id = crate::tools::python::python_server_id("tasks-tool");
-    let runtime = McpServerRuntime::connect(
+    let runtime = McpServerRuntime::connect_fixture(
         &server_id,
         &prepared.server_binding(),
         &workspace,

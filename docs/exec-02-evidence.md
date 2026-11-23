@@ -25,6 +25,7 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
 | T63 | `unused_delegation_is_sealed_against_late_effectful_dispatch`, `reserved_crash_prefixes_recover_exact_identity_without_reuse` | A child can publish its local drain after sealing unused delegated dispatch. Preparing a child and losing the parent before it sent retained work preserves the exact activation's prior recovery contract. A retained-work send and unused sealing exclude one another. |
 | T63 | `lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed` | A real Client prepares a Bash capture or mutation, or publishes a write. The proxy drops the original receipt, substitutes an invalid ticket, or returns `CommitUnknown` and gates Client-side teardown. The parent keeps the child root and records no quiescence proof while the binding's physical settlement remains unconfirmed. |
 | T61 | `revision_one_cannot_admit_either_lane_in_revision_two`, `websocket_session_version_and_generation_mismatches_stay_reserved` | The revised snapshot is mandatory in wire revision 2. Revision 1 is refused during Client bootstrap or on either Server Hello before a business lane exists. |
+| T63 (stdio START cut) | `cancellation_at_the_retained_anchor_prevents_interactive_start` | A shared supervisor waits for the anchor acknowledgement, then observes cancellation before writing START. The fixture proves an absent business marker and settlement of the exact retained anchor. The same driver runs Client-owned stdio. |
 
 ## Open gates
 
@@ -35,6 +36,7 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
   attestation tied to the old physical domain. Client guard evidence lives
   in process memory. The Linux SIGKILL case observes one business socket
   and exercises isolation between Sessions.
-- Physical candidate Spill, offline cleanup, and the Client-owned Managed
-  Python Store and stdio MCP still require implementation. Native macOS
-  fault injection and final exact-head verification remain open.
+- The physical candidate Spill writer and Root stdio run through the bound
+  Client in EXEC-03. Offline cleanup, child stdio routing and the Client-owned
+  Managed Python Store remain open. Native macOS fault injection and final
+  exact-head verification remain open.

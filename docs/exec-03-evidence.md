@@ -67,6 +67,27 @@ instructions are read by the Server and applied before Workspace
 instructions. Workspace Skill discovery and automatic watch and repair
 still require a Client-owned implementation.
 
+## Client stdio MCP
+
+For a bound Session the Client reads `.agents/mcp.toml` and the Server
+validates the captured revision again before applying configuration. A lost
+read can leave MCP resources unavailable and retains the last adopted
+configuration through the existing application owner. The Server still reads
+its User document and resolves the effective credentials before connection.
+The Client owns stdio supervision and negotiates the peer's protocol. The
+Server uses the original admission data and resumes the SDK request sequence,
+then sends and receives through the bound data lane. The protocol ADR records
+the memory and transport bounds. Managed Python preparations, delegated
+stdio routing and optional discovery/cache remain open.
+
+The Linux mount test observed one `server/discover`, one legacy
+`initialize`, one `tools/list`, one `tools/call` and two fake-provider
+requests. Its 1,100,000-byte text body crossed multiple execution pages and
+both markers were visible in the model continuation. The supervisor suite
+passed 82 tests, including the new START cut. Strict workspace Clippy and
+eight Managed Python tool regressions passed. The latter exercise stdio and
+the existing fingerprinted Store and do not measure Client-side preparation.
+
 ## Deterministic coverage
 
 | Required tests | Evidence and open coverage |
@@ -74,7 +95,7 @@ still require a Client-owned implementation.
 | T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. Shared child routes and ordered parallel commits still need EXEC-03 integration evidence. |
 | T13, T14, T15, T17, T18 | Session input/configuration/resource layering, safe activation and bootstrap remain open for EXEC-03. |
 | T16 | Model reset and freeze still need cross-entry integration evidence. |
-| T19, T20, T21, T30, T38 | MCP declaration cache, optional startup, Client stdio and foreground-path consolidation remain open. |
+| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. MCP declaration cache, optional startup, delegated routing and composed stdio Tasks and interactions remain open. |
 | T22, T40, T47 | The isolated Workspace test covers Client-owned AGENTS.md on cold load and explicit reconciliation, BOM stripping and retention of the last valid instructions. Skill discovery, automatic watching and reconnect repair remain open. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |

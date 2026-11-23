@@ -984,6 +984,33 @@ registration.
 
 ### Server → Client optional save
 
+### Client-owned stdio MCP
+
+The Server admits the configured source and freezes its credential resolution.
+An `Open` names one operation on the exact authenticated Session binding and
+supplies the selected Client program, Workspace-relative cwd, explicit
+environment and allowed protocol versions. The Client validates the cwd in
+its Workspace, supervises the physical process and negotiates the physical MCP
+session. The control directory for both supervision sockets is private to the
+Client. Cancellation and the business START frame share the process gate.
+The Server receives the negotiated peer metadata and next unused request ID,
+then uses the existing ToolCall, Tasks and interaction owners. A process close
+is acknowledged only after supervision proves physical settlement. A transport
+failure after dispatch leaves the effect unknown and does not replay the call.
+
+Each binding has eight retained MCP sessions and 4,096 stdio identities. A
+session has four queued outbound records of at most 512 KiB, one send in flight
+and a five-second physical send bound. The Client limits each inbound JSON
+record to 16 MiB before parsing. It retains one incoming queue entry, one
+pending record and one paged record. The Server assembles at most one 16 MiB
+record per receiving task, with a single item in the SDK input queue. Each
+execution page carries at most 64 KiB with checked sequence and offset. The
+wire encoding, parse allocations and transient serialization add to these
+payload budgets. Negotiation has a 20-second physical deadline and admission
+metadata is capped at 64 KiB. An absent binding provides no stdio capability.
+HTTP requests, their credentials and their network connection remain on the
+Server.
+
 Complete HTTP MCP and winning Host results may be saved into a
 Client-owned unpublished staging object under the owning namespace —
 never a Server/Host-chosen path. Chunks carry deterministic offsets;

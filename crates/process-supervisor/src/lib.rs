@@ -34,6 +34,8 @@ pub mod bash_supervisor {
     }
 }
 #[cfg(unix)]
+pub mod interactive_process;
+#[cfg(unix)]
 pub mod interactive_supervisor;
 #[cfg(not(unix))]
 pub mod interactive_supervisor {

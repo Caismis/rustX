@@ -205,7 +205,7 @@ impl Harness {
             tool_permissions: std::collections::BTreeMap::new(),
         };
         let workspace = Workspace::new(&workspace_root).expect("workspace");
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new(&server),
             &binding,
             &workspace,
@@ -1538,7 +1538,7 @@ async fn cancellation_releases_the_in_flight_http_task_request() {
     let workspace_root = directory.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let runtime = McpServerRuntime::connect(
+    let runtime = McpServerRuntime::connect_fixture(
         &McpServerId::new("tasks-http"),
         &server.binding(),
         &workspace,

@@ -77,6 +77,15 @@ impl ProtocolViolationRecorder {
         })
     }
 
+    pub(super) fn record_client_rejection(&self) {
+        self.first
+            .lock()
+            .expect("MCP protocol violation recorder lock poisoned")
+            .get_or_insert_with(|| {
+                "Client stdio MCP rejected a malformed or oversized record".to_owned()
+            });
+    }
+
     /// Records the first confirmed violation. Later violations are
     /// irrelevant: the stream ended at the first one.
     fn record(&self, error: &serde_json::Error, line: &[u8]) {

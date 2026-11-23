@@ -150,7 +150,7 @@ impl ConnectedServer {
     ) -> Self {
         let server_id = python_server_id(folder);
         let workspace = Workspace::new(workspace_root).expect("workspace");
-        let runtime = McpServerRuntime::connect(
+        let runtime = McpServerRuntime::connect_fixture(
             &server_id,
             &prepared.server_binding(),
             &workspace,
@@ -710,6 +710,8 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         ],
     );
 
+    let execution = crate::common::session_execution::ExecutionFixture::new(&workspace_root);
+    let bound_root = workspace_root.canonicalize().expect("canonical workspace");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
             source_demand: crate::common::source_demand(
@@ -717,7 +719,8 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
                 ["crasher", "exportless"].map(|name| format!("python:{name}")),
             ),
             conversation_id: ConversationId::new("conv_23577bcd-3dfd-7a47-88a7-5bb137bd7483"),
-            workspace: Workspace::new(&workspace_root).expect("workspace"),
+            workspace: Workspace::for_session(&bound_root, execution.scope.clone())
+                .expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             agent_activation: rustx::capabilities::AgentActivation {
@@ -854,12 +857,15 @@ def add(a: int, b: int) -> str:
         &[("server.py", server_v1), ("requirements.txt", "# none\n")],
     );
 
+    let execution = crate::common::session_execution::ExecutionFixture::new(&workspace_root);
+    let bound_root = workspace_root.canonicalize().expect("canonical workspace");
     let compose = || {
         rustx::capabilities::CapabilityCoordinator::new(
             rustx::capabilities::CapabilityCoordinatorConfig {
                 source_demand: crate::common::source_demand(&workspace_root, ["python:calc"]),
                 conversation_id: ConversationId::new("conv_c2f567d7-f47b-7cca-8f44-f679764e6ecd"),
-                workspace: Workspace::new(&workspace_root).expect("workspace"),
+                workspace: Workspace::for_session(&bound_root, execution.scope.clone())
+                    .expect("workspace"),
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
                 agent_activation: rustx::capabilities::AgentActivation {
@@ -1189,6 +1195,8 @@ def ping() -> str:
         )])
         .expect("base registry");
 
+    let execution = crate::common::session_execution::ExecutionFixture::new(&workspace_root);
+    let bound_root = workspace_root.canonicalize().expect("canonical workspace");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
             source_demand: crate::common::source_demand(
@@ -1196,7 +1204,8 @@ def ping() -> str:
                 ["conflicting", "healthy"].map(|name| format!("python:{name}")),
             ),
             conversation_id: ConversationId::new("conv_14bebb23-81a2-7139-846e-ee88c0abad28"),
-            workspace: Workspace::new(&workspace_root).expect("workspace"),
+            workspace: Workspace::for_session(&bound_root, execution.scope.clone())
+                .expect("workspace"),
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             agent_activation: rustx::capabilities::AgentActivation {

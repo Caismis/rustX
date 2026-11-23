@@ -362,6 +362,112 @@ async fn oversized_http_mcp_body_is_refused_without_replaying_the_call() {
     http_mcp_output(false, true).await;
 }
 
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+#[ignore = "requires Linux mount namespace; run test-support/prove_execution_mount_view.sh"]
+async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
+    bounded(Box::pin(async {
+        use rustx::app_server::protocol::Method;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+        let fixture = Fixture::new().await;
+        let provider = crate::common::FixtureServer::start(|attempt, _| {
+            if attempt == 0 {
+                crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse")
+            } else {
+                crate::common::sse_fixture("openai_chat", "plain_text.sse")
+            }
+        }).await;
+        let home = fixture.root.path().join("home");
+        let workspace = fixture.root.path().join("a").canonicalize().unwrap();
+        let logical_program = workspace.join("fixture-server");
+        let catalog = home.join("rustx/rustx.toml");
+        let raw = std::fs::read_to_string(&catalog).unwrap()
+            .replace("http://127.0.0.1:9/v1", &provider.url("/v1"));
+        let mut authored: toml::Value = toml::from_str(&raw).unwrap();
+        authored.as_table_mut().unwrap().insert(
+            "approval_mode".into(), toml::Value::String("full_access".into())
+        );
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".into(), toml::from_str("overflow = ['echo']").unwrap()
+        );
+        std::fs::write(catalog, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        let (bin, rustx) = isolated_server_pair();
+        let launcher = bin.path().join("rustx-execution-client");
+        std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+        for supervisor in ["bash-supervisor", "interactive-supervisor"] {
+            let staged = std::env::current_exe().unwrap().with_file_name(supervisor);
+            stage_binary(bin.path(), supervisor, &staged);
+        }
+        let physical = bin.path().join("physical");
+        std::fs::create_dir_all(physical.join(".agents")).unwrap();
+        std::fs::write(physical.join(".agents/mcp.toml"), "[mcp_servers.overflow]\ncommand = '../fixture-server'\n").unwrap();
+        assert!(!workspace.join(".agents/mcp.toml").exists());
+        std::fs::create_dir(bin.path().join("tmp")).unwrap();
+        std::fs::write(&launcher, r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+export TMPDIR="$bin/tmp"
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@"
+"#).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let program = physical.join("fixture-server");
+        std::fs::write(&program, r#"#!/usr/bin/env python3
+import json
+import sys
+for line in sys.stdin:
+    req = json.loads(line)
+    method = req["method"]
+    with open("stdio-requests", "a", encoding="utf-8") as observation:
+        observation.write(f"{method} {req.get('id', '-')}\n")
+    if "id" not in req:
+        continue
+    reply = {"jsonrpc":"2.0", "id": req["id"]}
+    if method == "server/discover":
+        reply["error"] = {"code": -32601, "message": "legacy fixture"}
+    elif method == "initialize":
+        reply["result"] = {"protocolVersion":"2025-11-25", "capabilities":{"tools":{}}, "serverInfo":{"name":"client-stdio", "version":"1"}}
+    elif method == "tools/list":
+        reply["result"] = {"tools":[{"name":"echo","inputSchema":{"type":"object", "properties":{}}}]}
+    elif method == "tools/call":
+        reply["result"] = {"content":[{"type":"text", "text":"client-only-output\n" + "x" * 1100000 + "\nclient-only-end"}]}
+    else:
+        reply["error"] = {"code": -32601, "message": "unknown fixture method"}
+    print(json.dumps(reply), flush=True)
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!logical_program.exists());
+        let session = &fixture.sessions[0];
+        let mut child = local_exec_command(&rustx, &fixture, session.as_str(), &workspace)
+            .env("TEST_KEY", "fixture").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let target = attach(&client, session.clone(), 2).await;
+        start_turn(&client, &target, "run a tool through the Client-owned MCP session").await;
+        let state = settled(&client, &target).await;
+        assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("client-only-output"));
+        assert!(requests[1].contains("client-only-end"));
+        assert!(!workspace.join("stdio-requests").exists());
+        let observed = std::fs::read_to_string(physical.join("stdio-requests")).unwrap();
+        let messages: Vec<_> = observed.lines().collect();
+        assert_eq!(messages, [
+            "server/discover 0",
+            "initialize 1",
+            "notifications/initialized -",
+            "tools/list 2",
+            "tools/call 3",
+        ]);
+        result(&client, Method::SessionDetach { target }).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })).await;
+}
+
 #[cfg(feature = "mcp-fixture")]
 async fn http_mcp_output(with_client: bool, over_limit: bool) {
     bounded(Box::pin(async {

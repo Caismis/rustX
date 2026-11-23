@@ -152,6 +152,7 @@ mod resources;
 mod resources_executor;
 mod result;
 mod runtime;
+mod stdio;
 mod streamable_http;
 mod task_driver;
 mod tasks;
@@ -365,17 +366,24 @@ pub struct McpServerBinding {
 impl McpServerBinding {
     /// Freeze every accepted credential input at the native connection owner,
     /// including bindings constructed without the configuration parser.
-    fn with_connection_redactions(&self) -> Self {
+    fn with_connection_redactions(&self, server_id: &McpServerId) -> Self {
         let mut binding = self.clone();
         let mut values = Vec::new();
         match &self.transport {
-            McpTransportConfig::Stdio { environment, .. } => {
+            // The reserved Managed Python namespace is generated internally.
+            // Its fixed runtime settings contain no authored secrets.
+            McpTransportConfig::Stdio { environment, .. }
+                if !server_id
+                    .as_str()
+                    .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE) =>
+            {
                 values.extend(
                     environment
                         .values()
                         .map(|value| crate::model::catalog::ResolvedCredential::new(value.clone())),
                 );
             }
+            McpTransportConfig::Stdio { .. } => (),
             McpTransportConfig::StreamableHttp { headers, .. } => {
                 let mut header = |name: &str, value: &str| {
                     values.push(crate::model::catalog::ResolvedCredential::new(value));

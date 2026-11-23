@@ -187,7 +187,7 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
     );
 
     let server_id = crate::tools::python::python_server_id("mrtr-tool");
-    let runtime = McpServerRuntime::connect(
+    let runtime = McpServerRuntime::connect_fixture(
         &server_id,
         &prepared.server_binding(),
         &workspace,

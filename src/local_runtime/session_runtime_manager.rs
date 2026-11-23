@@ -35,7 +35,8 @@ mod schedule_driver;
 pub(crate) mod status;
 pub(crate) use execution::{
     ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, OutputBinding,
-    StandaloneExecution, WorkspaceDocumentSnapshot, launch_sibling, workspace_entry,
+    StandaloneExecution, StdioMcpBinding, WorkspaceDocumentSnapshot, launch_sibling,
+    workspace_entry,
 };
 pub use execution::{
     EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,
