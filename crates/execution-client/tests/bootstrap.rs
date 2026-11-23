@@ -367,6 +367,58 @@ fn either_one_way_control_failure_recovers_the_same_authenticated_instance() {
 }
 
 #[test]
+fn reattachment_retires_old_watchers_before_admitting_a_rescan() {
+    use rustx_execution_protocol::watch::WatchId;
+    use std::num::NonZeroU64;
+
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    let mut first = admit_pair(&rig, &mut child);
+    let source = Path::new("watched");
+    std::fs::create_dir(rig.workspace_path.join(source)).unwrap();
+    let retired_id = WatchId::new(NonZeroU64::MIN);
+    first.register_watch(retired_id, source, || Ok(())).unwrap();
+    let changed = source.join("during-detach");
+    rig.binding.disconnect(first.connection_id());
+    std::fs::write(rig.workspace_path.join(&changed), b"current").unwrap();
+
+    let mut current = admit_pair(&rig, &mut child);
+    assert_eq!(first.admission(), current.admission());
+    assert!(!first.is_current());
+    assert_eq!(
+        current.poll_watch(retired_id, source).unwrap_err().kind(),
+        io::ErrorKind::NotFound,
+    );
+    assert_eq!(
+        current.read_range(&changed, 0, 64, None).unwrap().bytes,
+        b"current"
+    );
+
+    let id = WatchId::new(NonZeroU64::new(2).unwrap());
+    current.register_watch(id, source, || Ok(())).unwrap();
+    let hint = source.join("after-reattach");
+    std::fs::write(rig.workspace_path.join(&hint), b"new").unwrap();
+    let deadline = Instant::now() + ACCEPT_DEADLINE;
+    loop {
+        let notice = current.poll_watch(id, source).unwrap();
+        assert_eq!(notice.id, id);
+        assert!(!notice.retired);
+        assert!(!notice.changed_paths.contains(&changed));
+        if notice.changed_paths.contains(&hint) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "replacement watch did not report the new file"
+        );
+        std::thread::yield_now();
+    }
+    current.control().unwrap().request_revoke().unwrap();
+    drop(current);
+    expect_success(&mut child);
+}
+
+#[test]
 fn a_silent_control_peer_can_recover_after_the_probe_expires() {
     use nix::sys::{
         signal::{Signal, kill},
