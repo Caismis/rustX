@@ -291,7 +291,9 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound_steer_stays_strict()
  {
-    use crate::durable::{PendingInboundRef, PendingSteerScope};
+    use crate::durable::{PendingInboundRef, PendingMutationOutcome, PendingSteerScope};
+    use crate::runtime::conversation_runtime::Gate;
+    use std::sync::Arc;
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
@@ -319,51 +321,22 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
             .await,
             ErrorData::SteerUnavailable,
         );
-        // Because it was non-admission, inbound/queue with the exact same inputId succeeds.
-        let MethodResult::InboundAccepted {
-            inbound_sequence, ..
-        } = call(
-            &connection,
-            801,
-            Method::InboundQueue {
-                target: target.clone(),
-                input_id: reusable_input_id.clone(),
-                content: text_input("fall back to queue"),
-            },
-        )
-        .await
-        else {
-            panic!("same inputId must succeed after steer_unavailable non-admission");
-        };
-
-        // Strict queue-row inbound/steer keeps returning InvalidState for stale/non-steerable attempts.
-        assert_eq!(
-            rejected(
-                &connection,
-                Method::InboundSteer {
-                    target: target.clone(),
-                    expected_turn_id: stale_turn.clone(),
-                    scope: PendingSteerScope::Row {
-                        expected: PendingInboundRef {
-                            sequence: inbound_sequence,
-                            revision: 0,
-                        },
-                    },
-                },
-            )
-            .await,
-            ErrorData::InvalidState,
-        );
-
-        // Start a real attempt, cancel it so it is no longer steerable, then verify:
-        // - direct turn/steer returns SteerUnavailable without consuming input_id
-        // - turn/start and inbound/steer keep returning InvalidState
+        // Cancellation interrupts the provider wait. Park native settlement
+        // before it clears the cancelled Turn so we can test the closing state.
+        let runtime = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
+        let closing = Arc::new(Gate::default());
+        let settled = Arc::new(Gate::default());
+        let _closing_release = closing.arm_scoped();
+        let _settled_release = settled.arm_scoped();
+        runtime.install_before_restore_gate(closing.clone());
+        runtime.install_residency_probe(None, Some(settled.clone()));
         let MethodResult::TurnInputAccepted {
             turn_id: active_turn,
+            disposition: TurnInputDisposition::Started,
             ..
         } = call(
             &connection,
-            802,
+            801,
             Method::TurnStart {
                 target: target.clone(),
                 input_id: uuid::Uuid::new_v4().to_string(),
@@ -375,6 +348,45 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
             panic!("started attempt")
         };
         f.gates[0].wait_entered().await;
+
+        // The rejected inputId is reusable. Queue it while the first Turn is
+        // active so the row remains pending for the strict steer assertions.
+        let MethodResult::InboundAccepted {
+            inbound_sequence, ..
+        } = call(
+            &connection,
+            802,
+            Method::InboundQueue {
+                target: target.clone(),
+                input_id: reusable_input_id,
+                content: text_input("fall back to queue"),
+            },
+        )
+        .await
+        else {
+            panic!("same inputId must succeed after steer_unavailable non-admission");
+        };
+        let pending = PendingInboundRef {
+            sequence: inbound_sequence,
+            revision: 0,
+        };
+
+        // Strict queue-row inbound/steer keeps returning InvalidState for stale/non-steerable attempts.
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::InboundSteer {
+                    target: target.clone(),
+                    expected_turn_id: stale_turn,
+                    scope: PendingSteerScope::Row {
+                        expected: pending.clone(),
+                    },
+                },
+            )
+            .await,
+            ErrorData::InvalidState,
+        );
+
         call(
             &connection,
             803,
@@ -384,31 +396,26 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
             },
         )
         .await;
+        closing.wait_entered_async().await;
 
         let cancelled_steer_input_id = uuid::Uuid::new_v4().to_string();
+        let cancelled_steer = Method::TurnSteer {
+            target: target.clone(),
+            input_id: cancelled_steer_input_id.clone(),
+            expected_turn_id: active_turn.clone(),
+            content: text_input("steered-after-cancel"),
+        };
         assert_eq!(
-            rejected(
-                &connection,
-                Method::TurnSteer {
-                    target: target.clone(),
-                    input_id: cancelled_steer_input_id.clone(),
-                    expected_turn_id: active_turn.clone(),
-                    content: text_input("steered-after-cancel"),
-                },
-            )
-            .await,
+            rejected(&connection, cancelled_steer.clone()).await,
             ErrorData::SteerUnavailable,
         );
+        let start_next_turn = Method::TurnStart {
+            target: target.clone(),
+            input_id: uuid::Uuid::new_v4().to_string(),
+            content: text_input("start-next-turn"),
+        };
         assert_eq!(
-            rejected(
-                &connection,
-                Method::TurnStart {
-                    target: target.clone(),
-                    input_id: uuid::Uuid::new_v4().to_string(),
-                    content: text_input("start-while-not-steerable"),
-                },
-            )
-            .await,
+            rejected(&connection, start_next_turn.clone()).await,
             ErrorData::InvalidState,
         );
         assert_eq!(
@@ -416,22 +423,53 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
                 &connection,
                 Method::InboundSteer {
                     target: target.clone(),
-                    expected_turn_id: active_turn,
+                    expected_turn_id: active_turn.clone(),
                     scope: PendingSteerScope::Row {
-                        expected: PendingInboundRef {
-                            sequence: inbound_sequence,
-                            revision: 0,
-                        },
+                        expected: pending.clone(),
                     },
                 },
             )
             .await,
             ErrorData::InvalidState,
         );
+
+        // Leave no queued work that could start the successor on its own.
         assert!(matches!(
             call(
                 &connection,
                 804,
+                Method::InboundRemove {
+                    target: target.clone(),
+                    expected: pending,
+                },
+            )
+            .await,
+            MethodResult::InboundMutation {
+                outcome: PendingMutationOutcome::Applied { .. },
+            }
+        ));
+        // Once the coordinator clears the cancelled Turn, the same exact steer
+        // still refuses admission, and turn/start can start a successor.
+        closing.release();
+        settled.wait_entered_async().await;
+        assert_eq!(
+            rejected(&connection, cancelled_steer).await,
+            ErrorData::SteerUnavailable,
+        );
+        let MethodResult::TurnInputAccepted {
+            turn_id,
+            disposition: TurnInputDisposition::Started,
+            ..
+        } = call(&connection, 805, start_next_turn).await
+        else {
+            panic!("a settled cancellation allows a new Turn to start")
+        };
+        assert_ne!(turn_id, active_turn);
+        settled.release();
+        assert!(matches!(
+            call(
+                &connection,
+                806,
                 Method::InboundQueue {
                     target,
                     input_id: cancelled_steer_input_id,
