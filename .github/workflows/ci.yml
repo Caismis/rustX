@@ -539,7 +539,7 @@ jobs:
     name: Platform-sensitive external boundaries (macOS core)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-core']
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       VERIFICATION_PROFILE: fast
@@ -558,6 +558,10 @@ jobs:
       # libtest keeps its existing concurrency, assertions, selectors and
       # deadlines.
       CARGO_BUILD_JOBS: "2"
+      # Enable rustc incremental compilation; rust-cache restores the
+      # incremental fingerprint so warm runs skip already-checked query results
+      # for the monolithic lib-test unit (the lane's 0.2-23.5 min host lottery).
+      CARGO_INCREMENTAL: "1"
 
     steps:
       - name: Checkout
@@ -592,7 +596,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-core
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
 
       - name: Record native build environment
         shell: bash
@@ -679,7 +683,7 @@ jobs:
     name: Platform-sensitive boundaries (macOS full)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
-    runs-on: macos-latest
+    runs-on: macos-15
     # Run 43460497372 spent 80m building; 100m cut off the test/coverage tail.
     # Allow the full execution/coverage tail plus runner variance; see
     # docs/issue-480/ci-budget.md. Individual test deadlines stay unchanged.
@@ -701,6 +705,10 @@ jobs:
       # libtest keeps its existing concurrency, assertions, selectors and
       # deadlines.
       CARGO_BUILD_JOBS: "2"
+      # Enable rustc incremental compilation; rust-cache restores the
+      # incremental fingerprint so warm runs skip already-checked query results
+      # for the monolithic lib-test unit (the lane's 0.2-23.5 min host lottery).
+      CARGO_INCREMENTAL: "1"
 
     steps:
       - name: Checkout
@@ -735,7 +743,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-boundaries
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
 
       - name: Record native build environment
         shell: bash
@@ -977,7 +985,7 @@ jobs:
     name: Desktop adapter and Host (macOS Node)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['desktop-macos']
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
@@ -1003,7 +1011,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
