@@ -143,6 +143,14 @@ directory. It waits for watch registration and the initial rescan, edits
 AGENTS.md and the Skill marker, then waits for both values to appear in the
 runtime before stopping the observer and reaping the Client.
 
+The Workflow editor can list an authored HTTP source for an unclaimed
+Workspace, including when an unbound Session is selected. The authoring
+catalog starts no stdio or Managed Python process in that state. A reserved
+Workspace requires its exact Session and pins that Client for capture and
+listing. A different Session, an unavailable Client document or an
+outstanding recovery record prevents using the Server's Workspace view.
+The recovery check observes the original claim without consuming a receipt.
+
 ## Session-authored configuration
 
 `thread/start` accepts optional `session_config` and `session_resources`.

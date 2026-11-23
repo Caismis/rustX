@@ -3484,6 +3484,49 @@ impl SessionRuntimeManager {
             route: ExecutionRoute::Registry(Arc::downgrade(&self.execution)),
         }
     }
+
+    /// Selects the authority for a read-only Workflow authoring catalog.
+    /// An unclaimed Workspace can describe authored sources. Once reserved,
+    /// its catalog requires the exact Session and pins that generation.
+    pub(crate) fn workflow_catalog_scope(
+        &self,
+        session: Option<&SessionId>,
+        workspace: Option<&Path>,
+    ) -> Result<Option<SessionExecutionScope>, RuntimeManagerError> {
+        let slots = self.execution.0.lock().expect("execution registry mutex");
+        if let Some((session, slot)) = session.and_then(|id| slots.get(id).map(|slot| (id, slot))) {
+            let phase = slot.phase.lock().expect("execution slot phase");
+            if let Phase::Published(endpoint) = &*phase {
+                return Ok(Some(SessionExecutionScope {
+                    session: session.clone(),
+                    route: ExecutionRoute::Fixed(endpoint.clone()),
+                }));
+            }
+            return Err(error(
+                "the selected Workspace execution binding is unavailable",
+            ));
+        }
+        if workspace.is_some_and(|workspace| {
+            slots
+                .values()
+                .any(|slot| slot.workspace.as_os_str() == workspace.as_os_str())
+        }) {
+            return Err(error("the reserved Workspace requires its exact Session"));
+        }
+        drop(slots);
+        if let (Some(session), Some(_)) = (session, workspace)
+            && rustx_execution_server::RecoveryFence::session_pending(
+                self.configuration.runtime_root(),
+                &rustx_execution_protocol::SessionId::new(session.as_str()),
+            )
+            .map_err(error)?
+        {
+            return Err(error(
+                "the selected Workspace has an unsettled execution binding",
+            ));
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

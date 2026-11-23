@@ -3870,6 +3870,7 @@ fn independent_domain_receipt_retires_only_the_original_session_incarnation() {
     let original = reservation();
     let session = original.session.clone();
     let (owner, _) = Binding::reserve(original).unwrap();
+    assert!(!RecoveryFence::session_pending(&root, &session).unwrap());
     let retained = owner.retain_recovery_fence(&root).unwrap();
     let grant = retained.arm_local_domain().unwrap();
     let mut replacement = reservation();
@@ -3882,8 +3883,14 @@ fn independent_domain_receipt_retires_only_the_original_session_incarnation() {
     assert_erred_on_unconfirmed(&next, &root);
     std::fs::remove_file(grant.receipt()).unwrap();
     place_receipt(grant.receipt(), grant.token());
+    assert!(RecoveryFence::session_pending(&root, &session).unwrap());
+    assert!(
+        grant.receipt().exists(),
+        "observation must not consume a receipt"
+    );
     RecoveryFence::require_session_settled(&root, &session).unwrap();
     assert!(!grant.receipt().exists());
+    assert!(!RecoveryFence::session_pending(&root, &session).unwrap());
     let next_fence = next.retain_recovery_fence(&root).unwrap();
     let next_grant = next_fence.arm_local_domain().unwrap();
     place_receipt(next_grant.receipt(), grant.token());

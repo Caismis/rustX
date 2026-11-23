@@ -50,6 +50,32 @@ pub struct RecoveryFence {
 }
 
 impl RecoveryFence {
+    /// Observes a previous execution claim without consuming settlement or
+    /// modifying the trusted product root.
+    ///
+    /// # Errors
+    /// Fails when the trusted record directory cannot be inspected.
+    pub fn session_pending(
+        product_root: &Path,
+        session: &rustx_execution_protocol::SessionId,
+    ) -> io::Result<bool> {
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        let directory = match pending_directory(&root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        match fstatat(
+            &directory,
+            marker_name(session).as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => Ok(true),
+            Err(nix::errno::Errno::ENOENT) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub(super) fn create(
         product_root: &Path,
         admission: &rustx_execution_protocol::Admission,

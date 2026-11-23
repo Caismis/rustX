@@ -300,7 +300,7 @@ async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting()
     use crate::scripted_suites::common::{FixtureReply, FixtureServer};
 
     bounded(async {
-        let fixture = Fixture::with_session_count(None, 0).await;
+        let fixture = Fixture::with_session_count(None, 2).await;
         let peer = FixtureServer::start(|_, _| {
             FixtureReply::body(400, "Bad Request", "text/plain", "fixture")
         })
@@ -320,39 +320,92 @@ async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting()
         write_server(&SourceTarget::User);
         let connection = AppServerConnection::new(fixture.host.clone());
         super::protocol::initialize(&connection).await;
-        let method = |source, expected_scope| Method::WorkflowToolCatalog {
+        let method = |execution_session, source, expected_scope| Method::WorkflowToolCatalog {
             target: target.clone(),
-            execution_session: None,
+            execution_session,
             source,
             expected_scope,
             cursor: None,
         };
+        let refused = |id, call| {
+            let connection = &connection;
+            async move {
+                let Response::Failure(failure) = connection
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(id),
+                        call,
+                    })
+                    .await
+                else {
+                    panic!("the catalog must refuse request {id}");
+                };
+                failure.error.data
+            }
+        };
+        let selected = Some(fixture.sessions[0].id.clone());
         let MethodResult::WorkflowToolCatalog { catalog } =
-            super::protocol::call(&connection, 901, method(None, None)).await
+            super::protocol::call(&connection, 901, method(selected.clone(), None, None)).await
         else {
             panic!("catalog");
         };
         assert_eq!(catalog.sources[0].scope, SourceScope::User);
 
         write_server(&target);
-        let response = connection
-            .handle_request(Request {
-                jsonrpc: JsonRpcVersion::V2,
-                id: RequestId::Integer(902),
-                call: method(Some("shared".into()), Some(SourceScope::User)),
-            })
-            .await;
-        assert!(matches!(response, Response::Failure(failure)
-            if failure.error.data == Some(ErrorData::InvalidParams)));
+        assert_eq!(
+            refused(
+                902,
+                method(
+                    selected.clone(),
+                    Some("shared".into()),
+                    Some(SourceScope::User),
+                ),
+            )
+            .await,
+            Some(ErrorData::InvalidParams),
+        );
+        assert_eq!(
+            refused(
+                904,
+                method(
+                    Some(fixture.sessions[1].id.clone()),
+                    Some("shared".into()),
+                    None
+                ),
+            )
+            .await,
+            Some(ErrorData::InvalidParams),
+        );
         assert_eq!(peer.attempt_count(), 0);
 
-        let MethodResult::WorkflowToolCatalog { catalog } =
-            super::protocol::call(&connection, 903, method(Some("shared".into()), None)).await
+        let MethodResult::WorkflowToolCatalog { catalog } = super::protocol::call(
+            &connection,
+            903,
+            method(selected.clone(), Some("shared".into()), None),
+        )
+        .await
         else {
             panic!("catalog");
         };
         assert_eq!(catalog.sources[0].scope, SourceScope::Workspace);
-        assert!(peer.attempt_count() > 0);
+        let requests = peer.attempt_count();
+        assert!(requests > 0);
+
+        fixture
+            .manager
+            .reserve_local_execution(&fixture.sessions[0].id)
+            .await
+            .unwrap();
+        for (id, execution) in [(905, selected), (906, None)] {
+            assert_eq!(
+                refused(id, method(execution, Some("shared".into()), None)).await,
+                Some(ErrorData::ExecutionUnavailable),
+                "a reserved Workspace cannot be read through the Server view",
+            );
+        }
+        assert_eq!(peer.attempt_count(), requests);
+        connection.close();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         fixture.close().await;
     })
     .await;

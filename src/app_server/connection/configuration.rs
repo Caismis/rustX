@@ -418,10 +418,17 @@ impl AppServerConnection {
                 expected_scope,
             } => {
                 if let Some(session) = &execution_session {
-                    self.sessions
+                    let selected = self
+                        .sessions
                         .read_session_summary(session)
                         .await
                         .map_err(session_error)?;
+                    if target
+                        .workspace()
+                        .is_some_and(|directory| directory != selected.cwd)
+                    {
+                        return Err(domain(ErrorData::InvalidParams));
+                    }
                 }
                 let catalog = self
                     .host

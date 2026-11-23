@@ -193,14 +193,15 @@ impl SessionRuntimeManager {
         if expected_scope.is_some() && source.is_none() {
             return Err(SettingsError::Invalid);
         }
-        let owner = self.configuration.clone();
-        let scope = execution_session
-            .as_ref()
-            .map(|id| self.execution_scope(id));
-        let (plans, workspace) =
-            tokio::task::spawn_blocking(move || capture(&owner, &target, scope))
-                .await
-                .map_err(|_| SettingsError::Io)??;
+        let manager = self.clone();
+        let (plans, workspace) = tokio::task::spawn_blocking(move || {
+            let scope = manager
+                .workflow_catalog_scope(execution_session.as_ref(), target.workspace())
+                .map_err(|_| SettingsError::ExecutionUnavailable)?;
+            capture(&manager.configuration, &target, scope)
+        })
+        .await
+        .map_err(|_| SettingsError::Io)??;
         let Some(source) = source else {
             return page(
                 WorkflowToolCatalog {
@@ -270,13 +271,12 @@ fn capture(
     }
     let mcp = match &endpoint {
         Some(endpoint) => {
-            super::mcp_resources::load_with_workspace(Some(&user_root), directory, |_| {
-                super::configuration::capture::read_bound_mcp(endpoint).map_err(|_| {
-                    crate::runtime_client::types::RuntimeClientError::InvalidRequest {
-                        message: "Client MCP source is unavailable".into(),
-                    }
-                })
-            })
+            let document = match directory {
+                Some(_) => super::configuration::capture::read_bound_mcp(endpoint)
+                    .map_err(|_| SettingsError::ExecutionUnavailable)?,
+                None => None,
+            };
+            super::mcp_resources::load_with_workspace(Some(&user_root), directory, |_| Ok(document))
         }
         None => super::mcp_resources::load(&user_root, directory),
     };
