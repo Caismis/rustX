@@ -1142,6 +1142,11 @@ pub enum ClientRequest {
         /// empty for the workspace root itself.
         relative_path: PathBuf,
     },
+    /// Read one Workspace resource entry, resolving only contained links.
+    ResolveResourceEntry {
+        /// Normal Workspace-relative components, or empty for the root.
+        relative_path: PathBuf,
+    },
     /// One bounded page of a directory under the binding workspace.
     ReadDirectory {
         /// The workspace-relative directory path: normal components only,
@@ -1153,6 +1158,8 @@ pub enum ClientRequest {
         limit: u32,
         /// The revision the directory must still hold, when checked.
         expected_revision: Option<String>,
+        /// Omit hidden names from the reply, while charging them to the page.
+        skip_hidden: bool,
     },
     /// A bounded mutation beneath the admitted workspace.
     MutateTree(TreeMutation),
@@ -1416,6 +1423,15 @@ pub enum ClientReply {
         /// The entry's kind and stamp, stat'ed without following it.
         metadata: EntryStamp,
     },
+    /// The physically resolved, no-follow path of a Workspace resource.
+    ResourceEntry {
+        /// The resolved path relative to the admitted Workspace.
+        relative_path: PathBuf,
+        /// The target's kind and stamp.
+        metadata: EntryStamp,
+        /// The input traversed a link.
+        through_link: bool,
+    },
     /// One page of a directory listing.
     Directory {
         /// The revision the listing was verified under.
@@ -1424,6 +1440,8 @@ pub enum ClientReply {
         entries: Vec<PageEntry>,
         /// The index the next page starts at, absent at the end.
         next_offset: Option<u32>,
+        /// The number of hidden names consumed by the page.
+        skipped: u32,
     },
     /// The requested tree mutation finished.
     TreeMutated,

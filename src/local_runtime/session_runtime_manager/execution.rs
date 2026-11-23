@@ -3884,6 +3884,7 @@ mod tests {
         write_record(
             &mut client,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "c".repeat(64),
                 entries: vec![
                     rustx_execution_protocol::PageEntry {

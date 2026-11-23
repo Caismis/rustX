@@ -493,6 +493,10 @@ fn invalid_collection(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the collection source owns discovery, diagnostics and the offered paths"
+)]
 fn collect_automatic_source(
     root: &AutomaticSkillRoot,
     diagnostics: &mut Vec<SkillDiagnostic>,
@@ -553,8 +557,15 @@ fn collect_automatic_source(
         };
         let fallback_name = directory.to_string_lossy().into_owned();
         let location = file.display().to_string();
+        let location_for_tools = if bound { &canonical } else { &file };
         let result = match tree.frontmatter(&canonical, cancellation) {
-            Ok(header) => discover_package(&file, &canonical, &fallback_name, source, &header),
+            Ok(header) => discover_package(
+                location_for_tools,
+                &canonical,
+                &fallback_name,
+                source,
+                &header,
+            ),
             Err(error) if bound && error.kind() != io::ErrorKind::InvalidData => return Err(error),
             Err(error) => Err(SkillPackageError::MalformedFrontmatter {
                 directory: fallback_name.clone(),

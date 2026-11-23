@@ -1051,6 +1051,9 @@ fn serve_requests(
                 expected_revision.as_deref(),
             ),
             ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
+            ClientRequest::ResolveResourceEntry { relative_path } => {
+                resolve_resource_entry(root, workspace, &relative_path)
+            }
             ClientRequest::WorkspaceChanges(request) => ClientReply::WorkspaceChanges(
                 state
                     .changes
@@ -1070,12 +1073,14 @@ fn serve_requests(
                 offset,
                 limit,
                 expected_revision,
+                skip_hidden,
             } => read_directory(
                 root,
                 &relative_path,
                 offset,
                 limit,
                 expected_revision.as_deref(),
+                skip_hidden,
             ),
             ClientRequest::PrepareWrite {
                 relative_path,
@@ -1519,6 +1524,26 @@ fn get_metadata(root: &PackageDirectory, relative_path: &Path) -> ClientReply {
     }
 }
 
+fn resolve_resource_entry(
+    root: &PackageDirectory,
+    workspace: &Path,
+    relative_path: &Path,
+) -> ClientReply {
+    match root.resolve_resource(workspace, relative_path) {
+        Ok(entry) if entry.relative_path.to_str().is_some() => ClientReply::ResourceEntry {
+            relative_path: entry.relative_path,
+            metadata: stamp(&entry.metadata),
+            through_link: entry.through_link,
+        },
+        Ok(_) => ClientReply::Error {
+            kind: ReadError::Invalid,
+        },
+        Err(error) => ClientReply::Error {
+            kind: read_error(&error),
+        },
+    }
+}
+
 /// `ReadDirectory`: one revision-checked page under the workspace — an
 /// empty `relative_path` lists the root. Bounds are enforced before any
 /// physical work; errors cross as stable [`ReadError`] codes only.
@@ -1528,6 +1553,7 @@ fn read_directory(
     offset: u32,
     limit: u32,
     expected_revision: Option<&str>,
+    skip_hidden: bool,
 ) -> ClientReply {
     let Ok(relative) = relative_entry(relative_path) else {
         return ClientReply::Error {
@@ -1544,15 +1570,29 @@ fn read_directory(
             kind: ReadError::Invalid,
         };
     };
-    match root.directory_page(
-        relative,
-        offset,
-        limit,
-        expected_revision,
-        MAX_DIRECTORY_NAMES,
-        MAX_DIRECTORY_PAGE_ENTRIES,
-    ) {
-        Ok(page) => ClientReply::Directory {
+    let page = if skip_hidden {
+        root.skill_directory_page(
+            relative,
+            offset,
+            limit,
+            expected_revision,
+            MAX_DIRECTORY_NAMES,
+            MAX_DIRECTORY_PAGE_ENTRIES,
+        )
+    } else {
+        root.directory_page(
+            relative,
+            offset,
+            limit,
+            expected_revision,
+            MAX_DIRECTORY_NAMES,
+            MAX_DIRECTORY_PAGE_ENTRIES,
+        )
+        .map(|page| (page, 0))
+    };
+    match page {
+        Ok((page, skipped)) => ClientReply::Directory {
+            skipped: u32::try_from(skipped).expect("bounded directory page"),
             revision: page.revision,
             entries: page
                 .entries

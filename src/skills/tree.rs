@@ -12,10 +12,15 @@ use crate::runtime::CancellationSignal;
 pub(super) trait SkillTree {
     fn canonical(&self, path: &Path) -> io::Result<PathBuf>;
     fn entry(&self, path: &Path) -> io::Result<Option<Entry>>;
-    fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>>;
+    fn children(&self, path: &Path, limit: usize) -> io::Result<Children>;
     fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>>;
     fn frontmatter(&self, path: &Path, signal: &CancellationSignal) -> io::Result<Vec<u8>>;
     fn observe(&self, path: &Path);
+}
+
+pub(super) struct Children {
+    pub(super) paths: Vec<PathBuf>,
+    pub(super) scanned: usize,
 }
 
 pub(super) struct Entry {
@@ -50,15 +55,19 @@ impl SkillTree for Native {
         Ok(Some(Entry { kind, link }))
     }
 
-    fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
-        std::fs::read_dir(path)?
+    fn children(&self, path: &Path, limit: usize) -> io::Result<Children> {
+        let paths: Vec<_> = std::fs::read_dir(path)?
             .take(limit)
             .map(|entry| entry.map(|entry| entry.path()))
-            .collect()
+            .collect::<io::Result<_>>()?;
+        Ok(Children {
+            scanned: paths.len(),
+            paths,
+        })
     }
 
     fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>> {
-        crate::bounded_file::read_with_limit(path, bound).map_err(io::Error::other)
+        crate::bounded_file::read_with_limit_io(path, bound)
     }
 
     fn frontmatter(&self, path: &Path, signal: &CancellationSignal) -> io::Result<Vec<u8>> {
@@ -76,6 +85,7 @@ pub(crate) type ObservedSkillDirectories =
 
 pub(super) struct Client<'a> {
     observations: std::cell::RefCell<ObservedSkillDirectories>,
+    resolved_links: std::cell::RefCell<std::collections::BTreeMap<PathBuf, PathBuf>>,
     endpoint: &'a LocalExecutionEndpoint,
     deadline: Instant,
     signal: &'a CancellationSignal,
@@ -88,6 +98,7 @@ impl<'a> Client<'a> {
     ) -> Self {
         Self {
             observations: std::cell::RefCell::default(),
+            resolved_links: std::cell::RefCell::default(),
             endpoint,
             deadline: Instant::now() + Duration::from_secs(5),
             signal,
@@ -103,9 +114,12 @@ impl Client<'_> {
 
 impl SkillTree for Client<'_> {
     fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
-        // Bound tree metadata and reads never follow links. The lexical path
-        // is the exact path subsequent tools submit to the same Client.
-        Ok(path.to_path_buf())
+        Ok(self
+            .resolved_links
+            .borrow()
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| path.to_path_buf()))
     }
 
     fn entry(&self, path: &Path) -> io::Result<Option<Entry>> {
@@ -113,39 +127,51 @@ impl SkillTree for Client<'_> {
         match self
             .endpoint
             .read_workspace_source(path, self.deadline, |channel, relative| {
-                channel.entry_metadata_until(relative, self.deadline)
+                channel.resolve_resource_entry_until(relative, self.deadline)
             }) {
-            Ok(metadata) => Ok(Some(Entry {
-                kind: metadata.kind,
-                link: metadata.kind == EntryKind::Symlink,
-            })),
+            Ok((relative, metadata, link)) => {
+                if link {
+                    self.observe(path);
+                    self.resolved_links
+                        .borrow_mut()
+                        .insert(path.to_path_buf(), self.endpoint.workspace().join(relative));
+                }
+                Ok(Some(Entry {
+                    kind: metadata.kind,
+                    link,
+                }))
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
     }
 
-    fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
+    fn children(&self, path: &Path, limit: usize) -> io::Result<Children> {
+        let physical = self.canonical(path)?;
         self.observations
             .borrow_mut()
-            .insert(path.to_path_buf(), None);
+            .insert(physical.clone(), None);
         let mut children = Vec::new();
         let mut offset = 0;
         let mut revision = None;
-        while children.len() < limit {
+        let mut scanned = 0;
+        while scanned < limit {
             crate::package_io::check_cancelled(self.signal)?;
-            let count = u32::try_from((limit - children.len()).min(MAX_DIRECTORY_PAGE_ENTRIES))
+            let count = u32::try_from((limit - scanned).min(MAX_DIRECTORY_PAGE_ENTRIES))
                 .expect("bounded directory page");
-            let page =
-                self.endpoint
-                    .read_workspace_source(path, self.deadline, |channel, relative| {
-                        channel.directory_page_until(
-                            relative,
-                            offset,
-                            count,
-                            revision.as_deref(),
-                            self.deadline,
-                        )
-                    })?;
+            let page = self.endpoint.read_workspace_source(
+                &physical,
+                self.deadline,
+                |channel, relative| {
+                    channel.skill_directory_page_until(
+                        relative,
+                        offset,
+                        count,
+                        revision.as_deref(),
+                        self.deadline,
+                    )
+                },
+            )?;
             if let (Some(previous), Some(first)) = (children.last(), page.entries.first())
                 && previous >= &path.join(&first.name)
             {
@@ -154,6 +180,8 @@ impl SkillTree for Client<'_> {
                     "Client Skill directory pages are out of order",
                 ));
             }
+            scanned +=
+                page.entries.len() + usize::try_from(page.skipped).expect("bounded directory page");
             children.extend(page.entries.into_iter().map(|entry| path.join(entry.name)));
             let Some(next) = page.next_offset else {
                 break;
@@ -161,7 +189,10 @@ impl SkillTree for Client<'_> {
             offset = next;
             revision = Some(page.revision);
         }
-        Ok(children)
+        Ok(Children {
+            paths: children,
+            scanned,
+        })
     }
 
     fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>> {
@@ -190,13 +221,18 @@ impl SkillTree for Client<'_> {
     }
 
     fn observe(&self, path: &Path) {
-        if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
-            && parent.starts_with(self.endpoint.workspace())
-            && let Some(names) = self
-                .observations
-                .borrow_mut()
-                .entry(parent.to_path_buf())
-                .or_insert_with(|| Some(std::collections::BTreeSet::new()))
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return;
+        };
+        if !parent.starts_with(self.endpoint.workspace()) {
+            return;
+        }
+        let physical = self.canonical(parent).expect("cached Client path");
+        if let Some(names) = self
+            .observations
+            .borrow_mut()
+            .entry(physical)
+            .or_insert_with(|| Some(std::collections::BTreeSet::new()))
         {
             names.insert(name.to_owned());
         }

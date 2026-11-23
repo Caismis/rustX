@@ -1762,19 +1762,25 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
         std::fs::rename(workspace, &physical).unwrap();
         let instructions = physical.join("AGENTS.md");
         std::fs::write(&instructions, "before watch").unwrap();
-        let package = physical.join(".agents/skills/watched");
-        std::fs::create_dir_all(&package).unwrap();
-        let marker = package.join("SKILL.md");
-        let write_marker = |description| {
+        let collection = physical.join(".agents/skills");
+        std::fs::create_dir_all(&collection).unwrap();
+        let original_package = physical.join("skills-a");
+        std::fs::create_dir(&original_package).unwrap();
+        let replacement_package = physical.join("skills-b");
+        std::fs::create_dir(&replacement_package).unwrap();
+        let authored_link = collection.join("watched");
+        std::os::unix::fs::symlink("../../skills-a", &authored_link).unwrap();
+        let marker = original_package.join("SKILL.md");
+        let write_marker = |marker: &std::path::Path, description| {
             std::fs::write(
-                &marker,
+                marker,
                 format!(
                     "---\nname: watched\ndescription: {description}\n---\nBody remains on demand\n"
                 ),
             )
             .unwrap();
         };
-        write_marker("Before watch");
+        write_marker(&marker, "Before watch");
         let launcher = workspace_overlay_launcher(mount.path());
         assert!(!workspace.exists());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
@@ -1799,7 +1805,7 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
         observed.await.unwrap();
         let mut changed = fixture.manager.configuration_changes();
         std::fs::write(&instructions, "after watch").unwrap();
-        write_marker("After watch");
+        write_marker(&marker, "After watch");
         loop {
             let resources = runtime.runtime_resources();
             if resources
@@ -1844,7 +1850,13 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
             },
         );
         std::fs::write(&instructions, "current after detach").unwrap();
-        write_marker("Current after detach");
+        write_marker(
+            &replacement_package.join("SKILL.md"),
+            "Current after detach",
+        );
+        let next_link = collection.join(".new");
+        std::os::unix::fs::symlink("../../skills-b", &next_link).unwrap();
+        std::fs::rename(next_link, authored_link).unwrap();
         Fixture::admit_execution_pair(&endpoint).await;
         assert_eq!(endpoint.admission(), Some(&admission));
         assert!(!endpoint.control().unwrap().same_pair(&retired_lane));

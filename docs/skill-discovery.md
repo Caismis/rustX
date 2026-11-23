@@ -10,11 +10,13 @@ It stops traversal at a `SKILL.md`. Standalone Markdown files with Skill
 frontmatter are discovered directly in each collection root. Nested directories
 are searched for `SKILL.md` packages, not standalone Markdown files.
 
-Directory and file symlinks can point outside either collection. Discovered
-paths retain links below the collection root so package-relative references
-resolve beside the offered instruction file. Broken links and directory cycles
-are skipped. Package bodies and supporting files are opened on demand by the
-tools that use them.
+Directory and file symlinks can point outside the Skill collection. For a
+bound Workspace, the Client resolves the link target under the admitted
+Workspace and offers its real path to ordinary Read and Bash. It observes
+both the authored link and its resolved target. Broken links, external
+Workspace targets and directory cycles are skipped. Unbound discovery
+retains the authored package path. Package bodies and supporting files
+are opened on demand beside the offered instruction file.
 
 `skills/frontmatter.rs` reads up to 2 MiB of frontmatter with 4 KiB cancellable
 read-ahead and stops at the closing YAML delimiter. Two matching prefix reads verify the

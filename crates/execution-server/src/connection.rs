@@ -54,6 +54,8 @@ pub struct DirectoryListing {
     pub entries: Vec<PageEntry>,
     /// The index the next page starts at, absent at the end.
     pub next_offset: Option<u32>,
+    /// Hidden entries charged to an opted-in Skill discovery page.
+    pub skipped: u32,
 }
 
 /// The result of one bounded Client continuation query.
@@ -1269,6 +1271,54 @@ impl LocalConnection {
         Ok(metadata)
     }
 
+    /// Resolves a Workspace resource within the admitted Client directory.
+    ///
+    /// # Errors
+    /// Returns the Client's typed read error or retires the connection on an invalid reply.
+    pub fn resolve_resource_entry_until(
+        &mut self,
+        relative_path: &Path,
+        deadline: Instant,
+    ) -> io::Result<(PathBuf, EntryStamp, bool)> {
+        if !self.capabilities.contains(&Capability::DirectoryMetadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no directory metadata capability",
+            ));
+        }
+        match self.exchange_admitted(
+            &ClientRequest::ResolveResourceEntry {
+                relative_path: relative_path.to_path_buf(),
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )? {
+            ClientReply::Error { kind } => Err(read_error(kind)),
+            ClientReply::ResourceEntry {
+                relative_path: resolved,
+                metadata,
+                through_link,
+            } if resolved.as_os_str().len() <= 4096
+                && resolved.components().all(|component| {
+                    matches!(component, std::path::Component::Normal(name)
+                            if !name.as_encoded_bytes().contains(&0))
+                })
+                && metadata.kind != rustx_execution_protocol::EntryKind::Symlink
+                && (through_link || resolved == relative_path) =>
+            {
+                if let Some(reason) = stamp_violation(&metadata.stamp) {
+                    return Err(self.retire(io::Error::new(io::ErrorKind::InvalidData, reason)));
+                }
+                Ok((resolved, metadata, through_link))
+            }
+            _ => Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid resource entry reply",
+            ))),
+        }
+    }
+
     /// One bounded, revision-checked directory page under the binding
     /// workspace.
     ///
@@ -1323,6 +1373,47 @@ impl LocalConnection {
         expected_revision: Option<&str>,
         deadline: Instant,
     ) -> io::Result<DirectoryListing> {
+        self.scan_directory(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            deadline,
+            false,
+        )
+    }
+
+    /// Reads a discovery page, withholding hidden names and counting them toward the limit.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::directory_page_until`] for visible names.
+    pub fn skill_directory_page_until(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+    ) -> io::Result<DirectoryListing> {
+        self.scan_directory(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            deadline,
+            true,
+        )
+    }
+
+    fn scan_directory(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+        skip_hidden: bool,
+    ) -> io::Result<DirectoryListing> {
         if !self.capabilities.contains(&Capability::DirectoryMetadata) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -1344,6 +1435,7 @@ impl LocalConnection {
                 offset,
                 limit,
                 expected_revision: expected_revision.map(str::to_owned),
+                skip_hidden,
             },
             Some(deadline),
             || Ok(()),
@@ -1352,7 +1444,7 @@ impl LocalConnection {
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
-        self.validate_directory(offset, limit, expected_revision, &reply)
+        self.validate_directory(offset, limit, expected_revision, skip_hidden, &reply)
     }
 
     /// Verifies a `Directory` reply against the request before trusting
@@ -1364,6 +1456,7 @@ impl LocalConnection {
         offset: u32,
         limit: u32,
         expected_revision: Option<&str>,
+        skip_hidden: bool,
         reply: &ClientReply,
     ) -> io::Result<DirectoryListing> {
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
@@ -1371,6 +1464,7 @@ impl LocalConnection {
             revision,
             entries,
             next_offset,
+            skipped,
         } = reply
         else {
             return Err(self.retire(violation("unexpected reply to directory read")));
@@ -1378,7 +1472,9 @@ impl LocalConnection {
         if !valid_revision(revision) {
             return Err(self.retire(violation("directory reply carries an invalid revision")));
         }
-        if entries.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
+        let names = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        let delivered = names.saturating_add(*skipped);
+        if delivered > limit || (!skip_hidden && *skipped != 0) {
             return Err(self.retire(violation("directory reply exceeds requested page")));
         }
         let mut previous: Option<&str> = None;
@@ -1395,6 +1491,7 @@ impl LocalConnection {
                 || name.contains('\0')
                 || name == "."
                 || name == ".."
+                || (skip_hidden && (name.starts_with('.') || name == "node_modules"))
             {
                 return Err(self.retire(violation("directory reply carries an invalid entry name")));
             }
@@ -1406,7 +1503,6 @@ impl LocalConnection {
                 return Err(self.retire(violation(reason)));
             }
         }
-        let delivered = u32::try_from(entries.len()).unwrap_or(u32::MAX);
         let Some(cursor) = offset.checked_add(delivered) else {
             return Err(self.retire(violation("directory reply overflows the name space")));
         };
@@ -1437,6 +1533,7 @@ impl LocalConnection {
             revision: revision.clone(),
             entries: entries.clone(),
             next_offset: *next_offset,
+            skipped: *skipped,
         })
     }
 

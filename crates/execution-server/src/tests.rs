@@ -1341,6 +1341,7 @@ fn an_out_of_order_directory_reply_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("b"), entry("a")],
                 next_offset: None,
@@ -1376,6 +1377,7 @@ fn a_directory_reply_with_a_wrong_cursor_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a"), entry("b")],
                 next_offset: Some(offset + 99),
@@ -1411,6 +1413,7 @@ fn a_nul_directory_name_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a\0b"), entry("a\u{1f}")],
                 next_offset: None,
@@ -1449,6 +1452,7 @@ fn a_directory_reply_past_the_name_cap_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a")],
                 next_offset: Some(cap),
@@ -1482,6 +1486,7 @@ fn a_directory_reply_past_the_name_cap_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a")],
                 next_offset: None,
@@ -1518,6 +1523,7 @@ fn a_directory_page_ending_exactly_at_the_name_cap_is_legitimate() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a"), entry("b")],
                 next_offset: None,
@@ -1550,6 +1556,7 @@ fn a_dot_segment_directory_name_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("..")],
                 next_offset: None,

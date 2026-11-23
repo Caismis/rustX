@@ -361,23 +361,12 @@ fn launch_parameters(
         }
         return Some((python.prepared_launch(source, operations)?, lifecycle, info));
     }
-    if launch.program.as_os_str().is_empty() {
-        return None;
-    }
-    let program = if launch.program.is_relative()
-        && (launch.program.components().count() > 1 || launch.program.starts_with("."))
-    {
-        if launch
-            .program
-            .components()
-            .any(|part| !matches!(part, Component::CurDir | Component::Normal(_)))
-        {
-            return None;
-        }
-        cwd.join(launch.program)
-    } else {
-        launch.program
-    };
+    let program = client_program(
+        operations.workspace_root(),
+        operations.workspace(),
+        &launch.cwd,
+        launch.program,
+    )?;
     Some((
         InteractiveProcessSpec {
             cwd,
@@ -388,6 +377,48 @@ fn launch_parameters(
         lifecycle,
         info,
     ))
+}
+
+// Path-valued Workspace programs use the same contained resolution as
+// authored resources. Explicit system executables and PATH names are
+// provided by the admitted Client's runtime.
+fn client_program(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &std::path::Path,
+    cwd: &std::path::Path,
+    program: std::path::PathBuf,
+) -> Option<std::path::PathBuf> {
+    let bytes = program.as_os_str().as_encoded_bytes();
+    if bytes.is_empty()
+        || bytes.contains(&0)
+        || program
+            .components()
+            .any(|part| part == Component::ParentDir)
+    {
+        return None;
+    }
+    let relative = if program.is_absolute() {
+        let Ok(path) = program.strip_prefix(workspace) else {
+            return Some(program);
+        };
+        path.to_path_buf()
+    } else if bytes.contains(&b'/') || program.starts_with(".") {
+        cwd.join(program)
+    } else {
+        return Some(program);
+    };
+    let normalized = relative
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect::<std::path::PathBuf>();
+    let resolved = root.resolve_resource(workspace, &normalized).ok()?;
+    resolved
+        .metadata
+        .is_file
+        .then(|| workspace.join(resolved.relative_path))
 }
 
 struct Negotiator(ClientInfo);
@@ -600,4 +631,38 @@ fn encode_bounded<T: serde::Serialize>(value: &T, limit: usize) -> serde_json::R
     let mut buffer = Bounded(Vec::new(), limit);
     serde_json::to_writer(&mut buffer, value)?;
     Ok(buffer.0)
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use std::os::unix::fs::symlink;
+    use std::path::{Path, PathBuf};
+
+    use super::client_program;
+
+    #[test]
+    fn path_valued_programs_stay_in_the_client_workspace() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let workspace = base.join("workspace");
+        let commands = workspace.join("commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        let executable = commands.join("peer");
+        std::fs::write(&executable, "authorized").unwrap();
+        std::fs::write(base.join("external"), "outside").unwrap();
+        symlink("peer", commands.join("linked")).unwrap();
+        symlink("../../external", commands.join("outside")).unwrap();
+        let root = rustx_confined_fs::PackageDirectory::open(&workspace).unwrap();
+        let resolve =
+            |name: PathBuf| client_program(&root, &workspace, Path::new("commands"), name);
+
+        assert_eq!(resolve("./linked".into()), Some(executable.clone()));
+        assert_eq!(resolve(commands.join("linked")), Some(executable));
+        assert_eq!(resolve("./outside".into()), None);
+        assert_eq!(resolve(commands.join("outside")), None);
+        assert_eq!(resolve("../../external".into()), None);
+        assert_eq!(resolve(workspace.join("../external")), None);
+        assert_eq!(resolve("/bin/sh".into()), Some("/bin/sh".into()));
+        assert_eq!(resolve("sh".into()), Some("sh".into()));
+    }
 }

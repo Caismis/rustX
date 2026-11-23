@@ -374,13 +374,14 @@ async fn oversized_http_mcp_body_is_refused_without_replaying_the_call() {
 async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
     bounded(Box::pin(async {
         use rustx::app_server::protocol::Method;
-        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
 
         assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
         let fixture = Fixture::new().await;
-        let skill = ".agents/skills/project/client-guide/SKILL.md";
-        let reference = ".agents/skills/project/client-guide/references/notes.md";
-        let script = ".agents/skills/project/client-guide/scripts/check.sh";
+        let skill = "packages/client-guide/guide.md";
+        let reference = "packages/client-guide/references/notes.md";
+        let script = "packages/client-guide/scripts/check.sh";
         let provider = crate::common::FixtureServer::start(move |attempt, _| match attempt {
             0 => crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse"),
             1 => crate::common::FixtureReply::body(
@@ -441,9 +442,19 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         std::fs::create_dir_all(physical.join(".agents")).unwrap();
         std::fs::write(physical.join(".agents/mcp.toml"), "[mcp_servers.overflow]\ncommand = '../fixture-server'\n").unwrap();
         assert!(!workspace.join(".agents/mcp.toml").exists());
+        let collection = physical.join("workspace-skills");
+        std::fs::create_dir_all(collection.join("project")).unwrap();
+        symlink("../workspace-skills", physical.join(".agents/skills")).unwrap();
+        symlink("../../packages/client-guide", collection.join("project/client-guide")).unwrap();
+        std::fs::write(collection.join(std::ffi::OsStr::from_bytes(b".\xff")), b"hidden bytes").unwrap();
+        let outside = bin.path().join("outside-skill");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("SKILL.md"), "---\nname: outside-secret\ndescription: Never follow outside the Workspace\n---\n").unwrap();
+        symlink(outside, collection.join("outside")).unwrap();
         let skill_path = physical.join(skill);
         let package = skill_path.parent().unwrap();
         std::fs::create_dir_all(package).unwrap();
+        symlink("guide.md", package.join("SKILL.md")).unwrap();
         std::fs::write(&skill_path, "---\nname: client-guide\ndescription: Client-only discovery metadata\n---\nclient-skill-body-observed-on-demand\nRead references/notes.md and run scripts/check.sh.\n").unwrap();
         std::fs::create_dir(package.join("references")).unwrap();
         std::fs::create_dir(package.join("scripts")).unwrap();
@@ -469,7 +480,9 @@ unset RUSTX_CLIENT_DOMAIN_STAGING
 exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@"
 "#).unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let program = physical.join("fixture-server");
+        std::fs::create_dir(physical.join("commands")).unwrap();
+        symlink("commands/peer", physical.join("fixture-server")).unwrap();
+        let program = physical.join("commands/peer");
         std::fs::write(&program, r#"#!/usr/bin/env python3
 import json
 import sys
@@ -510,6 +523,8 @@ for line in sys.stdin:
         assert!(requests[0].contains("Client-only discovery metadata"));
         assert!(requests[0].contains(&*workspace.join(skill).to_string_lossy()));
         assert!(!requests[0].contains("rejected-skill"));
+        assert!(!requests[0].contains("outside-secret"));
+        assert!(!requests[0].contains("workspace-skills/project/client-guide"));
         assert!(!requests[0].contains("client-skill-body-observed-on-demand"));
         assert!(!requests[0].contains("references/notes.md"));
         assert!(!requests[0].contains("scripts/check.sh"));

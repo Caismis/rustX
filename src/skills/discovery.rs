@@ -2,6 +2,7 @@
 //! traversal before any of that package's supporting files are enumerated.
 
 use std::collections::BTreeSet;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -82,6 +83,12 @@ impl Scanner<'_> {
         if !self.ancestors.insert(canonical.clone()) {
             return Ok(());
         }
+        let result = self.visit_directory(path, depth);
+        self.ancestors.remove(&canonical);
+        result
+    }
+
+    fn visit_directory(&mut self, path: &Path, depth: usize) -> io::Result<()> {
         if depth > MAX_COLLECTION_DEPTH {
             return Err(invalid_data(format!(
                 "Skill collection exceeds {MAX_COLLECTION_DEPTH} directory levels"
@@ -104,7 +111,6 @@ impl Scanner<'_> {
             .push(builder.build().map_err(std::io::Error::other)?);
         let result = self.children(path, depth);
         self.rules.pop();
-        self.ancestors.remove(&canonical);
         result
     }
 
@@ -115,10 +121,7 @@ impl Scanner<'_> {
         target: &Path,
     ) -> std::io::Result<()> {
         let limit = self.remaining_ignore_bytes.min(MAX_IGNORE_FILE_BYTES);
-        let bytes = self
-            .tree
-            .read_file(target, limit)
-            .map_err(|error| invalid_data(error.to_string()))?;
+        let bytes = self.tree.read_file(target, limit)?;
         self.remaining_ignore_bytes -= bytes.len() as u64;
         for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
             crate::package_io::check_cancelled(self.signal)?;
@@ -169,8 +172,11 @@ impl Scanner<'_> {
             return self.offer(marker);
         }
         let limit = MAX_DIRECTORY_ENTRIES.min(self.remaining_entries);
-        let mut entries = self.tree.children(path, limit + 1)?;
-        if entries.len() > limit {
+        let super::tree::Children {
+            paths: mut entries,
+            scanned,
+        } = self.tree.children(path, limit + 1)?;
+        if scanned > limit {
             let message = if limit == MAX_DIRECTORY_ENTRIES {
                 format!("Skill collection directory exceeds {MAX_DIRECTORY_ENTRIES} entries")
             } else {
@@ -178,7 +184,7 @@ impl Scanner<'_> {
             };
             return Err(invalid_data(message));
         }
-        self.remaining_entries -= entries.len();
+        self.remaining_entries -= scanned;
         entries.sort();
         for entry in entries {
             crate::package_io::check_cancelled(self.signal)?;
@@ -188,7 +194,11 @@ impl Scanner<'_> {
             let kind = if entry == marker {
                 marker_kind
             } else {
-                self.entry(&entry)?.map(|entry| entry.kind)
+                match self.entry(&entry) {
+                    Ok(entry) => entry.map(|entry| entry.kind),
+                    Err(error) if error.kind() == io::ErrorKind::PermissionDenied => continue,
+                    Err(error) => return Err(error),
+                }
             };
             let Some(kind) = kind else {
                 continue;
@@ -197,7 +207,11 @@ impl Scanner<'_> {
                 continue;
             }
             if kind == EntryKind::Directory {
-                self.visit(&entry, depth + 1)?;
+                if let Err(error) = self.visit(&entry, depth + 1)
+                    && error.kind() != io::ErrorKind::PermissionDenied
+                {
+                    return Err(error);
+                }
             } else if kind == EntryKind::RegularFile && is_markdown(&entry) && depth == 0 {
                 self.offer(entry)?;
             }
@@ -231,6 +245,67 @@ mod tests {
             .expect("collection budget must stop discovery");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(error.to_string().contains(message), "{error}");
+    }
+
+    struct DeniedDirectory<'a>(&'a Path, io::ErrorKind);
+
+    impl SkillTree for DeniedDirectory<'_> {
+        fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+            Native.canonical(path)
+        }
+
+        fn entry(&self, path: &Path) -> io::Result<Option<Entry>> {
+            Native.entry(path)
+        }
+
+        fn children(&self, path: &Path, limit: usize) -> io::Result<super::super::tree::Children> {
+            if path == self.0 {
+                return Err(self.1.into());
+            }
+            Native.children(path, limit)
+        }
+
+        fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>> {
+            Native.read_file(path, bound)
+        }
+
+        fn frontmatter(&self, path: &Path, signal: &CancellationSignal) -> io::Result<Vec<u8>> {
+            Native.frontmatter(path, signal)
+        }
+
+        fn observe(&self, path: &Path) {
+            Native.observe(path);
+        }
+    }
+
+    #[test]
+    fn inaccessible_descendant_keeps_readable_sibling_and_other_errors() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let blocked = root.join("blocked");
+        let package = root.join("package");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::create_dir(&package).unwrap();
+        let marker = package.join(SKILL_MARKDOWN_FILE);
+        std::fs::write(&marker, []).unwrap();
+
+        let signal = CancellationSignal::new();
+        let collection = collect_from(
+            root,
+            &signal,
+            &DeniedDirectory(&blocked, io::ErrorKind::PermissionDenied),
+        );
+        assert_eq!(collection.files, [marker]);
+        assert!(collection.error.is_none());
+
+        for (denied, kind) in [
+            (root, io::ErrorKind::PermissionDenied),
+            (&blocked, io::ErrorKind::TimedOut),
+        ] {
+            let collection = collect_from(root, &signal, &DeniedDirectory(denied, kind));
+            assert_eq!(collection.files.len(), 0);
+            assert_eq!(collection.error.unwrap().kind(), kind);
+        }
     }
 
     #[test]
