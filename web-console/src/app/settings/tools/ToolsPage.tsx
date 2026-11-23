@@ -29,8 +29,10 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
   const [added, setAdded] = useState<string[]>([]);
   const authoredSources = agent?.tools?.sources ?? {};
   const sources = [...new Set([...reachableIdentities(scope, authoredSources, resolved?.agent?.tools?.sources), ...added])].filter(id => id.startsWith('python:'));
+  // Only the sources this page owns count (python:*, same as sources and
+  // workspaceRemovals); other grant kinds do not block Follow global.
   const hasWorkspaceOverrides = scope === 'workspace' && (
-    document.approval_mode != null || agent?.tools?.builtin != null || Object.keys(authoredSources).length > 0
+    document.approval_mode != null || agent?.tools?.builtin != null || Object.keys(authoredSources).some(id => id.startsWith('python:'))
   );
   const workspaceRemovals: SourceMutation[] = scope === 'workspace' ? [
     ...(document.approval_mode != null ? [{ kind: 'config', mutation: { unit: 'approval', authored: null } } as const] : []),
