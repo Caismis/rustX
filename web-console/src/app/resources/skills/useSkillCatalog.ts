@@ -3,10 +3,11 @@ import type {SkillDescriptor,SourceScope,SourceSettings} from '../../../../../pr
 import type {AppServerClient} from '../../../client/app-server';
 
 /** Native discovery and display information share a paginated catalog revision. */
-export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind,refresh=0) {
+export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind,refresh=0,executionSession?:string) {
  const directory=scope==='workspace'&&source.target.kind==='workspace'?source.target.directory:undefined;
+ const session=scope==='workspace'?executionSession:undefined;
  const generation=client?.getSnapshot().generation;
- const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;directory?:string;generation:number;refresh:number;skills:SkillDescriptor[];error?:string}>();
+ const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;directory?:string;session?:string;generation:number;refresh:number;skills:SkillDescriptor[];error?:string}>();
  useEffect(()=>{
   if(!enabled||!client)return;
   let alive=true;
@@ -17,16 +18,16 @@ export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSe
    const skills:SkillDescriptor[]=[];
    let offset=0,revision:string|undefined;
    do {
-    const {page}=await client.request({method:'skills/list',params:{target,offset,limit:32,expected_revision:revision}},'skills',undefined,current);
+    const {page}=await client.request({method:'skills/list',params:{target,execution_session:session,offset,limit:32,expected_revision:revision}},'skills',undefined,current);
     if(!current())return;
     revision=page.revision;skills.push(...page.data);
     if(page.next_offset==null)break;
     offset=page.next_offset;
    } while(current());
-   if(current())setResult({source,scope,directory,generation,refresh,skills});
-  })().catch(error=>{if(current())setResult({source,scope,directory,generation,refresh,skills:[],error:String(error)});});
+   if(current())setResult({source,scope,directory,session,generation,refresh,skills});
+  })().catch(error=>{if(current())setResult({source,scope,directory,session,generation,refresh,skills:[],error:String(error)});});
   return()=>{alive=false;};
- },[client,source,enabled,scope,directory,generation,refresh]);
- return enabled&&result&&result.scope===scope&&result.directory===directory&&result.generation===generation
+ },[client,source,enabled,scope,directory,session,generation,refresh]);
+ return enabled&&result&&result.scope===scope&&result.directory===directory&&result.session===session&&result.generation===generation
   ? {...result,pending:result.source!==source||result.refresh!==refresh}:undefined;
 }

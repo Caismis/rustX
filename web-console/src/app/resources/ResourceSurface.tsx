@@ -248,7 +248,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
       {editorAvailable && editorSource ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
         <AgentEditor source={editorSource} target={editorTarget} host={host} name={resourceFocus} initialDraft={newAgent} editable={editorEditable}
-          client={client} discover={visible && editorEditable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
+          client={client} executionSession={editorSource.target.kind === 'workspace' && executionSession?.cwd === editorSource.target.directory ? executionSession?.id : undefined}
+          discover={visible && editorEditable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
           models={catalogIdentities(editorSource, editorTarget.kind, 'models')} profiles={catalogProfiles(editorSource, editorTarget.kind)} />
       </SourceContext></SettingsActorContext> : <>
         <Button size="sm" onClick={closeAgent}>{tx('resources:cancel')}</Button>
@@ -305,6 +306,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
                 {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
                   query={query} view={view} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
+                  executionSession={scope === 'workspace' && executionSession?.cwd === directory ? executionSession?.id : undefined}
                   bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}

@@ -3089,6 +3089,14 @@ impl StandaloneExecution {
 }
 
 impl SessionExecutionRegistry {
+    pub(super) fn reserves_workspace(&self, workspace: &Path) -> bool {
+        self.0
+            .lock()
+            .expect("execution registry mutex")
+            .values()
+            .any(|slot| slot.workspace.as_os_str() == workspace.as_os_str())
+    }
+
     pub(super) fn reserved_workspaces(&self) -> BTreeSet<PathBuf> {
         self.0
             .lock()
@@ -3629,7 +3637,10 @@ mod tests {
         assert!(!slot.publish(&endpoint));
         drop(endpoint);
         match registry.claim(&session, workspace.clone(), ExecutionTransport::Unix) {
-            Err(error) => assert!(error.to_string().contains("recovery"), "{error}"),
+            Err(error) => assert_eq!(
+                error.to_string(),
+                "execution binding is closed or has changed",
+            ),
             Ok(_) => panic!("a fenced claim is never reissued"),
         }
     }

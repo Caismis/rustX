@@ -1782,12 +1782,18 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         },
         Method::SkillsList {
             target: source.clone(),
+            execution_session: Some(crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            )),
             offset: 0,
             limit: 32,
             expected_revision: None,
         },
         Method::SkillsRead {
             target: source.clone(),
+            execution_session: Some(crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            )),
             name: "example".into(),
             kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
             offset: 0,

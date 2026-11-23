@@ -126,6 +126,9 @@ pub enum Method {
     #[serde(rename = "skills/list")]
     SkillsList {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for a live Workspace projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         offset: usize,
         limit: usize,
         expected_revision: Option<String>,
@@ -133,6 +136,9 @@ pub enum Method {
     #[serde(rename = "skills/read")]
     SkillsRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for a live Workspace projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         name: String,
         kind: crate::local_runtime::skill_management::SkillContentKind,
         offset: u64,

@@ -5179,6 +5179,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace"
       },
+      "execution_session": "ses_00000000-0000-7000-8000-000000000001",
       "offset": 0,
       "limit": 32,
       "expected_revision": null
@@ -5193,6 +5194,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace"
       },
+      "execution_session": "ses_00000000-0000-7000-8000-000000000001",
       "name": "example",
       "kind": "instructions",
       "offset": "0",

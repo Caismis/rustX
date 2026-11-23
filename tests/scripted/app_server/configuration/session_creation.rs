@@ -1328,6 +1328,7 @@ fn workspace_overlay_launcher(mount: &std::path::Path) -> std::path::PathBuf {
         r#"#!/bin/sh
 set -eu
 bin=${0%/*}
+unset RUSTX_CLIENT_DOMAIN_STAGING
 exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}" --bind "$bin/physical" "$4" -- "$bin/client-real" "$@"
 "#,
     ).unwrap();
@@ -1339,12 +1340,18 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}"
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn bound_configuration_load_and_reconcile_without_any_server_workspace_directory() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{ErrorData, Method, MethodResult},
+    };
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::runtime::subagent::SubagentName;
     use crate::runtime::workflow::WorkflowId;
+    use base64::Engine as _;
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
+        let fixture = Fixture::with_session_count(None, 2).await;
         let workspace = &fixture.workspaces[0];
         let mount = tempfile::tempdir().unwrap();
         let physical = mount.path().join("physical");
@@ -1374,6 +1381,10 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         write_workflow("Client-only Workflow");
         let instructions = physical.join("AGENTS.md");
         std::fs::write(&instructions, "\u{feff}Client instructions").unwrap();
+        let package = physical.join(".agents/skills/bound-skill");
+        std::fs::create_dir_all(&package).unwrap();
+        let skill_document = b"---\nname: bound-skill\ndescription: Client-only Skill\n---\nClient-only body\n";
+        std::fs::write(package.join("SKILL.md"), skill_document).unwrap();
         let launcher = workspace_overlay_launcher(mount.path());
         assert!(!workspace.exists());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
@@ -1404,6 +1415,49 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         assert_definitions("Client-only Agent", "Client-only Workflow");
 
         let source = SourceTarget::Workspace { directory: workspace.clone() };
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let request = |index: usize| Method::SkillsList {
+            target: source.clone(),
+            execution_session: Some(fixture.sessions[index].id.clone()),
+            offset: 0,
+            limit: 32,
+            expected_revision: None,
+        };
+        let MethodResult::Skills { page } = call(&connection, 50, request(0)).await else { panic!("live Workspace Skills"); };
+        let [descriptor] = page.data.as_slice() else { panic!("one Skill: {page:?}"); };
+        assert_eq!(descriptor.catalog.name, "bound-skill");
+        assert_eq!(descriptor.catalog.location, workspace.join(".agents/skills/bound-skill/SKILL.md").display().to_string());
+        assert!(descriptor.operation_revision.is_none());
+        let read = |offset, expected_revision| Method::SkillsRead {
+            target: source.clone(),
+            execution_session: Some(fixture.sessions[0].id.clone()),
+            name: "bound-skill".into(),
+            kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
+            offset,
+            max_bytes: 51,
+            expected_revision,
+        };
+        let MethodResult::SkillContent { content: first } = call(&connection, 51, read(0, None)).await else { panic!("first bounded page"); };
+        let MethodResult::SkillContent { content: rest } = call(
+            &connection, 52, read(first.next_offset.unwrap(), Some(first.revision.clone())),
+        ).await else { panic!("last bounded page"); };
+        assert_eq!(rest.revision, first.revision);
+        assert!(rest.next_offset.is_none());
+        let decoded: Vec<_> = [first.data_base64, rest.data_base64].into_iter()
+            .flat_map(|page| base64::engine::general_purpose::STANDARD.decode(page).unwrap())
+            .collect();
+        assert_eq!(decoded, skill_document);
+        {
+            use crate::app_server::protocol::{JsonRpcVersion, Request, RequestId, Response};
+            let response = connection.handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(53),
+                call: request(1),
+            }).await;
+            let Response::Failure(failure) = response else { panic!("an unbound Session cannot list the first Session's Skills"); };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
         let old = {
             let state = fixture.manager.applications.lock();
             state.view(fixture.sessions[0].id.as_ref()).and_then(|application| application.desired.input_revision)
@@ -1424,8 +1478,17 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         let effective = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap();
         assert_eq!(effective.tool_deadline.hard_deadline_ms, 34_567);
 
+        // A Server directory at the same spelling is a decoy. Bound
+        // reconciliation must not run the Server's authoring repair over it.
+        std::fs::create_dir(workspace).unwrap();
+        let decoy = workspace.join("rustx.toml");
+        let decoy_text = "[agent.plugins.todo]\nenabled = true\nlegacy = 'do not repair'\n";
+        std::fs::write(&decoy, decoy_text).unwrap();
         std::fs::write(&instructions, [0xff]).unwrap();
         fixture.manager.reconcile_configuration(&source).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&decoy).unwrap(), decoy_text);
+        std::fs::remove_file(decoy).unwrap();
+        std::fs::remove_dir(workspace).unwrap();
         let application = settled(&fixture, 0).await;
         assert!(matches!(&application.units[&ApplyUnit::Instructions],
             UnitApplication::Failed { diagnostic } if diagnostic.contains("instruction text is not UTF-8")

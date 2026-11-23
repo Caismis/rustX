@@ -1309,7 +1309,7 @@ impl UserConfigManager {
             }
             // Staging failed, or the source directory's path could not be
             // confirmed durable: nothing was published.
-            Err(SettingsError::Io) => (
+            Err(SettingsError::Io | SettingsError::ExecutionUnavailable) => (
                 ConfigRepairStatus::Unresolved,
                 None,
                 Some(

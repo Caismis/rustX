@@ -28,13 +28,13 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
   return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
 }
 
-export function ResourceBrowser({ client, source, scope, revision, query, view, refresh, onRefresh, workspaceLabel,
+export function ResourceBrowser({ client, source, scope, revision, query, view, refresh, onRefresh, workspaceLabel, executionSession,
   bindDisplayWrite, bindDelete, onTransfer, transferDisabled }: {
   client: AppServerClient; source: SourceSettings; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
-  transferDisabled: boolean; workspaceLabel?: string;
+  transferDisabled: boolean; workspaceLabel?: string; executionSession?: string;
   query: string; view: CatalogView; refresh: number; onRefresh: () => void;
 }) {
   const tx = useTranslation();
@@ -44,7 +44,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
   const [deleting, setDeleting] = useState<{ title: string; owner: SourceScope; path: string; remove: () => Promise<void> }>();
   const settings = useSettingsActor();
   const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
-  const effective = useSkillCatalog(client, source, true, scope, refresh + localRefresh);
+  const effective = useSkillCatalog(client, source, true, scope, refresh + localRefresh, executionSession);
   const global = useSkillCatalog(client, source, scope === 'workspace', 'user', refresh + localRefresh);
   const listed = effective?.skills ?? [];
   // The effective catalog drives selection. Global's own catalog keeps shadowed
@@ -122,7 +122,8 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} view={view} empty={null}>
       {inherited.map(renderCard)}
     </ResourceGroup>}
-    {focus && <SkillDetail key={rowKey(focus.owner, focus.name)} client={client} target={focus.owner === 'user' ? userTarget : source.target}
+    {focus && <SkillDetail key={JSON.stringify([focus.owner, focus.name, executionSession])} client={client}
+      target={focus.owner === 'user' ? userTarget : source.target} executionSession={focus.owner === 'workspace' ? executionSession : undefined}
       name={focus.name} display={descriptors.get(rowKey(focus.owner, focus.name))?.display} close={() => setFocus(undefined)} />}
     {editing?.skill.display && <SkillDisplayDialog name={editing.skill.catalog.name} display={editing.skill.display}
       close={() => setEditing(undefined)} save={async (authored, upload) => {

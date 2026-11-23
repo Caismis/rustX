@@ -491,7 +491,11 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            if target.validate().is_err() {
+            if target
+                .workspace()
+                .is_some_and(|path| owner.execution.reserves_workspace(path))
+                || target.validate().is_err()
+            {
                 return;
             }
             owner.repair_sources(&target);
@@ -512,30 +516,11 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
-            let has_bound_consumer = target.workspace().is_some_and(|directory| {
-                rustx_execution_protocol::is_normalized_absolute_path(directory)
-                    && owner
-                        .sessions
-                        .configuration_bindings
-                        .lock()
-                        .expect("Session configuration bindings")
-                        .iter()
-                        .any(|(session, binding)| {
-                            binding.input.cwd.as_os_str() == directory.as_os_str()
-                                && owner
-                                    .execution
-                                    .configuration_endpoint(session)
-                                    .ok()
-                                    .flatten()
-                                    .is_some()
-                        })
-            });
-            let authored = match target.validate() {
-                Ok(()) => true,
-                Err(_) if has_bound_consumer => false,
-                Err(error) => return Err(SourceSettingsError::Source(error)),
-            };
+            let authored = !target
+                .workspace()
+                .is_some_and(|path| owner.execution.reserves_workspace(path));
             if authored {
+                target.validate().map_err(SourceSettingsError::Source)?;
                 owner.repair_sources(&target);
             }
             let mut application = owner.applications.lock();
@@ -668,7 +653,9 @@ impl SessionRuntimeManager {
             .ok_or_else(|| "User process policy source is invalid or unreadable".into())
             .and_then(|policy| policy.validate().map(|()| policy));
         application.capture_source(target, revision, process);
-        if let SourceTarget::Workspace { directory } = target {
+        if let SourceTarget::Workspace { directory } = target
+            && !self.execution.reserves_workspace(directory)
+        {
             let input = super::super::configuration::SessionConfigInput::new(directory.clone());
             application.record_source(
                 directory,
@@ -683,6 +670,9 @@ impl SessionRuntimeManager {
             // those without any live Session. This never touches `available`;
             // only successful fenced preparation publishes there.
             for directory in application.known_source_directories() {
+                if self.execution.reserves_workspace(&directory) {
+                    continue;
+                }
                 let input = super::super::configuration::SessionConfigInput::new(directory.clone());
                 application.record_source(
                     &directory,

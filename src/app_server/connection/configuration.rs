@@ -20,6 +20,37 @@ impl AppServerConnection {
             .map_err(|_| domain(ErrorData::OperationFailed))?
     }
 
+    async fn skill_endpoint(
+        &self,
+        target: &crate::local_runtime::configuration::settings::SourceTarget,
+        session: Option<&crate::local_runtime::session::SessionId>,
+    ) -> Result<
+        Option<
+            std::sync::Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+        >,
+        RpcError,
+    > {
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        let workspace = target
+            .workspace()
+            .ok_or_else(|| domain(ErrorData::InvalidParams))?;
+        self.sessions
+            .read_session_summary(session)
+            .await
+            .map_err(session_error)?;
+        let endpoint = self
+            .host
+            .manager()
+            .execution_endpoint(session)
+            .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+        if endpoint.workspace().as_os_str() != workspace.as_os_str() {
+            return Err(domain(ErrorData::InvalidParams));
+        }
+        Ok(Some(endpoint))
+    }
+
     /// Serve one admitted configuration request.
     #[allow(clippy::too_many_lines)] // One arm per configuration method.
     pub(super) async fn configuration(
@@ -44,31 +75,47 @@ impl AppServerConnection {
             }
             Method::SkillsList {
                 target,
+                execution_session,
                 offset,
                 limit,
                 expected_revision,
             } => {
+                let endpoint = self
+                    .skill_endpoint(&target, execution_session.as_ref())
+                    .await?;
                 let page = self
                     .host
                     .manager()
-                    .skill_page(target, offset, limit, expected_revision, request_owner)
+                    .skill_page(
+                        target,
+                        endpoint,
+                        offset,
+                        limit,
+                        expected_revision,
+                        request_owner,
+                    )
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::Skills { page })
             }
             Method::SkillsRead {
                 target,
+                execution_session,
                 name,
                 kind,
                 offset,
                 max_bytes,
                 expected_revision,
             } => {
+                let endpoint = self
+                    .skill_endpoint(&target, execution_session.as_ref())
+                    .await?;
                 let content = self
                     .host
                     .manager()
                     .skill_read(
                         target,
+                        endpoint,
                         name,
                         kind,
                         offset,

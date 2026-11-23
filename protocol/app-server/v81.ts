@@ -44,6 +44,10 @@ export type Request1 =
       method: 'skills/list';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for a live Workspace projection.
+         */
+        execution_session?: SessionId | null;
         offset: number;
         limit: number;
         expected_revision?: string | null;
@@ -53,6 +57,10 @@ export type Request1 =
       method: 'skills/read';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for a live Workspace projection.
+         */
+        execution_session?: SessionId | null;
         name: string;
         kind: SkillContentKind;
         offset: string;
@@ -1490,14 +1498,14 @@ export type McpServerId = string;
 export type CatalogKind = 'tools' | 'resources' | 'templates';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SkillContentKind".
- */
-export type SkillContentKind = 'instructions' | 'metadata';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionId".
  */
 export type SessionId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillContentKind".
+ */
+export type SkillContentKind = 'instructions' | 'metadata';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ConversationId".

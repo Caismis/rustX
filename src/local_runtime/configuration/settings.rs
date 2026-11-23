@@ -42,7 +42,7 @@ impl SourceTarget {
     /// Rejects relative, removed, redirected, or noncanonical Workspace paths.
     pub fn validate(&self) -> Result<(), SettingsError> {
         if let Self::Workspace { directory } = self
-            && (!directory.is_absolute()
+            && (!rustx_execution_protocol::is_normalized_absolute_path(directory)
                 || super::capture::canonical_directory(directory)
                     .map_err(|_| SettingsError::Invalid)?
                     != *directory)
@@ -386,6 +386,7 @@ pub enum SettingsError {
         actual: String,
     },
     Invalid,
+    ExecutionUnavailable,
     /// A Workflow candidate the native parser or compiler rejected, with its
     /// bounded diagnostic. Nothing was staged.
     InvalidWorkflow(Box<super::super::workflow_authoring::WorkflowDiagnostic>),

@@ -1133,6 +1133,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 0,
             limit: 32,
@@ -1157,6 +1158,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         &connection,
         2,
         Method::SkillsRead {
+            execution_session: None,
             target: target.clone(),
             name: "inspection".into(),
             kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1181,6 +1183,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             &connection,
             3,
             Method::SkillsRead {
+                execution_session: None,
                 target: target.clone(),
                 name: "inspection".into(),
                 kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1197,6 +1200,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             &connection,
             4,
             Method::SkillsRead {
+                execution_session: None,
                 target,
                 name: "../inspection".into(),
                 kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1587,12 +1591,14 @@ pub(crate) async fn skill_admission_scenario() {
     let fixture = Fixture::with_session_count(None, 0).await;
     for method in [
         Method::SkillsList {
+            execution_session: None,
             target: SourceTarget::User,
             offset: 0,
             limit: 1,
             expected_revision: None,
         },
         Method::SkillsRead {
+            execution_session: None,
             target: SourceTarget::User,
             name: "absent".into(),
             kind: SkillContentKind::Instructions,
@@ -1675,6 +1681,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 0,
             limit: 1,
@@ -1695,6 +1702,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 1,
             limit: 32,
@@ -1715,6 +1723,7 @@ pub(crate) async fn skill_large_resources_scenario() {
             &connection,
             2,
             Method::SkillsRead {
+                execution_session: None,
                 target: target.clone(),
                 name: "large".into(),
                 kind: SkillContentKind::Metadata,
@@ -1745,6 +1754,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         &connection,
         3,
         Method::SkillsRead {
+            execution_session: None,
             target,
             name: "large".into(),
             kind: SkillContentKind::Instructions,
@@ -1985,6 +1995,7 @@ pub(crate) async fn skill_catalog_page_scenario() {
             &connection,
             1,
             Method::SkillsList {
+                execution_session: None,
                 target: target.clone(),
                 offset,
                 limit: 32,

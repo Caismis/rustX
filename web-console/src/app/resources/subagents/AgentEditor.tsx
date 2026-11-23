@@ -24,13 +24,13 @@ export type AgentDraft = NamedAgentProfileDocument & { name?: string };
 interface Props {
   source: SourceSettings; target: SettingsTarget; host?: ProductHostWorkspaces; name?: string;
   models: string[]; profiles: ModelProfiles; initialDraft?: AgentDraft;
-  client?: AppServerClient; discover?: boolean; editable?: boolean;
+  client?: AppServerClient; executionSession?: string; discover?: boolean; editable?: boolean;
   loadMcpTools?: LoadMcpTools;
   onScopeChange?: (target: SettingsTarget, draft: AgentDraft) => void;
   onClose: () => void;
 }
 
-export function AgentEditor({ source, target, host, name, models, profiles, initialDraft, client, discover = true, editable = true, loadMcpTools, onScopeChange, onClose }: Props) {
+export function AgentEditor({ source, target, host, name, models, profiles, initialDraft, client, executionSession, discover = true, editable = true, loadMcpTools, onScopeChange, onClose }: Props) {
   const tx = useTranslation();
   const scope = target.kind;
   const creating = name === undefined;
@@ -147,7 +147,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
               value={value} change={update} loadMcpTools={discover && unit.writable ? loadMcpTools : undefined} />
             <section className={css.section} aria-labelledby={`${sections}-advanced`}>
               <h2 id={`${sections}-advanced`}>{tx('settings:agent-page.advanced-options')}</h2>
-              <AgentSkillFields client={client} source={source} scope={resourceScope} active={discover}
+              <AgentSkillFields client={client} source={source} scope={resourceScope} active={discover} executionSession={executionSession}
                 value={value.skills ?? []} change={skills => update({ skills })} />
               {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
               <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />

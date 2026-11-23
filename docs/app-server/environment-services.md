@@ -259,6 +259,13 @@ identity/size/timestamp evidence used by native file reads. Large Skill bodies
 remain valid and are never loaded in full. Continue with `expected_revision`;
 source replacement/mutation requires an authoritative reread. Native blocking
 jobs retain host admission through completion after a waiter disconnects.
+To browse the Workspace as seen by a selected Session, pass its
+`execution_session` on both reads. The Session must own that exact Workspace.
+Discovery and instruction pages come from its authenticated Client. User Skills
+continue to use their authored source. A missing or detached binding reports
+`execution_unavailable`. Live Workspace descriptors omit authoring operation
+revisions and optional display files. The explicit source-authoring view keeps
+its separate document roots.
 
 MCP management follows up to 32 bounded remote continuations on the same native
 connection, including an empty opaque token. Cycles, more than 128 total

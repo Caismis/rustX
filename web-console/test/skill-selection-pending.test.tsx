@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
 import type { MethodResult, SourceSettings } from '../../protocol/app-server/v81';
 import { ResourceBrowser } from '../src/app/resources/shared/ResourceBrowser';
+import { useSkillCatalog } from '../src/app/resources/skills/useSkillCatalog';
 import { cfg3Source } from './cfg3-data';
 import { cfg3Client } from './cfg3-fixture';
 import { chooseOption, renderEditor } from './settings-harness';
@@ -55,6 +56,29 @@ function browser(client: ReturnType<typeof cfg3Client>['client'], source: Source
   return <ResourceBrowser client={client} source={source} scope={scope} revision={revision} query="" view="cards" refresh={0} onRefresh={() => {}}
     bindDisplayWrite={() => undefined} bindDelete={() => undefined} transferDisabled />;
 }
+
+it('keeps Workspace Skill replies scoped to the requested Session at the same path', async () => {
+  const source = userSource('rev-1');
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  const previous = Promise.withResolvers<MethodResult>();
+  const sessions: (string | null | undefined)[] = [];
+  const { client } = cfg3Client(async operation => {
+    if (operation.method !== 'skills/list') return;
+    const session = operation.params.execution_session;
+    sessions.push(session);
+    return session === 'session-a' ? previous.promise : skillPage(['current']);
+  });
+  const { result, rerender } = renderHook(
+    ({ session }) => useSkillCatalog(client, source, true, 'workspace', 0, session),
+    { initialProps: { session: 'session-a' } },
+  );
+  await waitFor(() => expect(sessions).toEqual(['session-a']));
+  rerender({ session: 'session-b' });
+  await waitFor(() => expect(result.current?.skills.map(skill => skill.catalog.name)).toEqual(['current']));
+  await act(async () => previous.resolve(skillPage(['retired'])));
+  expect(result.current?.skills.map(skill => skill.catalog.name)).toEqual(['current']);
+  expect(sessions).toEqual(['session-a', 'session-b']);
+});
 
 it('does not expand all from a pending catalog, then toggles and freezes the released names at the current revision', async () => {
   const gate = gatedClient();

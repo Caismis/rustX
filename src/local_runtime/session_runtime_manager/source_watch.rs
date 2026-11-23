@@ -760,20 +760,17 @@ impl SessionRuntimeManager {
     }
 
     fn known_sources(&self) -> KnownSources {
-        let (mut workspaces, inputs, authored) = {
+        let (mut workspaces, inputs) = {
             let application = self.applications.lock();
             (
                 application.watched_source_directories(),
                 application.source_inputs(),
-                application.known_source_directories(),
             )
         };
         // A replacement, detached or retiring binding still reserves the
         // Client as the physical Workspace authority.
         let client_workspaces = self.execution.reserved_workspaces();
-        workspaces.retain(|directory| {
-            !client_workspaces.contains(directory) || authored.contains(directory)
-        });
+        workspaces.retain(|directory| !client_workspaces.contains(directory));
         KnownSources {
             user: self.user_source_roots(),
             inputs: resolved(

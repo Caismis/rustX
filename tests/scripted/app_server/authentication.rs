@@ -74,7 +74,7 @@ async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_adm
                 let params=serde_json::from_value(serde_json::json!({"sessionId":session_id,"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
                 let MethodResult::CommandExec {result}=rpc(&mut socket,Method::CommandExec(params)).await else {panic!("equal command eligibility")};
                 assert_eq!(result.exit_code,Some(0));
-                assert!(matches!(rpc(&mut socket,Method::SkillsList {target:crate::local_runtime::configuration::settings::SourceTarget::User,offset:0,limit:32,expected_revision:None}).await,MethodResult::Skills {..}));
+                assert!(matches!(rpc(&mut socket,Method::SkillsList {execution_session:None,target:crate::local_runtime::configuration::settings::SourceTarget::User,offset:0,limit:32,expected_revision:None}).await,MethodResult::Skills {..}));
                 peers.push(socket);
             }
             let MethodResult::SessionTransition {thread,..}=rpc(&mut peers[0],Method::SessionCreate {input_references: None,settings:crate::local_runtime::session::SessionPersistentState {session_config: None,session_resources: None,cwd:f.workspaces[0].clone(),model:None},dynamic_tools:vec![],submission:None}).await else {panic!("ordinary write eligibility")};
