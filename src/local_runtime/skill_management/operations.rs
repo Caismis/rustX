@@ -393,17 +393,24 @@ fn retire(path: &Path, directory: &PackageDirectory) -> Result<(), SettingsError
         .map_err(SettingsError::Io)?
         .ok_or(SettingsError::Invalid)?;
     let name = path.file_name().ok_or(SettingsError::Invalid)?;
-    let identity = directory_metadata(directory).map_err(SettingsError::Io)?;
-    let identity = (identity.dev(), identity.ino());
+    let metadata = directory_metadata(directory).map_err(SettingsError::Io)?;
+    let identity = (metadata.dev(), metadata.ino());
+    let original_mode = Mode::from_raw_mode((metadata.mode() & 0o777) as _);
     source.confirm().map_err(SettingsError::Io)?;
     directory.verify().map_err(|_| SettingsError::Invalid)?;
     // Renaming a non-writable directory fails with EACCES on XNU (seen on the
-    // macOS-15 runners): widen the root before moving it aside. The retired
-    // tree is removed by `remove_owned_tree` either way, so the recorded
-    // mode never has to come back.
+    // macOS-15 runners): widen the root before moving it aside. If the move
+    // never happens the package stays in place, so the recorded mode must be
+    // put back on every failure path below.
     rustix::fs::fchmod(directory.descriptor(), Mode::from_raw_mode(0o700))
         .map_err(|error| SettingsError::Io(error.into()))?;
-    let stage_name = rename_aside(&source, name)?;
+    let stage_name = match rename_aside(&source, name) {
+        Ok(stage_name) => stage_name,
+        Err(error) => {
+            let _ = rustix::fs::fchmod(directory.descriptor(), original_mode);
+            return Err(error);
+        }
+    };
     let stage_path = parent.join(&stage_name);
     let Ok(retired) = PackageDirectory::open(&stage_path) else {
         return Err(SettingsError::Committed);
@@ -422,6 +429,7 @@ fn retire(path: &Path, directory: &PackageDirectory) -> Result<(), SettingsError
         {
             return Err(SettingsError::Committed);
         }
+        let _ = rustix::fs::fchmod(directory.descriptor(), original_mode);
         return Err(SettingsError::Invalid);
     }
     if source.sync().is_err() {
@@ -796,9 +804,13 @@ impl UserConfigManager {
         let installed_directory = publish(&mut stage, &destination, &installed)?;
         // The stage root stayed writable through the publish rename (see
         // `restore_directory_modes`); the published package now takes the
-        // recorded root mode.
-        fs::set_permissions(&installed, Permissions::from_mode(tree.root_mode & 0o777))
-            .map_err(|_| SettingsError::Committed)?;
+        // recorded root mode. Chmod through the descriptor so a local writer
+        // cannot redirect the call by replacing `installed` after publish.
+        rustix::fs::fchmod(
+            installed_directory.descriptor(),
+            Mode::from_raw_mode((tree.root_mode & 0o777) as _),
+        )
+        .map_err(|_| SettingsError::Committed)?;
         let visible = self
             .discover_skill_scope(&destination_target, &destination_collection)
             .packages
