@@ -226,8 +226,10 @@ class Planning(unittest.TestCase):
                 self.assertEqual(planned["profile"], "full")
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
-                self.assertFalse(planned["run"]["rust-platform-core"])
                 self.assertTrue(planned["run"]["rust-platform-boundaries"])
+                # Push runs additionally publish the macOS core lane's cache
+                # lineage for future pull requests' first runs.
+                self.assertEqual(planned["run"]["rust-platform-core"], event == "push")
 
     def test_a_pull_request_runs_fast_until_promoted(self):
         self.assertEqual(v.plan("pull_request", [], modified("src/lib.rs"))["profile"], "fast")
