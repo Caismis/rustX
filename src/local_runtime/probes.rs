@@ -171,7 +171,7 @@ pub(super) async fn execute(
     plan: &ProbePlan,
     cancellation: CancellationSignal,
 ) -> Vec<ProbeResult> {
-    if launch.validate_resource_authority().is_err() {
+    if launch.validate_probe_authority().is_err() {
         return unavailable_targets(plan, "workspace resource authority changed before effects");
     }
     let needs_client = |target: &ProbeTarget| target.admitted && target.spawn_process;

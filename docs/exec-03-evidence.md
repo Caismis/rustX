@@ -192,6 +192,13 @@ Workspace is reserved. Releasing the peer's response cannot make the old
 authored result current. Subsequent queries leave the exact list count at
 three and the business invocation count at zero.
 
+An explicit Doctor plan verifies the authored Workspace directory identity
+before opening a Client or probing a source. A same-path replacement fails
+that plan before a process starts. A queued draft independently checks its
+physical identity at transfer. A stale draft supplies no prepared runtime
+to the new Session. Its ordinary first preparation still connects to the
+admitted HTTP source once when the Workspace is a valid directory.
+
 ## Session-authored configuration
 
 `thread/start` accepts optional `session_config` and `session_resources`.

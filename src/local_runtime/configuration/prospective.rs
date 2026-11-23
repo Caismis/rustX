@@ -548,8 +548,11 @@ impl ProspectiveSessionConfig {
     /// Recheck physical targets immediately before resource preparation. This
     /// never rereads launch documents and is not an execution filesystem sandbox.
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
-        if let super::WorkspaceResourceAuthority::Authored(identity) = self.workspace_resources
-            && super::capture::authored_workspace_identity(&self.workspace).ok() != Some(identity)
+        if matches!(
+            self.workspace_resources,
+            super::WorkspaceResourceAuthority::Authored(_)
+        ) && !super::capture::canonical_directory(&self.workspace)
+            .is_ok_and(|current| current == self.workspace)
         {
             return Err("Workspace physical binding changed after capture".into());
         }
@@ -581,6 +584,17 @@ impl ProspectiveSessionConfig {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// An explicit Doctor plan is authorized for the directory it inspected.
+    /// A Session draft has a separate physical ownership check at transfer.
+    pub(crate) fn validate_probe_authority(&self) -> Result<(), String> {
+        if let super::WorkspaceResourceAuthority::Authored(identity) = self.workspace_resources
+            && super::capture::authored_workspace_identity(&self.workspace).ok() != Some(identity)
+        {
+            return Err("Workspace physical binding changed after capture".into());
+        }
+        self.validate_resource_authority()
     }
     /// The immutable validated settings this launch resolved.
     #[must_use]
