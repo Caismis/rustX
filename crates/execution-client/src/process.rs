@@ -488,7 +488,11 @@ impl Operations {
         &self,
         future: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> bool {
-        self.start_auxiliary_owned(move |_guard| future)
+        self.start_auxiliary_owned(move |mut guard| async move {
+            guard.physical_settlement(false);
+            future.await;
+            guard.physical_settlement(true);
+        })
     }
 
     pub(crate) fn start_auxiliary_owned<F, Fut>(&self, run: F) -> bool
@@ -2523,6 +2527,25 @@ mod tests {
             ops.inner.lock().unwrap().records.len(),
             MAX_PROCESS_IDENTITIES_PER_GENERATION
         );
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn auxiliary_future_keeps_revocation_open_until_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        let ops = Operations::new(admission(directory.path())).unwrap();
+        let (entered, started) = std::sync::mpsc::channel();
+        let (release, parked) = tokio::sync::oneshot::channel();
+        assert!(ops.start_auxiliary(async move {
+            entered.send(()).unwrap();
+            parked.await.unwrap();
+        }));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        ops.revoke();
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        assert!(!ops.start_auxiliary(async {}));
+        release.send(()).unwrap();
+        assert_eq!(ops.settle(Duration::from_secs(5)), 0);
         ops.shutdown().unwrap();
     }
 
