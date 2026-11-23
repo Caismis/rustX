@@ -1713,13 +1713,14 @@ Optional O-SUM (only if explicitly selected; not a release gate):
 
 ## Verification
 
-Workspace verification commands from the repository root:
+Workspace verification commands from the repository root. Prepare matching
+native test artifacts as described in the [test guide](../tests/README.md).
+The native preparation wrapper takes a single Cargo package per invocation.
 
 ```sh
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-python3 test-support/prepare_native_tests.py -- cargo test --workspace --all-features --locked --no-run
 cargo test --workspace --all-features --locked
 cargo test --workspace --all-features --doc --locked
 cargo build --workspace --bins --release --locked
