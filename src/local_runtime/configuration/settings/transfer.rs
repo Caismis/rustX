@@ -364,11 +364,11 @@ impl UserConfigManager {
             }
         };
         let source = SourceDirectory::open(&source_path)
-            .map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?
             .map(bounded)
             .ok_or(SettingsError::Invalid)?;
         let destination =
-            bounded(SourceDirectory::create(&destination_path).map_err(|_| SettingsError::Io)?);
+            bounded(SourceDirectory::create(&destination_path).map_err(SettingsError::Io)?);
         if source.identity() == destination.identity() {
             return Err(SettingsError::TransferRejected(
                 TransferRejection::SameDirectory,
@@ -380,9 +380,9 @@ impl UserConfigManager {
         } else {
             ((&destination, destination_name), (&source, source_name))
         };
-        let _first = first.0.lock(first.1).map_err(|_| SettingsError::Io)?;
-        let _second = second.0.lock(second.1).map_err(|_| SettingsError::Io)?;
-        let original = source.read(source_name).map_err(|_| SettingsError::Io)?;
+        let _first = first.0.lock(first.1).map_err(SettingsError::Io)?;
+        let _second = second.0.lock(second.1).map_err(SettingsError::Io)?;
+        let original = source.read(source_name).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
         let actual = revision(original.as_deref());
         if actual != expected {
             return Err(SettingsError::Conflict {
@@ -394,7 +394,7 @@ impl UserConfigManager {
         let original = original.ok_or(SettingsError::Invalid)?;
         let existing = destination
             .read(destination_name)
-            .map_err(|_| SettingsError::Io)?;
+            .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
         let (remainder, candidate) = resource.candidates(
             &original,
             existing.as_deref(),
@@ -405,7 +405,7 @@ impl UserConfigManager {
         if source_name != destination_name
             && source
                 .read(destination_name)
-                .map_err(|_| SettingsError::Io)?
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
                 .is_some()
         {
             return Err(SettingsError::TransferRejected(
@@ -437,10 +437,10 @@ impl UserConfigManager {
             // uses. Each view applies the same owning-scope rule to its own
             // winning files; a Workspace shadow is not a Global consumer.
             let user_workflows = workflow_resources::load(None, &self.resource_root(user))
-                .map_err(|_| SettingsError::Io)?;
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let workflows =
                 workflow_resources::load(workspace.workspace(), &self.resource_root(user))
-                    .map_err(|_| SettingsError::Io)?;
+                    .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let user_programs =
                 enabled_programs(&user_workflows, &user_selected, &workspace_selected);
             let workspace_programs =
@@ -466,7 +466,7 @@ impl UserConfigManager {
         let actual = revision(
             source
                 .read(source_name)
-                .map_err(|_| SettingsError::Io)?
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
                 .as_deref(),
         );
         if actual != expected {

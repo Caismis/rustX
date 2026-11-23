@@ -566,7 +566,7 @@ fn unchanged_source_copy_failure_stays_io_and_removes_the_stage() {
         &revision,
     );
     assert!(
-        matches!(io_error, Err(SettingsError::Io)),
+        matches!(io_error, Err(SettingsError::Io(_))),
         "unchanged source must stay an I/O failure: {}",
         io_error.as_ref().err().map_or("ok", settings_error_name)
     );
@@ -646,7 +646,7 @@ fn settings_error_name(error: &SettingsError) -> &'static str {
     match error {
         SettingsError::Conflict { .. } => "conflict",
         SettingsError::Invalid => "invalid",
-        SettingsError::Io => "io",
+        SettingsError::Io(_) => "io",
         SettingsError::Committed => "committed",
         SettingsError::TransferRejected(_) => "rejected",
         SettingsError::InvalidWorkflow(_) => "workflow",

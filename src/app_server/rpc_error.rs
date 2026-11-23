@@ -229,7 +229,7 @@ pub(super) fn source_error(
         SettingsError::Invalid => ErrorData::InvalidParams,
         SettingsError::InvalidWorkflow(diagnostic) => ErrorData::WorkflowInvalid { diagnostic },
         SettingsError::TransferRejected(reason) => ErrorData::ResourceTransferRejected { reason },
-        SettingsError::Io => ErrorData::OperationFailed,
+        SettingsError::Io(_) => ErrorData::OperationFailed,
         SettingsError::Committed => ErrorData::CommittedDurabilityUncertain,
     })
 }

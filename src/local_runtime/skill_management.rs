@@ -61,7 +61,7 @@ fn descriptor(
         disable_model_invocation: package.disable_model_invocation(),
         enabled_by_default: package.enabled_by_default(),
         operation_revision: operations::operation_revision(package, collection),
-        metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
+        metadata_revision: digest(&package.definition()).map_err(|error| SettingsError::Io(std::io::Error::other(error)))?,
         display: read_display(package, collection),
     };
     // Leave room for the surrounding array so every projected descriptor can
@@ -139,7 +139,7 @@ impl SessionRuntimeManager {
                 }
             }
             let revision =
-                digest(&(&descriptors, &all_diagnostics)).map_err(|_| SettingsError::Io)?;
+                digest(&(&descriptors, &all_diagnostics)).map_err(|error| SettingsError::Io(std::io::Error::other(error)))?;
             if let Some(expected) = expected
                 && expected != revision
             {
@@ -180,7 +180,7 @@ impl SessionRuntimeManager {
             })
         })
         .await
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
     }
     #[allow(clippy::too_many_arguments)] // Native wire parameters and physical admission travel together.
     pub(crate) async fn skill_read(
@@ -233,7 +233,7 @@ impl SessionRuntimeManager {
                         max_bytes,
                         None,
                     )
-                    .map_err(|_| SettingsError::Io)?;
+                    .map_err(SettingsError::Io)?;
                     (
                         chunk.data_base64,
                         chunk.next_offset,
@@ -242,7 +242,7 @@ impl SessionRuntimeManager {
                 }
                 SkillContentKind::Metadata => {
                     let (bytes, total) = encode(&package.definition(), offset, max_bytes)
-                        .map_err(|_| SettingsError::Io)?;
+                        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?;
                     if offset > total {
                         return Err(SettingsError::Invalid);
                     }
@@ -283,7 +283,7 @@ impl SessionRuntimeManager {
             })
         })
         .await
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
     }
 }
 

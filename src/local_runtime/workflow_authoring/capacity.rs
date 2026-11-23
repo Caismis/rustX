@@ -76,7 +76,10 @@ impl Capacity {
                         "admit_capacity_directory",
                         &error,
                     );
-                    target.validate().err().unwrap_or(SettingsError::Io)
+                    target
+                        .validate()
+                        .err()
+                        .unwrap_or_else(|| SettingsError::Io(error))
                 })?;
             // A Workspace whose Workflow directory is the User one (a
             // Workspace at `~/rustx`) shares its one physical capacity lock,
@@ -94,7 +97,7 @@ impl Capacity {
                             "acquire_capacity_lock",
                             &error,
                         );
-                        SettingsError::Io
+                        SettingsError::Io(error)
                     })?,
             );
         }

@@ -2254,7 +2254,7 @@ fn noninterrupted_native_writer_lock_failure_does_not_retry_or_publish() {
         &revision_of(original),
         capacity(3),
     );
-    assert!(matches!(result, Err(SettingsError::Io)), "{result:?}");
+    assert!(matches!(result, Err(SettingsError::Io(_))), "{result:?}");
     assert_eq!(locks::attempts(), 1);
     assert_eq!(fixture.read(&fixture.workspace), original);
 }
@@ -4240,7 +4240,7 @@ fn a_document_replaced_by_a_symlink_while_it_is_opened_is_never_followed() {
             .expect("the opening boundary was reached");
         assert!(!reached.redirect.opened(), "reread = {reread}");
         assert!(
-            matches!(read, Err(super::super::settings::SettingsError::Io)),
+            matches!(read, Err(super::super::settings::SettingsError::Io(_))),
             "reread = {reread}: {read:?}"
         );
         assert_eq!(
@@ -4692,7 +4692,7 @@ fn a_symlinked_workspace_source_is_refused_by_every_consumer() {
     assert!(failure.contains("not a symlink"), "{failure}");
     assert!(matches!(
         fixture.manager.read_source_settings(&fixture.workspace),
-        Err(super::super::settings::SettingsError::Io)
+        Err(super::super::settings::SettingsError::Io(_))
     ));
     assert_eq!(
         fixture.repair(&fixture.workspace, &fixture.workspace),
@@ -5055,7 +5055,7 @@ fn unsupported_entries_and_oversized_documents_are_refused_without_effects() {
             assert_eq!(resource_read.unwrap().unwrap(), exact.as_bytes());
         } else {
             assert!(
-                matches!(read, Err(super::super::settings::SettingsError::Io)),
+                matches!(read, Err(super::super::settings::SettingsError::Io(_))),
                 "{case}: {read:?}"
             );
             assert!(resource_read.is_err(), "{case}");

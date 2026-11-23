@@ -167,30 +167,30 @@ impl SkillIconUpload {
 
 fn publish_asset(root: &Path, name: &str, bytes: &[u8]) -> Result<SourceDirectory, SettingsError> {
     let directory = SourceDirectory::create_directory(&root.join("assets"))
-        .map_err(|_| SettingsError::Io)?
+        .map_err(SettingsError::Io)?
         .with_byte_limit(MAX_ICON_BYTES);
     let name = OsStr::new(name);
-    directory.confirm().map_err(|_| SettingsError::Io)?;
+    directory.confirm().map_err(SettingsError::Io)?;
     // Publish an immutable asset before the sidecar can point to it. Identical
     // uploads reuse the same file, and a failed sidecar write leaves its old icon usable.
-    let existing = directory.read(name).map_err(|_| SettingsError::Io)?;
+    let existing = directory.read(name).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
     if existing.is_none() {
-        let staged = directory.stage(bytes).map_err(|_| SettingsError::Io)?;
+        let staged = directory.stage(bytes).map_err(SettingsError::Io)?;
         match directory.link(&staged, name) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(_) => return Err(SettingsError::Io),
+            Err(error) => return Err(SettingsError::Io(error)),
         }
     }
     if directory
         .read(name)
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
         .as_deref()
         != Some(bytes)
     {
         return Err(SettingsError::Invalid);
     }
-    directory.sync().map_err(|_| SettingsError::Io)?;
+    directory.sync().map_err(SettingsError::Io)?;
     Ok(directory)
 }
 
@@ -241,7 +241,7 @@ fn display_revision(package: &SkillPackage, bytes: Option<&[u8]>) -> Result<Stri
         package.instruction_source(),
         revision(bytes),
     ))
-    .map_err(|_| SettingsError::Io)
+    .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))
 }
 
 pub(super) fn read_display(package: &SkillPackage, collection: &Path) -> Option<SkillDisplay> {
@@ -365,10 +365,10 @@ impl UserConfigManager {
         let path = root.join(SIDECAR);
         let file = path.file_name().ok_or(SettingsError::Invalid)?;
         let directory = SourceDirectory::create(&path)
-            .map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?
             .with_byte_limit(MAX_METADATA_BYTES);
-        let _lock = directory.lock(file).map_err(|_| SettingsError::Io)?;
-        let original = directory.read(file).map_err(|_| SettingsError::Io)?;
+        let _lock = directory.lock(file).map_err(SettingsError::Io)?;
+        let original = directory.read(file).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
         let actual = display_revision(package, original.as_deref())?;
         if actual != expected {
             return Err(SettingsError::Conflict {
