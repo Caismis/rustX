@@ -1,3 +1,4 @@
+import { startHttpMcpPeer } from './http-mcp-startup-gate';
 import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
@@ -182,6 +183,8 @@ timezone = "UTC"
       app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
       return readiness(app, 'stderr', appServerEndpoint);
     };
+    const mcpFixtureLifetime = new AbortController();
+    const mcpFixtures: Awaited<ReturnType<typeof startHttpMcpPeer>>[] = [];
     const endpoint = await startApp();
     const control = async (path: string, method = 'GET') => {
       const response = await fetch(`${providerUrl}/__control/${path}`, { method });
@@ -208,6 +211,11 @@ timezone = "UTC"
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
       restartApp,
+      async serveMcpCatalog(catalog: (cursor: string | undefined) => unknown) {
+        const peer = await startHttpMcpPeer(mcpFixtureLifetime.signal, catalog);
+        mcpFixtures.push(peer);
+        return peer.url;
+      },
       /** Model-tool fixtures enroll the exact Session through trusted startup. */
       async bindExecution(sessionId: string, workspace: string) {
         execution = { sessionId, workspace };
@@ -247,7 +255,9 @@ timezone = "UTC"
           try { await workspaceHost.stop(); }
           finally {
             app?.kill('SIGTERM'); provider.kill('SIGTERM');
-            rmSync(directory, { recursive: true, force: true });
+            mcpFixtureLifetime.abort(new Error('Dogfood fixture settled'));
+            try { await Promise.all(mcpFixtures.map(peer => peer.close())); }
+            finally { rmSync(directory, { recursive: true, force: true }); }
           }
         }
       },
