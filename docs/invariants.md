@@ -6951,7 +6951,7 @@ runtime supervision/quiescence contract.
   batch does not erase it; consumption of the obligation clears it. Recovery
   authenticates each pointer against its named row and, for `task`, against
   the canonical message provenance. Disagreement fails closed. Reopen folds
-  only rows after `through`. Schema 114 rejects every other store; the frontier
+  only rows after `through`. Schema 116 rejects every other store; the frontier
   has no older-shape reader;
 
 - recovery runs after the tool-runtime ownership transfer and before the

@@ -5,7 +5,7 @@ This is the implementation contract for issue #532. The implementation base is
 `rust-v0.166.0`, resolved to immutable commit
 `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
 The public protocol is App Server v82, with Runtime Client v89, Session catalog
-v21, SQLite v115 and Runtime Manifest v7. Earlier protocols and storage layouts
+v21, SQLite v116 and Runtime Manifest v7. Earlier protocols and storage layouts
 are rejected; there is no compatibility reader or alternate gateway.
 
 ## Identity, methods and native owners

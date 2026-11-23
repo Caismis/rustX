@@ -6792,7 +6792,7 @@ durable facts
   clear it. The pointer is cleared only when the obligation is consumed.
   Recovery also checks the named canonical message provenance. A pointer
   outside the authenticated fold, or a named row that is not the expected fact,
-  fails closed. This is not a second history. Schema 114 remains the only
+  fails closed. This is not a second history. Schema 116 remains the only
   accepted store; there is no reader for an older frontier.
   Permission recovery reads the latest primary request's authenticated frozen
   metadata and the current projection checkpoint. It does not materialize the
