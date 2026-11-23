@@ -162,6 +162,9 @@ pauses the actual Client's uv identity proof through a socket gate and shows
 that closing the UI does not drop the finite request or listing permit. The
 Client settles cleanly after the gate opens, and exactly one environment
 remains installed.
+The fixture can use the same private wheel cache as the boundary suites.
+The gate stays on the real uv identity probe, after the Store was prepared
+once and before native listing completes.
 
 The managed-selection boundary fixture also accepts the pre-populated test
 wheel cache. It resolved the dependency conflict offline, built the healthy

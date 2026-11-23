@@ -41,10 +41,9 @@ use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 
 const MANAGED_STORE: &str = ".local/share/rustx/environments/python-tools";
 
-fn managed_python_path(home: &Path) -> std::ffi::OsString {
-    let path = std::env::var_os("PATH").expect("the test runner has a PATH");
+pub(crate) fn seed_managed_python_uv(home: &Path, uv: &Path) -> PathBuf {
     let Some(warmed) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE") else {
-        return path;
+        return uv.to_path_buf();
     };
     // The Client still creates the project and materializes its own Store.
     // Supplying cached wheels lets the physical test run without PyPI.
@@ -66,12 +65,7 @@ fn managed_python_path(home: &Path) -> std::ffi::OsString {
         String::from_utf8_lossy(&copy.stderr)
     );
 
-    let uv = std::env::split_paths(&path)
-        .map(|directory| directory.join("uv"))
-        .find(|binary| binary.is_file())
-        .expect("the test runner has uv")
-        .canonicalize()
-        .expect("canonical uv");
+    let uv = uv.canonicalize().expect("canonical uv");
     let bin = home.join("bin");
     std::fs::create_dir(&bin).expect("private fixture binaries");
     let wrapper = bin.join("uv");
@@ -83,8 +77,24 @@ fn managed_python_path(home: &Path) -> std::ffi::OsString {
     .expect("offline uv launcher");
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))
         .expect("executable uv launcher");
-    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path)))
-        .expect("Client fixture PATH")
+    wrapper
+}
+
+fn managed_python_path(home: &Path) -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").expect("the test runner has a PATH");
+    if std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE").is_none() {
+        return path;
+    }
+    let uv = std::env::split_paths(&path)
+        .map(|directory| directory.join("uv"))
+        .find(|binary| binary.is_file())
+        .expect("the test runner has uv");
+    let uv = seed_managed_python_uv(home, &uv);
+    std::env::join_paths(
+        std::iter::once(uv.parent().expect("uv directory").to_path_buf())
+            .chain(std::env::split_paths(&path)),
+    )
+    .expect("Client fixture PATH")
 }
 
 /// The staged `rustx-execution-client` sibling this test binary was

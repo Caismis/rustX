@@ -239,6 +239,7 @@ fn managed_catalog_gate(
         .unwrap();
     assert!(python.status.success());
     let python = std::str::from_utf8(&python.stdout).unwrap().trim();
+    let uv = crate::session_execution_support::seed_managed_python_uv(root, uv);
     let quote =
         |path: &std::path::Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"));
     let gate = root.join("gate.py");
@@ -264,7 +265,7 @@ with socket.socket(socket.AF_UNIX) as peer:
             quote(&gate),
             quote(&root.join("arm")),
             quote(socket),
-            quote(uv)
+            quote(&uv)
         ),
     )
     .unwrap();
