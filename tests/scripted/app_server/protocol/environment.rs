@@ -520,7 +520,8 @@ pub(crate) async fn watch_registration_scenario() {
         (true, false, false),
         (false, false, false),
     ] {
-        let source = fixture.workspaces[0].join("watch-source");
+        let source =
+            fixture.workspaces[0].join(format!("watch-source-{symlink}-{capture}-{directory}"));
         let saved = fixture.workspaces[0].join("saved-source");
         let outside_root = tempfile::tempdir().unwrap();
         let outside = outside_root.path().join("outside");
@@ -531,6 +532,15 @@ pub(crate) async fn watch_registration_scenario() {
             std::fs::write(&source, b"inside").unwrap();
             std::fs::write(&outside, b"outside").unwrap();
         }
+        let sentinel = if directory {
+            // On macOS, register a child vnode so its mutation has a native path.
+            let sentinel = source.join("authorized-sentinel");
+            #[cfg(target_os = "macos")]
+            std::fs::write(&sentinel, b"before").unwrap();
+            sentinel
+        } else {
+            source.clone()
+        };
         crate::app_server::filesystem::expect_native_source(
             source.clone(),
             std::fs::metadata(if capture { &outside } else { &source }).unwrap(),
@@ -590,37 +600,29 @@ pub(crate) async fn watch_registration_scenario() {
         if directory {
             std::fs::write(outside.join("outside-private-name"), b"outside").unwrap();
         }
-        let sentinel = if directory {
-            source.join("authorized-sentinel")
+        if symlink && directory {
+            // Force the sentinel callback down the busy identity-check path
+            // while the retained inode and restored grant still agree.
+            let (held, locked) = tokio::sync::oneshot::channel();
+            let (release, unlocked) = std::sync::mpsc::channel();
+            let native = fixture.manager.environment.clone();
+            let path = source.clone();
+            let lock = tokio::task::spawn_blocking(move || {
+                native.with_paths(&[path.to_str().unwrap()], |_| {
+                    held.send(()).unwrap();
+                    let _ = unlocked.recv();
+                    Ok(())
+                })
+            });
+            bounded(locked).await.unwrap();
+            let changed = retained_watch_hint(&connection, &source, &sentinel).await;
+            assert!(changed.resync_required);
+            assert_eq!(changed.changed_paths, [] as [std::path::PathBuf; 0]);
+            release.send(()).unwrap();
+            bounded(lock).await.unwrap().unwrap();
         } else {
-            source.clone()
-        };
-        std::fs::write(&sentinel, b"inside").unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let notification = connection.next_notification().await;
-                if let NotificationMethod::FsChanged(changed) = notification.notification {
-                    assert!(!changed.retired);
-                    assert!(
-                        changed
-                            .changed_paths
-                            .iter()
-                            .all(|path| path.starts_with(&source))
-                    );
-                    assert!(!changed.changed_paths.iter().any(|path| {
-                        path.file_name()
-                            .is_some_and(|name| name == "outside-private-name")
-                    }));
-                    if changed.changed_paths.contains(&sentinel)
-                        || cfg!(target_os = "macos") && changed.resync_required
-                    {
-                        break;
-                    }
-                }
-            }
-        })
-        .await
-        .expect("only the retained authorized directory must produce the sentinel hint");
+            retained_watch_hint(&connection, &source, &sentinel).await;
+        }
         call(
             &connection,
             2,
@@ -636,6 +638,56 @@ pub(crate) async fn watch_registration_scenario() {
         }
     }
     connection.close();
+}
+
+async fn retained_watch_hint(
+    connection: &AppServerConnection,
+    source: &Path,
+    sentinel: &Path,
+) -> crate::app_server::filesystem::Changed {
+    let published = crate::app_server::filesystem::observe_native_change(
+        source.to_path_buf(),
+        sentinel.to_path_buf(),
+    );
+    std::fs::write(sentinel, b"inside").unwrap();
+    bounded(published)
+        .await
+        .expect("retained observer must publish a callback for the authorized sentinel");
+
+    let mut last = None;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let notification = connection.next_notification().await;
+            if let NotificationMethod::FsChanged(changed) = notification.notification {
+                assert_eq!(changed.watch_id, "inode");
+                assert!(!changed.retired);
+                assert!(
+                    changed
+                        .changed_paths
+                        .iter()
+                        .all(|path| path.starts_with(source))
+                );
+                assert!(!changed.changed_paths.iter().any(|path| {
+                    path.file_name()
+                        .is_some_and(|name| name == "outside-private-name")
+                }));
+                // The native receipt above proves the exact sentinel was seen
+                // even when a busy identity check discards the routed paths.
+                if changed.changed_paths.iter().any(|path| path == sentinel)
+                    || (changed.resync_required && changed.changed_paths.is_empty())
+                {
+                    return changed;
+                }
+                last = Some(changed);
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "only the retained authorized directory must produce the sentinel hint: last={last:?}"
+        )
+    })
 }
 
 pub(crate) async fn observed_mutation_hint(
