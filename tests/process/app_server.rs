@@ -373,6 +373,8 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
         let fixture = Fixture::new().await;
         let skill = ".agents/skills/project/client-guide/SKILL.md";
+        let reference = ".agents/skills/project/client-guide/references/notes.md";
+        let script = ".agents/skills/project/client-guide/scripts/check.sh";
         let provider = crate::common::FixtureServer::start(move |attempt, _| match attempt {
             0 => crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse"),
             1 => crate::common::FixtureReply::body(
@@ -380,6 +382,30 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
                 include_str!("../fixtures/m2/openai_chat/issue189_child_read_tool_call.sse")
                     .replace("local/runtime.env", skill),
             ),
+            2 => {
+                let response = serde_json::json!({
+                    "id": "chatcmpl-client-skill-assets",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "gpt-test",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "tool_calls": [
+                            {"index": 0, "id": "call_client_reference", "type": "function",
+                             "function": {"name": "read", "arguments":
+                                 serde_json::json!({"arguments": {"path": reference}}).to_string()}},
+                            {"index": 1, "id": "call_client_script", "type": "function",
+                             "function": {"name": "bash", "arguments":
+                                 serde_json::json!({"execution_mode": "foreground",
+                                     "arguments": {"command": format!("/bin/bash {script}")}}).to_string()}}
+                        ]},
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                crate::common::FixtureReply::body(
+                    200, "OK", "text/event-stream", format!("data: {response}\n\ndata: [DONE]\n\n"),
+                )
+            }
             _ => crate::common::sse_fixture("openai_chat", "plain_text.sse"),
         }).await;
         let home = fixture.root.path().join("home");
@@ -399,7 +425,7 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
             "skills".into(), toml::Value::String("all".into())
         );
         authored["agent"]["tools"].as_table_mut().unwrap().insert(
-            "builtin".into(), toml::Value::Array(vec![toml::Value::String("read".into())])
+            "builtin".into(), toml::Value::Array(vec!["read".into(), "bash".into()])
         );
         std::fs::write(catalog, toml::to_string_pretty(&authored).unwrap()).unwrap();
         let (bin, rustx) = isolated_server_pair();
@@ -412,7 +438,11 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         let skill_path = physical.join(skill);
         let package = skill_path.parent().unwrap();
         std::fs::create_dir_all(package).unwrap();
-        std::fs::write(&skill_path, "---\nname: client-guide\ndescription: Client-only discovery metadata\n---\nclient-skill-body-observed-on-demand\n").unwrap();
+        std::fs::write(&skill_path, "---\nname: client-guide\ndescription: Client-only discovery metadata\n---\nclient-skill-body-observed-on-demand\nRead references/notes.md and run scripts/check.sh.\n").unwrap();
+        std::fs::create_dir(package.join("references")).unwrap();
+        std::fs::create_dir(package.join("scripts")).unwrap();
+        std::fs::write(physical.join(reference), b"client-reference-observed-on-demand\n").unwrap();
+        std::fs::write(physical.join(script), b"printf '%s\\n' started >> skill-starts\nprintf '%s\\n' client-script-observed-on-demand\n").unwrap();
         // A package marker must stop enumeration before the listing bound.
         for index in 0..2050 {
             std::fs::write(package.join(format!("asset-{index}")), b"decoy").unwrap();
@@ -421,7 +451,9 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         std::fs::create_dir(&hidden).unwrap();
         std::fs::write(hidden.join("SKILL.md"), "---\nname: rejected-skill\ndescription: Ignored source\n---\n").unwrap();
         std::fs::write(physical.join(".agents/skills/.ignore"), "ignored/\n").unwrap();
-        assert!(!workspace.join(skill).exists());
+        for locator in [skill, reference, script] {
+            assert!(!workspace.join(locator).exists());
+        }
         std::fs::create_dir(bin.path().join("tmp")).unwrap();
         std::fs::write(&launcher, r#"#!/bin/sh
 set -eu
@@ -448,6 +480,7 @@ for line in sys.stdin:
     elif method == "initialize":
         reply["result"] = {"protocolVersion":"2025-11-25", "capabilities":{"tools":{}}, "serverInfo":{"name":"client-stdio", "version":"1"}}
     elif method == "tools/list":
+        assert "io.modelcontextprotocol/protocolVersion" not in req.get("params", {}).get("_meta", {})
         reply["result"] = {"tools":[{"name":"echo","inputSchema":{"type":"object", "properties":{}}}]}
     elif method == "tools/call":
         reply["result"] = {"content":[{"type":"text", "text":"client-only-output\n" + "x" * 1100000 + "\nclient-only-end"}]}
@@ -467,14 +500,20 @@ for line in sys.stdin:
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
         let requests = provider.request_bodies();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
         assert!(requests[0].contains("Client-only discovery metadata"));
         assert!(requests[0].contains(&*workspace.join(skill).to_string_lossy()));
         assert!(!requests[0].contains("rejected-skill"));
         assert!(!requests[0].contains("client-skill-body-observed-on-demand"));
+        assert!(!requests[0].contains("references/notes.md"));
+        assert!(!requests[0].contains("scripts/check.sh"));
         assert!(requests[1].contains("client-only-output"));
         assert!(requests[1].contains("client-only-end"));
         assert!(requests[2].contains("client-skill-body-observed-on-demand"));
+        assert!(requests[3].contains("client-reference-observed-on-demand"));
+        assert!(requests[3].contains("client-script-observed-on-demand"));
+        assert_eq!(std::fs::read(physical.join("skill-starts")).unwrap(), b"started\n");
+        assert!(!workspace.join("skill-starts").exists());
         assert!(!workspace.join("stdio-requests").exists());
         let observed = std::fs::read_to_string(physical.join("stdio-requests")).unwrap();
         let messages: Vec<_> = observed.lines().collect();
@@ -628,6 +667,8 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
         .unwrap();
         std::fs::write(source.join("requirements.txt"), b"").unwrap();
         let runtime = fixture.root.path().join("diagnostic-runtime");
+        let scratch = fixture.root.path().join("diagnostic-scratch");
+        std::fs::create_dir(&scratch).unwrap();
         let store = bin.path().join("client-home/.local/share");
         let paths = [uv_path, PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
         let path = std::env::join_paths(paths).unwrap();
@@ -639,6 +680,7 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
                 .env("HOME", &home)
                 .env("PATH", &path)
                 .env("XDG_DATA_HOME", &store)
+                .env("TMPDIR", &scratch)
                 .arg("doctor")
                 .arg("--workspace")
                 .arg(&workspace)
@@ -662,11 +704,9 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
             assert!(!business.exists(), "a metadata probe made zero business calls");
             if prepare {
                 assert_eq!(result["verified"], "MCP handshake and capability discovery");
-                assert_eq!(std::fs::read_dir(runtime.join("execution-pending")).unwrap().count(), 0);
-            } else {
-                assert!(!runtime.exists());
             }
-            assert!(!runtime.join("sessions").exists(), "no diagnostic Session entered history");
+            assert!(!runtime.exists(), "no diagnostic Session entered product history");
+            assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0, "the private diagnostic root was removed after settlement");
         }
         let packages = store.join("rustx/environments/python-tools/packages");
         assert_eq!(std::fs::read_dir(packages).unwrap().count(), 1);
