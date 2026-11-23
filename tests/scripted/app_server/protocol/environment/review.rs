@@ -412,7 +412,12 @@ pub(crate) async fn catalog_credentials() {
                 &[None]
             };
             for option in options {
-                let fixture = Fixture::with_session_count(None, 0).await;
+                let fixture = Fixture::with_session_count(None, usize::from(!http)).await;
+                let mut client = if http {
+                    None
+                } else {
+                    Some(fixture.start_execution(0).await)
+                };
                 let authorization = if bearer {
                     format!("bEaReR {secret}")
                 } else {
@@ -486,7 +491,7 @@ pub(crate) async fn catalog_credentials() {
                         &connection,
                         1,
                         Method::McpCatalog {
-                            execution_session: None,
+                            execution_session: (!http).then(|| fixture.sessions[0].id.clone()),
                             target: SourceTarget::User,
                             id: crate::runtime::identity::McpServerId::new("echo"),
                             expected_revision: revision.clone(),
@@ -536,6 +541,9 @@ pub(crate) async fn catalog_credentials() {
                     bounded(fixture.host.drain()).await,
                     [] as [std::string::String; 0]
                 );
+                if let Some(client) = &mut client {
+                    assert!(bounded(client.wait()).await.unwrap().success());
+                }
             }
         }
     }

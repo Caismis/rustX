@@ -131,8 +131,9 @@ the new catalog has arrived.
 
 The bound runtime can reconcile again while the same Server pathname names
 an unrelated file. The physical Workspace authority remains with the
-original Client descriptor. Explicit Server authoring still verifies the
-retained inode of its own root.
+original Client descriptor. Explicit Server authoring verifies its root
+inode across capture. A prepared draft revalidates its own root before
+transfer.
 
 `client_source_watch_reloads_guidance_and_skill_metadata_after_registration`
 uses a real Linux Client in a mount namespace with no Server workspace
@@ -196,6 +197,13 @@ owner with an exact Client capture key. The delegated relay assigns a
 separate physical identity, admits only frozen launches and authorized tool
 names, and retains physical responsibility through Client close or binding
 settlement.
+
+The physical stdio owner retains the negotiated request context when
+`server/discover` selects an older supported MCP revision. Subsequent
+requests carry that version and retain their existing progress tokens.
+The credential catalog test runs tools, resources and templates through a
+real bound Client, checks that the peer receives literal and referenced
+credentials, and verifies that native inventory redacts the echoed fields.
 
 The finite MCP management route can also select an exact Session. The
 mounted Workspace regression reads its Client-only MCP definition and

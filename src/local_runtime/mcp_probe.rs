@@ -635,16 +635,41 @@ os.execv(sys.argv[2], sys.argv[2:])
                 "passive reads must never start native MCP"
             );
         }
-        let result = probe(
+        let id = McpServerId::new("explicit");
+        assert!(matches!(
+            probe(
+                owner.clone(),
+                SourceTarget::User,
+                id.clone(),
+                revision.clone()
+            )
+            .await,
+            Err(SettingsError::ExecutionUnavailable)
+        ));
+        assert!(!marker.exists());
+        let root = directory.path().canonicalize().unwrap();
+        let execution = crate::local_runtime::session_runtime_manager::StandaloneExecution::start(
+            SessionId::generate(),
+            root.clone(),
+            root,
+        )
+        .await
+        .unwrap();
+        let result = probe_query(
             owner,
             SourceTarget::User,
-            McpServerId::new("explicit"),
+            Some(execution.scope()),
+            id,
             revision,
+            None,
+            (),
+            Arc::default(),
         )
         .await
         .unwrap();
         assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
         assert_eq!(std::fs::read_to_string(marker).unwrap(), "started");
+        execution.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -675,30 +700,37 @@ os.execv(sys.argv[2], sys.argv[2:])
         .await
         .unwrap();
         assert_eq!(user.outcome, McpProbeOutcome::Reachable);
-        let failed = probe(
-            owner.clone(),
-            workspace.clone(),
-            id.clone(),
-            workspace_revision.clone(),
+        let root = directory.path().canonicalize().unwrap();
+        let execution = crate::local_runtime::session_runtime_manager::StandaloneExecution::start(
+            SessionId::generate(),
+            root.clone(),
+            root,
         )
         .await
         .unwrap();
+        let workspace_probe = |revision| {
+            probe_query(
+                owner.clone(),
+                workspace.clone(),
+                Some(execution.scope()),
+                id.clone(),
+                revision,
+                None,
+                (),
+                Arc::default(),
+            )
+        };
+        let failed = workspace_probe(workspace_revision.clone()).await.unwrap();
         assert_eq!(failed.outcome, McpProbeOutcome::ConnectionFailed);
         // Scope-local diagnostics do not resolve the user's same-name definition
         // when the Workspace entry disappears.
         let empty_revision = write(&owner, &workspace, "");
         assert!(matches!(
-            probe(
-                owner.clone(),
-                workspace.clone(),
-                id.clone(),
-                workspace_revision
-            )
-            .await,
+            workspace_probe(workspace_revision).await,
             Err(SettingsError::Conflict { .. })
         ));
         assert!(matches!(
-            probe(owner.clone(), workspace, id.clone(), empty_revision).await,
+            workspace_probe(empty_revision).await,
             Err(SettingsError::Invalid)
         ));
         assert!(matches!(
@@ -707,6 +739,7 @@ os.execv(sys.argv[2], sys.argv[2:])
         ));
         assert_eq!(fixture.control.accepted_calls(), 0);
         fixture.shutdown().await;
+        execution.shutdown().await.unwrap();
     }
 
     #[tokio::test]

@@ -12,9 +12,10 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::future::BoxFuture;
 use rmcp::{
-    ClientHandler, ClientLifecycleMode,
+    ClientHandler, ClientLifecycleMode, RoleClient,
     model::{
-        ClientCapabilities, ClientInfo, ClientJsonRpcMessage, ProtocolVersion, ServerJsonRpcMessage,
+        ClientCapabilities, ClientInfo, ClientJsonRpcMessage, ClientRequest, GetMeta,
+        ProtocolVersion, RequestMetaObject, ServerJsonRpcMessage,
     },
     service::{ClientInitializeError, negotiate_client_transport},
     transport::{Transport, async_rw::AsyncRwTransport},
@@ -396,8 +397,36 @@ impl ClientHandler for Negotiator {
     }
 }
 
-type Stdio =
-    AsyncRwTransport<rmcp::RoleClient, tokio::process::ChildStdout, tokio::process::ChildStdin>;
+type Stdio = AsyncRwTransport<RoleClient, tokio::process::ChildStdout, tokio::process::ChildStdin>;
+
+struct StartupTransport<T> {
+    pipe: T,
+    sent_initialize: bool,
+}
+
+impl<T: Transport<RoleClient>> Transport<RoleClient> for StartupTransport<T> {
+    type Error = T::Error;
+
+    fn send(
+        &mut self,
+        message: ClientJsonRpcMessage,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        self.sent_initialize |= matches!(
+            &message,
+            ClientJsonRpcMessage::Request(request)
+                if matches!(request.request, ClientRequest::InitializeRequest(_))
+        );
+        self.pipe.send(message)
+    }
+
+    async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
+        self.pipe.receive().await
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        self.pipe.close().await
+    }
+}
 
 #[allow(clippy::too_many_arguments)] // One counted physical-owner transition.
 async fn run(
@@ -419,13 +448,23 @@ async fn run(
     };
     let failure = if let (Some(stdout), Some(stdin)) = (process.stdout.take(), process.stdin.take())
     {
-        let mut pipe = AsyncRwTransport::new_client(stdout, stdin)
-            .with_received_record_limit(MAX_RECORD_BYTES);
-        let result = negotiate(&mut pipe, &info, lifecycle, &signal).await;
+        let mut startup = StartupTransport {
+            pipe: AsyncRwTransport::new_client(stdout, stdin)
+                .with_received_record_limit(MAX_RECORD_BYTES),
+            sent_initialize: false,
+        };
+        let result = negotiate(&mut startup, &info, lifecycle, &signal).await;
         match result {
-            Ok(admission) => {
+            Ok((admission, request_context)) => {
                 *status.lock().expect("stdio MCP status") = Status::Ready(admission);
-                transfer(&mut pipe, requests, &replies, &signal).await
+                transfer(
+                    &mut startup.pipe,
+                    request_context,
+                    requests,
+                    &replies,
+                    &signal,
+                )
+                .await
             }
             Err(failure) => failure,
         }
@@ -443,18 +482,18 @@ async fn run(
 }
 
 async fn negotiate(
-    pipe: &mut Stdio,
+    startup: &mut StartupTransport<Stdio>,
     info: &ClientInfo,
     lifecycle: ClientLifecycleMode,
     signal: &ProcessSignal,
-) -> Result<String, Option<Failure>> {
+) -> Result<(String, Option<RequestMetaObject>), Option<Failure>> {
     let negotiator = Negotiator(info.clone());
     let admitted = tokio::select! {
         biased;
         () = signal.cancelled() => return Err(None),
-        result = tokio::time::timeout(HANDSHAKE_BUDGET, negotiate_client_transport(&negotiator, pipe, lifecycle)) => result,
+        result = tokio::time::timeout(HANDSHAKE_BUDGET, negotiate_client_transport(&negotiator, startup, lifecycle)) => result,
     };
-    if pipe.invalid_record() {
+    if startup.pipe.invalid_record() {
         return Err(Some(Failure::InvalidRecord));
     }
     let admitted = match admitted {
@@ -464,16 +503,30 @@ async fn negotiate(
         }
         _ => return Err(Some(Failure::Handshake)),
     };
-    if known_version(admitted.peer_info.protocol_version.as_str()).is_none() {
+    let version = &admitted.peer_info.protocol_version;
+    if known_version(version.as_str()).is_none() {
         return Err(Some(Failure::UnsupportedRevision));
     }
-    encode_bounded(&admitted, MAX_ADMISSION_BYTES)
+    // Discovery can select an older revision and still require context on
+    // every request. The SDK restores context itself for newer revisions.
+    let request_context = (!startup.sent_initialize
+        && version.as_str() < ProtocolVersion::V_2026_07_28.as_str())
+    .then(|| {
+        RequestMetaObject::with_client_context(
+            version.clone(),
+            info.client_info.clone(),
+            info.capabilities.clone(),
+        )
+    });
+    let admission = encode_bounded(&admitted, MAX_ADMISSION_BYTES)
         .map(|bytes| STANDARD.encode(bytes))
-        .map_err(|_| Some(Failure::InvalidRecord))
+        .map_err(|_| Some(Failure::InvalidRecord))?;
+    Ok((admission, request_context))
 }
 
 async fn transfer(
     pipe: &mut Stdio,
+    request_context: Option<RequestMetaObject>,
     mut requests: mpsc::Receiver<ClientJsonRpcMessage>,
     replies: &mpsc::Sender<Vec<u8>>,
     signal: &ProcessSignal,
@@ -495,7 +548,12 @@ async fn transfer(
                 capacity.send(pending.take().expect("buffered response"));
             }
             message = requests.recv(), if sending.is_none() => {
-                let message = message?;
+                let mut message = message?;
+                if let (Some(context), ClientJsonRpcMessage::Request(request)) =
+                    (&request_context, &mut message)
+                {
+                    request.request.get_meta_mut().extend(context.clone());
+                }
                 let send = pipe.send(message);
                 sending = Some(Box::pin(async move {
                     match tokio::time::timeout(SEND_BUDGET, send).await {

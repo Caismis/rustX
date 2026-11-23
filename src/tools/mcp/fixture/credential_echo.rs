@@ -18,6 +18,15 @@ impl CredentialEcho {
         &self,
         context: &RequestContext<RoleServer>,
     ) -> Result<(String, String), rmcp::ErrorData> {
+        if self.0.is_some()
+            && (context.meta.protocol_version() != Some(ProtocolVersion::V_2025_11_25)
+                || context.meta.get_progress_token().is_none())
+        {
+            return Err(rmcp::ErrorData::invalid_params(
+                "stdio request did not retain discovery context and its progress token",
+                None,
+            ));
+        }
         let credential = self
             .0
             .clone()
@@ -62,7 +71,7 @@ impl ServerHandler for CredentialEcho {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<DiscoverResult, rmcp::ErrorData>> + Send {
         std::future::ready(Ok(DiscoverResult::from_server_info(
-            vec![ProtocolVersion::LATEST],
+            vec![ProtocolVersion::V_2025_11_25],
             self.get_info(),
         )))
     }
