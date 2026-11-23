@@ -82,10 +82,10 @@ impl StoreFixture {
         let package = discover_package(&authored, "fixture", &ProcessSignal::new(), Arc::default())
             .unwrap()
             .0;
-        let (staged, stages) = mpsc::unbounded_channel();
+        let (notifications, stages) = mpsc::unbounded_channel();
         let runner = Arc::new(GatedRunner {
             count: AtomicUsize::new(0),
-            staged,
+            staged: notifications,
         });
         Self {
             root,

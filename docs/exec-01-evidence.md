@@ -572,6 +572,31 @@ process states and are unsuitable for causal comparisons.
 
 ### Client scans, writes and Agent Bash
 
+The v4 Linux wire probe ran three fresh release Client and measuring-peer
+pairs per workload. The release Client was built from `f6430047c` and had
+SHA-256 `ee1054ef89c706cf346cb291157e1c6a384a00134acdd645513110e7fe103b70`.
+Each data request followed verified pairing and Ping. Shutdown required a
+physical Revoke receipt and the Client process exit. The peer held one
+data exchange at a time. The Write used Begin, 32 contiguous 64 KiB chunks
+and one Commit, then read the published bytes outside the timing sample.
+
+| Workload | Data RPCs | Server to Client bytes | Client to Server bytes | Client peak KiB | Measuring peer peak KiB | Startup median ms | Transfer median ms | Shutdown median ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ReadLines, 64 MiB source and 13 selected bytes | 1 | 99 | 265 | 9,200 | 18,860 | 2.82 | 59.61 | 44.19 |
+| Grep, 64 MiB source and 27 selected bytes | 1 | 149 | 132 | 10,260 | 18,832 | 2.84 | 18.69 | 84.93 |
+| Write, 2 MiB | 34 | 2,798,628 | 2,212 | 11,020 | 19,032 | 2.81 | 19.65 | 84.20 |
+
+Effective warm-cache source throughput was 1,074 MiB/s for ReadLines and
+3,425 MiB/s for Grep. Write delivered 102 MiB/s including RPC encoding,
+round trips and physical publication. Client logical I/O recorded 67,108,877
+bytes read for lines, 134,217,897 bytes read for search and 2,097,152 bytes
+written for Write. The independent idle control lane sent 0–67 bytes while
+an individual measured operation was underway. The peer footprint above
+does not measure the product Server. The previous product Server/Client
+table measures UI traffic and a different binary. Neither table measures
+the internal output queue high-water under simultaneous full Sessions, so
+their peak memory and latency figures do not establish a comparative speedup.
+
 **Measured Client boundary, not a full Agent benchmark.** On Linux
 `7.0.0-43-generic` x86_64, the debug Client (binary SHA-256
 `f0d0e7d899716cfa8bf89cb7c46759255aa34b3341d390978d6f135c5f8dd004`)
@@ -582,8 +607,8 @@ The table below is **historical, pre-pairing data**: it was collected
 before the control lane existed, so no `ControlPoll`/`ControlTurn`
 traffic ran during those windows. The probe now performs the real
 paired handshake (fresh 256-bit challenge + `ControlHello`) and answers
-the continuous poll loop on a second lane; its rows carry
-`"probe": "paired-v2"` and report `client_process_rchar` separately from
+the continuous poll loop on a second lane. The paired-v4 results above
+report `client_process_rchar` separately from
 control bytes sent and expected scan volume. Process snapshots cannot
 attribute server-side sends to physical reads by the Client.
 Pre-pairing and paired-v2 numbers are not directly comparable — the
