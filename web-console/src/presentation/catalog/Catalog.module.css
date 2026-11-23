@@ -206,13 +206,14 @@
   color: var(--dsw-alias-label-primary);
 }
 
-.context { margin: 6px 0 18px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+/* margin-block only: .library > * owns the inline margins that center the 960px column. */
+.context { margin-block: 6px 18px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
   gap: 16px;
-  margin: 0;
+  margin-block: 0;
   padding: 0;
   list-style: none;
 }
@@ -220,7 +221,7 @@
 /* Single-column horizontal rows (DSH): no boxed card, hairline separators. */
 .list {
   display: block;
-  margin: 0;
+  margin-block: 0;
   padding: 0;
   list-style: none;
   border-block: .5px solid var(--dsw-alias-border-l2);
@@ -440,7 +441,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 0 16px;
+  margin-block: 0 16px;
   padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l3);
   border-radius: 8px;
