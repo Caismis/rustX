@@ -5118,8 +5118,10 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             Signal::SIGKILL,
         )
         .unwrap();
-        use std::os::unix::process::ExitStatusExt;
-        assert_eq!(original.wait().await.unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&original.wait().await.unwrap()),
+            Some(libc::SIGKILL)
+        );
         driver.close().await;
 
         let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
