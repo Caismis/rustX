@@ -22,7 +22,7 @@ use super::outcome::{
     McpPhysicalOutcome, McpResponseOutcome, is_transport_loss, post_dispatch_cancellation_status,
 };
 use super::request::McpRequestOwnership;
-use super::result::{failed_mcp, mcp_empty_terminal, translate_result};
+use super::result::{failed_mcp, mcp_empty_terminal, translate_remote_result};
 use super::runtime::McpServerRuntime;
 #[cfg(test)]
 use super::test_sync;
@@ -618,9 +618,9 @@ impl McpServerRuntime {
             }
         };
         match response {
-            Ok(ServerResult::CallToolResult(result)) => {
-                McpRoundOutcome::terminal(translate_result(result, context, started))
-            }
+            Ok(ServerResult::CallToolResult(result)) => McpRoundOutcome::terminal(
+                translate_remote_result(result, context, started, &self.credentials).await,
+            ),
             // The one intermediate state of the MRTR machine (Issue #242).
             // Whether it may be served at all is the driver's decision: this
             // classifier only reports what the peer answered.

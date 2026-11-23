@@ -24,6 +24,7 @@ pub mod host;
 pub mod invocation;
 pub mod limits;
 pub mod locator;
+pub(crate) mod managed_import;
 pub mod managed_output;
 pub mod mcp;
 pub mod native;

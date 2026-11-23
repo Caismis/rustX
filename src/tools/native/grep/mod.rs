@@ -134,7 +134,16 @@ async fn run_grep(
         pattern: input.pattern,
         glob: input.glob,
     };
-    let result = if let Some(operation) = crate::tools::native::bash_operation_at(&root) {
+    let result = if let Some(locator) = crate::tools::managed_import::locator_at(&root) {
+        let Some(conversation) =
+            rustx_execution_protocol::save::ConversationId::parse(context.conversation_id.as_str())
+        else {
+            return failed_result("saved output is unavailable for this Conversation");
+        };
+        scope
+            .search_saved_output(locator, conversation, spec, &context.cancellation)
+            .await
+    } else if let Some(operation) = crate::tools::native::bash_operation_at(&root) {
         let conversation = context.conversation_id.as_str().to_owned();
         scope
             .inspect_bash_output(
@@ -148,8 +157,8 @@ async fn run_grep(
             )
             .await
             .map(|page| match page {
-                rustx_execution_server::BashOutputPage::Search(search) => search,
-                rustx_execution_server::BashOutputPage::Lines(_) => {
+                rustx_execution_server::ContinuationPage::Search(search) => search,
+                rustx_execution_server::ContinuationPage::Lines(_) => {
                     unreachable!("validated Bash Grep reply")
                 }
             })

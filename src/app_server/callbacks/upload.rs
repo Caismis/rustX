@@ -1,6 +1,6 @@
 //! Hosted receive state belongs to the pending callback and its subscription.
 
-use super::{CallbackReply, Callbacks, State, Validity};
+use super::{CallbackReply, Callbacks, Pending, State, Validity};
 use crate::app_server::{
     host_upload::{
         ChunkAck, HostUploadBeginParams, HostUploadExpected, HostUploadMethod, HostUploadRefusal,
@@ -12,6 +12,7 @@ use crate::message::content::TextBlock;
 use crate::tools::{
     ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
     limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES as PREVIEW_BYTES,
+    managed_import::Import,
     types::{ManagedOutputContinuation, TruncationState},
 };
 use rustx_process_supervisor::output_text::{IncrementalUtf8Decoder, TextPreviewCapture};
@@ -22,6 +23,7 @@ use tokio::time::Instant;
 pub(super) const MAX_ACTIVE: usize = 32;
 const MAX_PER_HOST: usize = 4;
 const MAX_PER_CONVERSATION: usize = 8;
+const MAX_PER_SESSION: usize = 8;
 // Retain an inexpensive tombstone per recipient until its subscription or
 // callback ends. Cycling UploadIds cannot reopen any of these slots.
 const MAX_SLOTS_PER_REQUEST: usize = 8;
@@ -37,6 +39,7 @@ pub(super) struct Receiving {
     slot: HostUploadSlot,
     preview: Preview,
     utf8: IncrementalUtf8Decoder,
+    save: Option<Import>,
     total_deadline: Instant,
     idle_deadline: Instant,
     permit: OwnedSemaphorePermit,
@@ -44,12 +47,33 @@ pub(super) struct Receiving {
 
 enum Preview {
     Items(Vec<String>),
-    Combined(TextPreviewCapture),
+    Combined {
+        text: TextPreviewCapture,
+        item_index: usize,
+    },
+}
+
+impl Preview {
+    fn separate_items(&mut self, index: usize) -> usize {
+        if let Self::Combined { text, item_index } = self {
+            // Match native text projection, accounting for items that have
+            // no chunks. The verifier still hashes the untouched wire bytes.
+            let separators = index.saturating_sub(*item_index);
+            for _ in 0..separators {
+                text.push("\n");
+            }
+            *item_index = index;
+            separators
+        } else {
+            0
+        }
+    }
 }
 
 pub(crate) struct CompletedUpload {
     end: ValidatedEnd,
     preview: Preview,
+    save: Option<Import>,
     deadline: Instant,
     _permit: OwnedSemaphorePermit,
 }
@@ -63,7 +87,15 @@ impl CompletedUpload {
         Instant::now() >= self.deadline
     }
 
-    pub(super) fn into_result(self, duration: u64) -> ToolExecutionResult {
+    pub(super) async fn publish(&mut self) -> Option<std::path::PathBuf> {
+        self.save.take()?.publish().await
+    }
+
+    pub(super) fn into_result(
+        self,
+        duration: u64,
+        locator: Option<std::path::PathBuf>,
+    ) -> ToolExecutionResult {
         let status = if self.end.success() {
             ToolExecutionStatus::Success
         } else {
@@ -73,8 +105,8 @@ impl CompletedUpload {
         };
         let (items, truncated) = match self.preview {
             Preview::Items(items) => (items, false),
-            Preview::Combined(preview) => {
-                let (text, truncated) = preview.finish();
+            Preview::Combined { text, .. } => {
+                let (text, truncated) = text.finish();
                 (vec![text], truncated)
             }
         };
@@ -88,8 +120,11 @@ impl CompletedUpload {
                 truncated: true,
                 original_bytes: Some(self.end.total()),
             });
-            result.managed_output = Some(Box::new(ManagedOutputContinuation::Unavailable {
-                diagnostic: "complete Hosted output was not saved".into(),
+            result.managed_output = Some(Box::new(match locator {
+                Some(locator) => ManagedOutputContinuation::Complete { locator },
+                None => ManagedOutputContinuation::Unavailable {
+                    diagnostic: "complete Hosted output was not saved".into(),
+                },
             }));
         }
         result
@@ -215,7 +250,11 @@ impl State {
             return Err(HostUploadRefusal::Capacity);
         }
         let thread = pending.thread.clone();
-        let (mut on_host, mut in_conversation) = (0, 0);
+        let session = pending
+            .execution
+            .as_ref()
+            .map(|scope| scope.session_id().clone());
+        let (mut on_host, mut in_conversation, mut in_session) = (0, 0, 0);
         for pending in self
             .pending
             .values_mut()
@@ -226,16 +265,25 @@ impl State {
                 if matches!(candidate, Candidate::Active(_)) {
                     on_host += usize::from(owner == client);
                     in_conversation += usize::from(pending.thread == thread);
+                    in_session += usize::from(session.as_ref().is_some_and(|id| {
+                        pending
+                            .execution
+                            .as_ref()
+                            .is_some_and(|scope| scope.session_id() == id)
+                    }));
                 }
             }
         }
-        if on_host >= MAX_PER_HOST || in_conversation >= MAX_PER_CONVERSATION {
+        if on_host >= MAX_PER_HOST
+            || in_conversation >= MAX_PER_CONVERSATION
+            || in_session >= MAX_PER_SESSION
+        {
             return Err(HostUploadRefusal::Capacity);
         }
         let permit = Arc::clone(budget)
             .try_acquire_owned()
             .map_err(|_| HostUploadRefusal::Capacity)?;
-        let receiving = Receiving::begin(&begin, now, permit)?;
+        let receiving = Receiving::begin(&begin, &self.pending[id], now, permit)?;
         self.pending
             .get_mut(id)
             .expect("authorized callback")
@@ -248,6 +296,7 @@ impl State {
 impl Receiving {
     fn begin(
         begin: &HostUploadBeginParams,
+        pending: &Pending,
         now: Instant,
         permit: OwnedSemaphorePermit,
     ) -> Result<Self, HostUploadRefusal> {
@@ -266,19 +315,47 @@ impl Receiving {
         });
         slot.begin(address.clone(), begin.success, &begin.items)?;
         let total: u64 = begin.items.iter().map(|item| item.length.get()).sum();
-        let preview = if total <= PREVIEW_BYTES as u64 {
+        let normalized_total = total + begin.items.len().saturating_sub(1) as u64;
+        let preview = if normalized_total <= PREVIEW_BYTES as u64 {
             Preview::Items(vec![String::new(); begin.items.len()])
         } else {
-            Preview::Combined(TextPreviewCapture::new(PREVIEW_BYTES))
+            Preview::Combined {
+                text: TextPreviewCapture::new(PREVIEW_BYTES),
+                item_index: 0,
+            }
+        };
+        let save = match (&pending.execution, &pending.validity) {
+            (Some(scope), Some(Validity::Tool(cancellation)))
+                if normalized_total > PREVIEW_BYTES as u64 =>
+            {
+                Some(Import::new(
+                    scope.clone(),
+                    pending.thread.clone(),
+                    cancellation.clone(),
+                ))
+            }
+            _ => None,
         };
         Ok(Self {
             slot,
             preview,
+            save,
             utf8: IncrementalUtf8Decoder::default(),
             total_deadline: now + TOTAL_BUDGET,
             idle_deadline: now + IDLE_BUDGET,
             permit,
         })
+    }
+}
+
+impl Receiving {
+    fn separate_items(&mut self, index: usize) {
+        let separators = self.preview.separate_items(index);
+        if separators > 0
+            && let Some(save) = &mut self.save
+        {
+            save.push(&"\n".repeat(separators));
+        }
     }
 }
 
@@ -321,10 +398,15 @@ impl Candidate {
                     chunk.sha256.as_bytes(),
                 )? == ChunkAck::Duplicate;
                 if !duplicate {
-                    let text = receiving.utf8.push(decoded);
+                    let fragment = receiving.utf8.push(decoded);
+                    let index = chunk.item_index as usize;
+                    receiving.separate_items(index);
+                    if let Some(save) = &mut receiving.save {
+                        save.push(&fragment);
+                    }
                     match &mut receiving.preview {
-                        Preview::Items(items) => items[chunk.item_index as usize].push_str(&text),
-                        Preview::Combined(preview) => preview.push(&text),
+                        Preview::Items(items) => items[index].push_str(&fragment),
+                        Preview::Combined { text, .. } => text.push(&fragment),
                     }
                     receiving.idle_deadline = now + IDLE_BUDGET;
                 }
@@ -341,6 +423,7 @@ impl Candidate {
                     end.total.get(),
                     end.digest.as_bytes(),
                 )?;
+                receiving.separate_items(end.items().len().saturating_sub(1));
                 let Self::Active(receiving) =
                     std::mem::replace(self, Self::Retired(HostUploadRefusal::Late))
                 else {
@@ -351,6 +434,7 @@ impl Candidate {
                     completed: Some(CompletedUpload {
                         end,
                         preview: receiving.preview,
+                        save: receiving.save,
                         deadline: receiving.total_deadline.min(receiving.idle_deadline),
                         _permit: receiving.permit,
                     }),

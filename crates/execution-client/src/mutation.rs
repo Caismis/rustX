@@ -213,7 +213,7 @@ impl Arbitration {
     /// commit honestly: a fenced commit is cancelled, not malformed. A
     /// `Revoke` queued behind an in-flight crossing makes this check
     /// wait it out, so it never answers ahead of the acknowledgement.
-    fn is_revoked(&self) -> bool {
+    pub(crate) fn is_revoked(&self) -> bool {
         *self.revoked.read().expect("revoke grant")
     }
 

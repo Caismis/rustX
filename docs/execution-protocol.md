@@ -1024,7 +1024,7 @@ response that fails business validation keeps its original claim. As with
 ordinary replies, multiple Hosts may already have performed external work.
 
 The broker allows 32 live receive or handoff buffers, four active candidates
-per Host connection and eight per conversation. Each pending callback has
+per Host connection and eight per conversation and per Session. Each pending callback has
 up to eight recipient slots, including retired candidates. A new UploadId
 cannot reopen a slot under the same subscription. Admission stops at the
 first capacity limit. The fixed budget is 60 seconds from Begin and the idle
@@ -1034,11 +1034,20 @@ checking active capacity. Detach, cancellation and callback resolution
 release their receiver state. The native invocation continues to own its own
 deadline and cancellation.
 
-The model receives at most 16 KiB of text. Above that threshold the Server
-keeps a bounded head and tail, retains the original byte count and returns
-`Unavailable` without a locator. This also works without a bound Client.
-The Client candidate storage and publication path is still open. The
-receiver creates no Server files and commits no durable record per chunk.
+The model receives at most 16 KiB of text. The preview keeps native newlines
+between items, including empty items. The digest and original-byte count use
+the unchanged wire items.
+
+Above the preview threshold the Server selects the Session's live
+`ManagedOutput` binding once. Four queued fragments per writer and a
+process-wide limit of sixteen writers bound the save transport. The five-second
+deadline covers the prefix, continuation chunks, seal and publish. A full
+writer window abandons saving while the Host continues to send and verify
+its result. The native cancellation signal can cut both timelines earlier.
+Only the winner requests publication, and a confirmed reply allows Read and
+Grep through `/.rustx-output/import/` for the owning Conversation. Without
+confirmed publication the bounded preview carries `Unavailable`. The receiver
+creates no Server files and commits no durable record per chunk.
 
 ### Canonical byte layout and metadata
 
@@ -1078,15 +1087,16 @@ envelope.
   real physical congestion proofs; what remains open under T11 is
   end-to-end proof at the product Agent-flow level (a real mid-commit
   cancel raced against a live composed Client), not the mechanism.
-- Optional save (EXEC-01) is contract and fixtures only: `protocol::save`
-  defines `SaveRequest`/`SaveReply` on `ClientRequest::Save`/`ClientReply::Save`,
-  with a pure reference state machine and checked-in envelope fixtures
-  (`crates/execution-protocol/fixtures/save-envelopes.json`). The real Client
-  does not advertise managed output and answers every save message with
-  `Unavailable { code: capability-unavailable }`, touching no path,
-  allocation, or queue. No Host path or optional-save storage is
-  implemented here.
-- No MCP session, Python, managed output, or any file
+- Optional save (EXEC-03) reuses the EXEC-01 Save envelope and validation
+  state machine. The real Client negotiates `ManagedOutput` and admits at
+  most 16 candidates, 17 MiB per file and 4,096 identities per binding.
+  It appends only validated, contiguous new bytes. Seal fixes the raw
+  length and SHA-256. Publish makes the opaque locator readable only by the
+  owner. Abort and expiry hold the file and quota until unlink is proved.
+  Graceful data teardown and Revoke attempt cleanup; offline cleanup after
+  Client death still requires physical-domain attestation. See the
+  Hosted reception contract and [EXEC-03 evidence](exec-03-evidence.md).
+- No MCP session or file
   operation beyond the range read, the two query operations, the
   two-phase conditional write, the conditional edit, the two
   logical-text page
@@ -1099,8 +1109,7 @@ envelope.
   `Binding::status()` is observation only, and a `Live` phase is a
   connection fact, not an integration claim. `Capability::Files` and
   everything it implies stay unadvertised until that capability lands.
-  The process family is consumed by exactly one product path —
-  the App Server's `command/exec` group — which registers one
+  App Server's `command/exec` registers one
   operation per UI `processId` on the Session's admitted endpoint,
   drives it through the typed exchanges on the data lane, and cancels
   it on the control lane; there is no Server-local spawn, PTY, or
@@ -1211,9 +1220,8 @@ envelope.
 - An authenticated connection has no implied configuration, MCP, or
   interpreter readiness. `WorkspacePythonStatus` reports only the Client's
   interpreter readiness under the separate `WorkspacePython` capability.
-- No Client instance replacement, generation increment, or death-cleanup
-  evidence path exists; a detached binding rejects every Hello with
-  `RecoveryRequired` until #577 lands.
+- No independent Client instance replacement, generation increment or death-cleanup
+  evidence path exists. A detached binding rejects Hello with `RecoveryRequired`.
 - The App Server reserves one endpoint from the Session catalog under the
   residency owner. The explicitly local Agent entry and the App Server's
   local execution option launch the trusted sibling over that same paired
@@ -1235,13 +1243,14 @@ envelope.
   even when Workspace configuration is invalid and Agent runtime attach
   fails. A missing current binding reports `ExecutionUnavailable`.
 - Fresh App Server configuration capture for a reserved Session reads
-  `rustx.toml` through the authenticated Client. The Server uses the proven
+  `rustx.toml` and Workspace `AGENTS.md` through the authenticated
+  Client. The Server uses the proven
   root identity, a one-MiB whole-document limit, a five-second wire budget
   per capture, and the same stamped `ReadRange` chunks as other files. It
   verifies the document again before admission. The initial read alone
   can report absence. A disappearance mid-read is a conflict. Binding
   authority supplies the Workspace path without a Server-side Workspace
-  probe for that document. Capture waits for data admission within the
+  probe for either document. Capture waits for data admission within the
   same wire budget and runs outside the configuration publication lock.
   Publication rechecks the current binding and source generations.
   The Server parses and authorizes the document, combines it with User

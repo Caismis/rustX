@@ -795,7 +795,7 @@ async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadat
             use futures_util::FutureExt;
             let attempt=AttemptId::new("incarnation-probe");
             let invocation=ToolInvocation {id:crate::tools::types::ToolInvocationId::Agent{call_id:ToolCallId::new("incarnation-probe")},tool_id:ToolId::new("probe"),tool_name:"lookup".into(),mode:ToolInvocationMode::Foreground,arguments:serde_json::json!({})};
-            let mut operation=f.host.callbacks().call(&thread.id,&attempt,&tools[0],invocation,ExecutionCancellation::detached(CancellationSignal::new(),CancellationReason::UserRequested));
+            let mut operation=f.host.callbacks().call(&thread.id,&attempt,&tools[0],invocation,ExecutionCancellation::detached(CancellationSignal::new(),CancellationReason::UserRequested),None);
             assert!(futures_util::poll!(&mut operation).is_pending());
             let Some(ServerMessage::Request(request))=first.next_server_message().await else {panic!("new native incarnation receives callback")};
             assert!(second.next_server_message().now_or_never().is_none(),"retired native subscription cannot receive new-incarnation calls even before Closed delivery");

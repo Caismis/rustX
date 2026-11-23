@@ -23,6 +23,7 @@ type AllocationHold = (
 );
 
 pub(crate) struct Captures {
+    prefix: &'static str,
     directory: Mutex<Option<Arc<Directory>>>,
     slots: Arc<Semaphore>,
     #[cfg(test)]
@@ -53,9 +54,14 @@ pub(crate) struct CaptureFile {
 
 impl Captures {
     pub(crate) fn new() -> Self {
+        Self::with_capacity("rustx-bash-", MAX_BASH_CAPTURES)
+    }
+
+    pub(crate) fn with_capacity(prefix: &'static str, slots: usize) -> Self {
         Self {
+            prefix,
             directory: Mutex::new(None),
-            slots: Arc::new(Semaphore::new(MAX_BASH_CAPTURES)),
+            slots: Arc::new(Semaphore::new(slots)),
             #[cfg(test)]
             allocation_hold: Mutex::new(None),
             #[cfg(test)]
@@ -106,11 +112,9 @@ impl Captures {
     }
 
     pub(crate) fn create(&self, operation: OperationId) -> io::Result<Arc<CaptureFile>> {
-        let slot = self
-            .slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| io::Error::other("Bash capture file capacity exhausted"))?;
+        let slot = self.slots.clone().try_acquire_owned().map_err(|_| {
+            io::Error::new(io::ErrorKind::WouldBlock, "capture file capacity exhausted")
+        })?;
         #[cfg(test)]
         {
             let hold = {
@@ -131,6 +135,7 @@ impl Captures {
             retained
         } else {
             let mut temporary = tempfile::Builder::new()
+                .prefix(self.prefix)
                 .permissions(std::fs::Permissions::from_mode(0o700))
                 .tempdir()?;
             let root = PackageDirectory::open(&temporary.path().canonicalize()?)?;
@@ -178,6 +183,49 @@ impl Captures {
 }
 
 impl CaptureFile {
+    pub(crate) fn append_at(&self, offset: u64, bytes: &[u8]) -> io::Result<()> {
+        use std::os::unix::fs::FileExt as _;
+        let removed = self.removed.blocking_lock();
+        if *removed || !self.readable.load(Ordering::Acquire) {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        if self.file.metadata()?.len() != offset {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        if let Err(error) = self.file.write_all_at(bytes, offset) {
+            self.readable
+                .store(self.file.set_len(offset).is_ok(), Ordering::Release);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn sync_for_publication(&self, length: u64) -> io::Result<()> {
+        self.read_verified(|_, _, file| {
+            if file.metadata()?.len() != length {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            self.file.sync_all()
+        })?
+    }
+
+    pub(crate) fn read_verified<T>(
+        &self,
+        read: impl FnOnce(&PackageDirectory, &Path, std::fs::File) -> T,
+    ) -> io::Result<T> {
+        use std::os::unix::fs::MetadataExt as _;
+        self.read(|root, name| {
+            let named_file = root.file(name)?;
+            let named = named_file.metadata()?;
+            let owned = self.file.metadata()?;
+            if (named.dev(), named.ino()) != (owned.dev(), owned.ino()) {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            Ok(read(root, name, named_file))
+        })
+        .unwrap_or_else(|| Err(io::ErrorKind::NotFound.into()))
+    }
+
     pub(crate) fn proves_empty(&self) -> bool {
         use std::os::unix::fs::MetadataExt as _;
 

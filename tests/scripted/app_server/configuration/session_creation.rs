@@ -1322,6 +1322,8 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         std::fs::rename(workspace, &physical).unwrap();
         let document = physical.join("rustx.toml");
         std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 23456\n").unwrap();
+        let instructions = physical.join("AGENTS.md");
+        std::fs::write(&instructions, "\u{feff}Client instructions").unwrap();
         let launcher = workspace_overlay_launcher(mount.path());
         assert!(!workspace.exists());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
@@ -1331,6 +1333,14 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
                 .config.tool_deadline_policy.hard_deadline_ms
         };
         assert_eq!(retained(), 23_456);
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let assert_instructions = |expected: &str| {
+            let resources = runtime.runtime_resources();
+            let file = resources.project_context_files().iter()
+                .find(|file| file.path == workspace.join("AGENTS.md")).unwrap();
+            assert_eq!(file.content, expected);
+        };
+        assert_instructions("Client instructions");
 
         let source = SourceTarget::Workspace { directory: workspace.clone() };
         let old = {
@@ -1338,15 +1348,26 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
             state.view(fixture.sessions[0].id.as_ref()).and_then(|application| application.desired.input_revision)
         };
         std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 34567\n").unwrap();
+        std::fs::write(&instructions, "Reconciled instructions").unwrap();
         let observation = fixture.manager.reconcile_configuration(&source).await.unwrap();
         assert_eq!(observation.scope, source.application_scope());
         assert!(observation.desired.input_revision.is_some());
         let application = applied(&fixture, 0).await;
         assert_ne!(application.desired.input_revision, old);
         assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
-        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        assert_eq!(application.units[&ApplyUnit::Instructions], UnitApplication::Applied);
+        assert_instructions("Reconciled instructions");
         let effective = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap();
         assert_eq!(effective.tool_deadline.hard_deadline_ms, 34_567);
+
+        std::fs::write(&instructions, [0xff]).unwrap();
+        fixture.manager.reconcile_configuration(&source).await.unwrap();
+        let application = settled(&fixture, 0).await;
+        assert!(matches!(&application.units[&ApplyUnit::Instructions],
+            UnitApplication::Failed { diagnostic } if diagnostic.contains("instruction text is not UTF-8")
+        ), "{application:?}");
+        assert_instructions("Reconciled instructions");
+        std::fs::write(&instructions, "Reconciled instructions").unwrap();
 
         std::fs::write(&document, "[agent]\nworkflows = [\"client-resource\"]\n").unwrap();
         fixture.manager.reconcile_configuration(&source).await.unwrap();

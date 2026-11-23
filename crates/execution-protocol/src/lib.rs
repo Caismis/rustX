@@ -1066,8 +1066,28 @@ pub enum ClientRequest {
         /// The bounded search parameters.
         spec: SearchSpec,
     },
-    /// One optional-save request. The real Client answers `Unavailable`.
+    /// One optional-save request on a binding offering managed output.
     Save(crate::save::SaveRequest),
+    /// Read lines of a published Client-owned import.
+    ReadSavedOutput {
+        /// The published locator under this binding.
+        locator: crate::save::Locator,
+        /// The Conversation making the read.
+        conversation: crate::save::ConversationId,
+        /// One-based line offset.
+        offset: DecimalU64,
+        /// Optional positive line limit.
+        limit: Option<DecimalU64>,
+    },
+    /// Search one published Client-owned import.
+    SearchSavedOutput {
+        /// The published locator under this binding.
+        locator: crate::save::Locator,
+        /// The Conversation making the search.
+        conversation: crate::save::ConversationId,
+        /// The bounded search parameters.
+        spec: SearchSpec,
+    },
     /// A bounded revision-checked range read under the binding workspace.
     ReadRange {
         /// The workspace-relative file path: normal components only.

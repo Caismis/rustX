@@ -4490,7 +4490,7 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "3.2.0"
-source = "git+https://github.com/Caismis/rust-sdk.git?rev=cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0#cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0"
+source = "git+https://github.com/Caismis/rust-sdk.git?rev=9cfd78ac790c0764dc404c5c20acfc9128cba071#9cfd78ac790c0764dc404c5c20acfc9128cba071"
 dependencies = [
  "async-trait",
  "base64 0.23.1",

@@ -347,6 +347,23 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
 #[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_spilling() {
+    http_mcp_output(false, false).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn http_mcp_imports_complete_output_through_the_bound_client() {
+    http_mcp_output(true, false).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn oversized_http_mcp_body_is_refused_without_replaying_the_call() {
+    http_mcp_output(false, true).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+async fn http_mcp_output(with_client: bool, over_limit: bool) {
     bounded(Box::pin(async {
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -362,10 +379,16 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
                 types::{ManagedOutputContinuation, ToolExecutionStatus},
             },
         };
-        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 
         let fixture = Fixture::new().await;
-        let original_bytes = FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1;
+        let original_bytes = if over_limit {
+            16 * 1024 * 1024 + 1
+        } else if with_client {
+            5 * rustx_execution_protocol::MAX_RAW_CHUNK_BYTES
+        } else {
+            FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1
+        };
         let mcp_calls = fixture.root.path().join("mcp-calls");
         let mcp = McpFixture {
             result_bytes: Some(original_bytes),
@@ -375,7 +398,7 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
         let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
             move || Ok(mcp.clone()),
             std::sync::Arc::default(),
-            StreamableHttpServerConfig::default(),
+            StreamableHttpServerConfig::default().with_json_response(true),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -416,41 +439,74 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
         )
         .unwrap();
 
-        let (bin, rustx) = isolated_server_bin();
-        let launch_probe = bin.path().join("rustx-execution-client");
-        std::fs::write(
-            &launch_probe,
-            "#!/bin/sh\nprintf 'launch\n' >> \"${0%/*}/client-launches\"\nexit 99\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(launch_probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (bin, rustx) = if with_client { isolated_server_pair() } else { isolated_server_bin() };
+        if !with_client {
+            let launch_probe = bin.path().join("rustx-execution-client");
+            std::fs::write(
+                &launch_probe,
+                "#!/bin/sh\nprintf 'launch\n' >> \"${0%/*}/client-launches\"\nexit 99\n",
+            ).unwrap();
+            std::fs::set_permissions(launch_probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let session = &fixture.sessions[0];
         let scratch = fixture.root.path().join("scratch");
         std::fs::create_dir(&scratch).unwrap();
-        let mut child = fixture
-            .command_with_program(rustx, "stdio")
+        let workspace = fixture.root.path().join("a").canonicalize().unwrap();
+        let client_scratch = bin.path().join("client-scratch");
+        let mut command = if with_client {
+            std::fs::create_dir(&client_scratch).unwrap();
+            let launcher = bin.path().join("rustx-execution-client");
+            std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+            std::fs::write(&launcher,
+                r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+export TMPDIR="$bin/client-scratch"
+exec "$bin/client-real" "$@"
+"#,
+            ).unwrap();
+            std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+            local_exec_command(&rustx, &fixture, session.as_str(), &workspace)
+        } else {
+            fixture.command_with_program(rustx, "stdio")
+        };
+        let mut child = command
             .env_clear()
             .env("HOME", home)
             .env("PATH", bin.path())
             .env("TMPDIR", &scratch)
             .env("TEST_KEY", "fixture")
-            .spawn()
-            .unwrap();
+            .spawn().unwrap();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
-        let session = &fixture.sessions[0];
         let target = attach(&client, session.clone(), 2).await;
         start_turn(&client, &target, "overflow without execution binding").await;
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
-        assert_eq!(
-            std::fs::read_dir(&scratch).unwrap().count(),
-            0,
-            "no Spill before detach or shutdown"
-        );
-        assert!(
-            !bin.path().join("client-launches").exists(),
-            "zero Client starts before teardown"
-        );
+        let scratch_entries = std::fs::read_dir(&scratch).unwrap()
+            .map(|entry| entry.unwrap().path()).collect::<Vec<_>>();
+        if with_client {
+            let [binding] = scratch_entries.as_slice() else {
+                panic!("Server scratch contains only the local binding: {scratch_entries:?}");
+            };
+            assert!(binding.file_name().unwrap().to_string_lossy().starts_with("rx-"));
+            let mut binding_entries = std::fs::read_dir(binding).unwrap()
+                .map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+            binding_entries.sort_unstable();
+            assert_eq!(binding_entries, ["b", "s"], "only bootstrap and Unix socket");
+            assert!(binding.join("s").metadata().unwrap().file_type().is_socket());
+            assert!(binding.join("b").metadata().unwrap().len() <= 4096);
+            let captures = std::fs::read_dir(&client_scratch).unwrap().filter_map(|entry| {
+                let entry = entry.unwrap();
+                entry.file_name().to_string_lossy().starts_with("rustx-save-").then(|| entry.path())
+            }).collect::<Vec<_>>();
+            let [directory] = captures.as_slice() else { panic!("one physical save: {captures:?}") };
+            let files = std::fs::read_dir(directory).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            let [file] = files.as_slice() else { panic!("one physical published file: {files:?}") };
+            assert_eq!(std::fs::read_to_string(file.path()).unwrap(), "x".repeat(original_bytes));
+        } else {
+            assert_eq!(scratch_entries, [] as [PathBuf; 0], "no Server Spill before teardown");
+        }
         result(&client, Method::SessionDetach { target }).await;
         client.close().await;
         detach_then_shutdown(&mut child).await;
@@ -473,7 +529,11 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
             !bin.path().join("client-launches").exists(),
             "zero Client starts"
         );
-        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+        if with_client {
+            assert!(std::fs::read_dir(&client_scratch).unwrap().all(|entry| {
+                !entry.unwrap().file_name().to_string_lossy().starts_with("rustx-save-")
+            }));
+        }
         let runtime = fixture.root.path().join("runtime");
         let controller = SessionController::open(&runtime).unwrap();
         let access = controller.acquire_session(session, None).await.unwrap();
@@ -517,26 +577,35 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
             panic!("canonical tool result");
         };
         let preview = tool.result.model_facing_projection();
-        assert_eq!(
-            tool.result.status,
-            ToolExecutionStatus::Success,
-            "{}",
-            preview.as_text()
-        );
         assert_eq!(std::fs::read_to_string(mcp_calls).unwrap(), "echo\n");
-        assert_eq!(
-            tool.result
-                .truncation
-                .as_ref()
-                .and_then(|cut| cut.original_bytes),
-            Some(original_bytes as u64)
-        );
-        assert!(matches!(
-            tool.result.managed_output.as_deref(),
-            Some(ManagedOutputContinuation::Unavailable { diagnostic })
-                if diagnostic.contains("no eligible Execution Client save binding")
-        ));
-        assert!(!preview.as_text().contains("Read or Grep"));
+        if over_limit {
+            assert!(matches!(
+                &tool.result.status,
+                ToolExecutionStatus::OutcomeUnknown { detail } if detail.contains("no correlated remote response")
+            ), "{:?}", tool.result.status);
+            assert_eq!(tool.result.truncation, None);
+            assert_eq!(tool.result.managed_output, None);
+        } else {
+            assert_eq!(tool.result.status, ToolExecutionStatus::Success, "{}", preview.as_text());
+            assert_eq!(
+                tool.result.truncation.as_ref().and_then(|cut| cut.original_bytes),
+                Some(original_bytes as u64)
+            );
+            if with_client {
+                assert!(matches!(
+                    tool.result.managed_output.as_deref(),
+                    Some(ManagedOutputContinuation::Complete { locator }) if locator.starts_with("/.rustx-output/import")
+                ));
+                assert!(preview.as_text().contains("Read or Grep"));
+            } else {
+                assert!(matches!(
+                    tool.result.managed_output.as_deref(),
+                    Some(ManagedOutputContinuation::Unavailable { diagnostic })
+                        if diagnostic.contains("no eligible Execution Client save binding")
+                ));
+                assert!(!preview.as_text().contains("Read or Grep"));
+            }
+        }
         for entry in ignore::WalkBuilder::new(&runtime)
             .standard_filters(false)
             .build()

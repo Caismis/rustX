@@ -56,6 +56,7 @@ mod bash_capture;
 mod changes;
 mod mutation;
 mod process;
+mod saves;
 mod search;
 mod terminal;
 mod tree;
@@ -224,6 +225,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::BoundedSearch,
             Capability::Process,
             Capability::AgentBash,
+            Capability::ManagedOutput,
         ]),
         credential: bootstrap.credential,
     };
@@ -255,6 +257,7 @@ fn serve_session(
 ) -> Result<(), String> {
     let workspace = admission.workspace.clone();
     let arbitration = std::sync::Arc::new(mutation::Arbitration::new());
+    let saves = std::sync::Arc::new(std::sync::Mutex::new(saves::Saves::new(admission.clone())));
     let operations = std::sync::Arc::new(
         process::Operations::new(admission).map_err(|error| handshake_error(&error))?,
     );
@@ -272,6 +275,7 @@ fn serve_session(
         data_shutdown,
         operations.clone(),
         watches.clone(),
+        saves.clone(),
     );
     let result = serve(
         &mut channel,
@@ -280,6 +284,7 @@ fn serve_session(
         &operations,
         &workspace,
         &watches,
+        &saves,
     );
     // Teardown: stop the worker first so its lane ends cleanly, then
     // shut the data lane — never exit with a lane still live.
@@ -287,6 +292,9 @@ fn serve_session(
     channel.shutdown();
     // An unresolved worker is never reported as a clean exit.
     let drained = operations.shutdown();
+    if !saves.lock().expect("managed output").close() {
+        return Err(String::from("unresolved managed output cleanup"));
+    }
     if !watches.shutdown() {
         return Err(String::from("unresolved watch cleanup"));
     }
@@ -422,6 +430,7 @@ fn client_control_worker(
     data_shutdown: rustx_execution_transport::ChannelShutdown,
     operations: std::sync::Arc<process::Operations>,
     watches: std::sync::Arc<watch::Watches>,
+    saves: std::sync::Arc<std::sync::Mutex<saves::Saves>>,
 ) -> ClientControlWorker {
     /// The idle poll period: commands wait at most this for the next
     /// turn, far inside the Server's command receipt budget.
@@ -499,7 +508,8 @@ fn client_control_worker(
                         operations.revoke();
                         let watches_settled = watches.shutdown();
                         let processes_settled = operations.finish_revocation(REVOKE_SETTLE_BUDGET);
-                        if !watches_settled || processes_settled.is_err() {
+                        let saves_settled = saves.try_lock().is_ok_and(|mut saves| saves.close());
+                        if !watches_settled || !saves_settled || processes_settled.is_err() {
                             return;
                         }
                         ControlReply::Revoked
@@ -656,14 +666,6 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
         .ok_or_else(|| String::from("untrusted admission"))
 }
 
-/// The Client does not advertise managed output: a save message is refused
-/// before any path, allocation, or queue is touched.
-fn save_unavailable() -> ClientReply {
-    ClientReply::Save(rustx_execution_protocol::save::SaveReply::Unavailable {
-        code: rustx_execution_protocol::save::SaveCode::CapabilityUnavailable,
-    })
-}
-
 #[allow(clippy::too_many_lines)] // The typed one-request/one-reply dispatch loop.
 fn serve(
     channel: &mut RecordChannel,
@@ -672,6 +674,7 @@ fn serve(
     operations: &std::sync::Arc<process::Operations>,
     workspace: &Path,
     watches: &watch::Watches,
+    saves: &std::sync::Mutex<saves::Saves>,
 ) -> Result<(), String> {
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
@@ -743,9 +746,56 @@ fn serve(
                     }
                 }
             }
-            // The Client does not advertise managed output: a save message is
-            // refused before any path, allocation, or queue is touched.
-            ClientRequest::Save(_) => save_unavailable(),
+            ClientRequest::Save(request) => ClientReply::Save(if arbitration.is_revoked() {
+                rustx_execution_protocol::save::SaveReply::Refused {
+                    code: rustx_execution_protocol::save::SaveCode::StaleOwner,
+                }
+            } else {
+                saves
+                    .lock()
+                    .expect("managed output")
+                    .dispatch(&request, std::time::Instant::now())
+            }),
+            ClientRequest::ReadSavedOutput {
+                locator,
+                conversation,
+                offset,
+                limit,
+            } => saves
+                .lock()
+                .expect("managed output")
+                .with_published(&locator, &conversation, |root, path| {
+                    read_lines(root, path, offset, limit, None)
+                })
+                .unwrap_or_else(|error| ClientReply::Error {
+                    kind: read_error(&error),
+                }),
+            ClientRequest::SearchSavedOutput {
+                locator,
+                conversation,
+                spec,
+            } => {
+                if matches!(spec, rustx_execution_protocol::SearchSpec::Grep { .. }) {
+                    saves
+                        .lock()
+                        .expect("managed output")
+                        .with_published(&locator, &conversation, |root, path| {
+                            search::search(
+                                root,
+                                path,
+                                &spec,
+                                std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
+                            )
+                        })
+                        .unwrap_or_else(|error| ClientReply::Error {
+                            kind: read_error(&error),
+                        })
+                } else {
+                    ClientReply::Error {
+                        kind: ReadError::Invalid,
+                    }
+                }
+            }
             ClientRequest::ReadRange {
                 relative_path,
                 offset,

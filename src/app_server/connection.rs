@@ -598,17 +598,23 @@ impl AppServerConnection {
             .get("id")
             .and_then(|value| serde_json::from_value::<RequestId>(value.clone()).ok())
             .filter(valid_request_id);
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"))
+            || object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+            || (object.contains_key("id") && id.is_none())
+        {
+            return Prepared::ready(Reply::plain(failure(
+                id,
+                rpc_error(-32600, "Invalid Request", None),
+            )));
+        }
+        if id.is_none() {
+            return Prepared::Ready(None);
+        }
         let mut association = None;
         let mut may_have_committed = false;
         let result = (|| {
-            if object
-                .keys()
-                .any(|key| !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"))
-                || object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
-                || id.is_none()
-            {
-                return Err(rpc_error(-32600, "Invalid Request", None));
-            }
             let upload = serde_json::from_str::<HostUploadEnvelope>(json)
                 .map_err(|_| rpc_error(-32602, "Invalid params", None))?;
             self.admitted()?;

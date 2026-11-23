@@ -114,7 +114,22 @@ async fn run_read(
     // writer wait under the absolute page deadline, and the blocking
     // exchange awaited to physical settlement even when cancellation
     // wins — a cancelled read never detaches the wire.
-    let page = if let Some(operation) = crate::tools::native::bash_operation_at(&target) {
+    let page = if let Some(locator) = crate::tools::managed_import::locator_at(&target) {
+        let Some(conversation) =
+            rustx_execution_protocol::save::ConversationId::parse(context.conversation_id.as_str())
+        else {
+            return failed_result("saved output is unavailable for this Conversation");
+        };
+        scope
+            .read_saved_output(
+                locator,
+                conversation,
+                input.offset(),
+                input.limit,
+                &context.cancellation,
+            )
+            .await
+    } else if let Some(operation) = crate::tools::native::bash_operation_at(&target) {
         scope
             .read_bash_output(
                 operation,

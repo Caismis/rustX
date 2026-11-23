@@ -63,7 +63,7 @@ pub use binding::{
 };
 pub use bootstrap::PublishedBundle;
 pub use connection::{
-    BashOutputPage, CommitCancelled, DirectoryListing, DocumentPage, LinesPage, LocalConnection,
+    CommitCancelled, ContinuationPage, DirectoryListing, DocumentPage, LinesPage, LocalConnection,
     PhysicalError, PreparedMutation, ProcessOutcomeUnknown, RangeRead, RefusedEdit, SearchResult,
     WatchOutcomeUnknown, WriteOutcomeUnknown,
 };

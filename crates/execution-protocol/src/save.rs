@@ -1,11 +1,9 @@
 //! The optional save contract (EXEC-01): the wire vocabulary and an executable
 //! pure reference for one normalized import.
 //!
-//! Nothing here allocates a path, writes a file, or advertises a capability.
-//! The real Execution Client answers every save message with
-//! `Unavailable`; the reference machine below is the contract any future
-//! storage must satisfy. Requests carry no Server or Host path, and no locator
-//! appears in any reply before a successful publish.
+//! The state machine owns validation and delegates physical operations to its
+//! Client storage owner. Requests carry no Server or Host path; the locator
+//! first becomes visible on successful publication.
 
 use std::time::Instant;
 
@@ -64,6 +62,12 @@ impl Sha256Hex {
         let mut out = [0u8; 32];
         out.copy_from_slice(&Sha256::digest(bytes));
         Self(out)
+    }
+
+    /// Wraps an already computed SHA-256 digest.
+    #[must_use]
+    pub const fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
     }
 
     /// The raw digest bytes.
@@ -253,6 +257,8 @@ pub enum SaveCode {
     Capacity,
     /// The step's deadline elapsed.
     Deadline,
+    /// Physical storage could not complete the step.
+    StorageUnavailable,
     /// The Client does not offer managed output.
     CapabilityUnavailable,
 }
@@ -381,7 +387,7 @@ pub enum SaveReply {
     },
     /// The Client does not offer managed output; no path or queue was touched.
     Unavailable {
-        /// Always [`SaveCode::CapabilityUnavailable`] on the real Client.
+        /// The negotiated output capability is unavailable.
         code: SaveCode,
     },
 }
@@ -558,6 +564,14 @@ pub struct SealRecord {
 /// The Client's physical side of a save. Publish is real or refused, readability
 /// is observed from storage, and cleanup reports what actually happened.
 pub trait SaveStorage {
+    /// Appends one validated, previously unapplied chunk. Failure leaves the
+    /// acknowledged prefix intact or poisons the candidate until cleanup.
+    ///
+    /// # Errors
+    ///
+    /// A byte limit or physical write was refused.
+    fn append(&mut self, key: &SaveKey, offset: u64, bytes: &[u8]) -> Result<(), SaveCode>;
+
     /// Publishes exactly the sealed bytes of `key`, returning the locator the
     /// Client physically created. An error publishes nothing.
     ///
@@ -795,7 +809,14 @@ impl SaveCapture {
                 offset,
                 data_base64,
                 sha256,
-            } => self.chunk(key, sequence.get(), offset.get(), data_base64, sha256),
+            } => self.chunk(
+                key,
+                sequence.get(),
+                offset.get(),
+                data_base64,
+                sha256,
+                storage,
+            ),
             SaveRequest::Seal {
                 key,
                 length,
@@ -850,6 +871,7 @@ impl SaveCapture {
         offset: u64,
         data_base64: &str,
         sha256: &Sha256Hex,
+        storage: &mut impl SaveStorage,
     ) -> SaveReply {
         let stream = match self.live(key) {
             Ok(stream) => stream,
@@ -859,13 +881,20 @@ impl SaveCapture {
             Ok(data) => data,
             Err(code) => return SaveReply::Refused { code },
         };
-        match stream.chunk(sequence, offset, &data, sha256) {
-            Ok(ChunkOutcome::Appended { next_offset }) => SaveReply::Chunked {
-                key: key.clone(),
-                sequence: DecimalU64::new(sequence),
-                next_offset: DecimalU64::new(next_offset),
-                duplicate: false,
-            },
+        let mut staged = stream.clone();
+        match staged.chunk(sequence, offset, &data, sha256) {
+            Ok(ChunkOutcome::Appended { next_offset }) => {
+                if let Err(code) = storage.append(key, offset, &data) {
+                    return SaveReply::Refused { code };
+                }
+                *stream = staged;
+                SaveReply::Chunked {
+                    key: key.clone(),
+                    sequence: DecimalU64::new(sequence),
+                    next_offset: DecimalU64::new(next_offset),
+                    duplicate: false,
+                }
+            }
             Ok(ChunkOutcome::Duplicate { next_offset }) => SaveReply::Chunked {
                 key: key.clone(),
                 sequence: DecimalU64::new(sequence),
@@ -977,15 +1006,15 @@ impl SaveCapture {
     }
 
     /// Aborts a live candidate; cleanup is whatever storage reports. A published
-    /// or already aborted candidate is terminal.
+    /// candidate is terminal. Repeating Abort may finish pending cleanup.
     fn abort(&mut self, key: &SaveKey, storage: &mut impl SaveStorage) -> SaveReply {
         let stream = match self.live(key) {
             Ok(stream) => stream,
             Err(code) => return SaveReply::Refused { code },
         };
         match stream.phase {
-            Phase::Open | Phase::Sealed(_) => {}
-            Phase::Published(_) | Phase::Aborted => {
+            Phase::Open | Phase::Sealed(_) | Phase::Aborted => {}
+            Phase::Published(_) => {
                 return SaveReply::Refused {
                     code: SaveCode::AlreadyTerminal,
                 };
@@ -1076,6 +1105,10 @@ mod tests {
     struct FixtureStorage;
 
     impl SaveStorage for FixtureStorage {
+        fn append(&mut self, _key: &SaveKey, _offset: u64, _bytes: &[u8]) -> Result<(), SaveCode> {
+            Ok(())
+        }
+
         fn publish(&mut self, _key: &SaveKey, _seal: &SealRecord) -> Result<Locator, SaveCode> {
             Ok(Locator::parse("save:fixture-locator").unwrap())
         }
@@ -1565,6 +1598,10 @@ mod lifecycle_tests {
     }
 
     impl SaveStorage for Recording {
+        fn append(&mut self, _key: &SaveKey, _offset: u64, _bytes: &[u8]) -> Result<(), SaveCode> {
+            Ok(())
+        }
+
         fn publish(&mut self, _key: &SaveKey, _seal: &SealRecord) -> Result<Locator, SaveCode> {
             self.publishes += 1;
             self.receipt.clone().ok_or(SaveCode::Capacity)

@@ -2238,83 +2238,198 @@ fn a_malformed_edit_request_is_an_error_not_a_stage() {
     expect_success(&mut child);
 }
 
-/// The real Client does not offer managed output: a save `Begin` on the
-/// admitted pair is declined with a typed `Unavailable`, the workspace is left
-/// exactly as it was, and the same connection keeps answering `Ping`.
 #[test]
-fn save_is_declined_as_unavailable_without_touching_the_workspace() {
-    use rustx_execution_protocol::process::{OperationId, ServerIncarnation};
+#[allow(
+    clippy::too_many_lines,
+    reason = "one real paired-Client protocol transcript"
+)]
+fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
+    use base64::Engine as _;
+    use rustx_execution_protocol::process::OperationId;
     use rustx_execution_protocol::save::{
-        ContentFormat, ConversationId, SaveCode, SaveOwner, SaveReply, SaveRequest,
+        Cleanup, ContentFormat, ConversationId, Readability, SaveCode, SaveExtent, SaveOwner,
+        SaveReply, SaveRequest, Sha256Hex,
     };
-    use rustx_execution_protocol::{Generation, SessionId};
+    use rustx_execution_server::ContinuationPage;
 
-    let rig = rig();
-    fs::write(rig.workspace_path.join("kept"), "before").unwrap();
-    let before = workspace_listing(&rig.workspace_path);
-
-    let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut peer = stream.try_clone().unwrap();
-    let connection = admit_pair_stream(&rig, &mut child, stream);
-
-    let owner = SaveOwner {
-        incarnation: ServerIncarnation::generate(),
-        session: SessionId::new("session-1"),
-        instance: ClientInstanceId::new("instance-1"),
-        generation: Generation::new(NonZeroU64::new(1).unwrap()),
-        conversation: ConversationId::parse("conv-1").unwrap(),
-        operation: OperationId::new(),
-    };
-    write_record(
-        &mut peer,
-        &ClientRequest::Save(SaveRequest::Begin {
-            owner,
-            content_format: ContentFormat::NormalizedUtf8V1,
-        }),
-    )
-    .unwrap();
-    let reply: ClientReply = read_record(&mut peer).unwrap();
-    assert_eq!(
-        reply,
-        ClientReply::Save(SaveReply::Unavailable {
-            code: SaveCode::CapabilityUnavailable
-        })
-    );
-    assert_eq!(
-        workspace_listing(&rig.workspace_path),
-        before,
-        "a declined save never stages anything in the workspace"
-    );
-    write_record(&mut peer, &ClientRequest::Ping).unwrap();
-    assert_eq!(
-        read_record::<ClientReply>(&mut peer).unwrap(),
-        ClientReply::Pong
-    );
-
-    drop(peer);
-    drop(connection);
-    expect_success(&mut child);
-}
-
-/// A reservation demanding managed output cannot be satisfied by the real
-/// Client, which does not advertise that capability: the handshake is rejected
-/// for missing capabilities, never admitted.
-#[test]
-fn a_reservation_requiring_managed_output_is_rejected_by_the_real_client() {
     let rig = rig_with(BTreeSet::from([
         Capability::Connection,
         Capability::ManagedOutput,
     ]));
+    fs::write(rig.workspace_path.join("kept"), "before").unwrap();
+    let before = workspace_listing(&rig.workspace_path);
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let outcome = rig.binding.accept_local(stream).unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
+    assert!(connection.supports(Capability::ManagedOutput));
+    let admission = connection.admission();
+    let owner = SaveOwner {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        conversation: ConversationId::parse("conv-1").unwrap(),
+        operation: OperationId::new(),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let begin = |owner| SaveRequest::Begin {
+        owner,
+        content_format: ContentFormat::NormalizedUtf8V1,
+    };
+    let wrong = SaveOwner {
+        conversation: owner.conversation.clone(),
+        session: rustx_execution_protocol::SessionId::new("another-session"),
+        ..owner.clone()
+    };
+    assert_eq!(
+        connection
+            .save_by(&begin(wrong), deadline, || Ok(()))
+            .unwrap(),
+        SaveReply::Refused {
+            code: SaveCode::StaleOwner
+        },
+    );
+    let request = begin(owner.clone());
+    let SaveReply::Begun { key } = connection.save_by(&request, deadline, || Ok(())).unwrap()
+    else {
+        panic!("candidate admitted");
+    };
+    assert_eq!(key.owner, owner);
+    assert_eq!(
+        connection.save_by(&request, deadline, || Ok(())).unwrap(),
+        SaveReply::Begun { key: key.clone() }
+    );
+    let data = b"prefix\nmiddle needle\ntail";
+    let sha256 = Sha256Hex::of(data);
+    let chunk = SaveRequest::Chunk {
+        key: key.clone(),
+        sequence: 1.into(),
+        offset: 0.into(),
+        sha256,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(data),
+    };
+    let length = (data.len() as u64).into();
+    for duplicate in [false, true] {
+        assert_eq!(
+            connection.save_by(&chunk, deadline, || Ok(())).unwrap(),
+            SaveReply::Chunked {
+                key: key.clone(),
+                sequence: 1.into(),
+                next_offset: length,
+                duplicate
+            },
+        );
+    }
+    let extent = SaveExtent::Complete;
     assert!(matches!(
-        outcome,
-        rustx_execution_server::ChannelAccept::Rejected(Reject::MissingCapabilities)
+        connection
+            .save_by(
+                &SaveRequest::Seal {
+                    key: key.clone(),
+                    length,
+                    sha256,
+                    extent,
+                },
+                deadline,
+                || Ok(())
+            )
+            .unwrap(),
+        SaveReply::Sealed { .. }
     ));
-    assert!(!child.wait().unwrap().success());
-    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
+    let SaveReply::Published { locator, .. } = connection
+        .save_by(
+            &SaveRequest::Publish {
+                key: key.clone(),
+                length,
+                sha256,
+                extent,
+            },
+            deadline,
+            || Ok(()),
+        )
+        .unwrap()
+    else {
+        panic!("physical publication");
+    };
+    assert!(matches!(
+        connection
+            .save_by(&SaveRequest::Probe { key }, deadline, || Ok(()))
+            .unwrap(),
+        SaveReply::Readability {
+            outcome: Readability::Readable,
+            ..
+        },
+    ));
+    let read = |conversation| ClientRequest::ReadSavedOutput {
+        conversation,
+        locator: locator.clone(),
+        offset: 1.into(),
+        limit: None,
+    };
+    assert!(matches!(
+        connection.inspect_output(&read(owner.conversation.clone()), deadline, || Ok(())).unwrap(),
+        ContinuationPage::Lines(page) if page.text.as_bytes() == data,
+    ));
+    assert_eq!(
+        connection
+            .inspect_output(
+                &read(ConversationId::parse("conv-2").unwrap()),
+                deadline,
+                || Ok(())
+            )
+            .err()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::NotFound,
+    );
+    let grep = ClientRequest::SearchSavedOutput {
+        conversation: owner.conversation.clone(),
+        locator,
+        spec: rustx_execution_protocol::SearchSpec::Grep {
+            literal: true,
+            ignore_case: false,
+            context: 0,
+            limit: 1.into(),
+            pattern: "needle".into(),
+            glob: None,
+        },
+    };
+    assert!(matches!(
+        connection.inspect_output(&grep, deadline, || Ok(())).unwrap(),
+        ContinuationPage::Search(page) if page.matches == 1 && page.body.contains("middle needle"),
+    ));
+
+    let SaveReply::Begun { key } = connection
+        .save_by(
+            &begin(SaveOwner {
+                operation: OperationId::new(),
+                ..owner
+            }),
+            deadline,
+            || Ok(()),
+        )
+        .unwrap()
+    else {
+        panic!("another candidate");
+    };
+    for cleanup in [Cleanup::Removed, Cleanup::AlreadyRemoved] {
+        assert_eq!(
+            connection
+                .save_by(
+                    &SaveRequest::Abort { key: key.clone() },
+                    deadline,
+                    || Ok(())
+                )
+                .unwrap(),
+            SaveReply::Aborted {
+                key: key.clone(),
+                cleanup
+            },
+        );
+    }
+    assert_eq!(workspace_listing(&rig.workspace_path), before);
+    connection.ping().unwrap();
+    drop(connection);
+    expect_success(&mut child);
 }
 
 fn workspace_listing(workspace: &Path) -> Vec<String> {

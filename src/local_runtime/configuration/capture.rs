@@ -12,13 +12,16 @@ use super::{
     WorkspaceResourceIdentity, application, read_bounded, repair,
 };
 use crate::local_runtime::session_runtime_manager::{
-    LocalExecutionEndpoint, WorkspaceConfiguration,
+    LocalExecutionEndpoint, WorkspaceDocumentSnapshot,
 };
 
 #[derive(Clone, Copy)]
-enum ResourceSource {
+enum ResourceSource<'a> {
     Authored,
-    Bound(Option<WorkspaceResourceIdentity>),
+    Bound {
+        endpoint: &'a LocalExecutionEndpoint,
+        retained: Option<WorkspaceResourceIdentity>,
+    },
 }
 
 enum WorkspaceDocument<'a> {
@@ -26,7 +29,7 @@ enum WorkspaceDocument<'a> {
     Bound {
         endpoint: &'a LocalExecutionEndpoint,
         path: PathBuf,
-        captured: WorkspaceConfiguration,
+        captured: WorkspaceDocumentSnapshot,
     },
 }
 
@@ -260,8 +263,8 @@ impl UserConfigManager {
                     self.resolve_resources(
                         request,
                         capture,
-                        workspace.map_or(ResourceSource::Authored, |(_, retained)| {
-                            ResourceSource::Bound(retained)
+                        workspace.map_or(ResourceSource::Authored, |(endpoint, retained)| {
+                            ResourceSource::Bound { endpoint, retained }
                         }),
                     )
                 })
@@ -384,7 +387,7 @@ impl UserConfigManager {
         let workspace_document = match endpoint {
             None => WorkspaceDocument::Authored(admit_source(&project_path)?),
             Some(endpoint) => {
-                let captured = read_bound_workspace(endpoint, &project_path)?;
+                let captured = read_bound_document(endpoint, &project_path, "rustx.toml")?;
                 WorkspaceDocument::Bound {
                     endpoint,
                     path: project_path.clone(),
@@ -497,7 +500,7 @@ impl UserConfigManager {
                 path,
                 captured,
             } => {
-                if &read_bound_workspace(endpoint, path)? == captured {
+                if &read_bound_document(endpoint, path, "rustx.toml")? == captured {
                     Ok(())
                 } else {
                     Err("Workspace configuration changed during capture; rescan to retry".into())
@@ -751,7 +754,7 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         resolved: SourceCapture,
-        resource_source: ResourceSource,
+        resource_source: ResourceSource<'_>,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         crate::package_io::check_cancelled(&self.resource_io)
             .map_err(|error| LaunchFailure::from(error.to_string()))?;
@@ -772,11 +775,11 @@ impl UserConfigManager {
         // Configuration preparation retains this physical identity; validators must not rebind it.
         // Authored resources are a separate Server-side source. A Client
         // configuration document does not require a matching resource root.
-        let retained = match resource_source {
-            ResourceSource::Authored => None,
-            ResourceSource::Bound(retained) => retained,
+        let (workspace_endpoint, retained) = match resource_source {
+            ResourceSource::Authored => (None, None),
+            ResourceSource::Bound { endpoint, retained } => (Some(endpoint), retained),
         };
-        let allow_absent = matches!(resource_source, ResourceSource::Bound(None));
+        let allow_absent = workspace_endpoint.is_some() && retained.is_none();
         let authored_identity = authored_workspace_identity(&locations.workspace, allow_absent)?;
         if retained.is_some() && retained != authored_identity {
             return Err(workspace_resource_failure(
@@ -796,10 +799,19 @@ impl UserConfigManager {
         }
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
         let agent_root = normalize_missing(&user_resource_root.join("agents"))?;
-        let project_context_files = {
-            crate::runtime::load_project_context_files(authored_workspace, &user_resource_root)
-                .map_err(LaunchFailure::resource)?
+        let read_authored_instructions = || {
+            let workspace = if workspace_endpoint.is_some() {
+                None
+            } else {
+                authored_workspace
+            };
+            crate::runtime::load_project_context_files(workspace, &user_resource_root)
+                .map_err(LaunchFailure::resource)
         };
+        let mut project_context_files = read_authored_instructions()?;
+        let bound_instructions = workspace_endpoint
+            .map(|endpoint| BoundInstructions::read(endpoint, &locations.workspace))
+            .transpose()?;
         let (subagents, role_sources) =
             super::super::agent_resources::load_authorized(authored_workspace, &agent_root)
                 .map_err(LaunchFailure::resource)?;
@@ -1059,13 +1071,13 @@ impl UserConfigManager {
                 return Err("configuration inputs changed during capture; rescan to retry".into());
             }
         }
-        if crate::runtime::load_project_context_files(authored_workspace, &user_resource_root)
-            .map_err(LaunchFailure::resource)?
-            != project_context_files
-        {
+        if read_authored_instructions()? != project_context_files {
             return Err(
                 "project instruction discovery changed during capture; rescan to retry".into(),
             );
+        }
+        if let Some(instructions) = bound_instructions {
+            instructions.verify_and_append(&mut project_context_files, &mut revisions)?;
         }
         if discover_skills()? != skill_discovery {
             return Err("Skill definitions changed during capture; rescan to retry".into());
@@ -1117,7 +1129,9 @@ impl UserConfigManager {
                 ResourceSource::Authored => WorkspaceResourceAuthority::Authored(
                     authored_identity.expect("authored configuration requires a Workspace"),
                 ),
-                ResourceSource::Bound(_) => WorkspaceResourceAuthority::Bound(authored_identity),
+                ResourceSource::Bound { .. } => {
+                    WorkspaceResourceAuthority::Bound(authored_identity)
+                }
             },
             config: std::sync::Arc::new(config),
             models,
@@ -1245,13 +1259,89 @@ fn read_document(source: &AdmittedSource) -> Result<Option<Vec<u8>>, LaunchFailu
         .map_err(|error| unavailable(source.path(), client_detail(error)))
 }
 
-fn read_bound_workspace(
+fn read_bound_document(
     endpoint: &LocalExecutionEndpoint,
     path: &Path,
-) -> Result<WorkspaceConfiguration, LaunchFailure> {
+    name: &str,
+) -> Result<WorkspaceDocumentSnapshot, LaunchFailure> {
     endpoint
-        .workspace_configuration()
+        .workspace_document(Path::new(name))
         .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
+}
+
+struct BoundInstructions<'a> {
+    endpoint: &'a LocalExecutionEndpoint,
+    path: PathBuf,
+    snapshot: WorkspaceDocumentSnapshot,
+}
+
+impl<'a> BoundInstructions<'a> {
+    const NAME: &str = crate::runtime::resources::PROJECT_CONTEXT_FILENAME;
+
+    fn read(endpoint: &'a LocalExecutionEndpoint, workspace: &Path) -> Result<Self, LaunchFailure> {
+        let path = workspace.join(Self::NAME);
+        let snapshot = Self::capture(endpoint, &path)?;
+        Ok(Self {
+            endpoint,
+            path,
+            snapshot,
+        })
+    }
+
+    fn capture(
+        endpoint: &LocalExecutionEndpoint,
+        path: &Path,
+    ) -> Result<WorkspaceDocumentSnapshot, LaunchFailure> {
+        endpoint
+            .workspace_document(Path::new(Self::NAME))
+            .map_err(|error| {
+                LaunchFailure::at(
+                    Some(path.into()),
+                    "projectInstructions",
+                    "Workspace instructions are unavailable from the Execution Client",
+                    "check the bound Workspace and instruction file",
+                    error.to_string(),
+                )
+            })
+    }
+
+    fn verify_and_append(
+        self,
+        files: &mut Vec<crate::runtime::ProjectContextFile>,
+        revisions: &mut BTreeMap<PathBuf, String>,
+    ) -> Result<(), LaunchFailure> {
+        if Self::capture(self.endpoint, &self.path)? != self.snapshot {
+            return Err(LaunchFailure::at(
+                Some(self.path),
+                "projectInstructions",
+                "Workspace instructions changed during capture",
+                "rescan after source edits settle",
+                "candidate discarded".into(),
+            ));
+        }
+        if let Some((bytes, _)) = self.snapshot.document {
+            let text = std::str::from_utf8(&bytes).map_err(|error| {
+                LaunchFailure::at(
+                    Some(self.path.clone()),
+                    "projectInstructions",
+                    "Workspace instruction text is not UTF-8",
+                    "save the instructions as UTF-8",
+                    error.to_string(),
+                )
+            })?;
+            let content = crate::runtime::resources::strip_instruction_bom(text).to_owned();
+            revisions.insert(
+                self.path.clone(),
+                super::super::settings::revision(Some(&bytes)),
+            );
+            files.retain(|file| file.path != self.path);
+            files.push(crate::runtime::ProjectContextFile {
+                path: self.path,
+                content,
+            });
+        }
+        Ok(())
+    }
 }
 
 /// A checked read of an admitted `rustx.toml` ([`AdmittedSource::reread`]).

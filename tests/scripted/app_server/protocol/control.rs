@@ -12,6 +12,21 @@ async fn hosted_uploads_share_the_normal_request_id_association() {
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
         let mut upload = fixtures().remove(0);
+        let mut notification = serde_json::to_value(&upload).unwrap();
+        notification.as_object_mut().unwrap().remove("id");
+        assert!(
+            connection
+                .handle_json(&notification.to_string())
+                .await
+                .is_none()
+        );
+        notification["id"] = serde_json::Value::Null;
+        let Some(Response::Failure(invalid_id)) =
+            connection.handle_json(&notification.to_string()).await
+        else {
+            panic!("null ID is an invalid request");
+        };
+        assert_eq!(invalid_id.error.code, -32600);
         upload.id = RequestId::Integer(60);
         let record = serde_json::to_string(&upload).unwrap();
         let ordinary = connection.admitted_request_for_test(Request {

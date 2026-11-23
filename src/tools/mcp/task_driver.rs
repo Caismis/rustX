@@ -20,7 +20,7 @@ use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 use super::invocation::McpCallIdentity;
 use super::outcome::{McpPhysicalOutcome, McpResponseOutcome, is_transport_loss};
 use super::request::McpRequestOwnership;
-use super::result::{failed_mcp, mcp_empty_terminal, translate_result};
+use super::result::{failed_mcp, mcp_empty_terminal, translate_remote_result};
 use super::runtime::McpServerRuntime;
 #[cfg(test)]
 use super::test_sync;
@@ -137,7 +137,8 @@ impl McpServerRuntime {
                 // `completed` task carrying `isError: true` is a completed
                 // task with a failed tool, not a failed task.
                 tasks::RemoteTaskObservation::Completed(result) => {
-                    return translate_result(*result, context, started);
+                    return translate_remote_result(*result, context, started, &self.credentials)
+                        .await;
                 }
                 // The task's own terminal failure, correlated to this task
                 // by the protocol. A known terminal outcome, bounded.

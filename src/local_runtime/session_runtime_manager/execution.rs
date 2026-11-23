@@ -14,7 +14,9 @@
 //! exchange runs at a time and a concurrent dispatch is refused as busy,
 //! never queued.
 
+mod output;
 mod sibling;
+pub(crate) use output::OutputBinding;
 pub(crate) use sibling::launch_sibling;
 
 use std::collections::{BTreeSet, HashMap};
@@ -88,6 +90,7 @@ pub struct LocalExecutionEndpoint {
     /// connection lands; the operation-identity source for every
     /// managed process this endpoint dispatches.
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
+    managed_output: std::sync::OnceLock<bool>,
 }
 
 enum Settlement {
@@ -247,6 +250,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            managed_output: std::sync::OnceLock::new(),
             workspace,
         })
     }
@@ -302,6 +306,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            managed_output: std::sync::OnceLock::new(),
             workspace,
         })
     }
@@ -426,6 +431,9 @@ impl LocalExecutionEndpoint {
             rustx_execution_server::ChannelAccept::Live(connection) => {
                 // The pair's admission is the operation-identity source;
                 // it can land exactly once (the slot's own invariant).
+                let _ = self
+                    .managed_output
+                    .set(connection.supports(Capability::ManagedOutput));
                 let _ = self.admission.set(connection.admission().clone());
                 let mut slot = self.connection.lock().expect("endpoint connection");
                 assert!(
@@ -578,7 +586,10 @@ impl LocalExecutionEndpoint {
     /// Capture the bound Workspace document under the same data budget as
     /// other authorized reads. A missing leaf is meaningful only after the
     /// live Client has proved the Workspace directory.
-    pub(crate) fn workspace_configuration(&self) -> io::Result<WorkspaceConfiguration> {
+    pub(crate) fn workspace_document(
+        &self,
+        relative: &Path,
+    ) -> io::Result<WorkspaceDocumentSnapshot> {
         const CAPTURE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
         let deadline = Instant::now() + CAPTURE_BUDGET;
         self.with_bounded_data_connection(deadline, |connection| {
@@ -587,7 +598,7 @@ impl LocalExecutionEndpoint {
                 return Err(io::Error::other("Client Workspace root is not a directory"));
             }
             let document = connection.read_bounded_file(
-                Path::new("rustx.toml"),
+                relative,
                 crate::bounded_file::MAX_RESOURCE_BYTES,
                 deadline,
                 || Ok(()),
@@ -597,7 +608,7 @@ impl LocalExecutionEndpoint {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error),
             };
-            Ok(WorkspaceConfiguration {
+            Ok(WorkspaceDocumentSnapshot {
                 directory_identity: root.stamp.identity,
                 document,
             })
@@ -1732,7 +1743,7 @@ enum DataCapacity {
 }
 
 #[derive(PartialEq, Eq)]
-pub(crate) struct WorkspaceConfiguration {
+pub(crate) struct WorkspaceDocumentSnapshot {
     directory_identity: String,
     pub(crate) document: Option<(Vec<u8>, FileStamp)>,
 }
@@ -1790,8 +1801,8 @@ impl SessionExecutionScope {
         )
         .await
         .map(|page| match page {
-            rustx_execution_server::BashOutputPage::Lines(lines) => project_lines(lines).1,
-            rustx_execution_server::BashOutputPage::Search(_) => {
+            rustx_execution_server::ContinuationPage::Lines(lines) => project_lines(lines).1,
+            rustx_execution_server::ContinuationPage::Search(_) => {
                 unreachable!("validated Bash Read reply")
             }
         })
@@ -1806,7 +1817,7 @@ impl SessionExecutionScope {
         + Send
         + 'static,
         cancellation: &ExecutionCancellation,
-    ) -> io::Result<rustx_execution_server::BashOutputPage> {
+    ) -> io::Result<rustx_execution_server::ContinuationPage> {
         self.dispatch_data(
             cancellation,
             DataCapacity::Immediate,
@@ -1814,7 +1825,7 @@ impl SessionExecutionScope {
                 let _writer = writer;
                 let key = operation.key_for(&endpoint)?;
                 endpoint.with_connection(Some(data), true, |connection| {
-                    connection.inspect_bash_output(&request(key), deadline, move || {
+                    connection.inspect_output(&request(key), deadline, move || {
                         cancellation
                             .with_active(|| ())
                             .ok_or_else(cancelled_before_dispatch)
@@ -2330,6 +2341,28 @@ impl SessionExecutionScope {
         }
         let endpoint = self.endpoint()?;
         let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let result = Self::dispatch_data_on(endpoint, cancel, capacity, deadline, work).await;
+        if cancel.is_cancelled() {
+            return Err(cancelled_before_dispatch());
+        }
+        result
+    }
+
+    async fn dispatch_data_on<T: Send + 'static>(
+        endpoint: Arc<LocalExecutionEndpoint>,
+        cancel: &ExecutionCancellation,
+        capacity: DataCapacity,
+        deadline: Instant,
+        work: impl FnOnce(
+            Arc<LocalExecutionEndpoint>,
+            OwnedSemaphorePermit,
+            OwnedSemaphorePermit,
+            Instant,
+            ExecutionCancellation,
+        ) -> io::Result<T>
+        + Send
+        + 'static,
+    ) -> io::Result<T> {
         let data = match capacity {
             DataCapacity::Immediate => {
                 endpoint
@@ -2372,7 +2405,7 @@ impl SessionExecutionScope {
             }
         };
         let worker_cancellation = cancel.clone();
-        let mut exchange = tokio::task::spawn_blocking(move || {
+        let exchange = tokio::task::spawn_blocking(move || {
             if Instant::now() >= deadline || worker_cancellation.is_cancelled() {
                 return Err(if worker_cancellation.is_cancelled() {
                     cancelled_before_dispatch()
@@ -2385,21 +2418,9 @@ impl SessionExecutionScope {
             }
             work(endpoint, data, writer, deadline, worker_cancellation)
         });
-        let settled = tokio::select! {
-            biased;
-            // The cancellation authority wins the race, including ties
-            // with an exchange that completed in the same wakeup.
-            () = cancel.cancelled() => None,
-            joined = &mut exchange => Some(joined),
-        };
-        let Some(joined) = settled else {
-            // Cancellation never detaches the admitted exchange: the
-            // blocking task — its reply and its deadline — is awaited to
-            // physical settlement before the cancelled result returns.
-            let _ = exchange.await;
-            return Err(cancelled_before_dispatch());
-        };
-        match joined {
+        // Keep the correlated reply for effectful exchanges. In particular,
+        // a successful Begin still owns a candidate after cancellation.
+        match exchange.await {
             Ok(result) => result,
             Err(error) => Err(io::Error::other(format!(
                 "read exchange task failed: {error}"
@@ -2435,68 +2456,8 @@ impl SessionExecutionScope {
             return Err(cancelled_before_dispatch());
         }
         let endpoint = self.endpoint()?;
-        let data = endpoint
-            .data_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
-            })?;
         let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
-        let writer = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return Err(cancelled_before_dispatch()),
-            permit = tokio::time::timeout_at(
-                tokio::time::Instant::from_std(deadline),
-                endpoint.agent_writer.clone().acquire_owned(),
-            ) => {
-                permit
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "execution connection page request timed out",
-                        )
-                    })?
-                    .map_err(|_| io::Error::other("execution writer queue is closed"))?
-            }
-        };
-        let worker_cancellation = cancel.clone();
-        let mut exchange = tokio::task::spawn_blocking(move || {
-            if Instant::now() >= deadline || worker_cancellation.is_cancelled() {
-                return Err(if worker_cancellation.is_cancelled() {
-                    cancelled_before_dispatch()
-                } else {
-                    io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "execution connection page request timed out",
-                    )
-                });
-            }
-            work(endpoint, data, writer, deadline, worker_cancellation)
-        });
-        let settled = tokio::select! {
-            biased;
-            () = cancel.cancelled() => None,
-            joined = &mut exchange => Some(joined),
-        };
-        let Some(joined) = settled else {
-            // The settled worker outcome is authoritative: a racing
-            // cancellation may have lost to a publish that already
-            // crossed, so the worker's own result — success, refusal, or
-            // unknown — is returned, never a masked cancellation.
-            return match exchange.await {
-                Ok(result) => result,
-                Err(error) => Err(io::Error::other(format!(
-                    "read exchange task failed: {error}"
-                ))),
-            };
-        };
-        match joined {
-            Ok(result) => result,
-            Err(error) => Err(io::Error::other(format!(
-                "read exchange task failed: {error}"
-            ))),
-        }
+        Self::dispatch_data_on(endpoint, cancel, DataCapacity::Immediate, deadline, work).await
     }
 }
 

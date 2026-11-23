@@ -1089,6 +1089,11 @@ pub struct NativeFixture {
 }
 
 impl NativeFixture {
+    /// Reaps the real Client while the native runtime and artifacts remain pinned.
+    pub fn disconnect_execution(&mut self) {
+        drop(self._execution.take().expect("live Execution Client"));
+    }
+
     /// The temporary directory backing this fixture.
     #[must_use]
     pub fn dir(&self) -> &tempfile::TempDir {

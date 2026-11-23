@@ -2,14 +2,9 @@
 //! one becomes the canonical [`ToolExecutionResult`], under the shared Tool
 //! Plane capture and MCP's own aggregate content accounting.
 //!
-//! The `rmcp` upstream `CallToolResult` is already fully materialized in
-//! memory when it reaches this adapter; bounding the HTTP receive itself is
-//! tracked separately under issue #578. Foreground results are preview-only:
-//! no eligible Execution Client save binding exists, so an overflow truncates
-//! the preview and settles a typed `Unavailable` continuation — it never
-//! allocates a local spill, never launches or queries a Client, and never
-//! retains the complete output. Background results keep their
-//! dispatch-owned sink unchanged.
+//! The transport bounds the HTTP record before rmcp materializes its result.
+//! This adapter independently bounds model content and offers normalized text
+//! to the Session's Client. Background results retain their dispatch sink.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -20,6 +15,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::executor::ToolExecutionContext;
 use crate::tools::limits::{FOREGROUND_TOOL_RESULT_PREVIEW_BYTES, MAX_MODEL_TOOL_RESULT_BYTES};
+use crate::tools::managed_import::{BufferedImport, Import};
 use crate::tools::output::{
     CapturedOutput, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter,
     continuation_for_capture, truncation_for_capture,
@@ -35,15 +31,110 @@ pub(super) fn translate_result(
     context: &ToolExecutionContext<'_>,
     started: Instant,
 ) -> ToolExecutionResult {
-    let background = context.execution_id.is_some();
-    let mut capture = match open_mcp_output_capture(context) {
+    translate_output(
+        result,
+        open_mcp_output_capture(context),
+        context.artifacts,
+        context.execution_id.is_some(),
+        started,
+        &mut |_| {},
+    )
+    .0
+}
+
+pub(super) async fn translate_remote_result(
+    result: CallToolResult,
+    context: &ToolExecutionContext<'_>,
+    started: Instant,
+    credentials: &crate::credentials::SourceCredentials,
+) -> ToolExecutionResult {
+    let Some(scope) = context
+        .workspace
+        .execution_scope()
+        .filter(|_| context.execution_id.is_none())
+    else {
+        return translate_result(scrub_credentials(result, credentials), context, started);
+    };
+    let producer = Import::new(
+        scope.clone(),
+        context.conversation_id.clone(),
+        context.cancellation.clone(),
+    );
+    let artifacts = context.artifacts.clone();
+    let credentials = credentials.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        let mut producer = BufferedImport::new(producer);
+        let (result, validated) = translate_output(
+            scrub_credentials(result, &credentials),
+            Ok(ToolOutputCapture::preview_only()),
+            &artifacts,
+            false,
+            started,
+            &mut |text| producer.push(text),
+        );
+        let producer = validated.then(|| producer.finish());
+        (result, producer)
+    });
+    let Ok((mut result, producer)) = task.await else {
+        return mcp_empty_terminal(
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: "MCP result could not be projected".to_owned(),
+            },
+            context,
+            started,
+        );
+    };
+    if let Some(producer) = producer {
+        let selected = producer.selected();
+        if let Some(locator) = producer.publish().await {
+            result.managed_output = Some(Box::new(ManagedOutputContinuation::Complete { locator }));
+        } else if selected
+            && let Some(ManagedOutputContinuation::Unavailable { diagnostic }) =
+                result.managed_output.as_deref_mut()
+        {
+            *diagnostic = "Full output was not saved through the selected Execution Client.".into();
+        }
+    }
+    result.duration_ms = duration_ms(started);
+    result
+}
+
+fn scrub_credentials(
+    mut result: CallToolResult,
+    credentials: &crate::credentials::SourceCredentials,
+) -> CallToolResult {
+    for block in &mut result.content {
+        if let ContentBlock::Text(text) = block {
+            text.text = credentials.redact(&text.text);
+        }
+    }
+    if let Some(structured) = &mut result.structured_content {
+        super::diagnostics::peer_json(structured, credentials);
+    }
+    result
+}
+
+fn translate_output(
+    result: CallToolResult,
+    capture: Result<ToolOutputCapture, (PathBuf, String)>,
+    artifacts: &ArtifactStore,
+    background: bool,
+    started: Instant,
+    import: &mut impl FnMut(&str),
+) -> (ToolExecutionResult, bool) {
+    let mut capture = match capture {
         Ok(capture) => capture,
         Err((locator, diagnostic)) => {
-            return failed_mcp_storage(&diagnostic, locator, started);
+            return (failed_mcp_storage(&diagnostic, locator, started), false);
         }
     };
     let reported_error = result.is_error == Some(true);
-    let captured = capture_mcp_content(result.content, result.structured_content, &mut capture);
+    let captured = capture_mcp_content(
+        result.content,
+        result.structured_content,
+        &mut capture,
+        import,
+    );
     let capture_result = capture.finish(captured.storage_error.is_none());
     let output_diagnostic = captured
         .storage_error
@@ -65,11 +156,12 @@ pub(super) fn translate_result(
         continuation
     };
     let (model_blocks, aggregate_error) =
-        materialize_mcp_blocks(captured.pending_blocks, &capture_result, context.artifacts);
+        materialize_mcp_blocks(captured.pending_blocks, &capture_result, artifacts);
     let unsupported = captured
         .unsupported
         .or(captured.aggregate_error)
         .or(aggregate_error);
+    let validated = capture_result.complete && unsupported.is_none();
     let status = if let Some(error) = captured.storage_error {
         ToolExecutionStatus::Failed {
             error: format!("MCP result output storage failed: {error}"),
@@ -84,17 +176,20 @@ pub(super) fn translate_result(
         ToolExecutionStatus::Success
     };
     let truncation = truncation_for_capture(&capture_result);
-    ToolExecutionResult {
-        deliveries: Vec::new(),
-        status,
-        content: model_blocks,
-        duration_ms: duration_ms(started),
-        exit_code: None,
-        artifacts: Vec::new(),
-        truncation,
-        workflow: None,
-        managed_output: continuation.map(Box::new),
-    }
+    (
+        ToolExecutionResult {
+            deliveries: Vec::new(),
+            status,
+            content: model_blocks,
+            duration_ms: duration_ms(started),
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation,
+            workflow: None,
+            managed_output: continuation.map(Box::new),
+        },
+        validated,
+    )
 }
 
 const MCP_AGGREGATE_BUDGET_ERROR: &str =
@@ -257,6 +352,7 @@ fn capture_mcp_content(
     blocks: Vec<ContentBlock>,
     structured_content: Option<serde_json::Value>,
     capture: &mut ToolOutputCapture,
+    import: &mut impl FnMut(&str),
 ) -> McpContentCapture {
     let mut captured = McpContentCapture {
         pending_blocks: Vec::new(),
@@ -277,9 +373,12 @@ fn capture_mcp_content(
         let mut push_textual = |text: &str| -> Result<(), String> {
             if !first_textual_block {
                 capture.push("\n")?;
+                import("\n");
             }
             first_textual_block = false;
-            capture.push(text)
+            capture.push(text)?;
+            import(text);
+            Ok(())
         };
         for block in blocks {
             match block {
@@ -352,6 +451,7 @@ fn capture_mcp_content(
             &mut remaining_textual_preview,
             &mut remaining_aggregate,
             &mut captured,
+            import,
         );
     }
     captured
@@ -366,12 +466,13 @@ fn capture_mcp_structured_content(
     remaining_textual_preview: &mut usize,
     remaining_aggregate: &mut usize,
     captured: &mut McpContentCapture,
+    import: &mut impl FnMut(&str),
 ) {
-    if captured.storage_error.is_none()
-        && !first_textual_block
-        && let Err(error) = capture.push("\n")
-    {
-        captured.storage_error = Some(error);
+    if captured.storage_error.is_none() && !first_textual_block {
+        match capture.push("\n") {
+            Ok(()) => import("\n"),
+            Err(error) => captured.storage_error = Some(error),
+        }
     }
     let normalized_before_json = capture.total_bytes();
     // One streaming serialization feeds an independent saturating byte
@@ -392,10 +493,15 @@ fn capture_mcp_structured_content(
         let mut writer = ToolOutputWriter::over_sink(move |text| {
             *serialized_bytes = serialized_bytes.saturating_add(text.len());
             block_preview.push(text);
-            if !*capture_failed && let Err(error) = capture.push(text) {
-                *capture_failed = true;
-                if storage_error.is_none() {
-                    *storage_error = Some(error);
+            if !*capture_failed {
+                match capture.push(text) {
+                    Ok(()) => import(text),
+                    Err(error) => {
+                        *capture_failed = true;
+                        if storage_error.is_none() {
+                            *storage_error = Some(error);
+                        }
+                    }
                 }
             }
             Ok(())

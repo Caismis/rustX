@@ -3830,6 +3830,7 @@ mod tests {
                 RecordChannel::unix(data).shutdown_handle().unwrap(),
                 ops.clone(),
                 Arc::new(crate::watch::Watches::new()),
+                Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
             );
             server
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -3996,6 +3997,7 @@ mod tests {
             RecordChannel::unix(data).shutdown_handle().unwrap(),
             ops.clone(),
             Arc::new(crate::watch::Watches::new()),
+            Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
         );
         server
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -4122,6 +4124,7 @@ mod tests {
             data_client.shutdown_handle().unwrap(),
             ops.clone(),
             Arc::new(crate::watch::Watches::new()),
+            Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
         );
         control_server
             .set_read_timeout(Some(Duration::from_secs(5)))

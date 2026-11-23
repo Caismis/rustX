@@ -5,6 +5,7 @@ use super::host_upload::HostUploadScope;
 use super::protocol::{
     ClientReply, JsonRpcVersion, RequestId, ServerMessage, ServerRequest, ServerRequestMethod,
 };
+use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
 use crate::runtime::identity::ConversationId;
 use std::{
     collections::BTreeMap,
@@ -35,6 +36,7 @@ struct Pending {
     validity: Option<Validity>,
     dispatched: Arc<std::sync::atomic::AtomicBool>,
     thread: ConversationId,
+    execution: Option<SessionExecutionScope>,
     request: ServerRequest,
     recipients: BTreeMap<String, String>,
     uploads: BTreeMap<String, upload::Candidate>,
@@ -457,6 +459,16 @@ impl Callbacks {
         method: ServerRequestMethod,
         validity: Option<Validity>,
     ) -> Result<Ticket, &'static str> {
+        self.request_scoped(thread, method, validity, None)
+    }
+
+    fn request_scoped(
+        self: &Arc<Self>,
+        thread: ConversationId,
+        method: ServerRequestMethod,
+        validity: Option<Validity>,
+        execution: Option<SessionExecutionScope>,
+    ) -> Result<Ticket, &'static str> {
         let mut state = self.state.lock().expect("callbacks");
         if state.pending.len() >= MAX_PENDING {
             return Err("server request capacity exceeded");
@@ -525,6 +537,7 @@ impl Callbacks {
                 validity,
                 dispatched: dispatched.clone(),
                 thread,
+                execution,
                 request,
                 recipients,
                 uploads: BTreeMap::new(),
@@ -669,6 +682,7 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
         definition: &'a crate::tools::host::HostToolDefinition,
         invocation: crate::tools::ToolInvocation,
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
+        execution: Option<SessionExecutionScope>,
     ) -> futures_util::future::BoxFuture<'a, crate::tools::ToolExecutionResult> {
         Box::pin(async move {
             use crate::tools::{ToolExecutionStatus as Status, host::result};
@@ -702,10 +716,11 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
                 upload_scope: None,
             });
             let mut ticket = match cancellation.with_active(|| {
-                self.request(
+                self.request_scoped(
                     conversation.clone(),
                     request,
                     Some(Validity::Tool(cancellation.clone())),
+                    execution,
                 )
             }) {
                 Some(Ok(ticket)) => ticket,
@@ -736,7 +751,10 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
             let settled = tokio::select! {
                 biased;
                 reply = &mut ticket.reply => match reply {
-                    Ok(CallbackReply::Upload(upload)) => upload.into_result(duration()),
+                    Ok(CallbackReply::Upload(mut upload)) => {
+                        let locator = upload.publish().await;
+                        upload.into_result(duration(), locator)
+                    },
                     Ok(CallbackReply::Message(ClientReply::Success(reply))) => match serde_json::from_value::<super::protocol::HostToolResponse>(reply.result) {
                         Ok(response) => result(
                             if response.success { Status::Success } else { Status::Failed { error: "application reported a failed tool result".into() } },
@@ -898,7 +916,7 @@ mod tests {
         match ticket.reply.try_recv().expect("exactly one winner") {
             CallbackReply::Upload(value) => {
                 assert!(end_wins);
-                assert_eq!(value.into_result(0).content, Vec::new());
+                assert_eq!(value.into_result(0, None).content, Vec::new());
             }
             CallbackReply::Message(ClientReply::Error(_)) => assert!(small_error && !end_wins),
             CallbackReply::Message(ClientReply::Success(value)) => {
@@ -1355,8 +1373,14 @@ mod tests {
                 mode: ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             };
-            let mut operation =
-                callbacks.call(&thread, &attempt, &definition, invocation, cancellation);
+            let mut operation = callbacks.call(
+                &thread,
+                &attempt,
+                &definition,
+                invocation,
+                cancellation,
+                None,
+            );
             assert!(futures_util::poll!(&mut operation).is_pending());
             let queued = client.messages.lock().await.recv().await.unwrap();
             let ServerMessage::Request(request) = queued.message else {

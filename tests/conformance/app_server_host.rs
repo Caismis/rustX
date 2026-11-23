@@ -157,15 +157,19 @@ async fn stream_large_result(
     second: &mut Peer,
     call: &ServerRequest,
     copy: &ServerRequest,
+    scratch: Option<&std::path::Path>,
+    refuse_save: bool,
 ) {
     let a = candidate(call);
     let b = candidate(copy);
     let body = format!(
-        "start-of-host-output{}host-middle{}🙂end-of-host-output",
+        "{}host-middle{}🙂end-of-host-output",
         "q".repeat(600_000),
         "z".repeat(600_000)
     );
-    let items = json!([{"typeTag": 1, "length": body.len().to_string()}]);
+    let parts = ["start-of-host-output", "", body.as_str(), ""];
+    let items = json!(parts.map(|part| json!({"typeTag": 1, "length": part.len().to_string()})));
+    let total = parts.iter().map(|part| part.len()).sum::<usize>();
     let begin =
         |candidate: &Value| json!({"candidate": candidate, "success": true, "items": items});
     assert_accepted(upload_request(first, "begin", begin(&a)).await, false);
@@ -175,27 +179,83 @@ async fn stream_large_result(
     );
     assert_accepted(upload_request(second, "begin", begin(&b)).await, false);
     assert_accepted(upload_request(second, "begin", begin(&b)).await, true);
-    for (index, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
-        let params = json!({
-            "candidate": b,
-            "itemIndex": 0,
-            "sequence": (index + 1).to_string(),
-            "offset": (index * MAX_CHUNK_BYTES).to_string(),
-            "dataBase64": base64::engine::general_purpose::STANDARD.encode(chunk),
-            "sha256": format!("{:x}", Sha256::digest(chunk)),
-        });
-        assert_accepted(upload_request(second, "chunk", params.clone()).await, false);
-        if index == 0 {
-            assert_accepted(upload_request(second, "chunk", params).await, true);
+    let mut observations = scratch.map(SaveObservation::new);
+    let mut loser_bytes = None;
+    let chunk_params =
+        |candidate: &Value, item_index, sequence: u64, offset: usize, chunk: &[u8]| {
+            json!({
+                "candidate": candidate,
+                "itemIndex": item_index,
+                "sequence": sequence.to_string(),
+                "offset": offset.to_string(),
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(chunk),
+                "sha256": format!("{:x}", Sha256::digest(chunk)),
+            })
+        };
+    if let Some(observer) = observations.as_mut()
+        && !refuse_save
+    {
+        let first_item = parts[0].as_bytes();
+        let prefix = &body.as_bytes()[..MAX_CHUNK_BYTES];
+        for params in [
+            chunk_params(&a, 0, 1, 0, first_item),
+            chunk_params(&a, 2, 2, 0, prefix),
+        ] {
+            assert_accepted(upload_request(first, "chunk", params).await, false);
         }
+        let staged = first_item.len() + 2 + prefix.len();
+        observer
+            .wait_for(|lengths| lengths == [staged as u64])
+            .await;
+        loser_bytes = Some(staged as u64);
+    }
+    let mut sequence = 1;
+    let mut prior = 0;
+    let mut storage_conflict = false;
+    for (item_index, part) in parts.iter().enumerate() {
+        for (index, chunk) in part.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
+            let offset = index * MAX_CHUNK_BYTES;
+            let params = chunk_params(&b, item_index, sequence, offset, chunk);
+            assert_accepted(upload_request(second, "chunk", params.clone()).await, false);
+            if sequence == 1 {
+                assert_accepted(upload_request(second, "chunk", params).await, true);
+            }
+            let staged = prior + item_index + offset + chunk.len();
+            if let Some(observer) = observations.as_mut()
+                && staged > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
+            {
+                let staged = staged as u64;
+                if let Some(loser) = loser_bytes {
+                    observer
+                        .wait_for(|lengths| lengths == [loser, staged])
+                        .await;
+                } else if refuse_save && !storage_conflict {
+                    observer.wait_for(|lengths| lengths == [staged]).await;
+                    // Advance the actual private file outside its writer so the
+                    // Client's next contiguous append detects a storage error.
+                    let [file] = saved_files(scratch.unwrap()).try_into().unwrap();
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(file)
+                        .unwrap()
+                        .set_len(staged + 1)
+                        .unwrap();
+                    storage_conflict = true;
+                }
+            }
+            sequence += 1;
+        }
+        prior += part.len();
     }
     let digest = format!(
         "{:x}",
-        sha2::digest::Output::<Sha256>::from(canonical_digest(&[(1, body.as_bytes())]))
+        sha2::digest::Output::<Sha256>::from(canonical_digest(
+            &parts.map(|part| (1, part.as_bytes()))
+        ))
     );
     let end = json!({
         "candidate": b, "success": true, "items": items,
-        "total": body.len().to_string(), "digest": digest,
+        "total": total.to_string(), "digest": digest,
     });
     let mut incomplete_end = end.clone();
     incomplete_end["candidate"] = a.clone();
@@ -218,12 +278,144 @@ async fn stream_large_result(
         upload_request(first, "abort", json!({"candidate": a})).await,
         HostUploadRefusal::Late,
     );
+    if let Some(observer) = observations.as_mut() {
+        if refuse_save {
+            assert!(storage_conflict);
+            observer.wait_for(<[u64]>::is_empty).await;
+        } else {
+            observer
+                .wait_for(|lengths| lengths == [(total + parts.len() - 1) as u64])
+                .await;
+        }
+    }
+}
+
+struct SaveObservation {
+    _watcher: notify::RecommendedWatcher,
+    changed: tokio::sync::watch::Receiver<()>,
+    scratch: std::path::PathBuf,
+}
+
+impl SaveObservation {
+    fn new(scratch: &std::path::Path) -> Self {
+        use notify::Watcher as _;
+        let (changed, updates) = tokio::sync::watch::channel(());
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if event.map_or(true, |event| {
+                    !matches!(event.kind, notify::EventKind::Access(_)) || event.need_rescan()
+                }) {
+                    changed.send_replace(());
+                }
+            })
+            .unwrap();
+        watcher
+            .watch(scratch, notify::RecursiveMode::Recursive)
+            .unwrap();
+        Self {
+            _watcher: watcher,
+            changed: updates,
+            scratch: scratch.to_path_buf(),
+        }
+    }
+
+    async fn wait_for(&mut self, matches: impl Fn(&[u64]) -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let mut lengths = saved_files(&self.scratch)
+                    .into_iter()
+                    .filter_map(|file| file.metadata().ok().map(|metadata| metadata.len()))
+                    .collect::<Vec<_>>();
+                lengths.sort_unstable();
+                if matches(&lengths) {
+                    break;
+                }
+                self.changed.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("verified Client staging transition");
+    }
+}
+
+fn saved_directories(scratch: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(scratch)
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("rustx-save-")
+                .then(|| entry.path())
+        })
+        .collect()
+}
+
+fn saved_files(scratch: &std::path::Path) -> Vec<std::path::PathBuf> {
+    saved_directories(scratch)
+        .into_iter()
+        .filter_map(|directory| std::fs::read_dir(directory).ok())
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect()
+}
+
+async fn admit_execution_client(
+    manager: &SessionRuntimeManager,
+    session: &rustx::runtime::identity::SessionId,
+    workspace: &std::path::Path,
+    scratch: &std::path::Path,
+) -> tokio::process::Child {
+    use rustx::local_runtime::session_runtime_manager::{EndpointAdmission, ExecutionListener};
+    use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+
+    let endpoint = manager.reserve_local_execution(session).await.unwrap();
+    let executable = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("rustx-execution-client");
+    let child = tokio::process::Command::new(executable)
+        .arg("--binding-file")
+        .arg(endpoint.bootstrap_path())
+        .arg("--workspace")
+        .arg(workspace)
+        .env("TMPDIR", scratch)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let ExecutionListener::Unix(listener) = endpoint.listener() else {
+        panic!("local fixture")
+    };
+    let listener = listener.try_clone().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+    for expected in [EndpointAdmission::Pending, EndpointAdmission::Live] {
+        let (stream, _) =
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let stream = stream.into_std().unwrap();
+        let binding = endpoint.clone();
+        let admitted = tokio::task::spawn_blocking(move || {
+            binding
+                .admit_local_stream_deadline(stream, deadline)
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(admitted, expected);
+    }
+    child
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit_once() {
     tokio::time::timeout(std::time::Duration::from_secs(180),async {
-        for winner in ["success","error","invalid","stream"] {
+        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused"] {
             let Some(provider)=ProviderEmulator::start("app_server_host_broadcast").await else {return;};
             let ServerFixture { root,workspace,sessions,manager,host,endpoint,shutdown,server }=ServerFixture::start(&provider).await;
             let mut first=Peer::connect(&endpoint).await; let mut second=Peer::connect(&endpoint).await; let mut generic=Peer::connect(&endpoint).await;
@@ -231,6 +423,11 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let MethodResult::SessionTransition {thread,session,..}=first.rpc(Method::SessionCreate {dynamic_tools:definitions.clone(),submission:None,settings:SessionPersistentState {cwd:workspace.clone(),model:None}}).await else {panic!("Thread start")};
             sessions.rename_session(&session.id,"Host conformance").await.unwrap();
             assert!(manager.execution_endpoint(&session.id).is_err());
+            let scratch = root.path().join("client-scratch");
+            std::fs::create_dir(&scratch).unwrap();
+            let mut client = if matches!(winner, "stream_saved" | "stream_save_refused") {
+                Some(admit_execution_client(&manager, &session.id, &workspace, &scratch).await)
+            } else { None };
             assert_eq!(thread.dynamic_tools,definitions);
             let a=first.follow(thread.id.clone()).await; let b=second.follow(thread.id.clone()).await; let c=generic.follow(thread.id.clone()).await;
             assert_eq!(a.runtime_incarnation,b.runtime_incarnation); assert_eq!(b.runtime_incarnation,c.runtime_incarnation);
@@ -266,8 +463,8 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 "error"=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"error":{"code":-32000,"message":"remote result unknown"}}),
                 _=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":"invalid domain payload"}),
             };
-            if winner == "stream" {
-                stream_large_result(&mut first, &mut second, &call, &copy).await;
+            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused") {
+                stream_large_result(&mut first, &mut second, &call, &copy, client.as_ref().map(|_| scratch.as_path()), winner == "stream_save_refused").await;
             } else {
                 first.reply(selected).await;
             }
@@ -280,27 +477,48 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let store=SqliteConversationStore::open_existing(thread.id.clone(),&access.database_path).unwrap();
             let canonical=store.load_canonical().unwrap(); let results:Vec<_>=canonical.iter().filter_map(|message|if let MessageBlock::Tool(tool)=message {Some(&tool.result)}else{None}).collect();
             assert_eq!(results.len(),1,"one canonical ToolResult");
-            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream"));
+            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream" | "stream_saved" | "stream_save_refused"));
             if matches!(winner, "error" | "invalid") {assert!(matches!(results[0].status,ToolExecutionStatus::OutcomeUnknown {..}));}
-            assert!(manager.execution_endpoint(&session.id).is_err());
+            assert_eq!(manager.execution_endpoint(&session.id).is_ok(), client.is_some());
             let requests = provider.requests().await;
             assert_eq!(requests.len(),2,"one model continuation");
-            if winner == "stream" {
+            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused") {
                 let result = results[0];
-                assert!(matches!(result.managed_output.as_deref(), Some(ManagedOutputContinuation::Unavailable { .. })));
-                assert!(result.truncation.as_ref().unwrap().original_bytes.unwrap() > 1_048_576);
+                if winner == "stream_saved" {
+                    let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output.as_deref() else {
+                        panic!("confirmed Client publication: {result:?}");
+                    };
+                    assert!(locator.starts_with("/.rustx-output/import"));
+                    assert!(!locator.exists(), "Server-side path does not resolve to a file");
+                    let directories = saved_directories(&scratch);
+                    assert_eq!(directories.len(), 1);
+                    let physical = std::fs::read_dir(&directories[0]).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+                    assert_eq!(physical.len(), 1, "only the winner's complete output is retained");
+                    let text = std::fs::read_to_string(physical[0].path()).unwrap();
+                    assert_eq!(text, format!("start-of-host-output\n\n{}host-middle{}🙂end-of-host-output\n", "q".repeat(600_000), "z".repeat(600_000)));
+                } else {
+                    assert!(matches!(result.managed_output.as_deref(), Some(ManagedOutputContinuation::Unavailable { .. })));
+                    assert!(result.truncation.as_ref().unwrap().original_bytes.unwrap() > 1_048_576);
+                    assert_eq!(saved_files(&scratch), [] as [std::path::PathBuf; 0]);
+                }
                 let tool_messages = requests[1]["body"]["messages"].as_array().unwrap()
                     .iter().filter(|message| message["role"] == "tool").collect::<Vec<_>>();
                 assert_eq!(tool_messages.len(), 1);
                 assert_eq!(tool_messages[0]["tool_call_id"], "host-call-1");
-                let continuation = serde_json::to_string(&tool_messages[0]["content"]).unwrap();
-                assert!(continuation.contains("start-of-host-output"));
+                let continuation = tool_messages[0]["content"].as_str().unwrap();
+                assert!(continuation.contains("start-of-host-output\n\nqqq"));
                 assert!(continuation.contains("end-of-host-output"));
                 assert!(!continuation.contains("host-middle"));
                 assert!(continuation.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 4096);
             }
             drop(store); drop(access); drop(first); drop(second); drop(generic); shutdown.cancel();server.await.unwrap().unwrap();
-            manager.unload(&thread.id).await.unwrap(); drop(host); drop(manager); provider.finish().await;
+            manager.unload(&thread.id).await.unwrap();
+            if let Some(child) = client.as_mut() {
+                assert_eq!(host.drain().await, Vec::<String>::new());
+                assert!(child.wait().await.unwrap().success());
+                assert_eq!(saved_directories(&scratch), Vec::<std::path::PathBuf>::new());
+            }
+            drop(host); drop(manager); provider.finish().await;
         }
     }).await.expect("Host callback conformance completes");
 }

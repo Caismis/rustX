@@ -56,8 +56,8 @@ pub struct DirectoryListing {
     pub next_offset: Option<u32>,
 }
 
-/// The result of one bounded Bash continuation query.
-pub enum BashOutputPage {
+/// The result of one bounded Client continuation query.
+pub enum ContinuationPage {
     /// A checked logical-text page.
     Lines(LinesPage),
     /// A checked search page.
@@ -139,6 +139,12 @@ impl LocalConnection {
     #[must_use]
     pub fn admission(&self) -> &Admission {
         &self.admission
+    }
+
+    /// Whether this peer advertised a capability at admission.
+    #[must_use]
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
     }
 
     /// The server-generated identity of this connection.
@@ -629,48 +635,150 @@ impl LocalConnection {
         })
     }
 
-    /// Run one bounded Read or Grep over the authorized Bash continuation.
+    /// Execute an optional output save over the existing admitted data lane.
+    ///
+    /// # Errors
+    ///
+    /// Capability, request-admission, transport or reply-integrity failure.
+    pub fn save_by(
+        &mut self,
+        request: &rustx_execution_protocol::save::SaveRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::save::SaveReply> {
+        use rustx_execution_protocol::save::{SaveReply, SaveRequest, decode_chunk};
+
+        if !self.supports(Capability::ManagedOutput) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let reply = self.exchange_admitted(
+            &ClientRequest::Save(request.clone()),
+            Some(deadline),
+            admit,
+            || (),
+        )?;
+        let ClientReply::Save(reply) = reply else {
+            return Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected save reply",
+            )));
+        };
+        let valid = match (request, &reply) {
+            (_, SaveReply::Refused { .. }) => true,
+            (SaveRequest::Begin { owner, .. }, SaveReply::Begun { key }) => owner == &key.owner,
+            (
+                SaveRequest::Chunk {
+                    key,
+                    offset,
+                    sequence,
+                    data_base64,
+                    ..
+                },
+                SaveReply::Chunked {
+                    key: received,
+                    sequence: echoed,
+                    next_offset,
+                    ..
+                },
+            ) => {
+                key == received
+                    && sequence == echoed
+                    && decode_chunk(data_base64).is_ok_and(|data| {
+                        offset.get().checked_add(data.len() as u64) == Some(next_offset.get())
+                    })
+            }
+            (
+                SaveRequest::Seal {
+                    key,
+                    length,
+                    sha256,
+                    extent,
+                },
+                SaveReply::Sealed {
+                    key: received,
+                    length: actual,
+                    sha256: digest,
+                    extent: saved,
+                },
+            )
+            | (
+                SaveRequest::Publish {
+                    key,
+                    length,
+                    sha256,
+                    extent,
+                },
+                SaveReply::Published {
+                    key: received,
+                    length: actual,
+                    sha256: digest,
+                    extent: saved,
+                    ..
+                },
+            ) => (key, length, sha256, extent) == (received, actual, digest, saved),
+            (SaveRequest::Abort { key }, SaveReply::Aborted { key: received, .. })
+            | (SaveRequest::Probe { key }, SaveReply::Readability { key: received, .. }) => {
+                key == received
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(reply)
+        } else {
+            Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "save reply contradicts its request",
+            )))
+        }
+    }
+
+    /// Run one bounded Read or Grep over the authorized Client-owned continuation.
     ///
     /// # Errors
     ///
     /// Returns capability, cancellation, transport or typed read/search errors.
-    pub fn inspect_bash_output(
+    pub fn inspect_output(
         &mut self,
         request: &ClientRequest,
         deadline: Instant,
         admit: impl FnOnce() -> io::Result<()>,
-    ) -> io::Result<BashOutputPage> {
-        if !self.capabilities.contains(&Capability::AgentBash) {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "peer admitted no Agent Bash capability",
-            ));
-        }
-        if !matches!(
-            request,
+    ) -> io::Result<ContinuationPage> {
+        let capability = match request {
             ClientRequest::ReadBashOutput { .. }
-                | ClientRequest::SearchBashOutput {
-                    spec: SearchSpec::Grep { .. },
-                    ..
-                }
-        ) {
-            return Err(io::ErrorKind::InvalidInput.into());
+            | ClientRequest::SearchBashOutput {
+                spec: SearchSpec::Grep { .. },
+                ..
+            } => Capability::AgentBash,
+            ClientRequest::ReadSavedOutput { .. }
+            | ClientRequest::SearchSavedOutput {
+                spec: SearchSpec::Grep { .. },
+                ..
+            } => Capability::ManagedOutput,
+            _ => return Err(io::ErrorKind::InvalidInput.into()),
+        };
+        if !self.supports(capability) {
+            return Err(io::ErrorKind::Unsupported.into());
         }
         let reply = self.exchange_admitted(request, Some(deadline), admit, || ())?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
         match request {
-            ClientRequest::ReadBashOutput { offset, limit, .. } => self
+            ClientRequest::ReadBashOutput { offset, limit, .. }
+            | ClientRequest::ReadSavedOutput { offset, limit, .. } => self
                 .validate_lines(offset.get(), limit.map(DecimalU64::get), None, &reply)
-                .map(BashOutputPage::Lines),
+                .map(ContinuationPage::Lines),
             ClientRequest::SearchBashOutput {
+                spec: SearchSpec::Grep { context, limit, .. },
+                ..
+            }
+            | ClientRequest::SearchSavedOutput {
                 spec: SearchSpec::Grep { context, limit, .. },
                 ..
             } => self
                 .validate_search(false, *context, *limit, &reply)
-                .map(BashOutputPage::Search),
-            _ => unreachable!("Bash output exchange must name Read or Grep"),
+                .map(ContinuationPage::Search),
+            _ => unreachable!("Continuation exchange must name Read or Grep"),
         }
     }
 
