@@ -667,7 +667,15 @@ strict rustdoc and the workspace release binary build passed. Dev passed
 44 tests and TUI passed 1,366 tests with one skip. The cold pinned browser
 fixture passed all seven MCP editor and development launcher cases after
 separating the fixture optimizer cache and scanning the lazy editor at
-startup. The full browser run uses the staged native executables.
+startup. The local full browser run with staged native executables
+reported 791 passes, two skips and two failed visibility assertions.
+The Office trace still had a pending Product Host document-preview
+request. The mobile Workflow trace still showed the child review
+running. The Office test now observes the real conversion response.
+Both Workflow viewports await the fake provider's completed scenario.
+The original visibility assertions and their time budgets are retained.
+The pinned-browser rerun passed both viewport cases and the Office case
+twice each, for six passes.
 The 12 opt-in Linux mount proofs passed with the prepared binaries. The
 App Server mount composition hit its original 60-second liveness guard
 while three builds were active. It passed on an unchanged rerun, along

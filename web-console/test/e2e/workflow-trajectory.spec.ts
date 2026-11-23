@@ -203,6 +203,7 @@ for (const width of [1440, 390])
       await fixture.gate('workflow-child-admitted');
       await expect(page.locator('[data-workflow-run-id]')).toBeVisible();
       await fixture.release('workflow-child-admitted');
+      await fixture.control('observations/await?kind=scenario_completed&timeoutMs=30000');
       await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
       await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
       const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true }),
