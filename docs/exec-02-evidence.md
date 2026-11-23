@@ -115,6 +115,12 @@ that closing the UI does not drop the finite request or listing permit. The
 Client settles cleanly after the gate opens, and exactly one environment
 remains installed.
 
+The managed-selection boundary fixture also accepts the pre-populated test
+wheel cache. It resolved the dependency conflict offline, built the healthy
+environment and exercised all three exposure selections with the original
+publication barrier. Two earlier cold Linux runs stopped during PyPI downloads
+before reaching that barrier.
+
 ## Open gates
 
 - Replacement admission and post-restart environment recovery still require
