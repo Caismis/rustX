@@ -48,10 +48,13 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
  * or abandon the intent and show the committed fact again. */
 function FailedIntentRecovery({ unit }: { unit: UnitEditing<Selection> }) {
   const tx = useTranslation();
-  const refused = unit.outcome.kind === 'rejected' || unit.outcome.kind === 'uncertain';
-  if (!unit.draft || !(unit.reviewNeeded || refused)) return null;
+  const failed = unit.outcome.kind === 'rejected' || unit.outcome.kind === 'uncertain' || unit.outcome.kind === 'conflict';
+  // Recovery exists wherever intent could be discarded: a value draft, or a
+  // pinned base a refused removal left behind (a refused "inherit" gesture
+  // has no draft, but its intent still needs the retry/discard affordance).
+  if (!unit.intent || !(unit.reviewNeeded || failed)) return null;
   return <div className={css.availability}>
-    <Button size="sm" onClick={() => { unit.review(); unit.submit(false); }}>{tx('settings:aria.retry')}</Button>
+    <Button size="sm" onClick={() => { unit.review(); unit.submit(!unit.draft); }}>{tx('settings:aria.retry')}</Button>
     <Button size="sm" variant="ghost" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>
   </div>;
 }
