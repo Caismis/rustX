@@ -16,7 +16,7 @@ function checkout() {
   const importer = join(root, 'upstream'), occt = join(importer, 'occt'), bin = join(root, 'bin');
   mkdirSync(join(importer, 'occt-import-js/src'), { recursive: true }); mkdirSync(occt); mkdirSync(bin);
   const git = (repository: string, ...args: string[]) => execFileSync(realGit, ['-C', repository, ...args], { encoding: 'utf8' });
-  writeFileSync(join(importer, '.gitignore'), 'occt/\n');
+  writeFileSync(join(importer, '.gitignore'), 'occt/\nignored.cpp\n');
   writeFileSync(join(importer, 'CMakeLists.txt'), '\ttarget_compile_options (OcctImportJS PUBLIC "$<$<CONFIG:Release>:-Oz>")\n');
   writeFileSync(join(importer, 'occt-import-js/src/importer-xcaf.cpp'), 'pinned XCAF source\n');
   writeFileSync(join(occt, 'native.cpp'), 'pinned OCCT source\n');
@@ -69,4 +69,14 @@ it.each([
   const result = fixture.run();
   expect(result.error).toBeUndefined(); expect(result.status).toBe(1);
   expect(existsSync(fixture.target)).toBe(false); expect(existsSync(fixture.sentinel)).toBe(false);
+});
+
+it.each(['untracked.cpp', 'ignored.cpp'])('excludes local-only compiler input %s from the pinned tree', name => {
+  const fixture = checkout(), source = join('occt-import-js/src', name);
+  writeFileSync(join(fixture.importer, source), 'local-only compiler input\n');
+  const status = fixture.git(fixture.importer, 'status', '--porcelain', '--untracked-files=all');
+  expect(status.includes(name)).toBe(name === 'untracked.cpp');
+  const result = fixture.run();
+  expect(result.status, result.stderr).toBe(73);
+  expect(existsSync(join(fixture.target, source))).toBe(false);
 });

@@ -212,14 +212,14 @@ export class PreviewContentOwner {
           void completion.catch(() => {});
           const aborted = () => rejectAttach?.(controller.signal.reason);
           controller.signal.addEventListener('abort', aborted, { once: true });
-          let consumed = false;
+          let consumerSignal: AbortSignal | undefined;
           const source: GeometrySource = { consume: (consumer, signal) => {
             if (this.state.source !== source || this.closed || !this.visible || !this.reader.current()) return Promise.reject(new Error('obsolete'));
             if (this.streamComplete && this.state.data !== undefined) return this.replayGeometry(source, consumer, signal);
-            if (consumed || !this.current(epoch)) return Promise.reject(new Error('obsolete'));
+            if (consumerSignal || !this.current(epoch)) return Promise.reject(new Error('obsolete'));
             const start = attach;
             if (!start) return Promise.reject(new Error('obsolete'));
-            consumed = true; attach = undefined;
+            consumerSignal = signal; attach = undefined;
             const abort = () => controller.abort(signal.reason);
             signal.addEventListener('abort', abort, { once: true });
             if (signal.aborted) abort(); else start(consumer);
@@ -231,7 +231,8 @@ export class PreviewContentOwner {
             const consumer = await attached;
             const result = await this.reader.geometry(controller.signal, {
               start: async value => {
-                if (metadata || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || value.bytes > FILE_PREVIEW_LIMITS.geometryBytes || typeof value.version !== 'string' || !value.version) throw new Error('malformed');
+                if (metadata || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || typeof value.version !== 'string' || !value.version) throw new Error('malformed');
+                if (value.bytes > FILE_PREVIEW_LIMITS.geometryBytes) throw new WorkspaceHostError('too_large', 'too_large');
                 metadata = { bytes: value.bytes, version: value.version };
                 if (value.bytes <= INACTIVE_BYTES) cache = new Uint8Array(value.bytes);
                 await consumer.start(value);
@@ -248,7 +249,17 @@ export class PreviewContentOwner {
             this.streamComplete = true; this.publish({ data: cache, version: result.version, loading: false }); cache = undefined;
             complete(result);
             if (this.reader.observe && !this.observation) { this.saved ??= this.state; this.pending = { kind: 'validate' }; }
-          } catch (error) { rejectComplete(error); throw error; }
+          } catch (error) {
+            rejectComplete(error);
+            // Decoder retirement may stop the read. Its exact cancellation
+            // reason is already owned by the viewer, while a physical failure
+            // reported during that cancellation still belongs to this owner.
+            if (consumerSignal?.aborted && error === consumerSignal.reason) {
+              if (this.current(epoch)) this.publish({ loading: false });
+              return;
+            }
+            throw error;
+          }
           finally { cache = undefined; attach = undefined; rejectAttach = undefined; controller.signal.removeEventListener('abort', aborted); }
           return;
         }

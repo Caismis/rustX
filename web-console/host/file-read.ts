@@ -3,7 +3,7 @@ import { sameSessionFile } from '../shared/session-file-identity.ts';
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
 import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v80.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, PreviewCancelled, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && !/[\uD800-\uDFFF]/u.test(value);
@@ -150,7 +150,7 @@ export async function openNativeDeliveryPreview(endpoint: string, credential: st
   const retirement = new Promise<void>((yes, no) => { retired = yes; failedRetirement = no; });
   void retirement.catch(() => {});
   let terminal: unknown, validated = false, validationDispatched = false, openedWitness = false, validationWitness = false;
-  const abort = () => { terminal ??= new Error('Product Host file authority revoked'); socket.close(1000); };
+  const abort = () => { terminal ??= new PreviewCancelled(); socket.close(1000); };
   const invalid = () => { terminal ??= new Error('Invalid native preview response'); socket.close(1000); };
   socket.addEventListener('open', () => {
     if (signal.aborted) { abort(); return; }

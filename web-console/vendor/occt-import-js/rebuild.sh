@@ -14,7 +14,7 @@ if [[ -n ${4:-} ]]; then
     git -C "$4" diff --quiet HEAD --
     git -C "$4/occt" diff --quiet HEAD --
     mkdir -p "$target"
-    cp -a -- "$4/CMakeLists.txt" "$4/occt-import-js" "$target/"
+    git -C "$4" archive HEAD CMakeLists.txt occt-import-js | tar -x -C "$target"
     mkdir -- "$target/occt"
     git -C "$4/occt" archive HEAD | tar -x -C "$target/occt"
 else
