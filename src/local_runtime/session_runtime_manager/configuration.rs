@@ -711,7 +711,13 @@ impl SessionRuntimeManager {
                     .workspace()
                     .is_none_or(|directory| directory.as_os_str() == binding.input.cwd.as_os_str())
             })
-            .map(|(session, binding)| (session.clone(), binding.workspace_resources.identity()))
+            .map(|(session, binding)| {
+                (
+                    session.clone(),
+                    binding.input.clone(),
+                    binding.workspace_resources.identity(),
+                )
+            })
             .collect();
         if retained.is_empty() {
             return Vec::new();
@@ -720,9 +726,10 @@ impl SessionRuntimeManager {
             let catalog = self.sessions.catalog.blocking_lock();
             retained
                 .into_iter()
-                .filter_map(|(session, identity)| {
+                .filter_map(|(session, mut input, identity)| {
                     let (_, settings) = catalog.lineage(&session, None).ok()?;
-                    Some((session, settings.input(), identity))
+                    input.authoring = settings.input().authoring;
+                    Some((session, input, identity))
                 })
                 .collect()
         };

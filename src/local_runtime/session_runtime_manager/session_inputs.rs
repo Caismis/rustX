@@ -49,7 +49,7 @@ impl SessionRuntimeManager {
         config: Option<SessionInputChange<SessionConfigContent>>,
         resources: Option<SessionInputChange<SessionResources>>,
     ) -> Result<u64, SessionInputError> {
-        let (mut settings, endpoint, native_resources, source_cut) = {
+        let (mut settings, endpoint, native_resources, retained_model, source_cut) = {
             let application = self.applications.lock();
             let catalog = self.sessions.catalog.blocking_lock();
             let actual = catalog.settings_revision(session)?;
@@ -62,14 +62,22 @@ impl SessionRuntimeManager {
                 .execution
                 .configuration_endpoint(session)
                 .map_err(|_| SessionInputError::ExecutionUnavailable)?;
-            let native_resources = self
+            let bindings = self
                 .sessions
                 .configuration_bindings
                 .lock()
-                .expect("Session configuration bindings")
-                .get(session)
-                .and_then(|binding| binding.workspace_resources.identity());
-            (settings, endpoint, native_resources, source_cut)
+                .expect("Session configuration bindings");
+            let retained = bindings.get(session);
+            let native_resources =
+                retained.and_then(|binding| binding.workspace_resources.identity());
+            let retained_model = retained.map(|binding| binding.input.model.clone());
+            (
+                settings,
+                endpoint,
+                native_resources,
+                retained_model,
+                source_cut,
+            )
         };
         if config.is_none() && resources.is_none() {
             return Err(SessionInputError::Invalid);
@@ -80,7 +88,10 @@ impl SessionRuntimeManager {
         if let Some(resources) = resources {
             resources.apply(&mut settings.session_resources);
         }
-        let input = settings.input();
+        let mut input = settings.input();
+        if let Some(model) = retained_model {
+            input.model = model;
+        }
         if endpoint
             .as_ref()
             .is_some_and(|endpoint| endpoint.control().is_none())
