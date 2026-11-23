@@ -19,6 +19,10 @@ on:
   push:
     branches:
       - main
+      # Also run on the long-lived working base so its pushes publish the
+      # macOS cache entries that first runs of new PRs restore. Remove this
+      # ref once the branch lands on main.
+      - devin/1794960987-macos-ci-build-speed
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
@@ -539,7 +543,7 @@ jobs:
     name: Platform-sensitive external boundaries (macOS core)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-core']
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       VERIFICATION_PROFILE: fast
@@ -592,7 +596,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-core
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
 
       - name: Record native build environment
         shell: bash
@@ -679,7 +683,7 @@ jobs:
     name: Platform-sensitive boundaries (macOS full)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
-    runs-on: macos-latest
+    runs-on: macos-15
     # Run 43460497372 spent 80m building; 100m cut off the test/coverage tail.
     # Allow the full execution/coverage tail plus runner variance; see
     # docs/issue-480/ci-budget.md. Individual test deadlines stay unchanged.
@@ -735,7 +739,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-boundaries
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
 
       - name: Record native build environment
         shell: bash
@@ -795,6 +799,19 @@ jobs:
       # ordinary library so they stage beside the lib/bin test harnesses too.
       - name: Compile unit and in-crate boundary test harnesses and stage the real executables
         run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
+
+      # macOS runners start with a 256-descriptor soft limit while the lib
+      # test binary drives ~4400 unit tests concurrently, each holding
+      # tempdirs, watchers and collection locks; the exhaustion surfaces as
+      # transient `Io` failures. `ulimit` must run inside the step's shell, so
+      # export BASH_ENV via GITHUB_ENV: the runner does not set BASH_ENV
+      # itself, but every later bash step sources the file it names, which
+      # also keeps the cargo test steps single-line as the lane checker
+      # requires.
+      - name: Raise the file-descriptor ceiling for test steps
+        run: |
+          printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' > "$RUNNER_TEMP/raise-fd-limit.sh"
+          echo "BASH_ENV=$RUNNER_TEMP/raise-fd-limit.sh" >> "$GITHUB_ENV"
 
       - name: Run unit tests and the in-crate boundary suites
         env:
@@ -977,7 +994,7 @@ jobs:
     name: Desktop adapter and Host (macOS Node)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['desktop-macos']
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
@@ -1003,7 +1020,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server

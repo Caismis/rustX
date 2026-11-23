@@ -211,8 +211,12 @@ impl Tree {
         Ok(())
     }
 
-    /// Restore recorded directory modes only after every child has been written.
-    /// Setting a private parent first would block the copy that still needs it.
+    /// Restore recorded subdirectory modes only after every child has been
+    /// written. Setting a private parent first would block the copy that
+    /// still needs it. The stage root stays writable (`0700`): renaming a
+    /// non-writable directory fails with EACCES on XNU (seen on the macOS-15
+    /// runners), so `root_mode` is applied to the published directory only
+    /// after the same-parent publish rename.
     fn restore_directory_modes(&self, destination: &Path) -> io::Result<()> {
         for entry in self.entries.iter().rev().filter(|entry| entry.directory) {
             fs::set_permissions(
@@ -220,7 +224,7 @@ impl Tree {
                 Permissions::from_mode(entry.stamp.3 & 0o777),
             )?;
         }
-        fs::set_permissions(destination, Permissions::from_mode(self.root_mode & 0o777))
+        fs::set_permissions(destination, Permissions::from_mode(0o700))
     }
 
     fn sync_directories(&self, destination: &Path) -> io::Result<()> {
@@ -249,10 +253,10 @@ fn lock_skill_collections<'a>(
     };
     let first = first
         .lock(OsStr::new(SKILLS_ROOT))
-        .map_err(|_| SettingsError::Io)?;
+        .map_err(SettingsError::Io)?;
     let second = second
         .lock(OsStr::new(SKILLS_ROOT))
-        .map_err(|_| SettingsError::Io)?;
+        .map_err(SettingsError::Io)?;
     Ok((first, second))
 }
 
@@ -323,9 +327,11 @@ fn publish(
     installed: &Path,
 ) -> Result<PackageDirectory, SettingsError> {
     let name = installed.file_name().ok_or(SettingsError::Invalid)?;
-    destination.confirm().map_err(|_| SettingsError::Io)?;
+    destination.confirm().map_err(SettingsError::Io)?;
     if !stage_name_is(destination, &stage.name, stage.identity) {
-        return Err(SettingsError::Io);
+        return Err(SettingsError::Io(std::io::Error::other(
+            "stage directory replaced externally",
+        )));
     }
     // Same-parent rename does not update `..`, so a non-writable package root
     // can be published without widening its mode.
@@ -345,7 +351,7 @@ fn publish(
                 TransferRejection::NameTaken,
             ));
         }
-        Err(_) => return Err(SettingsError::Io),
+        Err(error) => return Err(SettingsError::Io(error.into())),
     }
     let directory = PackageDirectory::open(installed).map_err(|_| SettingsError::Committed)?;
     let identity = directory_metadata(&directory).map_err(|_| SettingsError::Committed)?;
@@ -384,14 +390,29 @@ fn stage_name_is(parent: &SourceDirectory, name: &OsStr, identity: (u64, u64)) -
 fn retire(path: &Path, directory: &PackageDirectory) -> Result<(), SettingsError> {
     let parent = path.parent().ok_or(SettingsError::Invalid)?;
     let source = SourceDirectory::observe(parent)
-        .map_err(|_| SettingsError::Io)?
+        .map_err(SettingsError::Io)?
         .ok_or(SettingsError::Invalid)?;
     let name = path.file_name().ok_or(SettingsError::Invalid)?;
-    let identity = directory_metadata(directory).map_err(|_| SettingsError::Io)?;
-    let identity = (identity.dev(), identity.ino());
-    source.confirm().map_err(|_| SettingsError::Io)?;
+    let metadata = directory_metadata(directory).map_err(SettingsError::Io)?;
+    let identity = (metadata.dev(), metadata.ino());
+    // Keep the special bits (setgid/sticky) as well as the access bits:
+    // 0o777 would silently drop them when the mode is restored on failure.
+    let original_mode = Mode::from_raw_mode((metadata.mode() & 0o7777) as _);
+    source.confirm().map_err(SettingsError::Io)?;
     directory.verify().map_err(|_| SettingsError::Invalid)?;
-    let stage_name = rename_aside(&source, name)?;
+    // Renaming a non-writable directory fails with EACCES on XNU (seen on the
+    // macOS-15 runners): widen the root before moving it aside. If the move
+    // never happens the package stays in place, so the recorded mode must be
+    // put back on every failure path below.
+    rustix::fs::fchmod(directory.descriptor(), Mode::from_raw_mode(0o700))
+        .map_err(|error| SettingsError::Io(error.into()))?;
+    let stage_name = match rename_aside(&source, name) {
+        Ok(stage_name) => stage_name,
+        Err(error) => {
+            let _ = rustix::fs::fchmod(directory.descriptor(), original_mode);
+            return Err(error);
+        }
+    };
     let stage_path = parent.join(&stage_name);
     let Ok(retired) = PackageDirectory::open(&stage_path) else {
         return Err(SettingsError::Committed);
@@ -410,6 +431,7 @@ fn retire(path: &Path, directory: &PackageDirectory) -> Result<(), SettingsError
         {
             return Err(SettingsError::Committed);
         }
+        let _ = rustix::fs::fchmod(directory.descriptor(), original_mode);
         return Err(SettingsError::Invalid);
     }
     if source.sync().is_err() {
@@ -430,10 +452,12 @@ fn rename_aside(parent: &SourceDirectory, name: &OsStr) -> Result<OsString, Sett
         ) {
             Ok(()) => return Ok(OsString::from(stage_name)),
             Err(rustix::io::Errno::EXIST) => {}
-            Err(_) => return Err(SettingsError::Io),
+            Err(error) => return Err(SettingsError::Io(error.into())),
         }
     }
-    Err(SettingsError::Io)
+    Err(SettingsError::Io(std::io::Error::other(
+        "stage names exhausted",
+    )))
 }
 
 /// Remove one unpublished or retired tree after proving it is still the inode
@@ -565,14 +589,14 @@ impl UserConfigManager {
     ) -> Result<String, SettingsError> {
         let collection = self.skill_collection(target);
         let directory = SourceDirectory::observe(&collection)
-            .map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?
             .ok_or(SettingsError::Invalid)?;
         let _lock = directory
             .lock(OsStr::new(SKILLS_ROOT))
-            .map_err(|_| SettingsError::Io)?;
+            .map_err(SettingsError::Io)?;
         let package = self.skill_for_operation(target, &collection, name, expected)?;
         let root = managed_root(&package, &collection).ok_or(SettingsError::Invalid)?;
-        let package_dir = PackageDirectory::open(root).map_err(|_| SettingsError::Io)?;
+        let package_dir = PackageDirectory::open(root).map_err(SettingsError::Io)?;
         Tree::scan(&package_dir, &self.resource_io, false).map_err(|_| SettingsError::Invalid)?;
         self.skill_for_operation(target, &collection, name, expected)?;
         retire(root, &package_dir)?;
@@ -644,12 +668,12 @@ impl UserConfigManager {
         let source_collection = self.skill_collection(source_target);
         let destination_collection = self.skill_collection(destination_target);
         let source = SourceDirectory::observe(&source_collection)
-            .map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?
             .ok_or(SettingsError::Invalid)?;
         let destination = SourceDirectory::create_directory(&destination_collection)
-            .map_err(|_| SettingsError::Io)?;
-        if source.within(&destination).map_err(|_| SettingsError::Io)?
-            || destination.within(&source).map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?;
+        if source.within(&destination).map_err(SettingsError::Io)?
+            || destination.within(&source).map_err(SettingsError::Io)?
         {
             return Err(SettingsError::TransferRejected(
                 TransferRejection::SameDirectory,
@@ -658,7 +682,7 @@ impl UserConfigManager {
         let package =
             self.skill_for_operation(source_target, &source_collection, source_name, expected)?;
         let root = managed_root(&package, &source_collection).ok_or(SettingsError::Invalid)?;
-        let package_dir = PackageDirectory::open(root).map_err(|_| SettingsError::Io)?;
+        let package_dir = PackageDirectory::open(root).map_err(SettingsError::Io)?;
         let moving = operation == TransferOperation::Move;
         self.admit_skill_destination(
             source_target,
@@ -667,9 +691,9 @@ impl UserConfigManager {
             destination_name,
             moving,
         )?;
-        let identity = directory_metadata(&package_dir).map_err(|_| SettingsError::Io)?;
+        let identity = directory_metadata(&package_dir).map_err(SettingsError::Io)?;
         let source_identity = (identity.dev(), identity.ino());
-        let stage = OwnedStage::create(&destination_collection).map_err(|_| SettingsError::Io)?;
+        let stage = OwnedStage::create(&destination_collection).map_err(SettingsError::Io)?;
         let tree = Tree::scan(&package_dir, &self.resource_io, true)
             .map_err(|_| SettingsError::Invalid)?;
         if let Err(error) = tree.copy_to(&package_dir, stage.path(), &self.resource_io, || {
@@ -704,9 +728,9 @@ impl UserConfigManager {
         }
         // Directory modes are restored only after the staged tree is complete.
         tree.restore_directory_modes(stage.path())
-            .map_err(|_| SettingsError::Io)?;
+            .map_err(SettingsError::Io)?;
         tree.sync_directories(stage.path())
-            .map_err(|_| SettingsError::Io)?;
+            .map_err(SettingsError::Io)?;
         Ok(PreparedSkillTransfer {
             source_target: source_target.clone(),
             destination_target: destination_target.clone(),
@@ -744,12 +768,12 @@ impl UserConfigManager {
         let source_collection = self.skill_collection(&source_target);
         let destination_collection = self.skill_collection(&destination_target);
         let source = SourceDirectory::observe(&source_collection)
-            .map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?
             .ok_or(SettingsError::Invalid)?;
         let destination = SourceDirectory::create_directory(&destination_collection)
-            .map_err(|_| SettingsError::Io)?;
-        if source.within(&destination).map_err(|_| SettingsError::Io)?
-            || destination.within(&source).map_err(|_| SettingsError::Io)?
+            .map_err(SettingsError::Io)?;
+        if source.within(&destination).map_err(SettingsError::Io)?
+            || destination.within(&source).map_err(SettingsError::Io)?
         {
             return Err(SettingsError::TransferRejected(
                 TransferRejection::SameDirectory,
@@ -759,8 +783,8 @@ impl UserConfigManager {
         let package =
             self.skill_for_operation(&source_target, &source_collection, &source_name, &expected)?;
         let root = managed_root(&package, &source_collection).ok_or(SettingsError::Invalid)?;
-        let package_dir = PackageDirectory::open(root).map_err(|_| SettingsError::Io)?;
-        let identity = directory_metadata(&package_dir).map_err(|_| SettingsError::Io)?;
+        let package_dir = PackageDirectory::open(root).map_err(SettingsError::Io)?;
+        let identity = directory_metadata(&package_dir).map_err(SettingsError::Io)?;
         if (identity.dev(), identity.ino()) != source_identity || identity.mode() != tree.root_mode
         {
             return Err(SettingsError::Invalid);
@@ -780,6 +804,15 @@ impl UserConfigManager {
         }
         let installed = destination_collection.join(&destination_name);
         let installed_directory = publish(&mut stage, &destination, &installed)?;
+        // The stage root stayed writable through the publish rename (see
+        // `restore_directory_modes`); the published package now takes the
+        // recorded root mode. Chmod through the descriptor so a local writer
+        // cannot redirect the call by replacing `installed` after publish.
+        rustix::fs::fchmod(
+            installed_directory.descriptor(),
+            Mode::from_raw_mode((tree.root_mode & 0o777) as _),
+        )
+        .map_err(|_| SettingsError::Committed)?;
         let visible = self
             .discover_skill_scope(&destination_target, &destination_collection)
             .packages
@@ -868,10 +901,13 @@ impl UserConfigManager {
             {
                 SettingsError::Invalid
             }
-            Ok(_) => SettingsError::Io,
-            Err(_) => match self.skill_for_operation(source_target, collection, name, expected) {
+            Ok(_) => SettingsError::Io(std::io::Error::other(
+                "post-operation tree still equals its snapshot",
+            )),
+            Err(error) => match self.skill_for_operation(source_target, collection, name, expected)
+            {
                 Err(error @ SettingsError::Conflict { .. }) => error,
-                _ => SettingsError::Io,
+                _ => SettingsError::Io(error),
             },
         }
     }

@@ -224,7 +224,13 @@ def plan(event_name, labels, changes):
     else:
         classified = classify(changes)
         profile = "full" if PROMOTION_LABEL in labels else "fast"
-    return {**classified, "profile": profile, "run": selected_jobs(profile, classified["surfaces"]),
+    run = selected_jobs(profile, classified["surfaces"])
+    if event_name == "push":
+        # Push runs also publish the FAST-only macOS core lane's cache
+        # lineage, so a new pull request's first run restores a warm entry
+        # instead of always starting cold.
+        run["rust-platform-core"] = "rust" in classified["surfaces"] or "protocol" in classified["surfaces"]
+    return {**classified, "profile": profile, "run": run,
             "steps": selected_steps(profile, paths_of(changes)), "browser": browser_selection(profile, changes)}
 
 
