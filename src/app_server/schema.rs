@@ -1802,6 +1802,9 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         },
         Method::McpCatalog {
             target: source,
+            execution_session: Some(crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            )),
             id: crate::runtime::identity::McpServerId::new("example"),
             expected_revision: "source-revision".into(),
             kind: crate::tools::mcp::catalog::CatalogKind::Resources,

@@ -2079,15 +2079,12 @@ impl std::fmt::Debug for LocalExecutionEndpoint {
     }
 }
 
-/// A non-owning dispatch route to one Session's execution endpoint.
+/// A dispatch route to one Session's execution endpoint.
 ///
-/// The scope names the Session and holds the claim registry weakly: it
-/// never keeps an endpoint, credential, listener, or bootstrap alive, and
-/// a runtime being unloaded or reloaded never retains or re-claims one
-/// through it. It is the one route the native Read tool has into Session
-/// execution — there is no Server-local filesystem branch behind it, so
-/// holding a scope is not admission: every dispatch still resolves the
-/// endpoint and is gated by the binding's live-connection check.
+/// Normal runtime scopes hold the claim registry weakly. Delegation and
+/// finite management work can retain one exact endpoint through settlement.
+/// Holding either scope grants no admission. Dispatch still uses the
+/// binding's live-connection check.
 #[derive(Clone)]
 pub struct SessionExecutionScope {
     session: SessionId,
@@ -2097,7 +2094,7 @@ pub struct SessionExecutionScope {
 #[derive(Clone)]
 enum ExecutionRoute {
     Registry(Weak<SessionExecutionRegistry>),
-    Delegated(Arc<LocalExecutionEndpoint>),
+    Fixed(Arc<LocalExecutionEndpoint>),
 }
 
 enum DataCapacity {
@@ -2112,10 +2109,18 @@ pub(crate) struct WorkspaceDocumentSnapshot {
 }
 
 impl SessionExecutionScope {
+    /// Freeze a finite management operation to its admitted generation.
+    pub(crate) fn pin(&self) -> io::Result<Self> {
+        Ok(Self {
+            session: self.session.clone(),
+            route: ExecutionRoute::Fixed(self.endpoint()?),
+        })
+    }
+
     pub(crate) fn delegated_work(
         &self,
     ) -> Option<rustx_execution_server::delegation::DelegatedWork> {
-        if let ExecutionRoute::Delegated(endpoint) = &self.route
+        if let ExecutionRoute::Fixed(endpoint) = &self.route
             && let EndpointAuthority::Delegated { work, .. } = &endpoint.authority
         {
             return Some(work.clone());
@@ -2140,7 +2145,7 @@ impl SessionExecutionScope {
                 .ok_or_else(unavailable)?
                 .endpoint(&self.session)
                 .map_err(|_| unavailable()),
-            ExecutionRoute::Delegated(endpoint) => Ok(Arc::clone(endpoint)),
+            ExecutionRoute::Fixed(endpoint) => Ok(Arc::clone(endpoint)),
         }
     }
 
@@ -2841,7 +2846,7 @@ impl std::fmt::Debug for SessionExecutionScope {
                 "owner_available",
                 &match &self.route {
                     ExecutionRoute::Registry(registry) => registry.strong_count() != 0,
-                    ExecutionRoute::Delegated(_) => true,
+                    ExecutionRoute::Fixed(_) => true,
                 },
             )
             .finish_non_exhaustive()
@@ -2858,7 +2863,7 @@ impl PartialEq for SessionExecutionScope {
                 (ExecutionRoute::Registry(left), ExecutionRoute::Registry(right)) => {
                     left.ptr_eq(right)
                 }
-                (ExecutionRoute::Delegated(left), ExecutionRoute::Delegated(right)) => {
+                (ExecutionRoute::Fixed(left), ExecutionRoute::Fixed(right)) => {
                     Arc::ptr_eq(left, right)
                 }
                 _ => false,

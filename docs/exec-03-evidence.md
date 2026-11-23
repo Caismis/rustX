@@ -128,6 +128,11 @@ Server directory is absent. An unbound Session is refused. The Web Console
 test changes the Session at the same path and releases the old reply after
 the new catalog has arrived.
 
+The bound runtime can reconcile again while the same Server pathname names
+an unrelated file. The physical Workspace authority remains with the
+original Client descriptor. Explicit Server authoring still verifies the
+retained inode of its own root.
+
 `client_source_watch_reloads_guidance_and_skill_metadata_after_registration`
 uses a real Linux Client in a mount namespace with no Server workspace
 directory. It waits for watch registration and the initial rescan, edits
@@ -191,6 +196,16 @@ separate physical identity, admits only frozen launches and authorized tool
 names, and retains physical responsibility through Client close or binding
 settlement.
 
+The finite MCP management route can also select an exact Session. The
+mounted Workspace regression reads its Client-only MCP definition and
+observes one HTTP catalog request from Server, five declarations and zero
+business calls. The real Client stdio catalog keeps both resource pages
+on one connection and waits for its independently observed process
+to close. A mixed HTTP and stdio draft opens no process or speculative
+connection before Session admission. When a bound Session replaces a
+prepared Server-authoring draft, the draft settles before ordinary source
+admission. The two connection generations each list once.
+
 The initial MCP-only Linux mount test observed one `server/discover`, one legacy
 `initialize`, one `tools/list`, one `tools/call` and two fake-provider
 requests. Its 1,100,000-byte text body crossed multiple execution pages and
@@ -231,10 +246,10 @@ child path independently of the stdio relay fixture.
 
 | Required tests | Evidence and open coverage |
 | --- | --- |
-| T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. `shipped_parallel_reverses_completion_without_git_or_parent_orchestration` exercises reverse completion in a real Workflow. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` verifies rooted interaction and one canonical outer result. The isolated Root/Subagent/Workflow composition below checks the shared Session and exact provider sequence. Reverse completion and its canonical ordering are exercised in the separate Workflow fixture. |
+| T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. `shipped_parallel_reverses_completion_without_git_or_parent_orchestration` exercises reverse completion in a real Workflow. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` verifies rooted interaction and one canonical outer result. The isolated Root/Subagent/Workflow composition below checks the shared Session and exact provider sequence. `client_bash_reversed_settlement_keeps_canonical_order` holds the first real Bash behind a socket until the second settles. Both start exactly once, two model requests occur, and the durable results retain the original order before the sole final Attempt terminal. |
 | T13, T14, T15, T17, T18 | The Session input RPC covers definition shadowing, explicit permission, joint CAS, stale and invalid candidates, durable readback, and clearing overrides. Isolated cold load covers Client sources. The complete bootstrap and concurrent-activation composition remain open. |
 | T16 | `primary_model_selection_resets_primary_overrides_and_preserves_summary_policy` and `attempt_started_freezes_the_model_across_a_mid_attempt_switch` cover the Runtime Client entry. `r04_manager_selection_and_attempt_admission_have_both_complete_orders` exercises admission races through the App Server. `t05_t09_workflow_only_agent_model_rebuilds_frozen_execution` and `direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_result` exercise frozen Workflow profiles and the direct-model provider. A common acceptance trace across UI and delegated entry points remains open. |
-| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. Full delegated composition and composed stdio Tasks and interactions remain open. |
+| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. The real Client-owned Manager Store fixtures below cover foreground Tasks and MRTR. The bound management inventory uses one physical stdio process across both resource pages and waits for its witnessed exit. The independent HTTP probe requires zero business calls. |
 | T22, T40, T47 | Isolated Workspace tests cover Client-owned AGENTS.md, Agent TOML and Workflow YAML on cold load and explicit reconciliation. The verification hook rejects a changed in-flight capture and preserves the last valid generation. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. The Linux watch fixture verifies automatic guidance and Skill metadata updates after physical registration. Overflow and retired-watch races across reconnect still require composed proof. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. Real Client refusal, cancellation after Seal, and late publication across replacement each preserve the already validated result. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
@@ -322,6 +337,15 @@ released against the old lane after canonical completion. The replacement
 reads the original Workspace and receives zero Save requests. The durable
 result counts one successful Host ToolResult with an unavailable locator,
 and the provider counts one tool call and one bounded model continuation.
+
+On `010da0b9c`, a Linux debug run of that standalone scenario took 2.831 s
+including enrollment and fixture teardown. The active App Server peaked at
+175,092 KiB, with 0.61 s user and 0.05 s system CPU. The original Client
+peaked at 25,324 KiB and the replacement at 23,384 KiB. Both Clients used
+under 0.06 s sampled CPU. A separate enrollment Server peaked at 121,292
+KiB. The 10 ms procfs samples report individual process high-water marks.
+These figures describe replacement and a single Host. The earlier
+three-Host run has a different workload and in-process Server.
 
 In a separate untraced run, sampling procfs every 10 ms recorded 204,564 KiB
 peak RSS for the entire Host harness and its in-process Server, with 3.35 s

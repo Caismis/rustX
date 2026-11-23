@@ -19,10 +19,7 @@ use crate::local_runtime::session_runtime_manager::{
 #[derive(Clone, Copy)]
 enum ResourceSource<'a> {
     Authored,
-    Bound {
-        endpoint: &'a std::sync::Arc<LocalExecutionEndpoint>,
-        retained: Option<WorkspaceResourceIdentity>,
-    },
+    Bound(&'a std::sync::Arc<LocalExecutionEndpoint>),
 }
 
 enum WorkspaceDocument<'a> {
@@ -187,10 +184,7 @@ impl UserConfigManager {
         &self,
         input: &SessionConfigInput,
         credentials: &crate::credentials::CredentialSnapshot,
-        workspace: Option<(
-            &std::sync::Arc<LocalExecutionEndpoint>,
-            Option<WorkspaceResourceIdentity>,
-        )>,
+        workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
     ) -> Result<application::CapturedApplication, String> {
         let mut default = input.clone();
         default.model = None;
@@ -216,14 +210,11 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
-        workspace: Option<(
-            &std::sync::Arc<LocalExecutionEndpoint>,
-            Option<WorkspaceResourceIdentity>,
-        )>,
+        workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
-            .capture_layers(request, workspace.map(|(endpoint, _)| endpoint.as_ref()))
+            .capture_layers(request, workspace.map(std::sync::Arc::as_ref))
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -246,7 +237,7 @@ impl UserConfigManager {
                 layers,
                 true,
                 credentials,
-                workspace.map(|(endpoint, _)| endpoint.as_ref()),
+                workspace.map(std::sync::Arc::as_ref),
                 request.authoring.session_resources.as_ref(),
             )
             .and_then(|capture| {
@@ -260,9 +251,7 @@ impl UserConfigManager {
                 self.resolve_resources(
                     request,
                     capture,
-                    workspace.map_or(ResourceSource::Authored, |(endpoint, retained)| {
-                        ResourceSource::Bound { endpoint, retained }
-                    }),
+                    workspace.map_or(ResourceSource::Authored, ResourceSource::Bound),
                 )
             })
             .map_err(|error| error.diagnostic.reason)
@@ -681,7 +670,7 @@ impl UserConfigManager {
                 .transpose()?;
         }
         let mut mcp = super::super::mcp_resources::load_with_workspace(
-            &self.sources.home_directory.join("rustx/.agents"),
+            Some(&self.sources.home_directory.join("rustx/.agents")),
             Some(&locations.workspace),
             |path| match workspace_endpoint {
                 Some(endpoint) => read_bound_mcp(endpoint).map_err(|error| {
@@ -806,22 +795,13 @@ impl UserConfigManager {
             scoped_workflows,
         } = resolved;
         let host = &self.sources;
-        // Capture authority once, including host path aliases and missing leaves.
-        // Configuration preparation retains this physical identity; validators must not rebind it.
-        // Authored resources are a separate Server-side source. A Client
-        // configuration document does not require a matching resource root.
-        let (workspace_endpoint, retained) = match resource_source {
-            ResourceSource::Authored => (None, None),
-            ResourceSource::Bound { endpoint, retained } => (Some(endpoint), retained),
+        let (workspace_endpoint, authored_identity) = match resource_source {
+            ResourceSource::Authored => (
+                None,
+                Some(authored_workspace_identity(&locations.workspace)?),
+            ),
+            ResourceSource::Bound(endpoint) => (Some(endpoint), None),
         };
-        let allow_absent = workspace_endpoint.is_some() && retained.is_none();
-        let authored_identity = authored_workspace_identity(&locations.workspace, allow_absent)?;
-        if retained.is_some() && retained != authored_identity {
-            return Err(workspace_resource_failure(
-                &locations.workspace,
-                "directory identity changed",
-            ));
-        }
         let authored_workspace = authored_identity.map(|_| locations.workspace.as_path());
         let bound_definitions = workspace_endpoint
             .map(|endpoint| BoundDefinitions::capture(endpoint))
@@ -1221,7 +1201,9 @@ impl UserConfigManager {
             crate::skills::AutomaticSkillRoot::workspace,
         );
         revisions.insert(skill_scope.root, skill_discovery.revision());
-        if authored_workspace_identity(&locations.workspace, allow_absent)? != authored_identity {
+        if let Some(identity) = authored_identity
+            && authored_workspace_identity(&locations.workspace)? != identity
+        {
             return Err(workspace_resource_failure(
                 &locations.workspace,
                 "directory changed during capture",
@@ -1261,9 +1243,7 @@ impl UserConfigManager {
                 ResourceSource::Authored => WorkspaceResourceAuthority::Authored(
                     authored_identity.expect("authored configuration requires a Workspace"),
                 ),
-                ResourceSource::Bound { .. } => {
-                    WorkspaceResourceAuthority::Bound(authored_identity)
-                }
+                ResourceSource::Bound(_) => WorkspaceResourceAuthority::Bound,
             },
             config: std::sync::Arc::new(config),
             models,
@@ -1303,26 +1283,20 @@ pub(in crate::local_runtime) fn canonical_directory(path: &Path) -> Result<PathB
 
 pub(super) fn authored_workspace_identity(
     path: &Path,
-    allow_absent: bool,
-) -> Result<Option<WorkspaceResourceIdentity>, LaunchFailure> {
+) -> Result<WorkspaceResourceIdentity, LaunchFailure> {
     use std::os::unix::fs::MetadataExt as _;
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if allow_absent && error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(None);
-        }
-        Err(error) => return Err(workspace_resource_failure(path, error)),
-    };
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| workspace_resource_failure(path, error))?;
     if !metadata.is_dir() || !std::fs::canonicalize(path).is_ok_and(|canonical| canonical == path) {
         return Err(workspace_resource_failure(
             path,
             "Workspace directory was replaced or redirected",
         ));
     }
-    Ok(Some(WorkspaceResourceIdentity {
+    Ok(WorkspaceResourceIdentity {
         device: metadata.dev(),
         inode: metadata.ino(),
-    }))
+    })
 }
 
 fn workspace_resource_failure(path: &Path, detail: impl std::fmt::Display) -> LaunchFailure {

@@ -272,6 +272,11 @@ connection, including an empty opaque token. Cycles, more than 128 total
 descriptors, or an inventory above 64 KiB fail as `list_failed`; partial catalogs
 are never labeled complete. Tool, resource and template descriptions are
 credential-redacted, and business invocation is unavailable through this API.
+`mcp/catalog` and `mcp/probe` accept an exact `execution_session` for a live
+Workspace. Its Client verifies the source document revision. A stdio request
+retains the original binding through physical close. HTTP still connects
+from the Server, including when the definition was read through the Client.
+User-authored HTTP probing requires no Execution Client.
 The native connection owner includes every accepted literal environment/header
 value and every resolved sensitive reference in one private redaction set.
 Authorization and Proxy-Authorization Bearer inputs contribute both the complete

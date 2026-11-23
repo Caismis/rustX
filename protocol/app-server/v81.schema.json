@@ -34721,6 +34721,17 @@
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
                 },
+                "execution_session": {
+                  "description": "Exact Session for Client Workspace reads and stdio.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "id": {
                   "$ref": "#/$defs/McpServerId"
                 },
@@ -40032,6 +40043,17 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "description": "Exact Session for Client Workspace reads and stdio.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "id": {
                   "$ref": "#/$defs/McpServerId"

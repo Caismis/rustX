@@ -5211,6 +5211,7 @@ export const fixtures = [
         "kind": "workspace",
         "directory": "/workspace"
       },
+      "execution_session": "ses_00000000-0000-7000-8000-000000000001",
       "id": "example",
       "expected_revision": "source-revision",
       "kind": "resources"

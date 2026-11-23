@@ -191,16 +191,7 @@ pub(crate) struct WorkspaceResourceIdentity {
 #[derive(Clone, Copy)]
 pub(crate) enum WorkspaceResourceAuthority {
     Authored(WorkspaceResourceIdentity),
-    Bound(Option<WorkspaceResourceIdentity>),
-}
-
-impl WorkspaceResourceAuthority {
-    pub(crate) const fn identity(self) -> Option<WorkspaceResourceIdentity> {
-        match self {
-            Self::Authored(identity) => Some(identity),
-            Self::Bound(identity) => identity,
-        }
-    }
+    Bound,
 }
 
 /// Immutable prospective Session settings and statically resolved resources.

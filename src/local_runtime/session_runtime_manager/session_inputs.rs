@@ -119,7 +119,7 @@ impl SessionRuntimeManager {
         config: Option<SessionInputChange<SessionConfigContent>>,
         resources: Option<SessionInputChange<SessionResources>>,
     ) -> Result<u64, SessionInputError> {
-        let (settings, endpoint, native_resources, retained_model, source_cut) = {
+        let (settings, endpoint, retained_model, source_cut) = {
             let application = self.applications.lock();
             let catalog = self.sessions.catalog.blocking_lock();
             let actual = catalog.settings_revision(session)?;
@@ -153,16 +153,8 @@ impl SessionRuntimeManager {
                 .lock()
                 .expect("Session configuration bindings");
             let retained = bindings.get(session);
-            let native_resources =
-                retained.and_then(|binding| binding.workspace_resources.identity());
             let retained_model = retained.map(|binding| binding.input.model.clone());
-            (
-                settings,
-                endpoint,
-                native_resources,
-                retained_model,
-                source_cut,
-            )
+            (settings, endpoint, retained_model, source_cut)
         };
         let mut input = settings.input();
         if let Some(model) = retained_model {
@@ -177,9 +169,7 @@ impl SessionRuntimeManager {
         let capture = self.configuration.capture_session_application(
             &input,
             &self.credentials,
-            endpoint
-                .as_ref()
-                .map(|endpoint| (endpoint, native_resources)),
+            endpoint.as_ref(),
         );
         if endpoint
             .as_ref()

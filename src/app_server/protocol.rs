@@ -119,6 +119,9 @@ pub enum Method {
     #[serde(rename = "mcp/catalog")]
     McpCatalog {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for Client Workspace reads and stdio.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         id: crate::runtime::identity::McpServerId,
         expected_revision: String,
         kind: crate::tools::mcp::catalog::CatalogKind,
@@ -1104,6 +1107,9 @@ pub enum Method {
     #[serde(rename = "mcp/probe")]
     McpProbe {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for Client Workspace reads and stdio.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         id: crate::runtime::identity::McpServerId,
         expected_revision: String,
     },

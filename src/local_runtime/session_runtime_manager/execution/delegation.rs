@@ -92,7 +92,7 @@ impl ChildExecutionGrant {
         };
         Ok(SessionExecutionScope {
             session: session.clone(),
-            route: ExecutionRoute::Delegated(Arc::new(endpoint)),
+            route: ExecutionRoute::Fixed(Arc::new(endpoint)),
         })
     }
 }

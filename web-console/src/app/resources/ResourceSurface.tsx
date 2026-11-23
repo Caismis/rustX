@@ -91,7 +91,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [presentedHost, setPresentedHost] = useState(hostOwner);
   const agentEditor = module === 'subagents' && (newAgent !== undefined || resourceFocus !== undefined);
   const detail = !!mcpFocus;
-  const probes = useMcpProbes(client, host, target, observation, visible && available && module === 'mcp' && !mcpFocus, associations);
+  const probeSession = target.kind === 'user' || executionSession?.cwd === directory ? executionSession?.id : undefined;
+  const probes = useMcpProbes(client, host, target, observation, visible && available && module === 'mcp' && !mcpFocus, associations, probeSession);
   const scope = target.kind;
   const config = configAuthoring(source, scope);
   const revision = config.state === 'structured' ? config.revision : undefined;

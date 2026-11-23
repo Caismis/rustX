@@ -1402,6 +1402,7 @@ pub(crate) async fn mcp_admission_scenario() {
         let request = tokio::spawn(async move {
             let call = if catalog {
                 Method::McpCatalog {
+                    execution_session: None,
                     target: SourceTarget::User,
                     id: crate::runtime::identity::McpServerId::new("held"),
                     expected_revision: revision,
@@ -1409,6 +1410,7 @@ pub(crate) async fn mcp_admission_scenario() {
                 }
             } else {
                 Method::McpProbe {
+                    execution_session: None,
                     target: SourceTarget::User,
                     id: crate::runtime::identity::McpServerId::new("held"),
                     expected_revision: revision,
@@ -1482,6 +1484,7 @@ pub(crate) async fn mcp_capacity_scenario() {
     }
     let revision = crate::local_runtime::settings::revision(Some(text.as_bytes()));
     let method = || Method::McpProbe {
+        execution_session: None,
         target: SourceTarget::User,
         id: crate::runtime::identity::McpServerId::new("held"),
         expected_revision: revision.clone(),

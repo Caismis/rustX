@@ -100,3 +100,6 @@ cargo test -p rustx --all-features --locked --lib \
 cargo test -p rustx --all-features --locked --lib \
     client_source_watch_reloads_guidance_and_skill_metadata_after_registration \
     -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    bound_workspace_mcp_catalog_uses_client_definitions_and_server_network \
+    -- --ignored --nocapture

@@ -486,6 +486,7 @@ pub(crate) async fn catalog_credentials() {
                         &connection,
                         1,
                         Method::McpCatalog {
+                            execution_session: None,
                             target: SourceTarget::User,
                             id: crate::runtime::identity::McpServerId::new("echo"),
                             expected_revision: revision.clone(),

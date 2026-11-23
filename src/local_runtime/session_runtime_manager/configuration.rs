@@ -15,7 +15,6 @@ pub(super) struct BoundCapture {
     endpoint: Arc<super::LocalExecutionEndpoint>,
     watch: Option<rustx_execution_server::ControlHandle>,
     ticket: Arc<()>,
-    authored_workspace: Option<super::super::configuration::WorkspaceResourceIdentity>,
 }
 
 impl SessionRuntimeManager {
@@ -702,13 +701,7 @@ impl SessionRuntimeManager {
                     .workspace()
                     .is_none_or(|directory| directory.as_os_str() == binding.input.cwd.as_os_str())
             })
-            .map(|(session, binding)| {
-                (
-                    session.clone(),
-                    binding.input.clone(),
-                    binding.workspace_resources.identity(),
-                )
-            })
+            .map(|(session, binding)| (session.clone(), binding.input.clone()))
             .collect();
         if retained.is_empty() {
             return Vec::new();
@@ -717,15 +710,15 @@ impl SessionRuntimeManager {
             let catalog = self.sessions.catalog.blocking_lock();
             retained
                 .into_iter()
-                .filter_map(|(session, mut input, identity)| {
+                .filter_map(|(session, mut input)| {
                     let (_, settings) = catalog.lineage(&session, None).ok()?;
                     input.authoring = settings.input().authoring;
-                    Some((session, input, identity))
+                    Some((session, input))
                 })
                 .collect()
         };
         let mut bound = Vec::new();
-        for (session, input, authored_workspace) in inputs {
+        for (session, input) in inputs {
             application.cancel_bound_capture(&session);
             match self.execution.configuration_endpoint(&session) {
                 Ok(None) if authored => {
@@ -749,7 +742,6 @@ impl SessionRuntimeManager {
                         endpoint,
                         watch: None,
                         ticket,
-                        authored_workspace,
                     });
                 }
                 Err(error) => {
@@ -787,18 +779,13 @@ impl SessionRuntimeManager {
         {
             return;
         }
-        let Some((mut input, authored_workspace)) = self
+        let Some(mut input) = self
             .sessions
             .configuration_bindings
             .lock()
             .expect("Session configuration bindings")
             .get(session)
-            .map(|binding| {
-                (
-                    binding.input.clone(),
-                    binding.workspace_resources.identity(),
-                )
-            })
+            .map(|binding| binding.input.clone())
         else {
             return;
         };
@@ -817,7 +804,6 @@ impl SessionRuntimeManager {
             endpoint: endpoint.clone(),
             watch: Some(watch),
             ticket,
-            authored_workspace,
         }]);
     }
 
@@ -828,7 +814,6 @@ impl SessionRuntimeManager {
             endpoint,
             watch,
             ticket,
-            authored_workspace,
         } in bound
         {
             #[cfg(test)]
@@ -838,7 +823,7 @@ impl SessionRuntimeManager {
             let mut capture = self.configuration.capture_session_application(
                 &input,
                 &self.credentials,
-                Some((&endpoint, authored_workspace)),
+                Some(&endpoint),
             );
             let mut application = self.applications.lock();
             if !application.finish_bound_capture(&session, &ticket) {
@@ -876,15 +861,7 @@ impl SessionRuntimeManager {
             if let Ok(capture) = &mut capture
                 && let Ok(context) = &mut capture.context
             {
-                let identity = retained.workspace_resources.identity();
-                if identity.is_some() && context.workspace_resources.identity() != identity {
-                    capture.context = Err(
-                        "Workspace authored resources unavailable: directory identity changed"
-                            .into(),
-                    );
-                } else {
-                    context.input.model.clone_from(&retained.input.model);
-                }
+                context.input.model.clone_from(&retained.input.model);
             }
             drop(binding);
             let publish =

@@ -116,6 +116,7 @@ fn discover(
                 endpoint.workspace(),
             ),
         })
+        .with_cancellation(configuration.resource_io.clone())
         .discover_bound(endpoint)
         .map_err(|_| SettingsError::ExecutionUnavailable);
     }

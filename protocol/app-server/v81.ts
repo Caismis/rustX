@@ -35,6 +35,10 @@ export type Request1 =
       method: 'mcp/catalog';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for Client Workspace reads and stdio.
+         */
+        execution_session?: SessionId | null;
         id: McpServerId;
         expected_revision: string;
         kind: CatalogKind;
@@ -1280,6 +1284,10 @@ export type Request1 =
       method: 'mcp/probe';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for Client Workspace reads and stdio.
+         */
+        execution_session?: SessionId | null;
         id: McpServerId;
         expected_revision: string;
       };
@@ -1485,6 +1493,11 @@ export type SourceTarget =
       kind: 'workspace';
     };
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionId".
+ */
+export type SessionId = string;
+/**
  * Identifies an MCP server bound to the runtime.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1496,11 +1509,6 @@ export type McpServerId = string;
  * via the `definition` "CatalogKind".
  */
 export type CatalogKind = 'tools' | 'resources' | 'templates';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionId".
- */
-export type SessionId = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SkillContentKind".

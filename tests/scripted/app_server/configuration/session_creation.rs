@@ -1496,6 +1496,17 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         assert_instructions("Reconciled instructions");
         std::fs::write(&instructions, "Reconciled instructions").unwrap();
 
+        // The retained Client binding must also remain admissible when the
+        // same spelling names a non-directory in the Server's mount.
+        std::fs::write(workspace, b"unrelated Server file").unwrap();
+        write_config(45_678);
+        fixture.manager.reconcile_configuration(&source).await.unwrap();
+        let resolution = applied(&fixture, 0).await;
+        assert_eq!(resolution.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
+        assert_eq!(retained(), 45_678);
+        assert_eq!(std::fs::read(workspace).unwrap(), b"unrelated Server file");
+        std::fs::remove_file(workspace).unwrap();
+
         let changed_during_capture = workflow.clone();
         let stable_workflow = std::fs::read(&workflow).unwrap();
         fixture.manager.configuration.test_hooks.insert("before_resource_verification", move || {
@@ -1810,6 +1821,68 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
         watcher.await.unwrap().unwrap();
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{Method, MethodResult},
+    };
+    use crate::local_runtime::{configuration::settings::SourceTarget, mcp_probe::McpProbeOutcome};
+    use crate::tools::mcp::{
+        catalog::CatalogKind,
+        fixture::streamable_http::{HttpFixture, HttpFixtureControl},
+    };
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let physical = tempfile::tempdir().unwrap();
+        let overlay = physical.path().join("physical");
+        std::fs::rename(workspace, &overlay).unwrap();
+        let control = HttpFixtureControl::default();
+        let service = HttpFixture::start(control.clone()).await;
+        let document = format!("[mcp_servers.inventory]\nurl = {:?}\n", service.endpoint);
+        let resources = overlay.join(".agents");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = crate::local_runtime::settings::revision(Some(document.as_bytes()));
+        let launcher = workspace_overlay_launcher(physical.path());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let MethodResult::McpProbe { result } = call(
+            &connection,
+            99,
+            Method::McpCatalog {
+                target: SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+                execution_session: Some(fixture.sessions[0].id.clone()),
+                id: crate::runtime::identity::McpServerId::new("inventory"),
+                expected_revision: revision.clone(),
+                kind: CatalogKind::Tools,
+            },
+        )
+        .await
+        else {
+            panic!("bounded Workspace MCP inventory");
+        };
+        assert_eq!(result.outcome, McpProbeOutcome::Reachable);
+        assert_eq!(result.revision, revision);
+        assert_eq!(result.page.unwrap().tools.len(), 5);
+        assert_eq!(control.catalog_reads(), 1);
+        assert_eq!(control.accepted_calls(), 0);
+        assert!(!workspace.exists());
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+        service.shutdown().await;
     }))
     .await;
 }

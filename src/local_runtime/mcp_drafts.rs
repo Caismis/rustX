@@ -619,7 +619,16 @@ impl Scope {
         .await
         .map_err(|error| error.to_string())??;
         let inputs = Inputs::capture(&paths)?;
-        if inputs.bindings.is_empty() {
+        if inputs.bindings.is_empty()
+            || inputs.bindings.values().any(|binding| {
+                !matches!(
+                    binding.transport,
+                    crate::tools::mcp::McpTransportConfig::StreamableHttp { .. }
+                )
+            })
+        {
+            // The draft has no Session or Client. Keep the entire source
+            // batch for normal admission if any source requires one.
             return Ok((inputs, None));
         }
         let count = u32::try_from(inputs.bindings.len())
@@ -688,6 +697,18 @@ impl DraftClaim {
         };
         #[cfg(test)]
         slot.consume_waiting.send_replace(true);
+        if matches!(
+            paths.workspace_resources,
+            super::configuration::WorkspaceResourceAuthority::Bound
+        ) {
+            let failures = slot.settle().await;
+            slot.release_reservation();
+            return if failures.is_empty() {
+                Ok(None)
+            } else {
+                Err(failures.join("; "))
+            };
+        }
         let prepared = tokio::select! {
             outcome = slot.take() => outcome,
             () = cancellation.cancelled() => { slot.cancel(); slot.take().await },

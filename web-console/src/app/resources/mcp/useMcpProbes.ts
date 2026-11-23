@@ -12,7 +12,7 @@ const noCatalog = () => undefined;
 export type ProbeState = McpProbeOutcome | 'checking' | 'unknown';
 /** Only an explicit row action may execute a finite native diagnostic.
  * Observations and pending replies belong to one exact source and authority. */
-export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspaces | undefined, target: SettingsTarget, source: SourceSettings | undefined, active: boolean, associations?: WorkspaceAssociations) {
+export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspaces | undefined, target: SettingsTarget, source: SourceSettings | undefined, active: boolean, associations?: WorkspaceAssociations, executionSession?: string) {
   const catalog = useSyncExternalStore(associations?.subscribe ?? noSubscribe, associations?.getSnapshot ?? noCatalog)?.catalog;
   const registrationKey = () => {
     if (target.kind !== 'workspace' || !associations) return undefined;
@@ -25,7 +25,7 @@ export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspace
   const transport = useClientSelector(client, transportSelection, sameValue);
   const document = source?.target.kind === target.kind ? (target.kind === 'user' ? source.user_mcp : source.workspace_mcp) : undefined;
   const revision = document?.revision;
-  const key = JSON.stringify([transport.endpoint, transport.authorityRevision, transport.generation, transport.connection, settingsTargetKey(target), revision, active, registration]);
+  const key = JSON.stringify([transport.endpoint, transport.authorityRevision, transport.generation, transport.connection, settingsTargetKey(target), revision, active, registration, executionSession]);
   const currentKey = useRef(key);
   currentKey.current = key;
   const owner = useRef<{ key: string; host: ProductHostWorkspaces | undefined; states: Record<string, ProbeState> } | undefined>(undefined);
@@ -51,7 +51,13 @@ export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspace
     let state: ProbeState = 'unknown';
     try {
       let result;
-      if (target.kind === 'workspace') {
+      if (target.kind === 'workspace' && executionSession) {
+        if (source?.target.kind !== 'workspace') throw new Error('Workspace source unavailable');
+        result = (await client.request({
+          method: 'mcp/probe',
+          params: { target: source.target, execution_session: executionSession, id, expected_revision: revision },
+        }, 'mcp_probe', undefined, current)).result;
+      } else if (target.kind === 'workspace') {
         if (!host?.configureWorkspace || source?.target.kind !== 'workspace') throw new Error('Workspace Host unavailable');
         const response = await host.configureWorkspace(target.id, transport.endpoint ?? '', {
           kind:'mcp_probe', id, expected_revision:revision, expected_directory:source.target.directory,
@@ -59,7 +65,15 @@ export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspace
         if (response.kind !== 'mcp_probe') throw new Error('Unexpected probe result');
         result = response.result;
       } else {
-        result = (await client.request({method:'mcp/probe', params:{target:{kind:'user'},id,expected_revision:revision}}, 'mcp_probe', undefined, current)).result;
+        result = (await client.request({
+          method: 'mcp/probe',
+          params: {
+            target: { kind: 'user' },
+            execution_session: document.authored[id]?.definition.command ? executionSession : undefined,
+            id,
+            expected_revision: revision,
+          },
+        }, 'mcp_probe', undefined, current)).result;
       }
       if (result.id === id && result.revision === revision) state = result.outcome;
     } catch { /* Admission failures provide no connectivity evidence. */ }

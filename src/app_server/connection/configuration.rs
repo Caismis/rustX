@@ -61,14 +61,28 @@ impl AppServerConnection {
         match method {
             Method::McpCatalog {
                 target,
+                execution_session,
                 id,
                 expected_revision,
                 kind,
             } => {
+                if let Some(session) = &execution_session {
+                    self.sessions
+                        .read_session_summary(session)
+                        .await
+                        .map_err(session_error)?;
+                }
                 let result = self
                     .host
                     .manager()
-                    .mcp_catalog(target, id, expected_revision, kind, request_owner)
+                    .mcp_catalog(
+                        target,
+                        execution_session.as_ref(),
+                        id,
+                        expected_revision,
+                        kind,
+                        request_owner,
+                    )
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::McpProbe { result })
@@ -260,13 +274,26 @@ impl AppServerConnection {
             }
             Method::McpProbe {
                 target,
+                execution_session,
                 id,
                 expected_revision,
             } => {
+                if let Some(session) = &execution_session {
+                    self.sessions
+                        .read_session_summary(session)
+                        .await
+                        .map_err(session_error)?;
+                }
                 let result = self
                     .host
                     .manager()
-                    .probe_mcp(target, id, expected_revision, request_owner)
+                    .probe_mcp(
+                        target,
+                        execution_session.as_ref(),
+                        id,
+                        expected_revision,
+                        request_owner,
+                    )
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::McpProbe { result })

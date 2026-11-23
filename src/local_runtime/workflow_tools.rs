@@ -260,20 +260,24 @@ fn capture(
     let user_root = owner.resource_root(&SourceTarget::User);
     let directory = target.workspace();
     if let Some(endpoint) = &endpoint {
-        if directory.is_some_and(|directory| directory != endpoint.workspace()) {
+        if directory
+            .is_some_and(|directory| directory.as_os_str() != endpoint.workspace().as_os_str())
+        {
             return Err(SettingsError::Invalid);
         }
     } else {
         target.validate()?;
     }
     let mcp = match &endpoint {
-        Some(endpoint) => super::mcp_resources::load_with_workspace(&user_root, directory, |_| {
-            super::configuration::capture::read_bound_mcp(endpoint).map_err(|_| {
-                crate::runtime_client::types::RuntimeClientError::InvalidRequest {
-                    message: "Client MCP source is unavailable".into(),
-                }
+        Some(endpoint) => {
+            super::mcp_resources::load_with_workspace(Some(&user_root), directory, |_| {
+                super::configuration::capture::read_bound_mcp(endpoint).map_err(|_| {
+                    crate::runtime_client::types::RuntimeClientError::InvalidRequest {
+                        message: "Client MCP source is unavailable".into(),
+                    }
+                })
             })
-        }),
+        }
         None => super::mcp_resources::load(&user_root, directory),
     };
     let credentials = crate::credentials::CredentialSnapshot::capture();

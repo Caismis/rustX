@@ -73,25 +73,30 @@ fn parse_entries(
 
 /// Read only the supplied owners. User-only discovery never inspects a Workspace.
 pub(crate) fn load(user_root: &Path, workspace: Option<&Path>) -> McpCatalog {
-    load_with_workspace(user_root, workspace, super::settings::read_document)
+    load_with_workspace(Some(user_root), workspace, super::settings::read_document)
 }
 
 pub(super) fn load_with_workspace(
-    user_root: &Path,
+    user_root: Option<&Path>,
     workspace: Option<&Path>,
-    read_workspace: impl Fn(
+    read_workspace: impl FnOnce(
         &Path,
-    )
-        -> Result<Option<Vec<u8>>, crate::runtime_client::types::RuntimeClientError>,
+    ) -> Result<
+        Option<Vec<u8>>,
+        crate::runtime_client::types::RuntimeClientError,
+    >,
 ) -> McpCatalog {
     let mut catalog = McpCatalog::default();
-    for (path, user) in std::iter::once((user_root.join("mcp.toml"), true))
+    let mut read_workspace = Some(read_workspace);
+    for (path, user) in user_root
+        .into_iter()
+        .map(|root| (root.join("mcp.toml"), true))
         .chain(workspace.map(|workspace| (workspace.join(WORKSPACE_DOCUMENT), false)))
     {
         let captured = if user {
             super::settings::read_document(&path)
         } else {
-            read_workspace(&path)
+            read_workspace.take().expect("one Workspace document")(&path)
         }
         .map_err(|_| {
             RuntimeResourceLoadError::new("cannot read MCP definitions").at(&path, "mcp_servers")

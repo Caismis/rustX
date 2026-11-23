@@ -426,7 +426,7 @@ impl ApplicationState {
         >,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let capture = configuration
-            .capture_session_application(input, credentials, Some((endpoint, None)))?
+            .capture_session_application(input, credentials, Some(endpoint))?
             .context?;
         Self::validate_default(&capture, credentials)?;
         Self::admit_initial(capture, input, credentials, true)

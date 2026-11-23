@@ -5,12 +5,15 @@ use super::{
         UserConfigManager,
         settings::{SettingsError, SourceTarget},
     },
-    session_runtime_manager::SessionRuntimeManager,
+    session_runtime_manager::{SessionExecutionScope, SessionRuntimeManager},
 };
 use crate::{
-    runtime::{CancellationSignal, identity::McpServerId},
+    runtime::{
+        CancellationSignal,
+        identity::{McpServerId, SessionId},
+    },
     tools::{
-        mcp::{McpInvalidationState, McpServerRuntime, OwnedConnect},
+        mcp::{McpInvalidationState, McpServerRuntime, McpTransportConfig, OwnedConnect},
         workspace::Workspace,
     },
 };
@@ -92,6 +95,7 @@ impl SessionRuntimeManager {
     pub(crate) async fn probe_mcp(
         &self,
         target: SourceTarget,
+        execution_session: Option<&SessionId>,
         id: McpServerId,
         revision: String,
         request_owner: impl Send + 'static,
@@ -99,6 +103,7 @@ impl SessionRuntimeManager {
         probe_query(
             self.configuration.clone(),
             target,
+            execution_session.map(|session| self.execution_scope(session)),
             id,
             revision,
             None,
@@ -113,6 +118,7 @@ impl SessionRuntimeManager {
     pub(crate) async fn mcp_catalog(
         &self,
         target: SourceTarget,
+        execution_session: Option<&SessionId>,
         id: McpServerId,
         revision: String,
         kind: crate::tools::mcp::catalog::CatalogKind,
@@ -121,6 +127,7 @@ impl SessionRuntimeManager {
         probe_query(
             self.configuration.clone(),
             target,
+            execution_session.map(|session| self.execution_scope(session)),
             id,
             revision,
             Some(kind),
@@ -138,12 +145,14 @@ async fn probe(
     id: McpServerId,
     revision: String,
 ) -> Result<McpProbeResult, SettingsError> {
-    probe_query(owner, target, id, revision, None, (), Arc::default()).await
+    probe_query(owner, target, None, id, revision, None, (), Arc::default()).await
 }
 
+#[allow(clippy::too_many_arguments)] // one bounded source read and its independently retained probe
 async fn probe_query(
     owner: UserConfigManager,
     target: SourceTarget,
+    execution: Option<SessionExecutionScope>,
     id: McpServerId,
     revision: String,
     query: Option<crate::tools::mcp::catalog::CatalogKind>,
@@ -177,6 +186,7 @@ async fn probe_query(
                 &capture_target,
                 &capture_id,
                 &capture_revision,
+                execution.as_ref(),
             )
         })
         .await
@@ -205,9 +215,12 @@ async fn probe_query(
         // A changed definition cannot receive a successful result for old bytes.
         let check_id = id.clone();
         let check_revision = revision.clone();
-        tokio::task::spawn_blocking(move || capture(&owner, &target, &check_id, &check_revision))
-            .await
-            .map_err(|_| SettingsError::Io)??;
+        let scope = workspace.execution_scope().cloned();
+        tokio::task::spawn_blocking(move || {
+            capture(&owner, &target, &check_id, &check_revision, scope.as_ref())
+        })
+        .await
+        .map_err(|_| SettingsError::Io)??;
         Ok(McpProbeResult {
             id,
             revision,
@@ -224,12 +237,36 @@ fn capture(
     target: &SourceTarget,
     id: &McpServerId,
     expected: &str,
+    execution: Option<&SessionExecutionScope>,
 ) -> Result<(crate::tools::mcp::McpServerBinding, Workspace), SettingsError> {
-    target.validate()?;
+    let pin = |scope: &SessionExecutionScope| {
+        scope.pin().map_err(|_| SettingsError::ExecutionUnavailable)
+    };
+    let bound_workspace = execution
+        .filter(|_| target.workspace().is_some())
+        .map(pin)
+        .transpose()?;
     // Load only this scope. Inherited/same-name winning definitions are not the
     // configuration row the user requested to check.
     let root = owner.resource_root(target);
-    let catalog = super::mcp_resources::load(&root, None);
+    let catalog = if let Some(scope) = &bound_workspace {
+        let endpoint = scope
+            .endpoint()
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        if target.workspace().map(std::path::Path::as_os_str)
+            != Some(endpoint.workspace().as_os_str())
+        {
+            return Err(SettingsError::Invalid);
+        }
+        let document = super::configuration::capture::read_bound_mcp(&endpoint)
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        super::mcp_resources::load_with_workspace(None, Some(endpoint.workspace()), move |_| {
+            Ok(document)
+        })
+    } else {
+        target.validate()?;
+        super::mcp_resources::load(&root, None)
+    };
     let actual = catalog
         .revisions
         .get(&root.join("mcp.toml"))
@@ -255,8 +292,23 @@ fn capture(
     binding
         .credentials
         .capture(crate::credentials::CredentialSnapshot::capture());
-    let workspace = Workspace::new(target.workspace().unwrap_or(&owner.sources.home_directory))
-        .map_err(|_| SettingsError::Invalid)?;
+    let scope = if let Some(scope) = bound_workspace {
+        Some(scope)
+    } else if matches!(binding.transport, McpTransportConfig::Stdio { .. }) {
+        let scope = execution.ok_or(SettingsError::ExecutionUnavailable)?;
+        Some(pin(scope)?)
+    } else {
+        None
+    };
+    let workspace = if let Some(scope) = scope {
+        let endpoint = scope
+            .endpoint()
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        Workspace::for_session(endpoint.workspace(), scope)
+    } else {
+        Workspace::new(target.workspace().unwrap_or(&owner.sources.home_directory))
+    }
+    .map_err(|_| SettingsError::Invalid)?;
     Ok((binding, workspace))
 }
 
@@ -436,6 +488,7 @@ mod tests {
         let result = probe_query(
             owner,
             SourceTarget::User,
+            None,
             McpServerId::new("inventory"),
             revision,
             Some(CatalogKind::Resources),
@@ -459,14 +512,36 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn public_stdio_catalog_keeps_process_bound_cursor_until_physical_close() {
+        use crate::local_runtime::session_runtime_manager::StandaloneExecution;
         use crate::tools::mcp::{catalog::CatalogKind, fixture};
+        use tokio::io::AsyncReadExt as _;
+        let witness_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let witness = witness_dir.path().join("catalog");
+        let listener = tokio::net::UnixListener::bind(&witness).unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let owner = owner(temporary.path());
         let journal = temporary.path().join("native-catalog.jsonl");
-        let program = std::env::current_exe().unwrap();
-        let arguments = fixture::fixture_spawn_args(
+        let workspace = temporary.path().canonicalize().unwrap();
+        let execution =
+            StandaloneExecution::start(SessionId::generate(), workspace.clone(), workspace.clone())
+                .await
+                .unwrap();
+        let script = r"
+import os, socket, sys
+witness = socket.socket(socket.AF_UNIX)
+witness.connect(sys.argv[1])
+witness.set_inheritable(True)
+os.execv(sys.argv[2], sys.argv[2:])
+";
+        let mut arguments = vec![
+            "-c".to_owned(),
+            script.to_owned(),
+            witness.display().to_string(),
+            std::env::current_exe().unwrap().display().to_string(),
+        ];
+        arguments.extend(fixture::fixture_spawn_args(
             "tools::mcp::resources::tests::resource_only_stdio_negotiates_modern_and_legacy_without_tools_list",
-        );
+        ));
         let environment = BTreeMap::from([
             (fixture::FIXTURE_MODE_ENV, "1".to_string()),
             (fixture::RESOURCES_ENV, "1".to_string()),
@@ -479,7 +554,7 @@ mod tests {
         ]);
         let config = format!(
             "[mcp_servers.inventory]\ncommand = {:?}\nargs = {}\nenv = {{{}}}\n",
-            program.to_str().unwrap(),
+            "/usr/bin/python3",
             serde_json::to_string(&arguments).unwrap(),
             environment
                 .iter()
@@ -488,17 +563,23 @@ mod tests {
                 .join(", ")
         );
         let revision = write(&owner, &SourceTarget::User, &config);
-        let result = probe_query(
+        let query = probe_query(
             owner,
             SourceTarget::User,
+            Some(execution.scope()),
             McpServerId::new("inventory"),
             revision,
             Some(CatalogKind::Resources),
             (),
             Arc::default(),
-        )
-        .await
-        .unwrap();
+        );
+        tokio::pin!(query);
+        let mut peer = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            result = &mut query => panic!("catalog returned before the Client started: {result:?}"),
+        };
+        let result = query.await.unwrap();
+        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
         assert_eq!(result.outcome, McpProbeOutcome::Reachable);
         assert_eq!(result.page.unwrap().resources.len(), 2);
         let records: Vec<serde_json::Value> = std::fs::read_to_string(journal)
@@ -518,16 +599,18 @@ mod tests {
             cursor.starts_with("process-"),
             "the continuation belongs to the actual native process"
         );
-        let pid = cursor
+        let local_pid = cursor
             .strip_prefix("process-")
             .unwrap()
             .parse::<i32>()
             .unwrap();
+        let pid = peer.peer_cred().unwrap().pid().unwrap_or(local_pid);
         assert_eq!(
             nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
             Err(nix::errno::Errno::ESRCH),
             "successful discovery waits for physical process close"
         );
+        execution.shutdown().await.unwrap();
     }
 
     #[cfg(unix)]
@@ -722,7 +805,8 @@ mod tests {
                 listener.local_addr().unwrap()
             ),
         );
-        let (binding, workspace) = capture(&owner, &SourceTarget::User, &id, &revision).unwrap();
+        let (binding, workspace) =
+            capture(&owner, &SourceTarget::User, &id, &revision, None).unwrap();
         let task =
             tokio::spawn(
                 async move { run(&id, &binding, &workspace, CancellationSignal::new()).await },
