@@ -2676,7 +2676,7 @@ fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
     };
     assert!(matches!(
         connection.inspect_output(&range(owner.conversation.clone()), deadline, || Ok(())).unwrap(),
-        ContinuationPage::Range(page) if page.bytes == &data[7..] && page.next_offset.is_none(),
+        ContinuationPage::Range(page) if page.bytes == data[7..] && page.next_offset.is_none(),
     ));
     assert_eq!(
         connection

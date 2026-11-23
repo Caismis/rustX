@@ -1884,7 +1884,7 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
                 .collect::<Vec<_>>(),
             ["current after detach"]
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
         assert!(!workspace.exists());
         stop.cancel();
         watcher.await.unwrap().unwrap();

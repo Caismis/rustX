@@ -647,7 +647,7 @@ mod tests {
     /// diagnostic.
     struct TestRead {
         _directory: tempfile::TempDir,
-        _execution: crate::session_execution_support::ExecutionFixture,
+        execution: crate::session_execution_support::ExecutionFixture,
         workspace: Workspace,
         conversation_id: ConversationId,
         artifacts: ArtifactStore,
@@ -674,7 +674,7 @@ mod tests {
             .expect("managed output");
             Self {
                 _directory: directory,
-                _execution: execution,
+                execution,
                 workspace,
                 conversation_id,
                 artifacts,
@@ -829,7 +829,7 @@ mod tests {
             )
             .await;
         assert!(failure_of(split).contains("valid UTF-8 boundary"));
-        reader._execution.settle().await;
+        reader.execution.settle().await;
     }
 
     fn text_of(result: &ToolExecutionResult) -> &str {

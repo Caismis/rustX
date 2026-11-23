@@ -1208,12 +1208,12 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
         opening_signal.cancel();
         drop(writer);
         assert!(matches!(opening.await, Err(McpError::Discovery(_))));
-        let mut observed = Box::pin(observer.accept());
+        let mut accepted_socket = Box::pin(observer.accept());
         assert!(
-            futures_util::poll!(&mut observed).is_pending(),
+            futures_util::poll!(&mut accepted_socket).is_pending(),
             "queued Open started no process"
         );
-        drop(observed);
+        drop(accepted_socket);
 
         let binding = child.bind_stdio_mcp(&root).unwrap();
         let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
