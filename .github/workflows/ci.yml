@@ -19,6 +19,10 @@ on:
   push:
     branches:
       - main
+      # Also run on the long-lived working base so its pushes publish the
+      # macOS cache entries that first runs of new PRs restore. Remove this
+      # ref once the branch lands on main.
+      - devin/1794960987-macos-ci-build-speed
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
@@ -558,10 +562,6 @@ jobs:
       # libtest keeps its existing concurrency, assertions, selectors and
       # deadlines.
       CARGO_BUILD_JOBS: "2"
-      # Enable rustc incremental compilation; rust-cache restores the
-      # incremental fingerprint so warm runs skip already-checked query results
-      # for the monolithic lib-test unit (the lane's 0.2-23.5 min host lottery).
-      CARGO_INCREMENTAL: "1"
 
     steps:
       - name: Checkout
@@ -705,10 +705,6 @@ jobs:
       # libtest keeps its existing concurrency, assertions, selectors and
       # deadlines.
       CARGO_BUILD_JOBS: "2"
-      # Enable rustc incremental compilation; rust-cache restores the
-      # incremental fingerprint so warm runs skip already-checked query results
-      # for the monolithic lib-test unit (the lane's 0.2-23.5 min host lottery).
-      CARGO_INCREMENTAL: "1"
 
     steps:
       - name: Checkout
