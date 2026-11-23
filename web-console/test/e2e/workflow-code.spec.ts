@@ -8,6 +8,7 @@ import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote,openEmptySession,choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { replaceCodeMirrorText } from './codemirror';
 
 for(const width of [1440,390])for(const language of ['python3','javascript'] as const)test.describe(`Code panel ${language} ${width}`,()=>{
   test.use({viewport:{width,height:1000},hasTouch:width===390});
@@ -45,7 +46,7 @@ for(const width of [1440,390])for(const language of ['python3','javascript'] as 
       await panel.getByRole('button',{name:'同步函数签名',exact:true}).click();
       await expect(code).toContainText(language==='python3'?'def main(arg1: str, items: list[float])':'function main({arg1, items})');
       const script=language==='python3'?'def main(arg1, items):\n    return {"renamed":arg1,"count":len(items)}\n':'function main({arg1, items}) {\n    return {renamed:arg1,count:items.length};\n}';
-      await code.fill(script);await code.blur();
+      await replaceCodeMirrorText(code,script);await code.blur();
       const editor=panel.getByRole('region',{name:'代码',exact:true});
       await expect(editor.locator('.cm-gutters')).toBeVisible();
       await editor.getByRole('button',{name:'复制',exact:true}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(script);
