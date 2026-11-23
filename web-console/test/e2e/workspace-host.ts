@@ -26,7 +26,9 @@ export async function startWorkspaceHost(config: LocalHostConfig, desktop?: Desk
   } };
 }
 export type WorkspaceHostResponse = { status: number; headers: Record<string, string>; body: Buffer };
-const proxies = new WeakMap<Page, { retiring: boolean; pending: Set<Promise<void>> }>();
+type RouteProxy = { retiring: boolean; pending: Set<Promise<void>> };
+const proxies = new WeakMap<Page, RouteProxy>();
+const liveProxies = new Set<RouteProxy>();
 
 /** Keep interception installed until every Node callback has delivered its reply.
  * Playwright 1.63 can update empty patterns after the first callback completes
@@ -40,12 +42,29 @@ export async function drainWorkspaceHostRoutes(page: Page) {
     for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
   }
   proxies.delete(page);
+  liveProxies.delete(proxy);
+  if (failures.length) throw failures[0];
+}
+
+/** Retire every live proxy before the fixture's Product Host closes, so an
+ * in-flight forward finishes against a listening server instead of racing the
+ * shutdown with a refused connection. */
+export async function drainAllWorkspaceHostRoutes() {
+  const failures: unknown[] = [];
+  for (const proxy of liveProxies) {
+    proxy.retiring = true;
+    while (proxy.pending.size) {
+      const settled = await Promise.allSettled([...proxy.pending]);
+      for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
+    }
+  }
+  liveProxies.clear();
   if (failures.length) throw failures[0];
 }
 
 /** Same-origin deployment proxy to the actual isolated Node Product Host fixture. */
 export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }, observeResponse?: (request: Request, response: WorkspaceHostResponse) => void) {
-  const proxy = { retiring: false, pending: new Set<Promise<void>>() }; proxies.set(page, proxy);
+  const proxy = { retiring: false, pending: new Set<Promise<void>>() }; proxies.set(page, proxy); liveProxies.add(proxy);
   const forward = async (route: Route) => {
     if (proxy.retiring) { await route.fulfill({ status: 503, body: 'Fixture proxy retired' }); return; }
     // Observation is an open NDJSON response. Preserve its streaming transport;
