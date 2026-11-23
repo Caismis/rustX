@@ -233,10 +233,19 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     const card = (group: Locator, name: string) => group.getByRole('listitem', {name, exact: true});
     const action = async (row: Locator, name: string) => {
       const menuButton = row.getByRole('button', {name: /^Actions for /});
-      if (await menuButton.getAttribute('aria-expanded') !== 'true') {
-        await menuButton.click({timeout: 8_000});
+      const item = page.getByRole('menuitem', {name, exact: true});
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (await menuButton.getAttribute('aria-expanded') !== 'true') {
+          await menuButton.click({timeout: 8_000});
+        }
+        await item.click({timeout: 8_000});
+        // An observation-driven card refresh can swap the open menu mid-click:
+        // the click lands on the stale node, the item never fires and the menu
+        // stays open. Only a menu that actually closed proves the item ran.
+        try { await item.waitFor({state: 'hidden', timeout: 2_000}); return; }
+        catch { /* menu still open — retry */ }
       }
-      await page.getByRole('menuitem', {name, exact: true}).click({timeout: 8_000});
+      throw new Error(`menuitem '${name}' never fired`);
     };
     const transfer = async (row: Locator, name: string, operation: 'Copy' | 'Move') => {
       await action(row, name);
@@ -638,8 +647,18 @@ test('Workspace cards edit Global resources and transfer definitions in both dir
     await expect(page).toHaveTitle(/rustX/);
 
     const transfer = async (card: Locator, action: string, name: string, operation: 'Copy' | 'Move') => {
-      await card.getByRole('button', { name: /^Actions for / }).click();
-      await page.getByRole('menuitem', { name: action, exact: true }).click();
+      const menuButton = card.getByRole('button', { name: /^Actions for / });
+      const item = page.getByRole('menuitem', { name: action, exact: true });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (await menuButton.getAttribute('aria-expanded') !== 'true') {
+          await menuButton.click();
+        }
+        await item.click();
+        // An observation-driven card refresh can swap the open menu mid-click;
+        // a menu that stayed open means the item never fired — retry the gesture.
+        try { await item.waitFor({ state: 'hidden', timeout: 2_000 }); break; }
+        catch { /* menu still open — retry */ }
+      }
       const dialog = page.getByRole('dialog', { name: `${operation} resource`, exact: true });
       await dialog.getByLabel('Destination name').fill(name);
       await dialog.getByRole('button', { name: operation, exact: true }).click();
