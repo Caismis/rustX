@@ -153,11 +153,12 @@ max_output_tokens = { mode = "limit", tokens = 333 }
 // acknowledgement on desktop and a lost one, recovered through reconnect, in
 // the narrow layout. Neither the width-specific placement nor the lost-ACK
 // recovery depends on the other.
-for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as const) {
-  test(`live same-model profile selection (${width}, acknowledgement ${acknowledgement})`, { tag: acknowledgement === 'lost' ? ['@smoke'] : [] }, async ({ page }) => {
-    // Reuse the shared two-request provider scenario. Its first stream is held
-    // at an explicit gate until the profile mutation and recovery are proven.
-    const fixture = await startDogfood('tui_multi_session');
+for (const [width, acknowledgement, change] of [[1440, 'received', 'profile'], [390, 'lost', 'profile'], [1440, 'received', 'model']] as const) {
+  const changeModel = change === 'model';
+  const selection = changeModel ? 'different-model reset' : 'same-model profile selection';
+  test(`live ${selection} (${width}, acknowledgement ${acknowledgement})`, { tag: acknowledgement === 'lost' ? ['@smoke'] : [] }, async ({ page }) => {
+    // The first provider stream stays open through the model mutation and reload.
+    const fixture = await startDogfood(changeModel ? 'live_model_switch' : 'tui_multi_session');
     let passed = false;
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -187,14 +188,21 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original]);
       expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model_set' });
       if (acknowledgement === 'lost') wire.loseNext('session/setModel');
-      await trigger.click();
-      await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
-      await page.getByRole('menuitemradio', { name: 'low', exact: true }).click();
+      const secondModel = 'fixture/second-model';
+      const selectedLabel = changeModel ? secondModel : 'low';
+      const requested = changeModel ? { model: secondModel, auxiliary: original.auxiliary } : { ...original, profile: 'low' };
+      if (changeModel) {
+        await chooseCurrentModel(page, secondModel);
+      } else {
+        await trigger.click();
+        await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
+        await page.getByRole('menuitemradio', { name: 'low', exact: true }).click();
+      }
       if (acknowledgement === 'lost') {
         await expect.poll(wire.lost).toBe(1);
         await connectRemote(page, fixture.endpoint, fixture.token);
       }
-      await expect(trigger).toContainText('low', { timeout: 20_000 });
+      await expect(trigger).toContainText(selectedLabel, { timeout: 20_000 });
       await expect(trigger).toBeVisible();
       const frozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       expect(frozen).toEqual(admittedFrozen);
@@ -203,8 +211,8 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       expect(frozen.primary.maxOutputTokens).toBe(4096);
       expect(frozen.summary.mode).toBe('session');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await page.screenshot({ path: `/tmp/rustx-471-live-model-${width}-${acknowledgement}.png` });
-      expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original, { ...original, profile: 'low' }]);
+      await page.screenshot({ path: `/tmp/rustx-471-live-model-${width}-${acknowledgement}-${change}.png` });
+      expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original, requested]);
 
       // Reload while the original request remains physically active. Native
       // attach must restore both authorities, with no mutation replay.
@@ -217,8 +225,8 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       // sidebar: dismissing a pending navigation deliberately cancels it.
       await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
       if (width < 600 && await collapse.isVisible()) await collapse.click();
-      await expect(trigger).toContainText('low');
-      expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original, { ...original, profile: 'low' }]);
+      await expect(trigger).toContainText(selectedLabel);
+      expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original, requested]);
       expect((await sessionSnapshot(wire, sessionId)).attempt!.model).toEqual(admittedFrozen);
       await fixture.release('session-a-holding');
       await expect.poll(async () => (await sessionSnapshot(wire, sessionId)).attempt?.phase.type).toBe('settled');
@@ -233,11 +241,13 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       await expect(page.getByText('B answered while A was still working', { exact: true })).toBeVisible();
       const captured = await fixture.control('requests') as { requests: { body: Record<string, unknown> }[] };
       expect(captured.requests).toHaveLength(2);
-      const [high, low] = captured.requests.map(request => request.body);
-      expect(high.reasoning_effort).toBe('high');
-      expect(low.reasoning_effort).toBeUndefined();
-      expect(high.max_tokens ?? high.max_completion_tokens).toBe(4096);
-      expect(low.max_tokens ?? low.max_completion_tokens).toBe(1024);
+      const [before, after] = captured.requests.map(request => request.body);
+      expect(before.model).toBe('integration-model');
+      expect(before.reasoning_effort).toBe('high');
+      expect(before.max_tokens ?? before.max_completion_tokens).toBe(4096);
+      expect(after.model).toBe(changeModel ? 'second-model' : 'integration-model');
+      expect(after.reasoning_effort).toBe(changeModel ? 'medium' : undefined);
+      expect(after.max_tokens ?? after.max_completion_tokens).toBe(changeModel ? 2048 : 1024);
       expect(errors).toEqual([]);
       passed = true;
     } finally { await stopDogfoodPage(page, fixture, passed); }
