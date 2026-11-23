@@ -1351,6 +1351,7 @@ fn detached_cancellation(
 
 #[cfg(target_os = "linux")]
 pub(crate) async fn client_sigkill_keeps_other_sessions_and_history_available() {
+    use crate::app_server::command::hold_start_before_observation;
     use std::os::unix::process::ExitStatusExt as _;
 
     let fixture = Fixture::with_session_count(None, 3).await;
@@ -1360,10 +1361,19 @@ pub(crate) async fn client_sigkill_keeps_other_sessions_and_history_available() 
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
 
+    let original = fixture
+        .manager
+        .execution_endpoint(&fixture.sessions[0].id)
+        .unwrap();
+    let process = "client-death-before-observation";
+    let observation = hold_start_before_observation(process);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let script = format!("exec 3<>/dev/tcp/127.0.0.1/{port}; printf ready >&3; read -r -u 3");
+    let script = format!(
+        "printf 'started\n' >> started-once; exec 3<>/dev/tcp/127.0.0.1/{port}; printf ready >&3; read -r -u 3"
+    );
     let mut command = parameters(&fixture, &["/bin/bash", "-c", &script]);
+    command.process_id = Some(process.into());
     command.timeout_ms = Some(60_000);
     let interrupted = tokio::spawn({
         let connection = connection.clone();
@@ -1373,6 +1383,7 @@ pub(crate) async fn client_sigkill_keeps_other_sessions_and_history_available() 
     let mut ready = [0; 5];
     bounded(business.read_exact(&mut ready)).await.unwrap();
     assert_eq!(&ready, b"ready");
+    bounded(observation.await_entered()).await;
     killed.start_kill().unwrap();
     assert_eq!(
         bounded(killed.wait()).await.unwrap().signal(),
@@ -1415,10 +1426,22 @@ pub(crate) async fn client_sigkill_keeps_other_sessions_and_history_available() 
     assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
 
     assert_eq!(bounded(business.read(&mut ready)).await.unwrap(), 0);
-    assert!(matches!(
+    bounded(async {
+        while original.control().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(!interrupted.is_finished());
+    observation.release();
+    assert_eq!(
         bounded(interrupted).await.unwrap(),
-        ErrorData::OutcomeUnknown | ErrorData::ExecutionUnavailable
-    ));
+        ErrorData::OutcomeUnknown
+    );
+    assert_eq!(
+        std::fs::read(fixture.workspaces[0].join("started-once")).unwrap(),
+        b"started\n"
+    );
     connection.close();
     let unsettled = bounded(fixture.host.drain()).await;
     assert_eq!(unsettled.len(), 1);

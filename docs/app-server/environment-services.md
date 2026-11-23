@@ -51,7 +51,7 @@ Downloads retain their existing native source identities and publication owners.
 
 | Method/event | Contract |
 | --- | --- |
-| `command/exec` | Direct argv execution; no shell interpretation, model, Thread, Attempt or canonical ToolCall. The final response follows native process-tree settlement and all emitted output. |
+| `command/exec` | Direct argv execution; no shell interpretation, model, Thread, Attempt or canonical ToolCall. The final response follows native process-tree settlement and all emitted output. After START admission, losing the terminal or output observation returns `outcome_unknown` even when the failed observation never reached the Client. |
 | `command/exec/write` | Base64 stdin bytes, EOF, or both for this connection's process. The receipt covers this input operation. Reads continue while a bounded input batch is backpressured. A missing admission reply after possible delivery, a missing final receipt, or a write failure with possible partial effects returns `outcome_unknown`. |
 | `command/exec/resize` | Validate and apply a PTY size for this connection's process. |
 | `command/exec/terminate` | Request native cancellation. Receipt does not prove termination. |
