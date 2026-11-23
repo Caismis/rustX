@@ -64,8 +64,26 @@ resource candidate. A missing leaf is accepted only after the Client proves
 its Workspace root. Invalid or unavailable instructions fail resource
 adoption while independent configuration can still apply. The User
 instructions are read by the Server and applied before Workspace
-instructions. Workspace Skill discovery and automatic watch and repair
-still require a Client-owned implementation.
+instructions. Automatic watching and repair still require a Client-owned
+implementation.
+
+## Workspace Skill discovery
+
+An admitted Workspace uses the existing descriptor-relative metadata,
+directory and range RPCs for Skill discovery. User collections use the
+Server filesystem. Both sources apply the same collection traversal,
+ignore rules and frontmatter parser. A package marker ends enumeration;
+discovery reads only the frontmatter with 4 KiB of read-ahead. The Client
+tree publishes paths that its ordinary Read tool can open. A failed read
+of the Workspace collection rejects the candidate and retains the last
+adopted snapshot. An absent collection is an empty source.
+
+The Linux mount fixture places the only copy of the Skill and its 2,050
+assets in the Client view. Its first model request contains only Skill
+metadata and the real path. Native Read brings the body into the third
+request, and the ignored package stays absent. The local Skill group had
+27 passing tests and the configuration group had 359 passing tests and
+two opt-in cases.
 
 ## Client stdio MCP
 
@@ -84,7 +102,7 @@ separate physical identity, admits only frozen launches and authorized tool
 names, and retains physical responsibility through Client close or binding
 settlement.
 
-The Linux mount test observed one `server/discover`, one legacy
+The initial MCP-only Linux mount test observed one `server/discover`, one legacy
 `initialize`, one `tools/list`, one `tools/call` and two fake-provider
 requests. Its 1,100,000-byte text body crossed multiple execution pages and
 both markers were visible in the model continuation. The supervisor suite
@@ -121,7 +139,7 @@ Workflow ordering tests remain separate acceptance requirements.
 | T13, T14, T15, T17, T18 | Session input/configuration/resource layering, safe activation and bootstrap remain open for EXEC-03. |
 | T16 | Model reset and freeze still need cross-entry integration evidence. |
 | T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. MCP declaration cache, optional startup, full delegated composition and composed stdio Tasks and interactions remain open. |
-| T22, T40, T47 | The isolated Workspace test covers Client-owned AGENTS.md on cold load and explicit reconciliation, BOM stripping and retention of the last valid instructions. Skill discovery, automatic watching and reconnect repair remain open. |
+| T22, T40, T47 | The isolated Workspace test covers Client-owned AGENTS.md on cold load and explicit reconciliation, BOM stripping and retention of the last valid instructions. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. Automatic Client watches and reconnect repair remain open. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |

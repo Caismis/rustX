@@ -372,12 +372,15 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
 
         assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
         let fixture = Fixture::new().await;
-        let provider = crate::common::FixtureServer::start(|attempt, _| {
-            if attempt == 0 {
-                crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse")
-            } else {
-                crate::common::sse_fixture("openai_chat", "plain_text.sse")
-            }
+        let skill = ".agents/skills/project/client-guide/SKILL.md";
+        let provider = crate::common::FixtureServer::start(move |attempt, _| match attempt {
+            0 => crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse"),
+            1 => crate::common::FixtureReply::body(
+                200, "OK", "text/event-stream",
+                include_str!("../fixtures/m2/openai_chat/issue189_child_read_tool_call.sse")
+                    .replace("local/runtime.env", skill),
+            ),
+            _ => crate::common::sse_fixture("openai_chat", "plain_text.sse"),
         }).await;
         let home = fixture.root.path().join("home");
         let workspace = fixture.root.path().join("a").canonicalize().unwrap();
@@ -392,6 +395,12 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         authored["agent"]["tools"].as_table_mut().unwrap().insert(
             "sources".into(), toml::from_str("overflow = ['echo']").unwrap()
         );
+        authored["agent"].as_table_mut().unwrap().insert(
+            "skills".into(), toml::Value::String("all".into())
+        );
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "builtin".into(), toml::Value::Array(vec![toml::Value::String("read".into())])
+        );
         std::fs::write(catalog, toml::to_string_pretty(&authored).unwrap()).unwrap();
         let (bin, rustx) = isolated_server_pair();
         let launcher = bin.path().join("rustx-execution-client");
@@ -404,6 +413,19 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
         std::fs::create_dir_all(physical.join(".agents")).unwrap();
         std::fs::write(physical.join(".agents/mcp.toml"), "[mcp_servers.overflow]\ncommand = '../fixture-server'\n").unwrap();
         assert!(!workspace.join(".agents/mcp.toml").exists());
+        let skill_path = physical.join(skill);
+        let package = skill_path.parent().unwrap();
+        std::fs::create_dir_all(package).unwrap();
+        std::fs::write(&skill_path, "---\nname: client-guide\ndescription: Client-only discovery metadata\n---\nclient-skill-body-observed-on-demand\n").unwrap();
+        // A package marker must stop enumeration before the listing bound.
+        for index in 0..2050 {
+            std::fs::write(package.join(format!("asset-{index}")), b"decoy").unwrap();
+        }
+        let hidden = physical.join(".agents/skills/ignored");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("SKILL.md"), "---\nname: rejected-skill\ndescription: Ignored source\n---\n").unwrap();
+        std::fs::write(physical.join(".agents/skills/.ignore"), "ignored/\n").unwrap();
+        assert!(!workspace.join(skill).exists());
         std::fs::create_dir(bin.path().join("tmp")).unwrap();
         std::fs::write(&launcher, r#"#!/bin/sh
 set -eu
@@ -448,9 +470,14 @@ for line in sys.stdin:
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
         let requests = provider.request_bodies();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].contains("Client-only discovery metadata"));
+        assert!(requests[0].contains(&*workspace.join(skill).to_string_lossy()));
+        assert!(!requests[0].contains("rejected-skill"));
+        assert!(!requests[0].contains("client-skill-body-observed-on-demand"));
         assert!(requests[1].contains("client-only-output"));
         assert!(requests[1].contains("client-only-end"));
+        assert!(requests[2].contains("client-skill-body-observed-on-demand"));
         assert!(!workspace.join("stdio-requests").exists());
         let observed = std::fs::read_to_string(physical.join("stdio-requests")).unwrap();
         let messages: Vec<_> = observed.lines().collect();

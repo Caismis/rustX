@@ -5,8 +5,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use rustx_execution_protocol::EntryKind;
 
 use super::package::SKILL_MARKDOWN_FILE;
+use super::tree::{Entry, Native, SkillTree};
 use crate::runtime::CancellationSignal;
 
 pub(crate) const IGNORE_FILES: [&str; 3] = [".gitignore", ".ignore", ".fdignore"];
@@ -33,20 +35,18 @@ pub(crate) fn hidden(name: &std::ffi::OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b".") || name == "node_modules"
 }
 
-pub(crate) fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
-    let canonical = std::fs::canonicalize(path)?;
-    if !canonical.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotADirectory,
-            "Skill collection is not a directory",
-        ));
-    }
-    Ok(canonical)
+pub(crate) fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
+    collect_from(root, signal, &Native)
 }
 
-pub(crate) fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
+pub(super) fn collect_from(
+    root: &Path,
+    signal: &CancellationSignal,
+    tree: &dyn SkillTree,
+) -> Collection {
     let mut scanner = Scanner {
         signal,
+        tree,
         ancestors: BTreeSet::new(),
         rules: Vec::new(),
         remaining_entries: MAX_COLLECTION_ENTRIES,
@@ -65,6 +65,7 @@ pub(crate) fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
 
 struct Scanner<'a> {
     signal: &'a CancellationSignal,
+    tree: &'a dyn SkillTree,
     ancestors: BTreeSet<PathBuf>,
     rules: Vec<Gitignore>,
     remaining_entries: usize,
@@ -76,7 +77,7 @@ struct Scanner<'a> {
 impl Scanner<'_> {
     fn visit(&mut self, path: &Path, depth: usize) -> std::io::Result<()> {
         crate::package_io::check_cancelled(self.signal)?;
-        let canonical = std::fs::canonicalize(path)?;
+        let canonical = self.tree.canonical(path)?;
         // Following links must not turn an ancestor link into infinite recursion.
         if !self.ancestors.insert(canonical.clone()) {
             return Ok(());
@@ -90,11 +91,12 @@ impl Scanner<'_> {
         let mut builder = GitignoreBuilder::new(path);
         for name in IGNORE_FILES {
             let file = path.join(name);
-            self.record_link(&file);
-            crate::bounded_file::record_read(&file);
-            if let Ok(target) = std::fs::canonicalize(&file)
-                && target.is_file()
+            self.tree.observe(&file);
+            if self
+                .entry(&file)?
+                .is_some_and(|entry| entry.kind == EntryKind::RegularFile)
             {
+                let target = self.tree.canonical(&file)?;
                 self.add_ignore(&mut builder, &file, &target)?;
             }
         }
@@ -113,7 +115,10 @@ impl Scanner<'_> {
         target: &Path,
     ) -> std::io::Result<()> {
         let limit = self.remaining_ignore_bytes.min(MAX_IGNORE_FILE_BYTES);
-        let bytes = crate::bounded_file::read_with_limit(target, limit).map_err(invalid_data)?;
+        let bytes = self
+            .tree
+            .read_file(target, limit)
+            .map_err(|error| invalid_data(error.to_string()))?;
         self.remaining_ignore_bytes -= bytes.len() as u64;
         for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
             crate::package_io::check_cancelled(self.signal)?;
@@ -140,10 +145,12 @@ impl Scanner<'_> {
         Ok(())
     }
 
-    fn record_link(&mut self, path: &Path) {
-        if path.is_symlink() {
+    fn entry(&mut self, path: &Path) -> std::io::Result<Option<Entry>> {
+        let entry = self.tree.entry(path)?;
+        if entry.as_ref().is_some_and(|entry| entry.link) {
             self.found.links.push(path.to_path_buf());
         }
+        Ok(entry)
     }
 
     fn ignored(&self, path: &Path, directory: bool) -> bool {
@@ -157,52 +164,41 @@ impl Scanner<'_> {
 
     fn children(&mut self, path: &Path, depth: usize) -> std::io::Result<()> {
         let marker = path.join(SKILL_MARKDOWN_FILE);
-        self.record_link(&marker);
-        if marker.is_file() && !self.ignored(&marker, false) {
+        let marker_kind = self.entry(&marker)?.map(|entry| entry.kind);
+        if marker_kind == Some(EntryKind::RegularFile) && !self.ignored(&marker, false) {
             return self.offer(marker);
         }
         let limit = MAX_DIRECTORY_ENTRIES.min(self.remaining_entries);
-        let mut entries = Vec::new();
-        for (index, entry) in std::fs::read_dir(path)?.enumerate() {
-            crate::package_io::check_cancelled(self.signal)?;
-            if index == limit {
-                let message = if limit == MAX_DIRECTORY_ENTRIES {
-                    format!("Skill collection directory exceeds {MAX_DIRECTORY_ENTRIES} entries")
-                } else {
-                    format!("Skill collection exceeds {MAX_COLLECTION_ENTRIES} entries")
-                };
-                return Err(invalid_data(message));
-            }
-            self.remaining_entries -= 1;
-            if let Ok(entry) = entry {
-                entries.push(entry.path());
-            }
+        let mut entries = self.tree.children(path, limit + 1)?;
+        if entries.len() > limit {
+            let message = if limit == MAX_DIRECTORY_ENTRIES {
+                format!("Skill collection directory exceeds {MAX_DIRECTORY_ENTRIES} entries")
+            } else {
+                format!("Skill collection exceeds {MAX_COLLECTION_ENTRIES} entries")
+            };
+            return Err(invalid_data(message));
         }
+        self.remaining_entries -= entries.len();
         entries.sort();
         for entry in entries {
             crate::package_io::check_cancelled(self.signal)?;
             if entry.file_name().is_some_and(hidden) {
                 continue;
             }
-            if entry != marker {
-                self.record_link(&entry);
-            }
-            let Ok(metadata) = std::fs::metadata(&entry) else {
+            let kind = if entry == marker {
+                marker_kind
+            } else {
+                self.entry(&entry)?.map(|entry| entry.kind)
+            };
+            let Some(kind) = kind else {
                 continue;
             };
-            if self.ignored(&entry, metadata.is_dir()) {
+            if self.ignored(&entry, kind == EntryKind::Directory) {
                 continue;
             }
-            if metadata.is_dir() {
-                if let Err(error) = self.visit(&entry, depth + 1)
-                    && matches!(
-                        error.kind(),
-                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::InvalidData
-                    )
-                {
-                    return Err(error);
-                }
-            } else if metadata.is_file() && is_markdown(&entry) && depth == 0 {
+            if kind == EntryKind::Directory {
+                self.visit(&entry, depth + 1)?;
+            } else if kind == EntryKind::RegularFile && is_markdown(&entry) && depth == 0 {
                 self.offer(entry)?;
             }
         }

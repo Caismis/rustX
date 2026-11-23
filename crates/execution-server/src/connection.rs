@@ -1223,6 +1223,27 @@ impl LocalConnection {
         limit: u32,
         expected_revision: Option<&str>,
     ) -> io::Result<DirectoryListing> {
+        self.directory_page_until(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            Instant::now() + PAGE_REQUEST_TIMEOUT,
+        )
+    }
+
+    /// Reads one directory page using the absolute deadline of the source capture.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::directory_page`], including transport timeout.
+    pub fn directory_page_until(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+    ) -> io::Result<DirectoryListing> {
         if !self.capabilities.contains(&Capability::DirectoryMetadata) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -1238,12 +1259,17 @@ impl LocalConnection {
                 "invalid directory page request",
             ));
         }
-        let reply = self.exchange(&ClientRequest::ReadDirectory {
-            relative_path: relative_path.to_path_buf(),
-            offset,
-            limit,
-            expected_revision: expected_revision.map(str::to_owned),
-        })?;
+        let reply = self.exchange_admitted(
+            &ClientRequest::ReadDirectory {
+                relative_path: relative_path.to_path_buf(),
+                offset,
+                limit,
+                expected_revision: expected_revision.map(str::to_owned),
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }

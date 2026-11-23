@@ -636,6 +636,18 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    pub(crate) fn read_workspace_source<T>(
+        &self,
+        path: &Path,
+        deadline: Instant,
+        mut read: impl FnMut(&mut LocalConnection, &Path) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.with_bounded_data_connection(deadline, |connection| {
+            let relative = workspace_entry(self.workspace(), path)?;
+            read(connection, &relative)
+        })
+    }
+
     async fn wait_for_connection<T>(
         &self,
         deadline: Instant,

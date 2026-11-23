@@ -1,0 +1,236 @@
+//! Physical readers for the shared Skill collection scanner.
+
+use std::io::{self, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use rustx_execution_protocol::{EntryKind, FileStamp, MAX_DIRECTORY_PAGE_ENTRIES};
+
+use crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint;
+use crate::runtime::CancellationSignal;
+
+pub(super) trait SkillTree {
+    fn canonical(&self, path: &Path) -> io::Result<PathBuf>;
+    fn entry(&self, path: &Path) -> io::Result<Option<Entry>>;
+    fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>>;
+    fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>>;
+    fn frontmatter(&self, path: &Path, signal: &CancellationSignal) -> io::Result<Vec<u8>>;
+    fn observe(&self, path: &Path);
+}
+
+pub(super) struct Entry {
+    pub(super) kind: EntryKind,
+    pub(super) link: bool,
+}
+
+pub(super) struct Native;
+
+impl SkillTree for Native {
+    fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+        path.canonicalize()
+    }
+
+    fn entry(&self, path: &Path) -> io::Result<Option<Entry>> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let link = metadata.is_symlink();
+        let target = if link {
+            std::fs::metadata(path).ok()
+        } else {
+            Some(metadata)
+        };
+        let kind = match target {
+            Some(target) if target.is_dir() => EntryKind::Directory,
+            Some(target) if target.is_file() => EntryKind::RegularFile,
+            _ => EntryKind::Other,
+        };
+        Ok(Some(Entry { kind, link }))
+    }
+
+    fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
+        std::fs::read_dir(path)?
+            .take(limit)
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect()
+    }
+
+    fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>> {
+        crate::bounded_file::read_with_limit(path, bound).map_err(io::Error::other)
+    }
+
+    fn frontmatter(&self, path: &Path, signal: &CancellationSignal) -> io::Result<Vec<u8>> {
+        super::frontmatter::read(path, signal)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    fn observe(&self, path: &Path) {
+        crate::bounded_file::record_read(path);
+    }
+}
+
+pub(super) struct Client<'a> {
+    endpoint: &'a LocalExecutionEndpoint,
+    deadline: Instant,
+    signal: &'a CancellationSignal,
+}
+
+impl<'a> Client<'a> {
+    pub(super) fn new(
+        endpoint: &'a LocalExecutionEndpoint,
+        signal: &'a CancellationSignal,
+    ) -> Self {
+        Self {
+            endpoint,
+            deadline: Instant::now() + Duration::from_secs(5),
+            signal,
+        }
+    }
+}
+
+impl SkillTree for Client<'_> {
+    fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+        // Bound tree metadata and reads never follow links. The lexical path
+        // is the exact path subsequent tools submit to the same Client.
+        Ok(path.to_path_buf())
+    }
+
+    fn entry(&self, path: &Path) -> io::Result<Option<Entry>> {
+        crate::package_io::check_cancelled(self.signal)?;
+        match self
+            .endpoint
+            .read_workspace_source(path, self.deadline, |channel, relative| {
+                channel.entry_metadata_until(relative, self.deadline)
+            }) {
+            Ok(metadata) => Ok(Some(Entry {
+                kind: metadata.kind,
+                link: metadata.kind == EntryKind::Symlink,
+            })),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
+        let mut children = Vec::new();
+        let mut offset = 0;
+        let mut revision = None;
+        while children.len() < limit {
+            crate::package_io::check_cancelled(self.signal)?;
+            let count = u32::try_from((limit - children.len()).min(MAX_DIRECTORY_PAGE_ENTRIES))
+                .expect("bounded directory page");
+            let page =
+                self.endpoint
+                    .read_workspace_source(path, self.deadline, |channel, relative| {
+                        channel.directory_page_until(
+                            relative,
+                            offset,
+                            count,
+                            revision.as_deref(),
+                            self.deadline,
+                        )
+                    })?;
+            if let (Some(previous), Some(first)) = (children.last(), page.entries.first())
+                && previous >= &path.join(&first.name)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Client Skill directory pages are out of order",
+                ));
+            }
+            children.extend(page.entries.into_iter().map(|entry| path.join(entry.name)));
+            let Some(next) = page.next_offset else {
+                break;
+            };
+            offset = next;
+            revision = Some(page.revision);
+        }
+        Ok(children)
+    }
+
+    fn read_file(&self, path: &Path, bound: u64) -> io::Result<Vec<u8>> {
+        self.endpoint
+            .read_workspace_source(path, self.deadline, |channel, relative| {
+                channel
+                    .read_bounded_file(relative, bound, self.deadline, || {
+                        crate::package_io::check_cancelled(self.signal)
+                    })
+                    .map(|(bytes, _stamp)| bytes)
+            })
+    }
+
+    fn frontmatter(&self, path: &Path, signal: &CancellationSignal) -> io::Result<Vec<u8>> {
+        let reader = ClientFile {
+            source: self,
+            path,
+            stamp: None,
+            offset: Some(0),
+        };
+        super::frontmatter::prefix(
+            &mut BufReader::with_capacity(super::frontmatter::BUFFER_BYTES, reader),
+            signal,
+        )
+        .map(|(bytes, _)| bytes)
+    }
+
+    fn observe(&self, _path: &Path) {}
+}
+
+struct ClientFile<'a> {
+    source: &'a Client<'a>,
+    path: &'a Path,
+    stamp: Option<FileStamp>,
+    offset: Option<u64>,
+}
+
+impl Read for ClientFile<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let Some(offset) = self.offset else {
+            return Ok(0);
+        };
+        let count = u32::try_from(buffer.len().min(super::frontmatter::BUFFER_BYTES))
+            .expect("bounded read-ahead");
+        if count == 0 {
+            return Ok(0);
+        }
+        let revision = self.stamp.as_ref().map(|stamp| stamp.revision.as_str());
+        let page = self
+            .source
+            .endpoint
+            .read_workspace_source(self.path, self.source.deadline, |channel, relative| {
+                channel.read_range_admitted(
+                    relative,
+                    offset,
+                    count,
+                    revision,
+                    self.source.deadline,
+                    || crate::package_io::check_cancelled(self.source.signal),
+                    || (),
+                )
+            })
+            .map_err(|error| {
+                // A wire failure is a failed observation, distinct from invalid YAML.
+                if error.kind() == io::ErrorKind::InvalidData {
+                    io::Error::other(error)
+                } else {
+                    error
+                }
+            })?;
+        if self
+            .stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp != &page.metadata)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Client Skill changed while reading its definition",
+            ));
+        }
+        self.stamp = Some(page.metadata);
+        self.offset = page.next_offset;
+        buffer[..page.bytes.len()].copy_from_slice(&page.bytes);
+        Ok(page.bytes.len())
+    }
+}

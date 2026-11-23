@@ -24,6 +24,11 @@
 //! existing safe boundary. Bodies and assets remain live Tool inputs.
 
 use std::collections::BTreeMap;
+use std::io;
+
+use rustx_execution_protocol::EntryKind;
+
+use super::tree::{Client, Native, SkillTree};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::identity::{SkillId, SkillVersionId};
@@ -293,6 +298,7 @@ struct Candidate {
     location: String,
     canonical: PathBuf,
     package: Option<SkillPackage>,
+    bound: bool,
 }
 
 impl SkillDiscovery {
@@ -338,34 +344,58 @@ impl SkillDiscovery {
     }
 
     /// Discovers the effective Skill set in source and collection precedence.
+    ///
+    /// # Panics
+    /// Panics if the internal native reader returns an uncaught collection error.
     #[must_use]
     pub fn discover(&self) -> SkillDiscoveryOutcome {
+        self.discover_with(None)
+            .expect("native Skill observation reports collection errors as diagnostics")
+    }
+
+    /// Captures Workspace packages in the authenticated Client filesystem.
+    pub(crate) fn discover_bound(
+        &self,
+        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    ) -> io::Result<SkillDiscoveryOutcome> {
+        let client = Client::new(endpoint, &self.cancellation);
+        self.discover_with(Some(&client))
+    }
+
+    fn discover_with(&self, client: Option<&Client<'_>>) -> io::Result<SkillDiscoveryOutcome> {
         let mut diagnostics = Vec::new();
         let mut candidates = Vec::new();
-        let automatic = &self.config.automatic;
+        let mut roots = Vec::new();
         for source in [SkillSource::Workspace, SkillSource::User] {
-            let roots: Vec<_> = automatic
+            let workspace_client = client.filter(|_| source == SkillSource::Workspace);
+            let tree: &dyn SkillTree = workspace_client.map_or(&Native, |tree| tree);
+            for root in self
+                .config
+                .automatic
                 .iter()
                 .filter(|root| root.source == source)
-                .collect();
-            candidates.extend(collect_automatic_source(
-                source,
-                &roots,
-                &mut diagnostics,
-                &self.cancellation,
-            ));
+            {
+                let canonical = tree
+                    .canonical(&root.root)
+                    .unwrap_or_else(|_| root.root.clone());
+                roots.push(AutomaticSkillRoot {
+                    source,
+                    root: canonical,
+                });
+                candidates.extend(collect_automatic_source(
+                    root,
+                    &mut diagnostics,
+                    &self.cancellation,
+                    tree,
+                    workspace_client.is_some(),
+                )?);
+            }
         }
         let mut outcome = merge_candidates(candidates, diagnostics);
-        outcome.roots = automatic
-            .iter()
-            .map(|root| AutomaticSkillRoot {
-                source: root.source,
-                root: std::fs::canonicalize(&root.root).unwrap_or_else(|_| root.root.clone()),
-            })
-            .collect();
-        outcome.roots.sort();
-        outcome.roots.dedup();
-        outcome
+        roots.sort();
+        roots.dedup();
+        outcome.roots = roots;
+        Ok(outcome)
     }
 }
 
@@ -377,7 +407,7 @@ fn merge_candidates(
     let mut identities: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
     let mut seen = std::collections::BTreeSet::new();
     for candidate in candidates {
-        if seen.insert(candidate.canonical.clone()) {
+        if seen.insert((candidate.bound, candidate.canonical.clone())) {
             identities
                 .entry(candidate.name.clone())
                 .or_default()
@@ -448,97 +478,109 @@ fn merge_candidates(
 }
 
 fn collect_automatic_source(
-    source: SkillSource,
-    roots: &[&AutomaticSkillRoot],
+    root: &AutomaticSkillRoot,
     diagnostics: &mut Vec<SkillDiagnostic>,
     cancellation: &crate::runtime::CancellationSignal,
-) -> Vec<Candidate> {
-    let mut files = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for root in roots {
-        crate::bounded_file::record_read(&root.root);
-        let canonical = match super::discovery::canonical_root(&root.root) {
-            Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                diagnostics.push(SkillDiagnostic::SourceRootMissing {
-                    source,
-                    root: root.root.display().to_string(),
-                });
-                continue;
+    tree: &dyn SkillTree,
+    bound: bool,
+) -> io::Result<Vec<Candidate>> {
+    let source = root.source;
+    tree.observe(&root.root);
+    let collection = match tree.entry(&root.root) {
+        Ok(Some(entry)) if entry.kind == EntryKind::Directory => tree.canonical(&root.root),
+        Ok(None) => {
+            diagnostics.push(SkillDiagnostic::SourceRootMissing {
+                source,
+                root: root.root.display().to_string(),
+            });
+            return Ok(Vec::new());
+        }
+        Ok(Some(_)) => Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "Skill collection is not a directory",
+        )),
+        Err(error) => Err(error),
+    }
+    .map(|directory| super::discovery::collect_from(&directory, cancellation, tree));
+    let files = match collection {
+        Ok(collection) if collection.error.is_none() => collection.files,
+        failed => {
+            let error = match failed {
+                Ok(collection) => collection.error.expect("matched failed collection"),
+                Err(error) => error,
+            };
+            if bound {
+                return Err(error);
             }
-            Err(error) => {
-                diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-                    source,
-                    root: root.root.display().to_string(),
-                    detail: error.to_string(),
-                });
-                continue;
-            }
-        };
-        let collection = super::discovery::collect(&canonical, cancellation);
-        if let Some(error) = collection.error {
             diagnostics.push(SkillDiagnostic::SourceRootInvalid {
                 source,
                 root: root.root.display().to_string(),
                 detail: error.to_string(),
             });
+            return Ok(Vec::new());
+        }
+    };
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for file in files {
+        tree.observe(&file);
+        let canonical = match tree.canonical(&file) {
+            Ok(canonical) => canonical,
+            Err(error) if bound => return Err(error),
+            Err(_) => continue,
+        };
+        tree.observe(&canonical);
+        if !seen.insert(canonical.clone()) {
             continue;
         }
-        for file in collection.files {
-            crate::bounded_file::record_read(&file);
-            let Ok(path) = std::fs::canonicalize(&file) else {
-                continue;
-            };
-            crate::bounded_file::record_read(&path);
-            if seen.insert(path.clone()) {
-                files.push((file, path));
-            }
-        }
-    }
-    files
-        .into_iter()
-        .filter_map(|(file, canonical)| {
-            let declared = file
-                .file_name()
-                .is_some_and(|name| name == SKILL_MARKDOWN_FILE);
-            let fallback_name = file.parent()?.file_name()?.to_string_lossy().into_owned();
-            let location = file.display().to_string();
-            let result = discover_package(&file, &canonical, &fallback_name, source, cancellation);
-            match result {
-                Ok((package, warnings)) => {
-                    for detail in warnings {
-                        diagnostics.push(SkillDiagnostic::PackageWarning {
-                            source,
-                            package: location.clone(),
-                            detail,
-                        });
-                    }
-                    Some(Candidate {
-                        source,
-                        name: package.name().to_owned(),
-                        location,
-                        canonical,
-                        package: Some(package),
-                    })
-                }
-                Err(cause) if declared => {
-                    diagnostics.push(SkillDiagnostic::PackageInvalid {
+        let Some(directory) = file.parent().and_then(Path::file_name) else {
+            continue;
+        };
+        let fallback_name = directory.to_string_lossy().into_owned();
+        let location = file.display().to_string();
+        let result = match tree.frontmatter(&canonical, cancellation) {
+            Ok(header) => discover_package(&file, &canonical, &fallback_name, source, &header),
+            Err(error) if bound && error.kind() != io::ErrorKind::InvalidData => return Err(error),
+            Err(error) => Err(SkillPackageError::MalformedFrontmatter {
+                directory: fallback_name.clone(),
+                detail: error.to_string(),
+            }),
+        };
+        let (name, package) = match result {
+            Ok((package, warnings)) => {
+                diagnostics.extend(warnings.into_iter().map(|detail| {
+                    SkillDiagnostic::PackageWarning {
                         source,
                         package: location.clone(),
-                        cause,
-                    });
-                    Some(Candidate {
-                        source,
-                        name: fallback_name,
-                        location,
-                        canonical,
-                        package: None,
-                    })
-                }
-                Err(_) => None, // Ordinary Markdown without a Skill definition is inert.
+                        detail,
+                    }
+                }));
+                (package.name().to_owned(), Some(package))
             }
-        })
-        .collect()
+            Err(cause)
+                if file
+                    .file_name()
+                    .is_some_and(|name| name == SKILL_MARKDOWN_FILE) =>
+            {
+                diagnostics.push(SkillDiagnostic::PackageInvalid {
+                    source,
+                    package: location.clone(),
+                    cause,
+                });
+                (fallback_name, None)
+            }
+            Err(_) => continue,
+        };
+        candidates.push(Candidate {
+            source,
+            name,
+            location,
+            canonical,
+            package,
+            bound,
+        });
+    }
+    Ok(candidates)
 }
 
 /// Parses, validates, and hashes one Skill instruction file.
@@ -547,7 +589,7 @@ fn discover_package(
     canonical: &Path,
     directory_name: &str,
     source: SkillSource,
-    cancellation: &crate::runtime::CancellationSignal,
+    header: &[u8],
 ) -> Result<(SkillPackage, Vec<String>), SkillPackageError> {
     let location = path
         .to_str()
@@ -559,8 +601,7 @@ fn discover_package(
         directory: directory_name.to_owned(),
         detail,
     };
-    let header = super::frontmatter::read(canonical, cancellation).map_err(malformed)?;
-    let markdown = String::from_utf8_lossy(&header);
+    let markdown = String::from_utf8_lossy(header);
     let mut frontmatter = parse_frontmatter(&markdown).map_err(malformed)?;
     if frontmatter.name.is_empty() {
         directory_name.clone_into(&mut frontmatter.name);

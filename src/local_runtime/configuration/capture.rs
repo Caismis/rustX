@@ -854,12 +854,9 @@ impl UserConfigManager {
         config.agent.workflows.retain(|id| {
             workflows.enabled_by_owning_scope(id, &scoped_workflows[0], &scoped_workflows[1])
         });
-        let discover_skills = || {
-            self.discover_skills(authored_workspace)
-                .ok_or_else(|| LaunchFailure::from("cannot open Workspace for Skill discovery"))
-        };
-        let skill_discovery = discover_skills()?;
-        let skill_sources = authored_workspace.map_or_else(
+        let skill_workspace =
+            workspace_endpoint.map_or(authored_workspace, |_| Some(locations.workspace.as_path()));
+        let skill_sources = skill_workspace.map_or_else(
             || {
                 vec![crate::skills::AutomaticSkillRoot::user(
                     &host.home_directory,
@@ -867,6 +864,29 @@ impl UserConfigManager {
             },
             |root| crate::skills::automatic_skill_roots(Some(&host.home_directory), root),
         );
+        let discover_skills = || {
+            let discovery =
+                crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
+                    automatic: skill_sources.clone(),
+                })
+                .with_cancellation(self.resource_io.clone());
+            if let Some(endpoint) = workspace_endpoint {
+                discovery.discover_bound(endpoint).map_err(|error| {
+                    LaunchFailure::at(
+                        Some(
+                            crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root,
+                        ),
+                        "agent.skills",
+                        "Workspace Skill discovery is unavailable from the Execution Client",
+                        "check the bound Workspace and Skill collection",
+                        error.to_string(),
+                    )
+                })
+            } else {
+                Ok(discovery.discover())
+            }
+        };
+        let skill_discovery = discover_skills()?;
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
         {
@@ -1107,7 +1127,7 @@ impl UserConfigManager {
         }
         // The project Skill collection is the revision key of the complete
         // User and Workspace inventory.
-        let skill_scope = authored_workspace.map_or_else(
+        let skill_scope = skill_workspace.map_or_else(
             || crate::skills::AutomaticSkillRoot::user(&host.home_directory),
             crate::skills::AutomaticSkillRoot::workspace,
         );

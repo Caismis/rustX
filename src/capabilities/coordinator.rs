@@ -1153,13 +1153,27 @@ impl CapabilityCoordinator {
         } else {
             let config = inputs.skill_discovery.clone();
             let signal = cancellation.cloned().unwrap_or_default();
+            let scope = self.inner.mcp_owner.workspace.execution_scope().cloned();
             let discovered = tokio::task::spawn_blocking(move || {
-                SkillDiscovery::with_config(config)
-                    .with_cancellation(signal)
-                    .discover()
+                let requires_workspace = config
+                    .automatic
+                    .iter()
+                    .any(|root| root.source == crate::skills::SkillSource::Workspace);
+                let discovery = SkillDiscovery::with_config(config).with_cancellation(signal);
+                if let Some(scope) = scope
+                    && requires_workspace
+                {
+                    let endpoint = scope.endpoint()?;
+                    discovery.discover_bound(&endpoint)
+                } else {
+                    Ok(discovery.discover())
+                }
             })
             .await
-            .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+            .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?
+            .map_err(|error| {
+                CapabilityPreparationError::Mcp(format!("Skill discovery: {error}"))
+            })?;
             if cancellation.is_some_and(crate::runtime::CancellationSignal::is_cancelled) {
                 return Err(CapabilityPreparationError::ConversationInactive);
             }
