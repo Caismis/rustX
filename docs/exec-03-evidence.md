@@ -563,6 +563,24 @@ allocations. Concurrent compilation and the different HTTP framing limit
 comparisons with the JSON runs. The recorded samples isolate JSON and SSE
 in separate runs.
 
+The staged release Server at `2f307cb83d39a5e093e09504cb79284c468ec0b4`
+filled all 128 POST SSE slots from independent Sessions on four WebSocket
+connections. Each event held a 3 MiB prefix until all 128 peers reached
+the gate, then completed a body just under 4 MiB. The Server received
+536,358,400 encoded bytes, with 402,653,184 text bytes flushed before
+release. RSS rose from 451,424 KiB after attachment to 1,436,428 KiB at
+the gate and peaked at 1,973,096 KiB. Startup and attachment took
+20.479 s, the last prefix reached the gate after 2.401 s, and terminal
+settlement took 1.615 s after release. Procfs recorded 15.02 s user CPU
+and 10.33 s system CPU after attachment.
+
+Each of the 128 ledgers held one canonical tool commit and one terminal.
+The peer counted 128 MCP calls, 256 fake-provider business requests and
+128 auxiliary requests. Server scratch stayed empty. The 32-stream
+sample used a different per-event size and root revision. This sample
+verifies full POST parser occupancy. The independent subscription test
+above verifies the separate GET quota and resume handling.
+
 The standalone HTTP process fixture reused the same measure for a 327,680-byte
 result. Its App Server peaked at 188,688 KiB (0.79 s user and 0.03 s system
 CPU), its Client at 22,868 KiB, and whole-fixture time was 1.982 s. The
@@ -682,5 +700,27 @@ probe measurements include competing local builds, especially disk
 contention during publication. The debug Server and release Client
 used different workloads and build profiles.
 
-Final FULL and Merge verification, native macOS and the complete Browser
-acceptance matrix remain open.
+The GitHub Linux [Boundary job for `2f307cb83`](https://github.com/Caismis/rustX/actions/runs/45257812808/job/137984751641)
+passed 882 Rust tests with 12 existing ignores, the 55 provider-emulator
+tests, and the lane inventory check. The [browser coverage job](https://github.com/Caismis/rustX/actions/runs/45257812808/job/138008766504)
+verified all 795 registered cases, with 793 passes and two intentional skips.
+These jobs used the earlier fixture configuration.
+
+The same [FULL run](https://github.com/Caismis/rustX/actions/runs/45257812808)
+finished with 14 successful jobs and the two expected skips.
+[Merge verification](https://github.com/Caismis/rustX/actions/runs/45257812808/job/138025301211)
+recorded head `2f307cb83d39a5e093e09504cb79284c468ec0b4`, base
+`5ff54d8327917bca2cdbc9647d7da197afe8beed` and tested merge
+`bf61a71e945eefdb13a050f8ee8f86d2bc5ada15`.
+
+The preceding hosted [Boundary job](https://github.com/Caismis/rustX/actions/runs/45252112988/job/137964851571)
+lost rustc to SIGKILL during Server test compilation. The same compile and
+staging command under a four-CPU, 15,005,900 KiB cgroup with swap disabled
+reproduced one OOM kill. Increasing codegen units and enabling incremental
+compilation in separate runs each reproduced that kill. The original
+flags compiled and staged the entire Boundary target set in a 20 GiB
+cgroup in 12m 28s, with a 17,680,314,368-byte cgroup peak and zero OOM
+kills. The successful hosted Boundary job kept its original settings.
+
+The fixture and evidence follow-ups require their own exact-head FULL
+and Merge verification. Native macOS verification is deferred.
