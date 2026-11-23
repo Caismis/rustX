@@ -92,45 +92,31 @@ impl Drop for CancelOnDrop {
 impl SessionRuntimeManager {
     /// Probe exactly the authored source, without changing Session resources.
     /// The native task owns cleanup even if its RPC waiter is dropped.
-    pub(crate) async fn probe_mcp(
+    pub(crate) async fn inspect_mcp_source(
         &self,
         target: SourceTarget,
         execution_session: Option<&SessionId>,
         id: McpServerId,
         revision: String,
+        kind: Option<crate::tools::mcp::catalog::CatalogKind>,
         request_owner: impl Send + 'static,
     ) -> Result<McpProbeResult, SettingsError> {
+        let manager = self.clone();
+        let session = execution_session.cloned();
         probe_query(
             self.configuration.clone(),
             target,
-            execution_session.map(|session| self.execution_scope(session)),
+            move |target| {
+                let Some(workspace) = target.workspace() else {
+                    return Ok(session.as_ref().map(|id| manager.execution_scope(id)));
+                };
+                manager
+                    .source_catalog_scope(session.as_ref(), Some(workspace))
+                    .map_err(|_| SettingsError::ExecutionUnavailable)
+            },
             id,
             revision,
-            None,
-            request_owner,
-            self.mcp_probes.clone(),
-        )
-        .await
-    }
-}
-
-impl SessionRuntimeManager {
-    pub(crate) async fn mcp_catalog(
-        &self,
-        target: SourceTarget,
-        execution_session: Option<&SessionId>,
-        id: McpServerId,
-        revision: String,
-        kind: crate::tools::mcp::catalog::CatalogKind,
-        request_owner: impl Send + 'static,
-    ) -> Result<McpProbeResult, SettingsError> {
-        probe_query(
-            self.configuration.clone(),
-            target,
-            execution_session.map(|session| self.execution_scope(session)),
-            id,
-            revision,
-            Some(kind),
+            kind,
             request_owner,
             self.mcp_probes.clone(),
         )
@@ -145,14 +131,26 @@ async fn probe(
     id: McpServerId,
     revision: String,
 ) -> Result<McpProbeResult, SettingsError> {
-    probe_query(owner, target, None, id, revision, None, (), Arc::default()).await
+    probe_query(
+        owner,
+        target,
+        |_| Ok(None),
+        id,
+        revision,
+        None,
+        (),
+        Arc::default(),
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)] // one bounded source read and its independently retained probe
 async fn probe_query(
     owner: UserConfigManager,
     target: SourceTarget,
-    execution: Option<SessionExecutionScope>,
+    resolve_scope: impl Fn(&SourceTarget) -> Result<Option<SessionExecutionScope>, SettingsError>
+    + Send
+    + 'static,
     id: McpServerId,
     revision: String,
     query: Option<crate::tools::mcp::catalog::CatalogKind>,
@@ -180,14 +178,16 @@ async fn probe_query(
         let capture_target = target.clone();
         let capture_id = id.clone();
         let capture_revision = revision.clone();
-        let (binding, workspace) = tokio::task::spawn_blocking(move || {
-            capture(
+        let (binding, workspace, resolve_scope) = tokio::task::spawn_blocking(move || {
+            let execution = resolve_scope(&capture_target)?;
+            let (binding, workspace) = capture(
                 &capture_owner,
                 &capture_target,
                 &capture_id,
                 &capture_revision,
                 execution.as_ref(),
-            )
+            )?;
+            Ok::<_, SettingsError>((binding, workspace, resolve_scope))
         })
         .await
         .map_err(|_| SettingsError::Io)??;
@@ -217,6 +217,10 @@ async fn probe_query(
         let check_revision = revision.clone();
         let scope = workspace.execution_scope().cloned();
         tokio::task::spawn_blocking(move || {
+            if target.workspace().is_some() && scope.is_none() && resolve_scope(&target)?.is_some()
+            {
+                return Err(SettingsError::ExecutionUnavailable);
+            }
             capture(&owner, &target, &check_id, &check_revision, scope.as_ref())
         })
         .await
@@ -488,7 +492,7 @@ mod tests {
         let result = probe_query(
             owner,
             SourceTarget::User,
-            None,
+            |_| Ok(None),
             McpServerId::new("inventory"),
             revision,
             Some(CatalogKind::Resources),
@@ -563,10 +567,11 @@ os.execv(sys.argv[2], sys.argv[2:])
                 .join(", ")
         );
         let revision = write(&owner, &SourceTarget::User, &config);
+        let scope = execution.scope();
         let query = probe_query(
             owner,
             SourceTarget::User,
-            Some(execution.scope()),
+            move |_| Ok(Some(scope.clone())),
             McpServerId::new("inventory"),
             revision,
             Some(CatalogKind::Resources),
@@ -655,10 +660,11 @@ os.execv(sys.argv[2], sys.argv[2:])
         )
         .await
         .unwrap();
+        let scope = execution.scope();
         let result = probe_query(
             owner,
             SourceTarget::User,
-            Some(execution.scope()),
+            move |_| Ok(Some(scope.clone())),
             id,
             revision,
             None,
@@ -709,10 +715,11 @@ os.execv(sys.argv[2], sys.argv[2:])
         .await
         .unwrap();
         let workspace_probe = |revision| {
+            let scope = execution.scope();
             probe_query(
                 owner.clone(),
                 workspace.clone(),
-                Some(execution.scope()),
+                move |_| Ok(Some(scope.clone())),
                 id.clone(),
                 revision,
                 None,

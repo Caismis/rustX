@@ -196,7 +196,7 @@ impl SessionRuntimeManager {
         let manager = self.clone();
         let (plans, workspace) = tokio::task::spawn_blocking(move || {
             let scope = manager
-                .workflow_catalog_scope(execution_session.as_ref(), target.workspace())
+                .source_catalog_scope(execution_session.as_ref(), target.workspace())
                 .map_err(|_| SettingsError::ExecutionUnavailable)?;
             capture(&manager.configuration, &target, scope)
         })

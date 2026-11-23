@@ -3827,7 +3827,7 @@ mod mcp_race_tests {
         for server in &servers {
             tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                server.control.wait_catalog(),
+                server.control.wait_catalog(1),
             )
             .await
             .unwrap();
@@ -3880,7 +3880,7 @@ mod mcp_race_tests {
         for server in &servers[..limit] {
             tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                server.control.wait_catalog(),
+                server.control.wait_catalog(1),
             )
             .await
             .unwrap();
@@ -3890,7 +3890,7 @@ mod mcp_race_tests {
         servers[limit - 1].control.release_catalog();
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            servers[limit].control.wait_catalog(),
+            servers[limit].control.wait_catalog(1),
         )
         .await
         .unwrap();

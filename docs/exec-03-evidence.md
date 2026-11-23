@@ -151,6 +151,14 @@ listing. A different Session, an unavailable Client document or an
 outstanding recovery record prevents using the Server's Workspace view.
 The recovery check observes the original claim without consuming a receipt.
 
+The same admission applies to the MCP diagnostics. The
+`workspace_mcp_management_requires_its_binding_only_after_reservation`
+regression queries both public RPCs against a real HTTP peer, rejects a
+Session from another Workspace, and parks a third list request while the
+Workspace is reserved. Releasing the peer's response cannot make the old
+authored result current. Subsequent queries leave the exact list count at
+three and the business invocation count at zero.
+
 ## Session-authored configuration
 
 `thread/start` accepts optional `session_config` and `session_resources`.

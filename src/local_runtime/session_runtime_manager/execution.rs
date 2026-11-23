@@ -3485,10 +3485,10 @@ impl SessionRuntimeManager {
         }
     }
 
-    /// Selects the authority for a read-only Workflow authoring catalog.
+    /// Selects the authority for a read-only configuration catalog.
     /// An unclaimed Workspace can describe authored sources. Once reserved,
     /// its catalog requires the exact Session and pins that generation.
-    pub(crate) fn workflow_catalog_scope(
+    pub(crate) fn source_catalog_scope(
         &self,
         session: Option<&SessionId>,
         workspace: Option<&Path>,

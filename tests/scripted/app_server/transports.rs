@@ -411,6 +411,130 @@ async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting()
     .await;
 }
 
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One peer counts requests across the authority change.
+async fn workspace_mcp_management_requires_its_binding_only_after_reservation() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::mcp_probe::McpProbeOutcome;
+    use crate::runtime::identity::McpServerId;
+    use crate::tools::mcp::{
+        catalog::CatalogKind,
+        fixture::streamable_http::{HttpFixture, HttpFixtureControl},
+    };
+
+    let fixture = Fixture::with_session_count(None, 2).await;
+    let control = HttpFixtureControl::new();
+    let peer = HttpFixture::start(control.clone()).await;
+    let target = SourceTarget::Workspace {
+        directory: fixture.workspaces[0].clone(),
+    };
+    let root = fixture.manager.configuration.resource_root(&target);
+    std::fs::create_dir_all(&root).unwrap();
+    let document = format!("[mcp_servers.inspect]\nurl = {:?}\n", peer.endpoint);
+    std::fs::write(root.join("mcp.toml"), &document).unwrap();
+    let revision = crate::local_runtime::settings::revision(Some(document.as_bytes()));
+    let connection = AppServerConnection::new(fixture.host.clone());
+    super::protocol::initialize(&connection).await;
+    let selected = Some(fixture.sessions[0].id.clone());
+    let method = |execution_session, catalog| {
+        let target = target.clone();
+        let id = McpServerId::new("inspect");
+        let expected_revision = revision.clone();
+        if catalog {
+            Method::McpCatalog {
+                target,
+                execution_session,
+                id,
+                expected_revision,
+                kind: CatalogKind::Tools,
+            }
+        } else {
+            Method::McpProbe {
+                target,
+                execution_session,
+                id,
+                expected_revision,
+            }
+        }
+    };
+    let request = |id, call| {
+        connection.handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call,
+        })
+    };
+    for (id, catalog, previous_reads) in [(1, false, 0), (2, true, 1)] {
+        let other = Some(fixture.sessions[1].id.clone());
+        let Response::Failure(failure) = bounded(request(id + 10, method(other, catalog))).await
+        else {
+            panic!("another Workspace's Session must be rejected");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::InvalidParams));
+        assert_eq!(control.catalog_reads(), previous_reads);
+        let Response::Success(success) =
+            bounded(request(id, method(selected.clone(), catalog))).await
+        else {
+            panic!("an unclaimed Workspace's HTTP definition can be queried");
+        };
+        let MethodResult::McpProbe { result } = success.result else {
+            panic!("MCP management result");
+        };
+        assert_eq!(result.outcome, McpProbeOutcome::Reachable);
+        if catalog {
+            assert!(
+                result
+                    .page
+                    .unwrap()
+                    .tools
+                    .iter()
+                    .any(|tool| tool.name == control.echo())
+            );
+        } else {
+            assert!(result.page.is_none());
+        }
+    }
+    assert_eq!(control.catalog_reads(), 2);
+
+    control.hold_catalog();
+    let admitted = request(3, method(selected.clone(), false));
+    let reserve = async {
+        control.wait_catalog(3).await;
+        fixture
+            .manager
+            .reserve_local_execution(&fixture.sessions[0].id)
+            .await
+            .unwrap();
+        control.release_catalog();
+    };
+    let (response, ()) = bounded(async { tokio::join!(admitted, reserve) }).await;
+    let Response::Failure(failure) = response else {
+        panic!("a reservation during the HTTP probe invalidates its authored result");
+    };
+    assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+    for (id, session, catalog) in [
+        (4, selected.clone(), false),
+        (5, selected, true),
+        (6, None, false),
+        (7, None, true),
+    ] {
+        let Response::Failure(failure) = bounded(request(id, method(session, catalog))).await
+        else {
+            panic!("a reserved Workspace may only be read by its admitted Client");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+    }
+    assert_eq!(control.catalog_reads(), 3);
+    assert_eq!(control.accepted_calls(), 0);
+    assert!(fixture.manager.mcp_probes.is_settled());
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    peer.shutdown().await;
+    fixture.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t12_workflow_scratch_disconnect_retains_physical_request_until_settlement() {
     use base64::Engine as _;

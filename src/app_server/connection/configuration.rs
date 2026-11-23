@@ -8,6 +8,27 @@ use crate::app_server::rpc_error::{
 };
 
 impl AppServerConnection {
+    async fn validate_catalog_session(
+        &self,
+        target: &crate::local_runtime::configuration::settings::SourceTarget,
+        session: Option<&crate::local_runtime::session::SessionId>,
+    ) -> Result<(), RpcError> {
+        if let Some(session) = session {
+            let selected = self
+                .sessions
+                .read_session_summary(session)
+                .await
+                .map_err(session_error)?;
+            if target
+                .workspace()
+                .is_some_and(|directory| directory != selected.cwd)
+            {
+                return Err(domain(ErrorData::InvalidParams));
+            }
+        }
+        Ok(())
+    }
+
     async fn resolve_workflow_document(
         &self,
         target: &crate::local_runtime::configuration::settings::SourceTarget,
@@ -66,21 +87,17 @@ impl AppServerConnection {
                 expected_revision,
                 kind,
             } => {
-                if let Some(session) = &execution_session {
-                    self.sessions
-                        .read_session_summary(session)
-                        .await
-                        .map_err(session_error)?;
-                }
+                self.validate_catalog_session(&target, execution_session.as_ref())
+                    .await?;
                 let result = self
                     .host
                     .manager()
-                    .mcp_catalog(
+                    .inspect_mcp_source(
                         target,
                         execution_session.as_ref(),
                         id,
                         expected_revision,
-                        kind,
+                        Some(kind),
                         request_owner,
                     )
                     .await
@@ -278,20 +295,17 @@ impl AppServerConnection {
                 id,
                 expected_revision,
             } => {
-                if let Some(session) = &execution_session {
-                    self.sessions
-                        .read_session_summary(session)
-                        .await
-                        .map_err(session_error)?;
-                }
+                self.validate_catalog_session(&target, execution_session.as_ref())
+                    .await?;
                 let result = self
                     .host
                     .manager()
-                    .probe_mcp(
+                    .inspect_mcp_source(
                         target,
                         execution_session.as_ref(),
                         id,
                         expected_revision,
+                        None,
                         request_owner,
                     )
                     .await
@@ -417,19 +431,8 @@ impl AppServerConnection {
                 cursor,
                 expected_scope,
             } => {
-                if let Some(session) = &execution_session {
-                    let selected = self
-                        .sessions
-                        .read_session_summary(session)
-                        .await
-                        .map_err(session_error)?;
-                    if target
-                        .workspace()
-                        .is_some_and(|directory| directory != selected.cwd)
-                    {
-                        return Err(domain(ErrorData::InvalidParams));
-                    }
-                }
+                self.validate_catalog_session(&target, execution_session.as_ref())
+                    .await?;
                 let catalog = self
                     .host
                     .manager()
