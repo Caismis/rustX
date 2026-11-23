@@ -668,6 +668,22 @@ The probe's one in-flight request measures its own scheduling limit.
 The product Server memory and queue saturation measurements use the
 separate App Server fixtures.
 
+The release Client built from `83fb1b117` ran the same three workloads
+with only the Client executable in its staging directory. Each fresh
+process completed authenticated UDS pairing and Ping, then exited after
+the physical Revoke receipt. The data RPC counts and framed byte totals
+match the debug sample above.
+
+| Workload | Client peak KiB | Startup median ms | Transfer median ms | Shutdown median ms | Source throughput (MiB/s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ReadLines, 64 MiB | 9,880 | 2.79 | 90.69 | 10.37 | 706 |
+| Grep, 64 MiB | 11,200 | 2.84 | 30.08 | 71.01 | 2,128 |
+| Write and commit, 2 MiB | 11,400 | 2.67 | 23.15 | 77.42 | 86.4 |
+
+Each row is the median of three warm-cache runs. The Python peer's peak
+RSS was 18,872–18,892 KiB across the workload medians. Build profile and
+concurrent host load differ from the earlier samples.
+
 ### Paired read probe during Agent Bash development
 
 Collected with the debug Client binary

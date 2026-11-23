@@ -319,7 +319,7 @@ child path independently of the stdio relay fixture.
 | T22, T40, T47 | Isolated Workspace tests cover Client-owned AGENTS.md, Agent TOML and Workflow YAML on cold load and explicit reconciliation. The verification hook rejects a changed in-flight capture and preserves the last valid generation. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. The Linux watch fixture verifies automatic guidance and Skill metadata updates after physical registration and rejects a retired watch's captured result across authenticated reattachment. Native watch overflow and the reattachment path have separate proofs. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. Real Client refusal, cancellation after Seal, and late publication across replacement each preserve the already validated result. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
-| T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. HTTP process fixtures pass a near-limit response and refuse an oversized one. Each settles one call and one canonical result, with zero Client starts or Server Spill in the unbound cases. The single-transport process sample appears below. Concurrent parser occupancy remains unmeasured. |
+| T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. HTTP process fixtures pass a near-limit response and refuse an oversized one. Each settles one call and one canonical result, with zero Client starts or Server Spill in the unbound cases. The process samples below record RSS and encoded body bytes with up to four independent HTTP responses held concurrently. |
 | T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. The real Client confirms both native disk exhaustion and cancellation after a physical Seal, with no publication or business replay in either case. |
 | T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. The lost-receipt case below composes a real Host publication, late receipt loss and same-instance recovery. A separate paired-Client test refuses the retired generation’s Save key on a replacement. The standalone Linux case below tests a real local Client generation change and a late publication receipt. |
 | T71, T72, T73 | A real HTTP fixture holds an old lease across activation with identical tool schemas. A failed candidate preserves the previous version. `bound_credential_rotation_preserves_the_admitted_attempt_and_closes_after_last_lease` admits the original Attempt, captures a changed Workspace document through the Client and prepares it while the provider reply is held. The original Attempt makes one call with its original credential, and the next makes one with the rotated credential. The HTTP peer observes the original session's successful DELETE after its last lease. Four fake-provider requests contain both original business results and neither credential. This test covers ordinary rotation. Cancellation and remote refusal are exercised by the separate transport tests. |
@@ -450,6 +450,39 @@ before reaching the peer, and a control notification succeeds during the
 hold. Completing the JSON lets the next POST enter. Its SSE handoff
 returns the slot while the response stream stays live.
 
+The Linux debug Server built at `83fb1b117` also ran separate Sessions in
+one process with its binary staged alone. A loopback peer flushed 12 MiB
+of each JSON body and waited at a gate until every response reached that
+cut. The peer then completed each near-limit response. The one-Session
+run is the baseline for this sample. Body sizes include the encoded JSON
+envelope. RSS and CPU came from procfs.
+
+| Sessions | Complete HTTP body bytes | RSS before / held / peak (KiB) | Initialize and attach / all prefixes / finish after release (s) | User / system CPU after attachment (s) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 16,773,193 | 183,040 / 219,672 / 242,156 | 1.018 / 0.472 / 0.822 | 1.89 / 0.06 |
+| 2 | 33,546,386 | 187,768 / 238,348 / 283,684 | 1.924 / 0.478 / 0.842 | 2.77 / 0.11 |
+| 4 | 67,092,772 | 194,028 / 274,548 / 362,912 | 6.208 / 0.507 / 1.199 | 6.04 / 0.21 |
+
+Each Session made one MCP business call, two business requests to the fake
+provider and one auxiliary provider request. Each ledger recorded one
+ToolResult of 17,022–17,023 bytes followed by one terminal event. Journal
+event JSON totaled 26,770–26,776 bytes per Session. The Server scratch
+directory stayed empty. These measurements cover process-wide memory with
+up to four simultaneous bodies. Allocator overhead at the 32-slot bound
+remains unmeasured.
+
+The Linux release Server from the same source repeated the workload with
+the same body byte counts, one commit and one terminal per Session.
+
+| Sessions | Release RSS before / held / peak (KiB) | Initialize and attach / all prefixes / finish after release (s) | User / system CPU after attachment (s) |
+| ---: | ---: | ---: | ---: |
+| 1 | 66,200 / 99,664 / 120,776 | 0.171 / 0.115 / 0.096 | 0.24 / 0.08 |
+| 2 | 70,940 / 123,424 / 166,832 | 0.312 / 0.129 / 0.147 | 0.49 / 0.20 |
+| 4 | 76,052 / 156,908 / 241,164 | 0.637 / 0.104 / 0.168 | 0.66 / 0.25 |
+
+The debug and release observations used different build profiles under
+concurrent host load. Compare within each profile's sample.
+
 The standalone HTTP process fixture reused the same measure for a 327,680-byte
 result. Its App Server peaked at 188,688 KiB (0.79 s user and 0.03 s system
 CPU), its Client at 22,868 KiB, and whole-fixture time was 1.982 s. The
@@ -519,5 +552,5 @@ resource and cancellation combinations remain individually mapped below.
   Web Console type check, build and 5,018 tests passed with four skips.
 - `git diff --check` passed.
 
-Final FULL and Merge verification, native macOS, whole-frame HTTP parser
-occupancy and the complete Browser acceptance matrix remain open.
+Final FULL and Merge verification, native macOS and the complete Browser
+acceptance matrix remain open.

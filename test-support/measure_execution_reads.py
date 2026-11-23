@@ -6,17 +6,12 @@ product Agent Server measurements. Each
 sample starts a new peer process and Client; fixtures are warm-cache. rchar
 counts process-wide logical reads, not disk traffic or source-only reads.
 
-Pairing revision (`"probe": "paired-v4"` in results): the Client handshake is
-now two independently authenticated lanes — the data `Hello` is answered with
-a fresh 256-bit pairing challenge that a second connection's `ControlHello`
-must echo — and the Client paces a continuous `ControlPoll`/`ControlTurn`
-loop on that lane for the whole session. Every result produced before this
-revision is HISTORICAL: it predates the control lane entirely, so its
-`client_rchar_ex_socket` excluded traffic that simply did not exist yet and
-is not comparable with paired-v2 numbers. The measuring peer cannot align
-socket sends with reads in a different process. Report observed rchar and
-the scanner's expected source byte count separately, without subtracting
-sent bytes from the former.
+The current results carry `"probe": "paired-v5"`. The data `Hello` receives
+a fresh 256-bit pairing challenge, and the independent `ControlHello` must
+echo it. The Client paces `ControlPoll` and `ControlTurn` for the whole
+session. Older single-lane measurements exclude the control traffic.
+The measuring peer cannot align socket sends with reads in another
+process. Report observed rchar and the expected source bytes separately.
 """
 
 import argparse
