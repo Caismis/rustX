@@ -45,7 +45,16 @@ for (const width of [1440, 390]) test(`focused Human Input fields save and follo
   } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
-test('a catalog larger than one RPC resolves a tool on the final page', async ({ page }) => {
+test('a catalog larger than one Workflow page resolves a tool on the final page', async ({ page }) => {
+  let bytes = 0;
+  for (let cursor: string | undefined, next = true; next;) {
+    const record = pagedCatalog(cursor);
+    bytes += Buffer.byteLength(JSON.stringify(record));
+    cursor = record.nextCursor;
+    next = cursor !== undefined;
+  }
+  expect(bytes).toBeGreaterThan(256 * 1024);
+  expect(bytes).toBeLessThan(1024 * 1024);
   const fixture = await startDogfood('web_console_dogfood');
   try {
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });

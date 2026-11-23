@@ -19,7 +19,7 @@ export function pagedCatalog(cursor: string | undefined) {
     throw new Error('Invalid fixture catalog cursor');
   }
   const properties = Object.fromEntries(Array.from({ length: 64 }, (_, field) => [
-    `field_${field}`, { type: 'string', description: 'A field description. '.repeat(6) },
+    `field_${field}`, { type: 'string', description: 'A field description. '.repeat(3) },
   ]));
   const tools = Array.from({ length: 16 }, (_, index) => ({
     name: `tool_${String(offset + index).padStart(3, '0')}`,
