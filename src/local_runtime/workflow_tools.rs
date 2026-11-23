@@ -348,7 +348,16 @@ async fn list(
     let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
     let binding = match plan.connect {
         Connect::Invalid => return state(WorkflowToolSourceState::Invalid),
-        Connect::Mcp(binding) => *binding,
+        Connect::Mcp(binding) => {
+            if matches!(
+                &binding.transport,
+                crate::tools::mcp::McpTransportConfig::Stdio { .. }
+            ) && workspace.execution_scope().is_none()
+            {
+                return state(WorkflowToolSourceState::ExecutionUnavailable);
+            }
+            *binding
+        }
         Connect::Python(package) => {
             if workspace.execution_scope().is_none() {
                 return state(WorkflowToolSourceState::ExecutionUnavailable);

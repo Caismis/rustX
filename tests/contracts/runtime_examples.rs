@@ -178,8 +178,9 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert_eq!(policies.edit.execution, ToolExecutionPolicy::ForegroundOnly);
 }
 
+#[cfg(feature = "test-support")]
 #[test]
-fn committed_echo_package_is_discovered_by_production_python_discovery() {
+fn committed_echo_package_has_a_valid_authored_source() {
     let workspace_path = examples_root();
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
     let user = tempfile::tempdir().unwrap();

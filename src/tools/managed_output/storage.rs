@@ -7,7 +7,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use nix::fcntl::{Flock, FlockArg, OFlag, open, openat};
-use nix::sys::stat::{Mode, mkdirat};
+use nix::sys::stat::Mode;
+#[cfg(any(test, feature = "test-support"))]
+use nix::sys::stat::mkdirat;
 use nix::unistd::{UnlinkatFlags, unlinkat};
 use serde::{Deserialize, Serialize};
 
@@ -156,6 +158,7 @@ fn lock(owner: &Path) -> io::Result<Flock<File>> {
     Flock::lock(file, FlockArg::LockExclusive).map_err(|(_, e)| io::Error::from(e))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn write(ownership: &Ownership) -> io::Result<()> {
     write_with_sync(ownership, false)
 }
@@ -238,10 +241,13 @@ impl Binding {
 pub(super) struct Namespaces {
     owner: PathBuf,
     conversation: ConversationId,
+    #[cfg(any(test, feature = "test-support"))]
     temp_root: PathBuf,
     bindings: Vec<Binding>,
+    #[cfg(any(test, feature = "test-support"))]
     current: Option<Binding>,
     workspace: Option<PathBuf>,
+    #[cfg(any(test, feature = "test-support"))]
     issued: BTreeSet<PathBuf>,
     #[cfg(test)]
     names: std::collections::VecDeque<String>,
@@ -261,19 +267,25 @@ impl Namespaces {
         }
         let owner = owner.canonicalize()?;
         let ownership = read(&owner, conversation)?;
+        #[cfg(not(any(test, feature = "test-support")))]
+        let _ = temp_root;
         Ok(Self {
             owner,
             conversation: conversation.clone(),
+            #[cfg(any(test, feature = "test-support"))]
             temp_root: temp_root.to_owned(),
             bindings: ownership.namespaces,
+            #[cfg(any(test, feature = "test-support"))]
             current: None,
             workspace: None,
+            #[cfg(any(test, feature = "test-support"))]
             issued: BTreeSet::new(),
             #[cfg(test)]
             names: std::collections::VecDeque::default(),
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn allocate(
         ownership: &mut Ownership,
         temp_root: &Path,
@@ -348,6 +360,7 @@ impl Namespaces {
         ))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn allocation_location(&self) -> &Path {
         self.current
             .as_ref()
@@ -358,6 +371,7 @@ impl Namespaces {
         self.workspace = Some(workspace.to_owned());
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn current_directory(&mut self) -> io::Result<File> {
         if let Some(current) = &self.current {
             match current.open(&self.owner, &self.conversation) {
@@ -385,6 +399,7 @@ impl Namespaces {
         Ok(dir)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn root(&mut self) -> io::Result<PathBuf> {
         self.current_directory()?;
         Ok(self
@@ -408,6 +423,7 @@ impl Namespaces {
         binding.open(&self.owner, &self.conversation).map(|_| ())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn create(&mut self, prefix: &str, extension: &str) -> io::Result<(File, PathBuf)> {
         let dir = self.current_directory()?;
         for _ in 0..RETRIES {
@@ -447,6 +463,7 @@ impl Namespaces {
         ))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn open_file(&self, path: &Path) -> io::Result<File> {
         let binding = self
             .bindings
@@ -466,6 +483,7 @@ impl Namespaces {
         )?))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn discard(&self, path: &Path) -> io::Result<()> {
         let binding = self
             .bindings

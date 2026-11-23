@@ -8,6 +8,7 @@
 //! mechanism. Every failure after physical process ownership began awaits
 //! the same settlement proof drain uses ([`settle_connect_failure`]).
 
+#[cfg(any(test, feature = "test-support"))]
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -19,9 +20,9 @@ use rmcp::service::{RoleClient, RunningService};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::tools::workspace::Workspace;
-use rustx_process_supervisor::interactive_process::{
-    InteractiveProcessSpec, SupervisedInteractiveProcess,
-};
+#[cfg(any(test, feature = "test-support"))]
+use rustx_process_supervisor::interactive_process::InteractiveProcessSpec;
+use rustx_process_supervisor::interactive_process::SupervisedInteractiveProcess;
 
 use super::handler::McpClientHandler;
 use super::invalidation::McpInvalidationState;
@@ -44,6 +45,7 @@ pub(crate) struct OwnedConnect<'a> {
     workspace: &'a Workspace,
     invalidation: Arc<McpInvalidationState>,
     cancellation: CancellationSignal,
+    #[cfg(any(test, feature = "test-support"))]
     fixture_stdio: bool,
     /// Test-only: parks the connect exactly once physical process ownership
     /// exists and before the handshake begins.
@@ -65,6 +67,7 @@ impl<'a> OwnedConnect<'a> {
             workspace,
             invalidation,
             cancellation,
+            #[cfg(any(test, feature = "test-support"))]
             fixture_stdio: cfg!(test),
             #[cfg(test)]
             ownership_pause: None,
@@ -97,6 +100,7 @@ impl McpServerRuntime {
     ///
     /// Panics only if the connection's invalidation sink is installed twice,
     /// which the single-install control flow below makes impossible.
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub async fn connect_fixture(
         server_id: &McpServerId,
@@ -155,6 +159,7 @@ impl McpServerRuntime {
             workspace,
             invalidation,
             cancellation,
+            #[cfg(any(test, feature = "test-support"))]
             fixture_stdio,
             #[cfg(test)]
             ownership_pause,
@@ -188,8 +193,10 @@ impl McpServerRuntime {
         // observes); the recorder exists for every transport so the
         // violation check is uniform. Streamable HTTP surfaces corruption
         // through its own worker transport and is unchanged by this seam.
-        let protocol_violation =
-            framing::ProtocolViolationRecorder::new(binding.credentials.clone());
+        let protocol_violation = framing::ProtocolViolationRecorder::new(
+            #[cfg(any(test, feature = "test-support"))]
+            binding.credentials.clone(),
+        );
         // Set by the Streamable HTTP arm only: stdio owns no per-request
         // local HTTP state.
         let mut request_ownership: Option<Arc<streamable_http::McpHttpRequestOwnership>> = None;
@@ -225,6 +232,7 @@ impl McpServerRuntime {
                 (service, None)
             }
             McpTransportConfig::ManagedPython { .. } => return Err(stdio_requires_binding()),
+            #[cfg(any(test, feature = "test-support"))]
             McpTransportConfig::Stdio {
                 program,
                 args,
@@ -360,6 +368,8 @@ impl McpServerRuntime {
                 };
                 (service, Some(process))
             }
+            #[cfg(not(any(test, feature = "test-support")))]
+            McpTransportConfig::Stdio { .. } => return Err(stdio_requires_binding()),
             McpTransportConfig::StreamableHttp { endpoint, headers } => {
                 if endpoint.trim().is_empty() {
                     return Err(McpError::Configuration(
@@ -723,6 +733,7 @@ fn stdio_requires_binding() -> McpError {
     McpError::Discovery("stdio MCP requires an authenticated Session Execution Client".into())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<PathBuf, McpError> {
     let Some(cwd) = cwd else {
         return Ok(workspace.root().to_path_buf());

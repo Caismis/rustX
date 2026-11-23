@@ -36,7 +36,10 @@ repository = "https://github.com/Caismis/rustX"
 publish = false
 
 [features]
-mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
+# Fixture executors for external Rust integration tests. Product admission
+# continues to use the bound Execution Client with this feature enabled.
+test-support = []
+mcp-fixture = ["test-support", "rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
 # Issue #387 measurement-only counters (reservation / conflict / legacy-layout
 # probe and the rustX logical owner-operation counters). Non-default: ordinary
 # production builds compile the recorders to no-ops and carry no measurement

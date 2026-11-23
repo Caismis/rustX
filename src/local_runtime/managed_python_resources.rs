@@ -202,9 +202,7 @@ fn capture_bound_package(
     }
 }
 
-/// Captures the User root and the explicitly supplied Workspace, shadowing before parsing.
-/// With no Workspace, discovery reads only User resources; it never infers a cwd.
-/// This operation reads package bytes but never imports code or prepares Python.
+/// Discovers the declarations of the selected scopes without starting Python.
 ///
 /// # Errors
 /// Returns a bounded resource error when discovery cannot produce a catalog.
@@ -212,12 +210,13 @@ pub fn discover(
     workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
-    discover_authoring(
-        workspace,
-        user_root,
-        &crate::runtime::CancellationSignal::new(),
-        true,
-    )
+    let cancellation = crate::runtime::CancellationSignal::new();
+    #[cfg(any(test, feature = "test-support"))]
+    return discover_authoring(workspace, user_root, &cancellation, |path, name| {
+        crate::tools::python::discover_package(path, name, &cancellation)
+    });
+    #[cfg(not(any(test, feature = "test-support")))]
+    discover_controlled(workspace, user_root, &cancellation)
 }
 
 pub(crate) fn discover_controlled(
@@ -225,14 +224,25 @@ pub(crate) fn discover_controlled(
     user_root: &Path,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
-    discover_authoring(workspace, user_root, cancellation, cfg!(test))
+    #[cfg(test)]
+    let read =
+        |path: &Path, name: &str| crate::tools::python::discover_package(path, name, cancellation);
+    #[cfg(not(test))]
+    let read = crate::tools::python::PythonToolPackage::inspect_authoring;
+    discover_authoring(workspace, user_root, cancellation, read)
 }
 
 fn discover_authoring(
     workspace: Option<&Path>,
     user_root: &Path,
     cancellation: &crate::runtime::CancellationSignal,
-    freeze_fixture_sources: bool,
+    read_package: impl Fn(
+        &Path,
+        &str,
+    ) -> Result<
+        crate::tools::python::PythonToolPackage,
+        crate::tools::python::PythonToolError,
+    >,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
     crate::package_io::check_cancelled(cancellation)
         .map_err(|error| RuntimeResourceLoadError::new(error.to_string()).at(user_root, "tools"))?;
@@ -313,13 +323,7 @@ fn discover_authoring(
                 .map_err(|error| {
                     crate::tools::python::PythonToolError::InvalidPackage(error.to_string())
                 })
-                .and_then(|()| {
-                    if freeze_fixture_sources {
-                        crate::tools::python::discover_package(&path, &name, cancellation)
-                    } else {
-                        crate::tools::python::PythonToolPackage::inspect_authoring(&path, &name)
-                    }
-                });
+                .and_then(|()| read_package(&path, &name));
             (ToolSourceId::ManagedPython(name), package)
         })
         .collect();

@@ -57,7 +57,9 @@ pub use executor::{
     ToolRegistryError, ToolSettlement,
 };
 pub use locator::LocatorError;
-pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
+#[cfg(any(test, feature = "test-support"))]
+pub use managed_output::{BackgroundOutput, ResultSpill};
+pub use managed_output::{ManagedOutputError, ManagedToolOutput};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{
     ARGUMENTS_FIELD, EXECUTION_MODE_DESCRIPTION, EXECUTION_MODE_DESCRIPTION_REMINDER,

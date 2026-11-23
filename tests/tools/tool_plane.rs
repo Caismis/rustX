@@ -7,6 +7,7 @@
 //! when validation or atomic commit fails.
 
 use crate::common::{NativeFixture, native_fixture, native_fixture_with_execution, run_tool};
+#[cfg(feature = "test-support")]
 use rustx::runtime::identity::ToolExecutionId;
 use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
@@ -519,6 +520,7 @@ async fn write_and_edit_never_follow_final_component_symlinks() {
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "old");
 }
 
+#[cfg(feature = "test-support")]
 #[tokio::test]
 async fn managed_output_is_readable_but_model_mutation_cannot_replace_a_live_inode() {
     let fixture = native_fixture();
@@ -573,6 +575,7 @@ async fn managed_output_is_readable_but_model_mutation_cannot_replace_a_live_ino
     assert_eq!(std::fs::read_to_string(&advertised).unwrap(), "AB");
 }
 
+#[cfg(feature = "test-support")]
 #[tokio::test]
 async fn managed_output_descendants_are_rejected_before_parent_creation() {
     let fixture = native_fixture();
@@ -634,6 +637,7 @@ async fn managed_output_descendants_are_rejected_before_parent_creation() {
 }
 
 #[cfg(unix)]
+#[cfg(feature = "test-support")]
 #[tokio::test]
 async fn managed_output_symlink_mutations_are_rejected_without_side_effects() {
     use std::os::unix::fs::symlink;

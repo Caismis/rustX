@@ -22,9 +22,11 @@
 //! as the original structured return value.
 
 use std::io::Write;
+#[cfg(any(test, feature = "test-support"))]
 use std::path::PathBuf;
 
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+#[cfg(any(test, feature = "test-support"))]
 use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSpill};
 #[cfg(test)]
 use crate::tools::types::ManagedOutputContinuation;
@@ -36,7 +38,7 @@ pub(crate) use stdout::BoundedStdoutCapture;
 /// Test-only observation seam for committed background appends.
 #[cfg(test)]
 type AppendWatch = Option<tokio::sync::watch::Sender<u64>>;
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "test-support"))]
 type AppendWatch = Option<std::convert::Infallible>;
 
 pub(crate) use rustx_process_supervisor::output_text::TextPreviewCapture;
@@ -45,6 +47,7 @@ pub(crate) use rustx_process_supervisor::output_text::TextPreviewCapture;
 #[derive(Debug)]
 pub(crate) struct CapturedOutput {
     /// The deterministic bounded UTF-8 preview.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) preview: String,
     /// Whether the complete logical representation crossed the preview bound.
     pub(crate) truncated: bool,
@@ -54,6 +57,7 @@ pub(crate) struct CapturedOutput {
     /// managed-output file exists.
     pub(crate) complete: bool,
     /// The managed-output locator, when a spill/sink was allocated.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) output_locator: Option<PathBuf>,
 }
 
@@ -79,11 +83,15 @@ impl ToolOutputCapture {
     pub(crate) fn finish(self, complete: bool) -> CapturedOutput {
         let total_bytes = self.0.total();
         let (preview, truncated) = self.0.finish();
+        #[cfg(not(any(test, feature = "test-support")))]
+        let _ = preview;
         CapturedOutput {
+            #[cfg(any(test, feature = "test-support"))]
             preview,
             truncated,
             total_bytes,
             complete,
+            #[cfg(any(test, feature = "test-support"))]
             output_locator: None,
         }
     }
@@ -175,10 +183,9 @@ impl Write for ToolOutputWriter<'_> {
 
 /// Standalone foreground capture with a lazy complete-result spill.
 ///
-/// This is the native Bash foreground path only: strong physical semantics
-/// are preserved until its Execution Client port. The shared
-/// [`ToolOutputCapture`] used by MCP is preview-only instead and never
-/// allocates a spill.
+/// The direct supervisor fixture uses this path to assert spill ownership
+/// under injected I/O faults. Product Bash uses the Execution Client.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct ForegroundOutputCapture {
     preview: TextPreviewCapture,
@@ -188,6 +195,7 @@ pub(crate) struct ForegroundOutputCapture {
     spill_started: Option<tokio::sync::watch::Sender<bool>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl ForegroundOutputCapture {
     /// Creates a capture using the shared foreground preview policy.
     pub(crate) fn new() -> Self {
@@ -277,6 +285,7 @@ impl ForegroundOutputCapture {
 }
 
 /// Background capture over an already dispatch-allocated output sink.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct BackgroundOutputCapture {
     preview: TextPreviewCapture,
@@ -287,6 +296,7 @@ pub(crate) struct BackgroundOutputCapture {
     watch: Option<tokio::sync::watch::Sender<u64>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl BackgroundOutputCapture {
     /// Creates a capture over the single dispatch-owned sink.
     pub(crate) fn new(limit: usize, sink: BackgroundOutput, watch: AppendWatch) -> Self {
