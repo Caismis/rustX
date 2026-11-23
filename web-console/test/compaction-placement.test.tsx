@@ -87,3 +87,30 @@ it('reads one bounded native checkpoint page, navigates explicitly, and rejects 
     expect(ui.result.current.markers).toEqual([]);
   } finally { server.client.disconnect(); }
 });
+
+it('clears a projection history error and blocks navigation and duplicate retries while reading', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const latest = marker('20', '100', server).head;
+    await server.update('A', { ...snapshot(), context: { compaction_count: 20, compaction_in_progress: false, projection_head: latest } });
+    let finish!: (page: { records: typeof latest[]; next_activation: null }) => void;
+    const read = vi.spyOn(server.client, 'projections')
+      .mockRejectedValueOnce(new Error('projection read failed'))
+      .mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const ui = renderHook(() => useCompactionHistory(server.client, 'A', true));
+    await waitFor(() => expect(ui.result.current.error).toContain('projection read failed'));
+    expect(ui.result.current.busy).toBe(false);
+    act(() => ui.result.current.retry());
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(ui.result.current.busy).toBe(true);
+    expect(ui.result.current.error).toBeUndefined();
+    expect(ui.result.current.earlier).toBeUndefined();
+    expect(ui.result.current.later).toBeUndefined();
+    act(() => ui.result.current.retry());
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => finish({ records: [latest], next_activation: null }));
+    expect(ui.result.current.busy).toBe(false);
+    expect(ui.result.current.error).toBeUndefined();
+    expect(ui.result.current.earlier).toBeTypeOf('function');
+  } finally { server.client.disconnect(); }
+});

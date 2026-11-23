@@ -47,7 +47,11 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
 /// Normalize a failure for the actual protocol's structured-format field.
 /// A generic bad request, or provider prose mentioning a field, is not
 /// sufficient evidence that the native output feature was rejected.
-pub(crate) fn normalize_error_for_format(error: OpenAIError, field: &str) -> ModelError {
+pub(crate) fn normalize_error_for_format(
+    error: OpenAIError,
+    field: &str,
+    owned_parent: Option<&str>,
+) -> ModelError {
     let rejected_format = http_failure_of(&error).is_some_and(|failure| {
         failure.status.as_u16() == 400
             && is_explicit_format_rejection(
@@ -56,6 +60,7 @@ pub(crate) fn normalize_error_for_format(error: OpenAIError, field: &str) -> Mod
                 failure.provider_param.as_deref(),
                 &failure.message,
                 field,
+                owned_parent,
             )
     });
     let mut normalized = normalize_error(error);
@@ -72,9 +77,13 @@ pub(crate) fn is_explicit_format_rejection(
     provider_param: Option<&str>,
     message: &str,
     expected_field: &str,
+    owned_parent: Option<&str>,
 ) -> bool {
     let rejected_field = match provider_code {
-        Some("unsupported_parameter") => provider_param == Some(expected_field),
+        Some("unsupported_parameter") => {
+            provider_param == Some(expected_field)
+                || owned_parent.is_some_and(|parent| provider_param == Some(parent))
+        }
         Some("unsupported_value") => {
             matches!(
                 (expected_field, provider_param),
@@ -704,6 +713,7 @@ mod tests {
             super::normalize_error_for_format(
                 async_openai::error::OpenAIError::Boxed(Box::new(failure)),
                 field,
+                None,
             )
             .kind
         }

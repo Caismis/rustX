@@ -492,6 +492,37 @@ describe("presentation projection", () => {
     );
   });
 
+  for (const type of ['context_compacted', 'checkpoint_advanced'] as const) {
+    it(`dismisses a previously observed inactive summary on ${type}`, () => {
+      const inactive = { live: false, status: { operation_id: 'inactive', admission_generation: '1', phase: 'generating' as const,
+        accepted_fragments: 0, diagnostic: null, triggering_attempt_id: null, waiting_attempt_id: null } };
+      const before = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [inactive] };
+      const state = replaceFromSnapshot(snapshot({ context: before }), runtimeCursor(1));
+      assert.match(compactionNotice(state)!, /no longer active/);
+      const context = { ...before, compaction_count: 1, latest_compaction: {
+        operation_id: 'manual', generation: '1', checkpoint_id: 'new-checkpoint', activation_id: '1',
+        tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10',
+      } };
+      const cursor = runtimeCursor(2);
+      const event: RuntimeClientEvent = type === 'context_compacted' ? { type, context }
+        : { type, transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) };
+      const next = reduce(state, { cursor, event });
+      assert.equal(compactionNotice(next), undefined);
+      assert.deepEqual(next.context.compaction_operations, [inactive]);
+    });
+  }
+
+  it('preserves a failure first seen with a checkpoint of unknown relative order', () => {
+    const context = { compaction_in_progress: false, compaction_count: 1, latest_compaction: {
+      operation_id: 'manual', generation: '1', checkpoint_id: 'new-checkpoint', activation_id: '1',
+      tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10',
+    }, compaction_operations: [{ live: false, status: { operation_id: 'unseen', admission_generation: '2', phase: 'failed' as const,
+      accepted_fragments: 0, diagnostic: 'unseen summary failure', triggering_attempt_id: null, waiting_attempt_id: null } }] };
+    const cursor = runtimeCursor(1);
+    const next = reduce(initial(), { cursor, event: { type: 'checkpoint_advanced', transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) } });
+    assert.match(compactionNotice(next)!, /unseen summary failure/);
+  });
+
   it("rebuilds a mid-stream assistant message from the snapshot alone", () => {
     const state = replaceFromSnapshot(
       snapshot({

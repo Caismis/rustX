@@ -176,10 +176,17 @@ export function deferredContent(state: PresentationState) {
  * Pure: the input state is never mutated, so a caller may keep the previous
  * value (for a diff, a test assertion, or an undo of a render).
  */
-function terminalSummaryNotices(context: PresentationState['context']): string[] {
+function settledSummaryNotices(context: PresentationState['context']): string[] {
   return (context.compaction_operations ?? [])
-    .filter(({status}) => ['failed', 'cancelled', 'superseded', 'no_effect'].includes(status.phase))
+    .filter(({status, live}) => ['failed', 'cancelled', 'superseded', 'no_effect'].includes(status.phase)
+      || (!live && ['generating', 'retrying', 'foreground_waiting', 'ready'].includes(status.phase)))
     .map(({status}) => status.operation_id);
+}
+
+function checkpointAdvanced(before: PresentationState['context'], after: PresentationState['context']): boolean {
+  const activation = after.projection_head?.activation_id ?? after.latest_compaction?.activation_id;
+  const previous = before.projection_head?.activation_id ?? before.latest_compaction?.activation_id;
+  return activation != null && activation !== previous && BigInt(activation) > BigInt(previous ?? 0);
 }
 
 export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
@@ -188,8 +195,8 @@ export function reduce(state: PresentationState, protocolEvent: ProjectedEvent):
   if (event.type === 'checkpoint_advanced') {
     const next = replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
     if (next.conversationId === state.conversationId) {
-      next.dismissedCompactionNotices = next.context.latest_compaction && next.context.latest_compaction.checkpoint_id !== state.context.latest_compaction?.checkpoint_id
-        ? terminalSummaryNotices(state.context) : state.dismissedCompactionNotices;
+      next.dismissedCompactionNotices = checkpointAdvanced(state.context, next.context)
+        ? settledSummaryNotices(state.context) : state.dismissedCompactionNotices;
     }
     return next;
   }
@@ -197,15 +204,17 @@ export function reduce(state: PresentationState, protocolEvent: ProjectedEvent):
   if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
   event = expandRuntimeEvent(native, event);
   const projected = foldRuntimeEvent(native, event);
+  const fields = nativeFields(projected);
   let view: TranscriptView = transcriptView(state);
-  let dismissed = state.dismissedCompactionNotices;
+  let dismissed = checkpointAdvanced(state.context, fields.context)
+    ? settledSummaryNotices(state.context) : state.dismissedCompactionNotices;
   for (const fact of transitionFacts(event)) {
     view = adaptTranscript(view, fact, projected);
     if (fact.type === 'context_compacted') {
-      dismissed = terminalSummaryNotices(fact.context);
+      dismissed = settledSummaryNotices(fact.context);
     }
   }
-  const next: PresentationState = { ...view, ...nativeFields(projected), cursor };
+  const next: PresentationState = { ...view, ...fields, cursor };
   if (dismissed?.length) next.dismissedCompactionNotices = dismissed;
   nativeSnapshots.set(next, projected);
   preserveHistoryBindings(state, next);

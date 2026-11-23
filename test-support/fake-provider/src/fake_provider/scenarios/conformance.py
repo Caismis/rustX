@@ -693,26 +693,36 @@ def compaction_twice_explicit_summary() -> Scenario:
     return _compaction_twice("compaction_twice_explicit_summary", SUMMARY_MODEL)
 
 
-def compaction_anthropic_format_rejection() -> Scenario:
+def _compaction_format_rejection(name: str, model: str, protocol: str, wrapper: str, detail: dict[str, str]) -> Scenario:
     """Two operations each reject Native once, then accept their Prompt retry."""
-    base = _compaction_twice("compaction_anthropic_format_rejection", ANTHROPIC_MODEL)
+    base = _compaction_twice(name, model)
     steps = []
     for step in base.steps:
-        if step.expect.model != ANTHROPIC_MODEL:
+        if step.expect.model != model:
             steps.append(step)
             continue
-        expect = replace(step.expect, protocol=ANTHROPIC_MESSAGES)
-        native = replace(expect, json_subset={"output_config": {"format": {"type": "json_schema"}}})
+        expect = replace(step.expect, protocol=protocol)
+        native = replace(expect, json_subset={wrapper: {"format": {"type": "json_schema"}}})
         steps.append(Step(native, HttpError(400, {
             "type": "error",
-            "error": {
-                "type": "invalid_request_error",
-                "message": "output_config.format: Extra inputs are not permitted",
-            },
+            "error": {"type": "invalid_request_error", **detail},
         })))
-        prompt = replace(expect, body_excludes=(*expect.body_excludes, '"output_config"'))
-        steps.append(replace(step, expect=prompt))
+        steps.append(replace(step, expect=expect))
     return Scenario(base.name, *steps)
+
+
+def compaction_anthropic_format_rejection() -> Scenario:
+    return _compaction_format_rejection(
+        "compaction_anthropic_format_rejection", ANTHROPIC_MODEL, ANTHROPIC_MESSAGES,
+        "output_config", {"message": "output_config.format: Extra inputs are not permitted"},
+    )
+
+
+def compaction_responses_wrapper_rejection() -> Scenario:
+    return _compaction_format_rejection(
+        "compaction_responses_wrapper_rejection", RESPONSES_MODEL, OPENAI_RESPONSES,
+        "text", {"code": "unsupported_parameter", "param": "text", "message": "text is not supported"},
+    )
 
 
 CHUNKED_PROMPT = "conformance: write the chunked compaction history"
@@ -980,6 +990,7 @@ SCENARIOS = {
     "compaction_explicit_summary": compaction_explicit_summary,
     "compaction_cross_provider_summary": compaction_cross_provider_summary,
     "compaction_anthropic_format_rejection": compaction_anthropic_format_rejection,
+    "compaction_responses_wrapper_rejection": compaction_responses_wrapper_rejection,
     "compaction_transient_summary": compaction_transient_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,
     "compaction_twice_explicit_summary": compaction_twice_explicit_summary,

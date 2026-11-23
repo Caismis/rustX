@@ -598,7 +598,7 @@ impl ChatStreamNormalizer {
 
     fn normalize_error(&self, error: async_openai::error::OpenAIError) -> ModelError {
         if self.native_format {
-            normalize_error_for_format(error, "response_format")
+            normalize_error_for_format(error, "response_format", None)
         } else {
             normalize_error(error)
         }
@@ -1402,6 +1402,7 @@ fn chat_stream_error(error: &serde_json::Value, native_format: bool) -> ModelErr
             error.get("param").and_then(serde_json::Value::as_str),
             message,
             "response_format",
+            None,
         )
         && error
             .get("status")

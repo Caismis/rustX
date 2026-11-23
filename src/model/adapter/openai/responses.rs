@@ -89,13 +89,21 @@ impl ModelAdapter for OpenAiResponsesAdapter {
         if input.protocol() != self.protocol() {
             return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
         }
-        let normalizer = ResponsesNormalizer::new(tools, input.invocation.compat.responses_storage)
-            .with_native_format(
-                input
-                    .response_schema
-                    .as_ref()
-                    .is_some_and(crate::model::structured::PreparedResponseSchema::is_native),
-            );
+        let mut normalizer =
+            ResponsesNormalizer::new(tools, input.invocation.compat.responses_storage);
+        if input
+            .response_schema
+            .as_ref()
+            .is_some_and(crate::model::structured::PreparedResponseSchema::is_native)
+        {
+            // Native format synthesis creates the parent only when the
+            // original request has no authored `text` parameters.
+            normalizer.native_format = if input.request_params().contains_key("text") {
+                ResponsesNativeFormat::Format
+            } else {
+                ResponsesNativeFormat::TextWrapper
+            };
+        }
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
                 client: self.client.clone(),
@@ -345,7 +353,7 @@ struct ToolAssembly {
 #[derive(Debug)]
 struct ResponsesNormalizer {
     tools: std::sync::Arc<ValidatedTools>,
-    native_format: bool,
+    native_format: ResponsesNativeFormat,
     storage_mode: ResponsesStorageMode,
     blocks: BlockAllocator<ResponsesBlockKey>,
     tool_calls: BTreeMap<u32, ToolAssembly>,
@@ -363,7 +371,7 @@ impl ResponsesNormalizer {
     fn new(tools: std::sync::Arc<ValidatedTools>, storage_mode: ResponsesStorageMode) -> Self {
         Self {
             tools,
-            native_format: false,
+            native_format: ResponsesNativeFormat::None,
             storage_mode,
             blocks: BlockAllocator::new(),
             tool_calls: BTreeMap::new(),
@@ -378,16 +386,11 @@ impl ResponsesNormalizer {
         }
     }
 
-    fn with_native_format(mut self, native_format: bool) -> Self {
-        self.native_format = native_format;
-        self
-    }
-
     fn normalize_error(&self, error: async_openai::error::OpenAIError) -> ModelError {
-        if self.native_format {
-            normalize_error_for_format(error, "text.format")
-        } else {
+        if self.native_format == ResponsesNativeFormat::None {
             normalize_error(error)
+        } else {
+            normalize_error_for_format(error, "text.format", self.native_format.owned_parent())
         }
     }
 
@@ -2214,7 +2217,23 @@ fn provider_error(message: String) -> ModelError {
     }
 }
 
-fn responses_stream_error(event: &serde_json::Value, native_format: bool) -> ModelError {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponsesNativeFormat {
+    None,
+    Format,
+    TextWrapper,
+}
+
+impl ResponsesNativeFormat {
+    fn owned_parent(self) -> Option<&'static str> {
+        (self == Self::TextWrapper).then_some("text")
+    }
+}
+
+fn responses_stream_error(
+    event: &serde_json::Value,
+    native_format: ResponsesNativeFormat,
+) -> ModelError {
     let response = event.get("response").unwrap_or(event);
     let error = response.get("error").unwrap_or(response);
     let message = str_field(error, "message")
@@ -2260,7 +2279,7 @@ fn responses_stream_error(event: &serde_json::Value, native_format: bool) -> Mod
     } else {
         ModelErrorKind::ProviderError
     };
-    if native_format
+    if native_format != ResponsesNativeFormat::None
         && kind == ModelErrorKind::InvalidRequest
         && is_explicit_format_rejection(
             str_field(error, "type"),
@@ -2268,6 +2287,7 @@ fn responses_stream_error(event: &serde_json::Value, native_format: bool) -> Mod
             str_field(error, "param"),
             message,
             "text.format",
+            native_format.owned_parent(),
         )
         && event
             .get("status")
@@ -2304,7 +2324,7 @@ fn responses_stream_error(event: &serde_json::Value, native_format: bool) -> Mod
 
 #[cfg(test)]
 mod native_format_rejection_tests {
-    use super::responses_stream_error;
+    use super::{ResponsesNativeFormat, responses_stream_error};
     use crate::model::{ModelErrorKind, ModelRetryDisposition};
     use serde_json::json;
 
@@ -2316,11 +2336,11 @@ mod native_format_rejection_tests {
         });
         let event = json!({"error": detail});
         assert_eq!(
-            responses_stream_error(&event, true).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
             ModelErrorKind::NativeFormatUnsupported
         );
         assert_eq!(
-            responses_stream_error(&event, false).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::None).kind,
             ModelErrorKind::InvalidRequest
         );
     }
@@ -2333,33 +2353,33 @@ mod native_format_rejection_tests {
             "param": "text.format",
             "message": "feature unavailable"
         }});
-        let typed = responses_stream_error(&event, true);
+        let typed = responses_stream_error(&event, ResponsesNativeFormat::Format);
         assert_eq!(typed.kind, ModelErrorKind::NativeFormatUnsupported);
         assert_eq!(typed.retry_disposition, ModelRetryDisposition::Never);
         assert_eq!(
-            responses_stream_error(&event, false).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::None).kind,
             ModelErrorKind::InvalidRequest
         );
         event["status"] = json!(429);
         assert_ne!(
-            responses_stream_error(&event, true).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
             ModelErrorKind::NativeFormatUnsupported
         );
         event.as_object_mut().unwrap().remove("status");
         event["error"]["param"] = json!("response_format");
         assert_eq!(
-            responses_stream_error(&event, true).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
             ModelErrorKind::InvalidRequest
         );
         event["error"]["param"] = json!("text.format");
         event["error"]["message"] = json!("maximum context length exceeded");
         assert_eq!(
-            responses_stream_error(&event, true).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
             ModelErrorKind::ContextWindowExceeded
         );
         event["error"]["type"] = json!("rate_limit_error");
         assert_eq!(
-            responses_stream_error(&event, true).kind,
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
             ModelErrorKind::RateLimit
         );
     }

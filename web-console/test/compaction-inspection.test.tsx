@@ -49,13 +49,39 @@ it('shows actual frozen binding and exact known usage while preserving unknown m
 
 it('retries a failed physical request read for the selected Call', async () => {
   const selected = call('A');
-  const read = vi.fn(async () => requestPage(cut, selected)).mockRejectedValueOnce(new Error('read failed'));
+  const pending = deferred<CheckpointPage>();
+  const read = vi.fn(() => pending.promise).mockRejectedValueOnce(new Error('read failed'));
   render(<CompactionInspection initial={calls([selected])} cut={cut} reader={reader('scope', read)}/>);
   expect((await screen.findByRole('alert')).textContent).toContain('read failed');
   fireEvent.click(screen.getByRole('button', { name: 'Read again' }));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole('status').textContent).toContain('Reading native evidence');
+  expect(screen.queryByRole('button', { name: 'Read again' })).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  await act(async () => pending.resolve(requestPage(cut, selected)));
   expect(await screen.findByText('historical-provider')).toBeTruthy();
   expect(screen.queryByRole('alert')).toBeNull();
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+it('retries a continuation at the same offset while retaining the first page', async () => {
+  const selected = { ...call('A'), request_count: '2' };
+  const first = page(cut, selected.requests_domain, [{ id: 'request-A', offset: '0', value: request(selected) }], '2', '1');
+  const second = page(cut, selected.requests_domain, [{ id: 'request-A-2', offset: '1', value: {
+    ...request(selected, 'second-provider'), request_id: 'request-A-2', ordinal: 1,
+  } }], '2');
+  const pending = deferred<CheckpointPage>();
+  const read = vi.fn<TraceFieldReader['page']>(() => pending.promise)
+    .mockResolvedValueOnce(first).mockRejectedValueOnce(new Error('continuation failed'));
+  render(<CompactionInspection initial={calls([selected])} cut={cut} reader={reader('scope', read)}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Load more physical requests' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Read again' }));
+  expect(screen.getByText('historical-provider')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Read again' })).toBeNull();
+  expect(read.mock.calls.map(args => args[2])).toEqual([0, 1, 1]);
+  await act(async () => pending.resolve(second));
+  expect(screen.getByText('historical-provider')).toBeTruthy();
+  expect(screen.getByText('second-provider')).toBeTruthy();
 });
 
 it('retains a selected Call beyond the first page when the native cut advances', async () => {

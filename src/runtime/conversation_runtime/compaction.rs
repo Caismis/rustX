@@ -601,9 +601,13 @@ impl ConversationRuntime {
                 return Err(ManualCompactionError::Busy);
             }
             if let Err(error) = state.conversation.hydrate(self.inner.store.as_ref()) {
-                return Err(ManualCompactionError::Durable {
-                    message: error.to_string(),
-                });
+                let message = error.to_string();
+                self.inner.record_durability_failure(
+                    &mut state,
+                    DurableOperation::HydrateConversation,
+                    message.clone(),
+                );
+                return Err(ManualCompactionError::Durable { message });
             }
             let operation_id = crate::runtime::identity::CompactionOperationId::new(
                 uuid::Uuid::now_v7().to_string(),

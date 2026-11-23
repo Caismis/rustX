@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { RuntimeClientContextView, RuntimeClientCompactionOperation } from '../../../../protocol/app-server/v82';
 import type { AppServerClient } from '../../client/app-server';
 import type { CompactionRequestEvidence } from '../../client/contracts';
@@ -21,17 +22,50 @@ export function compactionPresentation(context?: RuntimeClientContextView, reque
   return undefined;
 }
 
+function inactive({ status, live }: RuntimeClientCompactionOperation) {
+  return !live && ['generating', 'retrying', 'foreground_waiting', 'ready'].includes(status.phase);
+}
+
+function noticeKey({ status }: RuntimeClientCompactionOperation) {
+  return `${status.operation_id}:${status.admission_generation}`;
+}
+
+function useDismissedNotices(scope: string, context: RuntimeClientContextView | undefined) {
+  const [observed, observe] = useState<{ scope: string; context: RuntimeClientContextView; notices: Set<string>; dismissed: Set<string> }>();
+  const previous = observed?.scope === scope ? observed : undefined;
+  if (!context || previous?.context === context) return previous?.dismissed;
+  const operations = context.compaction_operations ?? [];
+  const activation = context.projection_head?.activation_id ?? context.latest_compaction?.activation_id;
+  const priorActivation = previous?.context.projection_head?.activation_id ?? previous?.context.latest_compaction?.activation_id;
+  const advanced = activation != null && (priorActivation == null || BigInt(activation) > BigInt(priorActivation));
+  const committed = operations.filter(({ status }) => status.phase === 'committed');
+  const notices = new Set<string>(), dismissed = new Set<string>();
+  for (const operation of operations) {
+    const { status } = operation;
+    if (!inactive(operation) && !['failed', 'cancelled', 'superseded', 'no_effect'].includes(status.phase)) continue;
+    const key = noticeKey(operation);
+    notices.add(key);
+    // A checkpoint and a newly observed failure may arrive in the same snapshot.
+    if (previous?.dismissed.has(key) || (advanced && previous?.notices.has(key))
+      || committed.some(item => BigInt(item.status.admission_generation) > BigInt(status.admission_generation))) dismissed.add(key);
+  }
+  observe({ scope, context, notices, dismissed });
+  return dismissed;
+}
+
 /** Compaction lives in the Chat reading flow, alongside the messages it follows. */
 export function ContextSeat({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const tx = useTranslation();
   const facts = useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { context: view?.snapshot?.context, request: view?.compactionRequest,
+      authority: state.authorityId, conversation: view?.target?.conversation_id,
       current: state.connection === 'connected' && view?.attachment === 'attached' };
   }, sameValue);
   const context = facts.current ? facts.context : undefined;
   const operations = context?.compaction_operations ?? [];
-  const visible = operations.filter(operation => operation.status.phase !== 'committed');
+  const dismissed = useDismissedNotices(JSON.stringify([facts.authority, sessionId, facts.conversation]), context);
+  const visible = operations.filter(operation => operation.status.phase !== 'committed' && !dismissed?.has(noticeKey(operation)));
   const progress = context?.compaction_progress;
   const foreground = !!context?.compaction_in_progress && !operations.some(operation => operation.status.operation_id === progress?.operation_id);
   const joinedRequest = foreground && facts.request && ['submitting', 'uncertain'].includes(facts.request.status)
@@ -46,7 +80,7 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
     : progress?.mode === 'blocking' ? 'agent:context.blocking'
       : progress?.mode === 'proactive' ? 'agent:context.generating' : 'agent:context.running';
   return <div data-context-seat="" role="status" aria-live="polite">
-    {visible.map(operation => <OperationSeat key={`${operation.status.operation_id}:${operation.status.admission_generation}`} operation={operation}/>) }
+    {visible.map(operation => <OperationSeat key={noticeKey(operation)} operation={operation}/>) }
     {foreground && <div data-compaction-foreground="" data-compaction-operation={progress?.operation_id}>
       <CompactionMessage title={tx('agent:context.command-title')} summary={tx(foregroundCopy)} running>
         {joinedRequest && facts.request?.status === 'uncertain' && <p>{tx('agent:context.uncertain')}</p>}
@@ -67,10 +101,9 @@ const operationLabels = {
 function OperationSeat({ operation }: { operation: RuntimeClientCompactionOperation }) {
   const tx = useTranslation(), { status, live } = operation;
   const running = live && ['generating', 'retrying', 'foreground_waiting'].includes(status.phase);
-  const inactive = !live && ['generating', 'retrying', 'foreground_waiting', 'ready'].includes(status.phase);
   return <div data-compaction-operation={status.operation_id} data-compaction-phase={status.phase} data-compaction-live={live}>
     <CompactionMessage title={tx('agent:context.summary-title')}
-      summary={tx(inactive ? 'agent:context.inactive' : operationLabels[status.phase])} running={running} error={status.phase === 'failed'}>
+      summary={tx(inactive(operation) ? 'agent:context.inactive' : operationLabels[status.phase])} running={running} error={status.phase === 'failed'}>
       {status.diagnostic && <p>{status.diagnostic}</p>}
     </CompactionMessage>
   </div>;

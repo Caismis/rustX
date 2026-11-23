@@ -181,3 +181,241 @@ async fn oversized_suffix_during_idle_install_preserves_session_admission() {
     assert_eq!(state.published.as_ref(), Some(&state.status));
     assert!(state.status.diagnostic.is_some());
 }
+
+fn journal_statuses(
+    runtime: &ConversationRuntime,
+    admission: &CompactionAdmission,
+) -> Vec<CompactionOperationStatus> {
+    runtime
+        .inner
+        .store
+        .read_events(None, 256)
+        .unwrap()
+        .events
+        .into_iter()
+        .filter_map(|event| match event.event {
+            RuntimeEvent::CompactionOperationUpdated { status }
+                if status.operation_id == admission.operation_id =>
+            {
+                Some(status)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_waits_for_named_cancellation_of_a_joined_ready_worker() {
+    let directory = tempfile::tempdir().unwrap();
+    let (runtime, _, store) = fixture(&directory, summary_turn_script("retained fact")).await;
+    let admission = start_background(&runtime).await;
+    runtime.inner.reap_async_compaction(true).await;
+    let work = runtime.inner.async_work(&admission).unwrap();
+    assert!(runtime.inner.lifecycle.idle_epoch().is_some());
+    assert_eq!(
+        journal_statuses(&runtime, &admission).last().unwrap().phase,
+        CompactionOperationPhase::Ready
+    );
+
+    let (publishing, release) =
+        cancellation::install_gate(&work.named_cancellation_publication_gate);
+    let owner = runtime.clone();
+    let id = admission.operation_id.clone();
+    let cancel = tokio::task::spawn_blocking(move || owner.cancel_compaction(&id));
+    within_liveness_guard("named cancellation publication", publishing)
+        .await
+        .unwrap();
+    let drain = runtime.inner.begin_drain().unwrap();
+    let admissions = runtime.inner.lifecycle.wait_for_no_admissions();
+    tokio::pin!(admissions);
+    assert!(futures_util::poll!(&mut admissions).is_pending());
+    assert!(!drain.completed.load(Ordering::Acquire));
+    assert_eq!(
+        journal_statuses(&runtime, &admission).last().unwrap().phase,
+        CompactionOperationPhase::Ready
+    );
+
+    release.send(()).unwrap();
+    assert!(
+        within_liveness_guard("named cancellation settlement", cancel)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    within_liveness_guard("shutdown after cancellation", runtime.shutdown())
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.inner.lifecycle.state(),
+        crate::runtime::types::ConversationLifecycleState::Quiescent
+    );
+    assert!(runtime.inner.async_work(&admission).is_none());
+    let terminal: Vec<_> = journal_statuses(&runtime, &admission)
+        .into_iter()
+        .filter(|status| status.phase.is_terminal())
+        .collect();
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0].phase, CompactionOperationPhase::Cancelled);
+    let settled_cut = store.compaction_resource_cut().unwrap().journal;
+    assert!(!runtime.cancel_compaction(&admission.operation_id).unwrap());
+    assert_eq!(
+        store.compaction_resource_cut().unwrap().journal,
+        settled_cut
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn named_cancellation_after_idle_drain_admission_closes_leaves_publication_to_drain() {
+    let directory = tempfile::tempdir().unwrap();
+    let (runtime, _, store) = fixture(&directory, summary_turn_script("retained fact")).await;
+    let admission = start_background(&runtime).await;
+    runtime.inner.reap_async_compaction(true).await;
+    let lifecycle = &runtime.inner.lifecycle;
+    assert!(lifecycle.begin_idle_drain(lifecycle.idle_epoch().unwrap()));
+    let before = store.compaction_resource_cut().unwrap().journal;
+    assert!(!runtime.cancel_compaction(&admission.operation_id).unwrap());
+    assert_eq!(store.compaction_resource_cut().unwrap().journal, before);
+    within_liveness_guard("drain owns ready cancellation", runtime.shutdown())
+        .await
+        .unwrap();
+    assert_eq!(
+        journal_statuses(&runtime, &admission).last().unwrap().phase,
+        CompactionOperationPhase::Cancelled
+    );
+    assert!(runtime.inner.async_work(&admission).is_none());
+}
+
+async fn capture_failure_keeps_cancellation(named: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let (runtime, _, _) = fixture(&directory, Vec::new()).await;
+    let protected = [runtime_inbound_message("first").id];
+    let constraints = if named {
+        CompactionConstraints {
+            protected_context_ids: &protected,
+            ..CompactionConstraints::default()
+        }
+    } else {
+        CompactionConstraints {
+            estimate_correction: crate::context::engine::EstimateCorrection::new(1, u64::MAX),
+            ..CompactionConstraints::default()
+        }
+    };
+    let (admission, operation, captured) = capture_background(&runtime, &constraints).await;
+    let Err(error) = captured else {
+        panic!("expected planning failure")
+    };
+    let expected = if named {
+        ContextErrorKind::NoEligibleHistory
+    } else {
+        ContextErrorKind::CannotFit
+    };
+    assert!(
+        matches!(&error, CompactionExecutionError::Context(error) if error.kind == expected),
+        "{error:?}"
+    );
+    operation.close().await;
+    let work = runtime.inner.async_work(&admission).unwrap();
+    let coordinator = RuntimeCompactionCoordinator(Arc::downgrade(&runtime.inner));
+    if named {
+        let (flagged, token) = cancellation::install_gate(&work.cancellation_request_gate);
+        let owner = runtime.clone();
+        let id = admission.operation_id.clone();
+        let cancel = tokio::task::spawn_blocking(move || owner.cancel_compaction(&id));
+        within_liveness_guard("accepted named cancellation before its token", flagged)
+            .await
+            .unwrap();
+        assert!(!admission.cancellation.is_cancelled());
+        coordinator.fail_admission(&admission, &error).unwrap();
+        token.send(()).unwrap();
+        assert!(
+            within_liveness_guard("named capture cancellation", cancel)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+    } else {
+        // Represent the foreground owner holding capture until settlement.
+        runtime.inner.lock_state().manual_compaction = Some(CurrentManualCompaction {
+            operation_id: admission.operation_id.clone(),
+            cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
+        });
+        runtime.inner.begin_drain().unwrap();
+        assert!(admission.cancellation.is_cancelled());
+        coordinator.fail_admission(&admission, &error).unwrap();
+        runtime.inner.lock_state().manual_compaction = None;
+        runtime.inner.settlement.notify_waiters();
+    }
+    assert!(work.lifecycle.lock().unwrap().is_none());
+    within_liveness_guard(
+        "capture admission release",
+        runtime.inner.lifecycle.wait_for_no_admissions(),
+    )
+    .await;
+    within_liveness_guard(
+        "capture retirement",
+        runtime.inner.reap_async_compaction(true),
+    )
+    .await;
+    assert!(runtime.inner.async_work(&admission).is_none());
+    let statuses = journal_statuses(&runtime, &admission);
+    let status = statuses.last().unwrap();
+    assert_eq!(status.phase, CompactionOperationPhase::Cancelled);
+    assert!(status.diagnostic.is_none());
+    assert!(status.waiting_attempt_id.is_none());
+    within_liveness_guard("capture shutdown", runtime.shutdown())
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepted_named_cancellation_beats_no_eligible_history_before_token() {
+    capture_failure_keeps_cancellation(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_cancellation_beats_cannot_fit() {
+    capture_failure_keeps_cancellation(false).await;
+}
+
+#[tokio::test]
+async fn cancelled_capture_still_latches_its_durability_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let (runtime, _, _) = fixture(&directory, Vec::new()).await;
+    let coordinator = RuntimeCompactionCoordinator(Arc::downgrade(&runtime.inner));
+    let admission = coordinator
+        .admit(&AttemptId::new("capture"))
+        .unwrap()
+        .unwrap();
+    assert!(runtime.cancel_compaction(&admission.operation_id).unwrap());
+    let error = CompactionExecutionError::Durable("failed to read capture source".into());
+    coordinator.fail_admission(&admission, &error).unwrap();
+    let failure = runtime.inner.durability_gate.failure().unwrap();
+    assert_eq!(failure.operation, DurableOperation::CanonicalCommit);
+    assert_eq!(failure.diagnostic, "failed to read capture source");
+    let statuses = journal_statuses(&runtime, &admission);
+    let status = statuses.last().unwrap();
+    assert_eq!(status.phase, CompactionOperationPhase::Cancelled);
+    assert!(status.diagnostic.is_none());
+    let _ = within_liveness_guard("failed capture drain", runtime.shutdown()).await;
+}
+
+#[tokio::test]
+async fn manual_compaction_hydration_failure_fences_subsequent_admission() {
+    use crate::runtime::conversation_runtime::compaction::ManualCompactionError;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (runtime, _, store) = fixture(&directory, Vec::new()).await;
+    assert!(runtime.inner.lock_state().conversation.owned().is_none());
+    *store.fail_projected_history_when.lock().unwrap() = Some(Box::new(|| true));
+    let Err(ManualCompactionError::Durable { message }) = runtime.admit_compaction(None, None)
+    else {
+        panic!("first manual admission should fail hydration");
+    };
+    let failure = runtime.inner.durability_gate.failure().unwrap();
+    assert_eq!(failure.operation, DurableOperation::HydrateConversation);
+    assert_eq!(failure.diagnostic, message);
+    *store.fail_projected_history_when.lock().unwrap() = None;
+    assert!(
+        matches!(runtime.admit_compaction(None, None), Err(ManualCompactionError::DurabilityFailed { message }) if message == failure.diagnostic)
+    );
+}

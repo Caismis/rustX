@@ -37,6 +37,22 @@ fn permission_reminder_ids(
 }
 
 async fn start_background(runtime: &ConversationRuntime) -> CompactionAdmission {
+    let (admission, operation, captured) =
+        capture_background(runtime, &CompactionConstraints::default()).await;
+    RuntimeCompactionCoordinator(Arc::downgrade(&runtime.inner))
+        .start(admission.clone(), captured.unwrap(), operation)
+        .unwrap();
+    admission
+}
+
+async fn capture_background(
+    runtime: &ConversationRuntime,
+    constraints: &CompactionConstraints<'_>,
+) -> (
+    CompactionAdmission,
+    Box<dyn crate::context::summarizer::SummaryOperation>,
+    Result<CapturedCompaction, CompactionExecutionError>,
+) {
     let (context, revision, tools, prompt) = {
         let mut state = runtime.inner.lock_state();
         let model = state.model.snapshot().unwrap();
@@ -91,7 +107,7 @@ async fn start_background(runtime: &ConversationRuntime) -> CompactionAdmission 
         &tools,
         None,
         &prompt,
-        &CompactionConstraints::default(),
+        constraints,
         &admission.cancellation,
         CompactionAttribution {
             operation_id: admission.operation_id.clone(),
@@ -100,12 +116,8 @@ async fn start_background(runtime: &ConversationRuntime) -> CompactionAdmission 
         },
         operation.as_ref(),
     )
-    .await
-    .unwrap();
-    coordinator
-        .start(admission.clone(), captured, operation)
-        .unwrap();
-    admission
+    .await;
+    (admission, operation, captured)
 }
 
 /// A background result which wins an authorized recovery race closes the

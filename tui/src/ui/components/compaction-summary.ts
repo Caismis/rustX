@@ -19,14 +19,15 @@ export class CompactionSummary extends Box {
     const before = receipt?.checkpoint_id === head.checkpoint_id ? receipt.tokens_before : undefined;
     const label = before ? `Compacted from ${before.source === 'estimated' ? '~' : ''}${groupedQuantity(before.input_tokens)} tokens` : 'Context compacted';
     const preview = head.summary_preview;
+    const checkpointId = sanitizeField(head.checkpoint_id);
     if (!preview) {
       this.addChild(new Text(role.compactionText(`${label} · Summary unavailable`), 0, 0));
     } else if (expanded) {
       this.addChild(new Markdown(`**${label}**\n\n${sanitizeField(preview.text, true)}`, 0, 0, markdownTheme));
-      if (preview.truncated) this.addChild(new Text(role.meta(`Read full checkpoint: /context projection ${sanitizeField(head.checkpoint_id)}`), 0, 0));
-      this.addChild(new Text(role.meta('/expand compaction to collapse'), 0, 0));
+      if (preview.truncated) this.addChild(new Text(role.meta(`Read full checkpoint: /context projection ${checkpointId}`), 0, 0));
+      this.addChild(new Text(role.meta(`Collapse with /expand compaction ${checkpointId}`), 0, 0));
     } else {
-      this.addChild(new Text(role.compactionText(`${label} (/expand compaction to expand)`), 0, 0));
+      this.addChild(new Text(role.compactionText(`${label} · Expand with /expand compaction ${checkpointId}`), 0, 0));
     }
   }
 }

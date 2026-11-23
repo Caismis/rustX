@@ -97,29 +97,35 @@ function PhysicalRequests({ call, cut, reader, owner }: { call: TraceInspectionC
   const tx = useTranslation();
   const identity = JSON.stringify([checkpointReadCutKey(cut), call]);
   const requestOwner = JSON.stringify([owner, call.call_id]);
-  const latest = useRef({ identity, reader }); latest.current = { identity, reader };
+  const latest = useRef({ identity, reader, requestOwner }); latest.current = { identity, reader, requestOwner };
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const [retry, setRetry] = useState(0);
-  const [state, setState] = useState<{ identity: string; owner: string; items?: CompactionPhysicalRequest[]; next?: string | null; busy?: boolean; error?: string; through: string }>();
+  const [state, setState] = useState<{ identity: string; owner: string; items?: CompactionPhysicalRequest[]; next?: string | null; busy?: boolean;
+    failure?: { message: string; offset: string; append: boolean } }>();
   const shown = state?.owner === requestOwner ? state : undefined;
-  const current = () => alive.current && latest.current.identity === identity && latest.current.reader === reader;
+  const current = () => alive.current && latest.current.identity === identity && latest.current.reader === reader && latest.current.requestOwner === requestOwner;
   const load = async (offset: string, append: boolean, owned: () => boolean) => {
+    if (!owned()) return;
+    setState(previous => ({ identity, owner: requestOwner, busy: true,
+      items: previous?.owner === requestOwner ? previous.items : undefined }));
     try {
       const page = await reader.page(cut, call.requests_domain, compactionPageOffset(offset), owned);
       const requests = compactionRequestsPage(page, cut, call, offset);
       if (owned()) setState(previous => ({ identity, owner: requestOwner,
-        items: [...(append && previous?.identity === identity ? previous.items ?? [] : []), ...requests.items], next: requests.next, through: cut.through }));
+        items: [...(append && previous?.identity === identity ? previous.items ?? [] : []), ...requests.items], next: requests.next }));
     } catch (error) {
       if (owned()) setState(previous => ({ identity, owner: requestOwner,
-        items: previous?.owner === requestOwner ? previous.items : undefined, through: previous?.through ?? cut.through, error: String(error).slice(0, 512) }));
+        items: previous?.owner === requestOwner ? previous.items : undefined,
+        failure: { message: String(error).slice(0, 512), offset, append } }));
     }
   };
   useEffect(() => {
     let mounted = true;
     void load('0', false, () => mounted && current());
     return () => { mounted = false; };
-  }, [identity, reader, retry]);
+  }, [identity, reader, requestOwner]);
+  const busy = shown?.identity !== identity || shown.busy;
+  const failure = busy ? undefined : shown?.failure;
   const strategy = call.strategy === 'native' ? 'trajectory:compaction.native'
     : call.strategy === 'prompt' ? 'trajectory:compaction.prompt'
       : call.strategy ? 'trajectory:compaction.fallback' : undefined;
@@ -130,8 +136,8 @@ function PhysicalRequests({ call, cut, reader, owner }: { call: TraceInspectionC
       <div><dt>{tx('trajectory:compaction.preceding')}</dt><dd>{call.preceding_call?.call_id ?? '—'}</dd></div>
       <div><dt>{tx('trajectory:compaction.previous-summary')}</dt><dd>{call.previous_summary?.call_id ?? '—'}</dd></div>
     </dl>
-    {(!shown || shown.identity !== identity) && <p role="status">{tx(shown?.items ? 'trajectory:compaction.refreshing' : 'trajectory:compaction.loading')}</p>}
-    {shown?.error && <p role="alert">{shown.error} <Button onClick={() => setRetry(value => value + 1)}>{tx('trajectory:compaction.retry')}</Button></p>}
+    {busy && <p role="status">{tx(shown?.items ? 'trajectory:compaction.refreshing' : 'trajectory:compaction.loading')}</p>}
+    {failure && <p role="alert">{failure.message} <Button onClick={() => { void load(failure.offset, failure.append, current); }}>{tx('trajectory:compaction.retry')}</Button></p>}
     {shown?.items?.map(request => <div className={css.request} key={request.id} data-compaction-request={request.id}>
       <h4>{tx('trajectory:compaction.physical-request')} {request.ordinal + 1}</h4>
       <dl className={css.facts}>
@@ -149,9 +155,6 @@ function PhysicalRequests({ call, cut, reader, owner }: { call: TraceInspectionC
       {request.remoteUncertain && <p>{tx('trajectory:compaction.remote-unknown')}</p>}
     </div>)}
     {shown?.items?.length === 0 && <p>{tx('trajectory:compaction.no-requests')}</p>}
-    {shown?.identity === identity && shown.next != null && <Button disabled={shown.busy} onClick={() => {
-      setState(previous => previous && { ...previous, busy: true });
-      void load(shown.next!, true, current);
-    }}>{tx('trajectory:compaction.more-requests')}</Button>}
+    {!busy && shown?.next != null && <Button onClick={() => { void load(shown.next!, true, current); }}>{tx('trajectory:compaction.more-requests')}</Button>}
   </div>;
 }

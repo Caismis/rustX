@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { createElement } from 'react';
-import { cleanup, render } from '@testing-library/react';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v82';
+import { act, cleanup, render } from '@testing-library/react';
+import type { RuntimeClientCompactionOperation, RuntimeClientCompactionView } from '../../protocol/app-server/v82';
 import { RpcFailure } from '../src/client/errors';
 import { compactionPresentation, ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
@@ -12,6 +12,57 @@ const receipt = (generation: string): RuntimeClientCompactionView => ({
   operation_id: `compaction-operation-${generation}`,
   generation, checkpoint_id:`conv_8498648a-66ba-716f-8243-8cf147533e5${generation}`, activation_id:generation,
   tokens_before:{input_tokens:'8400',source:'estimated'}, estimated_tokens_after:'1900',
+});
+
+function operation(id: string, generation: string, phase: RuntimeClientCompactionOperation['status']['phase']): RuntimeClientCompactionOperation {
+  return { live: false, status: { operation_id: id, admission_generation: generation, phase, accepted_fragments: 0,
+    diagnostic: phase === 'failed' ? `${id} diagnostic` : null, triggering_attempt_id: null, waiting_attempt_id: null } };
+}
+
+it('removes an older failure at the chat frontier when a retained later operation committed', async () => {
+  server = new Server();
+  const failed = operation('earlier', '1', 'failed');
+  const committed = operation('later', '2', 'committed');
+  const context = { compaction_in_progress: false, compaction_count: 1, projection_head: projectionHead(),
+    compaction_operations: [failed, committed] };
+  server.snapshots.set('A', { ...snapshot(), context });
+  await server.attached('A');
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  expect(view.container.querySelector('[data-compaction-operation]')).toBeNull();
+  expect(server.client.getSnapshot().views.A.snapshot?.context?.compaction_operations).toEqual([failed, committed]);
+});
+
+it.each(['failed', 'generating'] as const)('dismisses a previously observed %s notice after manual compaction', async phase => {
+  server = new Server();
+  await server.attached('A');
+  const previous = operation('earlier', '1', phase);
+  const context = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [previous] };
+  await server.update('A', { ...snapshot(), context });
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  expect(view.container.querySelector('[data-compaction-operation="earlier"]')).toBeTruthy();
+  const next = { ...context, compaction_count: 1, projection_head: projectionHead() };
+  await act(async () => { await server.update('A', { ...snapshot(), context: next }); });
+  expect(view.container.querySelector('[data-compaction-operation="earlier"]')).toBeNull();
+  expect(server.client.getSnapshot().views.A.snapshot?.context?.compaction_operations).toEqual([previous]);
+});
+
+it('keeps a failure first seen when reconnect reveals a checkpoint of unknown relative order', async () => {
+  server = new Server();
+  await server.attached('A');
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  const failure = operation('unseen', '2', 'failed');
+  await act(async () => {
+    await server.client.disconnect();
+    server.snapshots.set('A', { ...snapshot(), context: { compaction_in_progress: false, compaction_count: 1,
+      projection_head: projectionHead(), compaction_operations: [failure] } });
+    server.handlers.set('session/subscribe', () => {
+      server.handlers.delete('session/subscribe');
+      throw new RpcFailure({ code: -32000, message: 'History advanced while disconnected', data: { kind: 'resync_required' } });
+    });
+    await server.connect();
+    await server.client.waitForAttachment('A', () => true);
+  });
+  expect(view.container.querySelector('[data-compaction-operation="unseen"]')).toBeTruthy();
 });
 
 it('accepts a correlated skipped response without inventing a checkpoint', async () => {

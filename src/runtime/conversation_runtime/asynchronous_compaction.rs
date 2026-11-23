@@ -40,6 +40,8 @@ struct Work {
     generation_settlement_gate: Mutex<Option<ArbitrationTestGate>>,
     #[cfg(test)]
     cancellation_request_gate: Mutex<Option<ArbitrationTestGate>>,
+    #[cfg(test)]
+    named_cancellation_publication_gate: Mutex<Option<ArbitrationTestGate>>,
     changed: tokio::sync::Notify,
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
     exit_announced: AtomicBool,
@@ -386,6 +388,9 @@ impl RuntimeInner {
         self: &Arc<Self>,
         operation_id: &crate::runtime::identity::CompactionOperationId,
     ) -> Result<bool, ContextError> {
+        let Ok(_admission) = self.lifecycle.try_enter_running() else {
+            return Ok(false);
+        };
         let work = self
             .async_compaction
             .lock()
@@ -436,9 +441,14 @@ impl RuntimeInner {
             }
             decision
         });
-        if publish && let Err(error) = self.publish_async_status(&work) {
-            self.fail_async_durability(&error);
-            return Err(error);
+        if publish {
+            #[cfg(test)]
+            wait_for_arbitration_test_gate(&work.named_cancellation_publication_gate);
+            if let Err(error) = self.publish_async_status(&work) {
+                self.fail_async_durability(&error);
+                return Err(error);
+            }
+            self.retire_async_compaction(&work);
         }
         work.changed.notify_waiters();
         if accepted {
@@ -515,6 +525,10 @@ impl RuntimeInner {
         if publish_terminal && let Err(error) = self.publish_async_status(&work) {
             self.fail_async_durability(&error);
         }
+        self.retire_async_compaction(&work);
+    }
+
+    fn retire_async_compaction(&self, work: &Arc<Work>) {
         let terminal = {
             let state = work.state.lock().expect("asynchronous compaction state");
             (matches!(state.phase, Phase::Terminal)
@@ -531,7 +545,7 @@ impl RuntimeInner {
                 && registry
                     .proactive
                     .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, &work))
+                    .is_some_and(|current| Arc::ptr_eq(current, work))
             {
                 registry.proactive = None;
             }
@@ -902,6 +916,8 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             generation_settlement_gate: Mutex::new(None),
             #[cfg(test)]
             cancellation_request_gate: Mutex::new(None),
+            #[cfg(test)]
+            named_cancellation_publication_gate: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             join: Mutex::new(None),
             exit_announced: AtomicBool::new(false),
@@ -1116,26 +1132,35 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
         })?;
         {
             let mut state = work.state.lock().expect("asynchronous compaction state");
-            match error {
-                CompactionExecutionError::Context(context)
-                    if context.kind == ContextErrorKind::NoEligibleHistory =>
-                {
-                    state.status.phase = CompactionOperationPhase::NoEffect;
-                    state.status.diagnostic = None;
-                }
-                CompactionExecutionError::Context(context)
-                    if context.kind == ContextErrorKind::Cancelled =>
-                {
-                    state.status.phase = CompactionOperationPhase::Cancelled;
-                    state.status.diagnostic = None;
-                }
-                _ => {
-                    state.status.phase = CompactionOperationPhase::Failed;
-                    state.status.diagnostic =
-                        Some(format!("{error:?}").chars().take(256).collect());
-                }
-            }
+            let kind = match error {
+                CompactionExecutionError::Context(context) => Some(context.kind),
+                _ => None,
+            };
+            state.status.phase = if state.cancel_requested
+                || admission.cancellation.is_cancelled()
+                || kind == Some(ContextErrorKind::Cancelled)
+            {
+                CompactionOperationPhase::Cancelled
+            } else if kind == Some(ContextErrorKind::NoEligibleHistory) {
+                CompactionOperationPhase::NoEffect
+            } else {
+                CompactionOperationPhase::Failed
+            };
+            state.status.waiting_attempt_id = None;
+            state.status.diagnostic = (state.status.phase == CompactionOperationPhase::Failed)
+                .then(|| format!("{error:?}").chars().take(256).collect());
             state.phase = Phase::Terminal;
+        }
+        match error {
+            CompactionExecutionError::Context(context)
+                if context.kind == ContextErrorKind::AuxiliaryDurabilityFailed =>
+            {
+                inner.fail_async_durability(context);
+            }
+            CompactionExecutionError::Durable(diagnostic) => {
+                inner.fail_async_native(DurableOperation::CanonicalCommit, diagnostic.clone());
+            }
+            _ => {}
         }
         let publication = inner.publish_async_status(&work);
         if let Err(error) = &publication {

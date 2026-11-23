@@ -9,6 +9,7 @@ import { compactionKey, withAllCollapsed, withToggledCompaction } from '../src/u
 import { plainText, plainWidth } from '../src/ui/theme.ts';
 import { stateOf, prefs, blockText } from './support/render.ts';
 import { userMessage, assistantMessage } from './support/fixtures.ts';
+import { harness } from './support/app-server-harness.ts';
 
 type Operation = NonNullable<RuntimeClientContextView['compaction_operations']>[number];
 const operation = (phase: Operation['status']['phase'], live = true): Operation => ({ live,
@@ -85,6 +86,25 @@ it('deduplicates a native history page against the active head and orders equal-
   assert.equal(markers.length, 2);
   assert.equal(markers[0]!.head.checkpoint_id, prior.checkpoint_id);
   assert.equal(markers[1]!.head.checkpoint_id, head.checkpoint_id);
+});
+
+it('targets the historical checkpoint in its displayed expand and collapse commands', async () => {
+  const historical = { ...head, checkpoint_id: 'older-checkpoint' };
+  const active = { ...head, checkpoint_id: 'active-checkpoint', activation_id: '2' };
+  const state = stateOf({ messages: [userMessage('one', 'question'), assistantMessage('two', 'answer')],
+    context: { ...base, projection_head: active } });
+  const loaded = [historical, active];
+  assert.equal(renderTranscript(state, prefs(), undefined, loaded).filter(block => block.kind === 'compaction').length, 2);
+  const h = await harness();
+  try {
+    for (const expanded of [false, true]) {
+      const marker = new CompactionSummary(historical, expanded).render(120).map(plainText).join('\n');
+      const command = marker.match(/\/expand compaction \S+/)?.[0];
+      assert.ok(command);
+      const outcome = await h.dispatcher.submit(command);
+      assert.deepEqual(outcome, { kind: 'preference', preference: { type: 'expand_compaction', checkpointId: historical.checkpoint_id } });
+    }
+  } finally { h.client.close(); }
 });
 
 it('renders CJK, bounded summaries and exact token quantities within narrow terminal cells', () => {

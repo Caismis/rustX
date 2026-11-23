@@ -164,7 +164,7 @@ struct Setup {
     auxiliary: Option<String>,
     /// The Summary model and profile arrangement exercised by this fixture.
     summary_scenario: SummaryScenario,
-    anthropic_native_output: bool,
+    native_summary_model: Option<&'static str>,
     summary_window: Option<u64>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
@@ -179,7 +179,7 @@ impl Setup {
             context_window: 128_000,
             auxiliary: None,
             summary_scenario: SummaryScenario::Standard,
-            anthropic_native_output: false,
+            native_summary_model: None,
             summary_window: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
@@ -865,7 +865,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             "context_window": window, "max_output_tokens": 1024,
             "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
         });
-        if protocol == "anthropic_messages" && setup.anthropic_native_output {
+        if setup.native_summary_model == Some(id) {
             model["capabilities"]["json_schema_output"] = true.into();
         }
         if setup.summary_scenario == SummaryScenario::CrossProvider
@@ -1977,23 +1977,47 @@ async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
     emulator.finish().await;
 }
 
-/// A whole-field Anthropic rejection downgrades only its current operation.
+/// A native-format rejection downgrades only its current operation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_format_rejections_downgrade_once_per_compaction_operation() {
+    assert_compaction_format_rejection(
+        "compaction_anthropic_format_rejection",
+        "emulator-anthropic",
+        ANTHROPIC_MODEL,
+        "anthropic_messages",
+        "output_config",
+    )
+    .await;
+    assert_compaction_format_rejection(
+        "compaction_responses_wrapper_rejection",
+        "emulator",
+        RESPONSES_MODEL,
+        "openai_responses",
+        "text",
+    )
+    .await;
+}
+
 #[allow(clippy::too_many_lines)]
-async fn anthropic_extra_inputs_downgrades_once_per_compaction_operation() {
+async fn assert_compaction_format_rejection(
+    scenario: &str,
+    provider: &str,
+    model: &'static str,
+    protocol: &str,
+    wrapper: &str,
+) {
     use rustx::durable::AuxiliaryStore;
     use rustx::events::types::RuntimeEvent as E;
     use rustx::model::auxiliary::AuxiliaryInputEvidence;
     use rustx::model::structured::StructuredOutputStrategy;
 
-    let Some(emulator) = ProviderEmulator::start("compaction_anthropic_format_rejection").await
-    else {
+    let Some(emulator) = ProviderEmulator::start(scenario).await else {
         return;
     };
     let setup = Setup {
         context_window: COMPACTION_CONTEXT_WINDOW,
-        auxiliary: Some(format!("emulator-anthropic/{ANTHROPIC_MODEL}")),
-        anthropic_native_output: true,
+        auxiliary: Some(format!("{provider}/{model}")),
+        native_summary_model: Some(model),
         ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
     };
     let driver = Driver::start(&emulator, &setup).await;
@@ -2014,19 +2038,13 @@ async fn anthropic_extra_inputs_downgrades_once_per_compaction_operation() {
     );
     let summaries: Vec<_> = requests
         .iter()
-        .filter(|request| request["model"] == ANTHROPIC_MODEL)
+        .filter(|request| request["model"] == model)
         .collect();
     assert_eq!(summaries.len(), 4);
     for pair in summaries.as_chunks::<2>().0 {
-        assert_eq!(
-            pair[0]["body"]["output_config"]["format"]["type"],
-            "json_schema"
-        );
-        assert!(pair[1]["body"].get("output_config").is_none());
-        assert!(
-            pair.iter()
-                .all(|request| request["protocol"] == "anthropic_messages")
-        );
+        assert_eq!(pair[0]["body"][wrapper]["format"]["type"], "json_schema");
+        assert!(pair[1]["body"].get(wrapper).is_none());
+        assert!(pair.iter().all(|request| request["protocol"] == protocol));
     }
     let mut journal = Vec::new();
     let mut after = None;

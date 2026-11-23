@@ -318,6 +318,58 @@ fn format_field(protocol: ModelProtocol) -> &'static str {
     }
 }
 
+#[tokio::test]
+async fn responses_text_wrapper_rejection_requires_runtime_ownership_over_http_and_stream() {
+    let protocol = ModelProtocol::OpenAiResponses;
+    let detail = json!({"type": "invalid_request_error", "code": "unsupported_parameter",
+        "param": "text", "message": "text is not supported"});
+    let server = crate::common::FixtureServer::start(move |_, _| {
+        let stream = json!({"type": "error", "error": detail});
+        crate::common::FixtureReply::body(
+            200,
+            "OK",
+            "text/event-stream",
+            format!("event: error\ndata: {stream}\n\n"),
+        )
+    })
+    .await;
+    let response = json!({"type":"error", "error":{"type": "invalid_request_error", "code": "unsupported_parameter",
+        "param":"text", "message":"text is not supported"}});
+    let http = crate::common::FixtureServer::start(move |_, _| {
+        crate::common::FixtureReply::json_error(400, "Bad Request", &response)
+    })
+    .await;
+
+    for server in [&server, &http] {
+        let adapter = adapter(protocol, server);
+        let native = request(protocol, true);
+        let mut authored = native.clone();
+        authored.invocation.request_params =
+            crate::common::request_params(sibling_params(protocol));
+        let mut ordinary = native.clone();
+        ordinary.response_schema = None;
+        for (index, (input, kind)) in [
+            (native, ModelErrorKind::NativeFormatUnsupported),
+            (authored, ModelErrorKind::InvalidRequest),
+            (ordinary, ModelErrorKind::InvalidRequest),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let events = crate::common::collect_events(adapter.as_ref(), input).await;
+            let Some(ModelEvent::Failed { error }) = events.last() else {
+                panic!("expected provider rejection: {events:?}");
+            };
+            assert_eq!(error.kind, kind);
+            assert_eq!(
+                error.retry_disposition,
+                rustx::model::ModelRetryDisposition::Never
+            );
+            assert_eq!(server.attempt_count(), index as u64 + 1);
+        }
+    }
+}
+
 async fn assert_format_error(
     protocol: ModelProtocol,
     detail: Value,
