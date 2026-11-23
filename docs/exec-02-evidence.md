@@ -67,11 +67,17 @@ without independent proof from its physical host.
 
 The independent receipt covers the Linux PID namespace and its exact private
 scratch directory. Retired output scope cannot recreate missing published
-files. Named mutation stages in Workspace and unpublished Python stages in
-the stable Store can outlive forced termination. The receipt does not claim
-those directories were deleted. The runner needs Bubblewrap and the host
-policy for its namespace setup. Native macOS tests and separate operator
-host attestation remain open.
+files. The watcher retains the exact Managed Python and Workspace mutation
+staging roots allocated by the original Client. The detached-descendant
+fixture requests both roots through the original PID, removes them after
+SIGKILL and preserves an unrelated published package and Workspace file.
+Repeated allocation with the same parent returns the same root. The
+descriptor-identity test preserves a foreign replacement at the retired
+name. The ordinary Workspace mutation path releases its stage after
+settlement. Independently launched remote Clients own their own staging
+and run without authority to produce this native receipt. The runner needs
+Bubblewrap and the host policy for its namespace setup. Native macOS tests
+and separate operator host attestation remain open.
 
 Client save expiry is owned by a maintenance thread outside the data and
 control lanes. An abandoned unpublished file is retried after its deadline

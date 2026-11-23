@@ -686,6 +686,9 @@ impl Drop for BuildOwnerGuard {
 
 struct PythonToolStoreInner {
     root: PathBuf,
+    staging_root: PathBuf,
+    #[cfg(target_os = "linux")]
+    staging_claim: Option<rustx_process_supervisor::client_domain::StagingClaim>,
     pending_cleanup: Mutex<std::collections::BTreeSet<PathBuf>>,
     runner: Arc<dyn SupervisedProcessRunner>,
     uv_binary: PathBuf,
@@ -724,9 +727,26 @@ impl PythonToolStore {
     pub(super) fn new(root: PathBuf) -> Result<Self, PythonToolError> {
         Self::establish(&root)?;
         let root = std::fs::canonicalize(root).map_err(io_error)?;
+        let staging_root = root.join(PACKAGES_DIRECTORY);
+        #[cfg(target_os = "linux")]
+        let (staging_root, staging_claim) = {
+            use std::os::fd::AsFd as _;
+            let packages = PackageDirectory::open(&staging_root).map_err(io_error)?;
+            let claim = rustx_process_supervisor::client_domain::reserve_staging(
+                packages.descriptor().as_fd(),
+            )
+            .map_err(io_error)?;
+            let directory = claim
+                .as_ref()
+                .map_or(staging_root.clone(), |claim| staging_root.join(&claim.name));
+            (directory, claim)
+        };
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
                 root,
+                staging_root,
+                #[cfg(target_os = "linux")]
+                staging_claim,
                 pending_cleanup: Mutex::default(),
                 runner: Arc::new(RunnerBackedProcessRunner),
                 uv_binary: resolve_executable("uv"),
@@ -1153,10 +1173,17 @@ async fn materialize_package(
         .parent()
         .ok_or_else(|| PythonToolError::Storage("prepared state has no parent".into()))?;
     let directory = PackageDirectory::open(package_root).map_err(io_error)?;
+    let staging_directory = PackageDirectory::open(&inner.staging_root).map_err(io_error)?;
+    #[cfg(target_os = "linux")]
+    if let Some(claim) = &inner.staging_claim {
+        claim
+            .verify(staging_directory.descriptor())
+            .map_err(io_error)?;
+    }
     let staging = tempfile::Builder::new()
         .prefix(".build-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in(package_root)
+        .tempdir_in(&inner.staging_root)
         .map_err(io_error)?
         .keep();
     // The existing Python store owns any failed cleanup and retries it before
@@ -1199,9 +1226,10 @@ async fn materialize_package(
             let staging_name = staging.file_name().expect("exclusive staging name");
             let destination_name = destination.file_name().expect("fingerprint name");
             directory.verify().map_err(io_error)?;
+            staging_directory.verify().map_err(io_error)?;
             let rename = cancellation.with_active(|| {
                 rustix::fs::renameat_with(
-                    directory.descriptor(),
+                    staging_directory.descriptor(),
                     staging_name,
                     directory.descriptor(),
                     destination_name,

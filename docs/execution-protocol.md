@@ -309,6 +309,21 @@ to a numeric PID cannot authorize replacement. The binding fence consumes
 the proof once. Revoke accepted through the authenticated pair remains a
 separate physical settlement path.
 
+A local Client allocates its Managed Python and Workspace mutation staging
+directories through the independent watcher. The watcher authenticates the
+exact live namespace init and accepts an anchored parent descriptor. The
+Client verifies the returned device and inode before using the private
+directory. Python stages share the filesystem with the published Store.
+Workspace stages share it with the destination's existing parent. A single
+mutation stage serves synchronous data requests and is released after its
+commit or refusal. Only the existing filesystem publish gate can make
+Workspace bytes visible. A write that crosses the gate and loses its
+cleanup receipt reports CommitUnknown. Authenticated Revoke closes staging
+admission and confirms release once the physical workers settle. After
+namespace exit the watcher reclaims the exact outstanding directories before
+the guardian can publish settlement. Completed Workspace files and published
+Python fingerprints survive that release.
+
 The local App Server waits 1, 2 and 4 seconds before attempting successive
 replacements. It permits at most three attempts in a rolling 60 seconds,
 with backoff reset after five stable minutes. A failed replacement launch

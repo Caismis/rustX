@@ -598,7 +598,11 @@ fn settle_revocation(
     let processes_settled = operations.finish_revocation(remaining);
     let python_settled = python.close();
     let saves_settled = saves::Saves::close_by(saves, cutoff);
-    watches_settled && processes_settled.is_ok() && python_settled && saves_settled
+    let settled = watches_settled && processes_settled.is_ok() && python_settled && saves_settled;
+    #[cfg(target_os = "linux")]
+    let settled =
+        settled && rustx_process_supervisor::client_domain::release_staging(cutoff).is_ok();
+    settled
 }
 
 fn client_control_worker(
@@ -1031,7 +1035,12 @@ fn serve_requests(
                     .changes
                     .dispatch(operations, operations.workspace(), request),
             ),
-            ClientRequest::MutateTree(request) => tree::mutate(root, arbitration, &request),
+            ClientRequest::MutateTree(request) => match operations.admit_auxiliary() {
+                Some(_mutation) => tree::mutate(root, arbitration, &request),
+                None => ClientReply::Error {
+                    kind: ReadError::Unavailable,
+                },
+            },
             ClientRequest::Watch(request) => {
                 ClientReply::Watch(watches.dispatch(root, workspace, request))
             }
@@ -1067,7 +1076,10 @@ fn serve_requests(
                 expectation,
                 replacements,
             } => writes.prepare_edit(root, &relative_path, &expectation, &replacements),
-            ClientRequest::CommitWrite { ticket } => writes.commit(ticket),
+            ClientRequest::CommitWrite { ticket } => match operations.admit_auxiliary() {
+                Some(_staging) => writes.commit(ticket),
+                None => ClientReply::WriteCancelled { ticket },
+            },
             ClientRequest::AbortWrite { ticket } => writes.abort(ticket),
             ClientRequest::ReadLines {
                 relative_path,

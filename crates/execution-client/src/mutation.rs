@@ -586,43 +586,32 @@ impl Writes {
         self.payload_bytes = self.payload_bytes.saturating_sub(expected);
         // Private staging first — nothing named is written, and no
         // shared arbitration lock is held while the kernel works.
-        let staged = target.stage(|file| file.write_all(&payload));
-        let result = match staged {
-            Ok(staged) => {
-                // The gate runs inside `publish_with_gate`, wrapped
-                // around the actual `linkat`/`renameat` syscall under
-                // the ticket lock: `Crossed` can only be recorded
-                // after the crossing physically succeeded.
-                let arbitration = self.arbitration.clone();
-                let mut cancelled = false;
-                match staged.publish_with_gate(|cross| {
-                    match arbitration.publish_gate(&cell, cross) {
-                        PublishGate::Crossed => Ok(()),
-                        // The staged write's own drop cleans the
-                        // private stage — a proven zero-write cancel.
-                        PublishGate::Cancelled => {
-                            cancelled = true;
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::Interrupted,
-                                "cancelled before publish",
-                            ))
-                        }
-                        PublishGate::Failed(source) => Err(source),
+        let mut cancelled = false;
+        let result = stage_mutation(target, |file| file.write_all(&payload)).and_then(|staged| {
+            // Only the actual crossing enters the ticket's publish gate.
+            let arbitration = self.arbitration.clone();
+            let published =
+                staged.publish_with_gate(|cross| match arbitration.publish_gate(&cell, cross) {
+                    PublishGate::Crossed => Ok(()),
+                    PublishGate::Cancelled => {
+                        cancelled = true;
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "cancelled before publish",
+                        ))
                     }
-                }) {
-                    Ok(published) => published.finish(),
-                    Err(source) => {
-                        if cancelled {
-                            self.arbitration.remove(ticket);
-                            return ClientReply::WriteCancelled { ticket };
-                        }
-                        Err(source)
-                    }
-                }
-            }
-            Err(source) => Err(source),
-        };
+                    PublishGate::Failed(source) => Err(source),
+                })?;
+            published.finish()
+        });
+        let cleanup = release_staging();
         self.arbitration.remove(ticket);
+        if cancelled {
+            return ClientReply::WriteCancelled { ticket };
+        }
+        if result.is_ok() && cleanup.is_err() {
+            return ClientReply::CommitUnknown { ticket };
+        }
         match result {
             Ok(metadata) => ClientReply::Written {
                 ticket,
@@ -652,6 +641,34 @@ impl Writes {
         self.next = self.next.checked_add(1)?;
         Some(ticket)
     }
+}
+
+pub(super) fn stage_mutation(
+    target: WriteTarget,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<rustx_confined_fs::StagedWrite> {
+    #[cfg(target_os = "linux")]
+    {
+        use rustx_process_supervisor::client_domain::reserve_mutation_staging;
+        use std::os::fd::AsFd as _;
+
+        let parent = target.destination_parent();
+        if let Some(claim) = reserve_mutation_staging(parent.descriptor().as_fd())? {
+            let area = parent.child(std::ffi::OsStr::new(&claim.name))?;
+            claim.verify(area.descriptor())?;
+            return target.stage_at(Some(area), write);
+        }
+    }
+    target.stage(write)
+}
+
+pub(super) fn release_staging() -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    return rustx_process_supervisor::client_domain::release_mutation_staging(
+        std::time::Instant::now() + rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT,
+    );
+    #[cfg(not(target_os = "linux"))]
+    Ok(())
 }
 
 /// Distinguishes a post-crossing failure — reported as `CommitUnknown`,

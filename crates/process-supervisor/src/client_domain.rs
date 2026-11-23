@@ -20,6 +20,12 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+mod staging;
+pub use staging::{
+    StagingClaim, release_mutation_staging, release_staging, reserve_mutation_staging,
+    reserve_staging,
+};
+
 struct Receipt<'a> {
     directory: File,
     name: &'a OsStr,
@@ -162,7 +168,7 @@ pub fn launch_init(
         ));
     }
     let init = pidfd_open(rustix::process::getpid(), PidfdFlags::empty())?;
-    send_namespace(io::stdout(), init.as_fd())?;
+    send_descriptor(io::stdout(), b'R', init.as_fd())?;
     drop(init);
     let mut grant = [0];
     io::stdin().read_exact(&mut grant)?;
@@ -176,19 +182,19 @@ pub fn launch_init(
         .exec())
 }
 
-fn send_namespace(channel: impl AsFd, descriptor: BorrowedFd<'_>) -> io::Result<()> {
+fn send_descriptor(channel: impl AsFd, kind: u8, descriptor: BorrowedFd<'_>) -> io::Result<()> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
     let mut ancillary = SendAncillaryBuffer::new(&mut space);
     let descriptors = [descriptor];
     if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors))
         || sendmsg(
             channel,
-            &[IoSlice::new(b"R")],
+            &[IoSlice::new(&[kind])],
             &mut ancillary,
             SendFlags::NOSIGNAL,
         )? != 1
     {
-        return Err(io::Error::other("cannot send Client namespace descriptor"));
+        return Err(io::Error::other("cannot send Client domain descriptor"));
     }
     Ok(())
 }
@@ -282,24 +288,56 @@ fn verify_exit(descriptor: &OwnedFd) -> io::Result<()> {
 ///
 /// # Errors
 /// Returns an invalid handoff or an unconfirmed kernel exit.
-pub fn watch_lease() -> io::Result<()> {
+pub fn watch_lease(socket: &Path, client_pid: i32) -> io::Result<()> {
     let mut channel = UnixStream::from(io::stdin().as_fd().try_clone_to_owned()?);
     let (descriptor, _) = namespace_init(&channel)?;
+    let mut staging = staging::Staging::listen(socket, client_pid)?;
     channel.write_all(b"W")?;
-    wait_for_exit(&descriptor, &channel)?;
-    verify_exit(&descriptor)
+    loop {
+        let mut sources = [
+            PollFd::new(descriptor.as_fd(), PollFlags::POLLIN),
+            PollFd::new(channel.as_fd(), PollFlags::POLLIN | PollFlags::POLLHUP),
+            PollFd::new(staging.descriptor(), PollFlags::POLLIN),
+        ];
+        match poll(&mut sources, PollTimeout::NONE) {
+            Err(Errno::EINTR) => continue,
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+        if sources[0].any() == Some(true) {
+            break;
+        }
+        if sources[1].any() == Some(true) {
+            request_exit(&descriptor)?;
+            break;
+        }
+        if sources[2].any() == Some(true)
+            && let Err(error) = staging.receive(&descriptor)
+        {
+            // The original owner stays held even if its reply is lost.
+            eprintln!("Client private staging request failed: {error}");
+        }
+    }
+    verify_exit(&descriptor)?;
+    staging.release()
 }
 
-fn arm_lease(descriptor: &OwnedFd) -> io::Result<(UnixStream, std::process::Child)> {
+fn arm_lease(
+    descriptor: &OwnedFd,
+    socket: &Path,
+    client_pid: i32,
+) -> io::Result<(UnixStream, std::process::Child)> {
     let (mut supervisor, watcher) = UnixStream::pair()?;
     supervisor.set_read_timeout(Some(Duration::from_secs(2)))?;
     set_socket_passcred(&watcher, true)?;
     let mut child = Command::new(std::env::current_exe()?)
         .arg("client-domain-lease")
+        .arg(socket)
+        .arg(client_pid.to_string())
         .stdin(OwnedFd::from(watcher))
         .stdout(Stdio::null())
         .spawn()?;
-    let armed = send_namespace(&supervisor, descriptor.as_fd()).and_then(|()| {
+    let armed = send_descriptor(&supervisor, b'R', descriptor.as_fd()).and_then(|()| {
         let mut ready = [0_u8; 1];
         supervisor.read_exact(&mut ready)?;
         if ready == *b"W" {
@@ -333,6 +371,7 @@ fn run_in_namespace(
     let receipt_directory = receipt_path.parent().expect("validated receipt directory");
     let launcher_input = OwnedFd::from(launch.try_clone()?);
     let launcher_output = OwnedFd::from(launch);
+    let staging_socket = scratch.logical_path.join("staging.sock");
     let mut launcher = Command::new("/usr/bin/bwrap")
         .args([
             "--unshare-user",
@@ -352,6 +391,7 @@ fn run_in_namespace(
         .arg(program)
         .args(arguments)
         .env("TMPDIR", &scratch.logical_path)
+        .env(staging::SOCKET_ENV, &staging_socket)
         .stdin(launcher_input)
         .stdout(launcher_output)
         .spawn()?;
@@ -371,7 +411,7 @@ fn run_in_namespace(
         // Bubblewrap's parent-death signal is useful during setup. Its
         // launcher and child run independently, so require a separate
         // acknowledged pidfd owner before admitting any Client work.
-        lease = Some(arm_lease(&descriptor)?);
+        lease = Some(arm_lease(&descriptor, &staging_socket, sender)?);
         writeln!(result, "ready {sender}")?;
         result.flush()?;
         let mut grant = [0];
@@ -392,8 +432,11 @@ fn run_in_namespace(
     verify_exit(&descriptor)?;
     if let Some((lease, mut watcher)) = lease {
         drop(lease);
-        // The exact pidfd has already proved the physical exit.
-        let _ = watcher.wait();
+        if !watcher.wait()?.success() {
+            return Err(io::Error::other(
+                "Client staging settlement could not be confirmed",
+            ));
+        }
     }
     if let Err(error) = boot_and_wait {
         eprintln!("Client namespace lease closed: {error}");

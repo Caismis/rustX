@@ -27,7 +27,18 @@ fn main() {
                     _ => std::process::exit(1),
                 }
             } else if role == "client-domain-lease" {
-                client_domain::watch_lease()
+                let Some(socket) = arguments.next() else {
+                    std::process::exit(1);
+                };
+                let Some(pid) = arguments
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .and_then(|value| value.parse::<i32>().ok())
+                    .filter(|pid| *pid > 0)
+                else {
+                    std::process::exit(1);
+                };
+                client_domain::watch_lease(socket.as_ref(), pid)
             } else {
                 let Some(program) = arguments.next() else {
                     std::process::exit(1)

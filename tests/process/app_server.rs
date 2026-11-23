@@ -427,6 +427,7 @@ async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
 set -eu
 bin=${0%/*}
 export TMPDIR="$bin/tmp"
+unset RUSTX_CLIENT_DOMAIN_STAGING
 exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@"
 "#).unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -678,6 +679,19 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
 #[ignore = "requires Linux mount namespace and uv; run test-support/prove_execution_mount_view.sh"]
 async fn managed_python_prepares_and_runs_in_the_bound_client_mount() {
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    managed_python_store_for_client(true).await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+#[ignore = "requires Linux namespaces and prepared uv wheels; run test-support/prove_execution_mount_view.sh"]
+async fn managed_python_revokes_only_its_guarded_unpublished_root() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    managed_python_store_for_client(false).await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+async fn managed_python_store_for_client(isolated_mount: bool) {
     let uv = crate::common::provider_emulator::required_uv("the Client Managed Python boundary")
         .expect("the isolated Managed Python proof requires uv");
     let (bin, rustx) = isolated_server_pair();
@@ -706,7 +720,11 @@ async fn managed_python_prepares_and_runs_in_the_bound_client_mount() {
         std::fs::write(settings, toml::to_string_pretty(&authored).unwrap()).unwrap();
         let launcher = bin.path().join("rustx-execution-client");
         std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
-        let physical = bin.path().join("physical");
+        let physical = if isolated_mount {
+            bin.path().join("physical")
+        } else {
+            workspace.clone()
+        };
         let package = physical.join(".agents/tools/echo");
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(package.join("requirements.txt"), b"# no extra dependencies\n").unwrap();
@@ -723,14 +741,25 @@ def echo() -> str:
         calls.write('echo\n')
     return answer
 ").unwrap();
-        assert!(!workspace.join(".agents/tools").exists());
-        std::fs::create_dir(bin.path().join("tmp")).unwrap();
+        let launch = if isolated_mount {
+            assert!(!workspace.join(".agents/tools").exists());
+            std::fs::create_dir(bin.path().join("tmp")).unwrap();
+            // This fixture introduces a second mount launcher. Run the
+            // actual Client with a private mount-owned temporary root.
+            // The native case keeps the guardian's admitted PID and proves
+            // the independent Store settlement protocol.
+            r#"export TMPDIR="$bin/tmp"
+unset RUSTX_CLIENT_DOMAIN_STAGING
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --bind "$HOME" "$HOME" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@""#
+        } else {
+            r#"exec "$bin/client-real" "$@""#
+        };
         std::fs::write(&launcher, format!(r#"#!/bin/sh
 set -eu
 bin=${{0%/*}}
-export PATH='{}':/usr/local/bin:/usr/bin:/bin HOME="$bin/client-home" TMPDIR="$bin/tmp"
+export PATH='{}':/usr/local/bin:/usr/bin:/bin HOME="$bin/client-home"
 export XDG_DATA_HOME="$HOME/.local/share"
-exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --bind "$HOME" "$HOME" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@"
+{launch}
 "#, uv_path.display().to_string().replace('\'', "'\\''"))).unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
         let session = &fixture.sessions[0];
@@ -746,9 +775,15 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/phys
         assert_eq!(requests.len(), 2);
         assert!(requests[1].contains("isolated-managed-python-result"), "{}", requests[1]);
         assert_eq!(std::fs::read(physical.join("managed-calls")).unwrap(), b"echo\n");
-        assert!(!workspace.join("managed-calls").exists());
+        if isolated_mount {
+            assert!(!workspace.join("managed-calls").exists());
+        }
         let store = bin.path().join("client-home/.local/share/rustx/environments/python-tools/packages");
-        let [installed] = store.read_dir().unwrap().collect::<Result<Vec<_>, _>>().unwrap().try_into().unwrap();
+        let (staging, installed): (Vec<_>, Vec<_>) = store.read_dir().unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap().into_iter()
+            .partition(|entry| entry.file_name().to_string_lossy().starts_with(".rustx-domain-stage-"));
+        assert_eq!(staging.len(), usize::from(!isolated_mount));
+        let [installed]: [std::fs::DirEntry; 1] = installed.try_into().unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(installed.path().join("manifest.json")).unwrap()).unwrap();
         assert_eq!(manifest["fastmcp"], "4.0.3");
         assert_eq!(manifest["package"], "echo");
@@ -763,6 +798,10 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/phys
         assert!(matches!(&deletion, MethodResult::Deletion {
             result: SessionDeletionResult::Deleted { session_id }
         } if session_id == session), "{deletion:?}");
+        assert_eq!(store.read_dir().unwrap().count(), 1);
+        for stage in staging {
+            assert!(!stage.path().exists(), "authenticated Revoke confirmed staging removal");
+        }
         assert!(installed.path().join("source/common.py").is_file());
         assert_eq!(std::fs::read(physical.join("managed-calls")).unwrap(), b"echo\n");
         peer.close().await;
@@ -2394,7 +2433,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         let launcher = bin.join("rustx-execution-client");
         std::fs::write(
             &launcher,
-            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexport TMPDIR=\"$bin/tmp\"\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind \"$bin/physical\" \"$4\" --tmpfs \"$bin/tmp\" -- \"$bin/client-real\" \"$@\"\n",
+            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexport TMPDIR=\"$bin/tmp\"\nunset RUSTX_CLIENT_DOMAIN_STAGING\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind \"$bin/physical\" \"$4\" --tmpfs \"$bin/tmp\" -- \"$bin/client-real\" \"$@\"\n",
         )
         .unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -5400,7 +5439,7 @@ async fn namespace_receipt_covers_a_detached_session_and_requires_the_guardian()
 
     bounded(async {
         let script = r"
-import ctypes, os, pathlib, signal, socket, sys
+import array, ctypes, json, os, pathlib, signal, socket, sys
 assert os.getpid() == 1
 # Exercise the inherited pidfd lease even if the launcher cannot propagate
 # its parent-death signal. Linux PR_SET_PDEATHSIG is 1.
@@ -5408,6 +5447,28 @@ assert ctypes.CDLL(None).prctl(1, 0, 0, 0, 0) == 0
 assert not pathlib.Path(sys.argv[2]).exists()
 scratch = pathlib.Path(os.environ['TMPDIR'])
 (scratch / 'candidate').write_bytes(b'private namespace output')
+def stage_identity(parent, kind):
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(os.environ['RUSTX_CLIENT_DOMAIN_STAGING'])
+            connection.sendmsg([kind], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))])
+            with connection.makefile('rb') as reader:
+                count = reader.read(1)[0]
+                device = int.from_bytes(reader.read(8), 'big')
+                inode = int.from_bytes(reader.read(8), 'big')
+                path = pathlib.Path(parent) / reader.read(count).decode('ascii')
+            identity = path.stat()
+            assert (device, inode) == (identity.st_dev, identity.st_ino)
+            return path
+    finally:
+        os.close(fd)
+stage = stage_identity(sys.argv[3], b'S')
+assert stage_identity(sys.argv[3], b'S') == stage
+mutation = stage_identity(sys.argv[4], b'M')
+assert stage_identity(sys.argv[4], b'M') == mutation
+(stage / 'incomplete').write_bytes(b'unpublished Python stage')
+(mutation / 'incomplete').write_bytes(b'unpublished Workspace mutation')
 child = os.fork()
 if child == 0:
     os.setsid()
@@ -5415,7 +5476,7 @@ if child == 0:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     with socket.socket(socket.AF_UNIX) as peer:
         peer.connect(sys.argv[1])
-        peer.sendall(str(scratch).encode() + b'\n')
+        peer.sendall((json.dumps([str(scratch), str(stage), str(mutation)]) + '\n').encode())
         peer.recv(1)
     os._exit(0)
 os.waitpid(child, 0)
@@ -5438,6 +5499,12 @@ os.waitpid(child, 0)
             let verifier = authority.join("domain.authority");
             let proof = authority.join("domain.proof");
             std::fs::write(&verifier, b"private authority").unwrap();
+            let store = private.path().join("packages");
+            std::fs::create_dir(&store).unwrap();
+            std::fs::write(store.join("published"), b"published Python environment").unwrap();
+            let workspace = private.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            std::fs::write(workspace.join("file"), b"committed workspace file").unwrap();
             let witness = private.path().join("witness");
             let listener = tokio::net::UnixListener::bind(&witness).unwrap();
             let mut guard = Command::new(&executable)
@@ -5446,6 +5513,8 @@ os.waitpid(child, 0)
                 .args(["/usr/bin/python3", "-c", script])
                 .arg(&witness)
                 .arg(&verifier)
+                .arg(&store)
+                .arg(&workspace)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .kill_on_drop(true)
@@ -5462,13 +5531,18 @@ os.waitpid(child, 0)
             lease.write_all(b"G").await.unwrap();
             let (peer, _) = listener.accept().await.unwrap();
             let mut peer = BufReader::new(peer);
-            let mut scratch = String::new();
-            peer.read_line(&mut scratch).await.unwrap();
-            let scratch = PathBuf::from(scratch.trim_end());
+            let mut ownership = String::new();
+            peer.read_line(&mut ownership).await.unwrap();
+            let [scratch, stage, mutation]: [PathBuf; 3] = serde_json::from_str(&ownership).unwrap();
+            assert_eq!(
+                std::fs::read(stage.join("incomplete")).unwrap(),
+                b"unpublished Python stage",
+            );
             assert_eq!(
                 std::fs::read(scratch.join("candidate")).unwrap(),
                 b"private namespace output"
             );
+            assert_eq!(std::fs::read(mutation.join("incomplete")).unwrap(), b"unpublished Workspace mutation");
             assert!(!proof.exists());
             if kill_guardian {
                 guard.start_kill().unwrap();
@@ -5492,6 +5566,24 @@ os.waitpid(child, 0)
                 0,
                 "the detached session lost its writer"
             );
+            if kill_guardian {
+                // The watcher runs after namespace closure. It cleans the
+                // exact stage without any authority to publish a receipt.
+                while stage.exists() || mutation.exists() {
+                    tokio::task::yield_now().await;
+                }
+                assert!(!proof.exists());
+            }
+            assert!(!stage.exists(), "the independent watcher reaped the Python stage");
+            assert!(!mutation.exists(), "the independent watcher reaped the mutation stage");
+            assert_eq!(
+                std::fs::read(workspace.join("file")).unwrap(),
+                b"committed workspace file",
+            );
+            assert_eq!(
+                std::fs::read(store.join("published")).unwrap(),
+                b"published Python environment",
+            );
             assert!(unrelated.try_wait().unwrap().is_none());
             if kill_guardian {
                 // Only the test fixture can discard an exact scratch path
@@ -5507,7 +5599,10 @@ os.waitpid(child, 0)
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
-    use rustx::app_server::{command::ExecParams, protocol::Method};
+    use rustx::app_server::{
+        command::ExecParams,
+        protocol::{Method, MethodResult},
+    };
     use std::os::unix::fs::PermissionsExt as _;
     use tokio::io::AsyncReadExt as _;
 
@@ -5666,6 +5761,20 @@ os._exit(os.waitstatus_to_exitcode(status))
         await_admission(&current, session, &probe).await;
         assert_eq!(std::fs::read(workspace.join("started")).unwrap(), b"one start\n");
         assert_eq!(std::fs::read(probe).unwrap(), b"original bytes");
+        let destination = workspace.join("nested/new/committed.txt");
+        assert!(matches!(
+            result(&current, Method::FsWriteFile {
+                session_id: session.clone(),
+                path: destination.display().to_string(),
+                data_base64: "cmVwbGFjZW1lbnQgY29tbWl0".into(),
+                expected_revision: None,
+            }).await,
+            MethodResult::FileMetadata { .. }
+        ));
+        assert_eq!(std::fs::read(destination).unwrap(), b"replacement commit");
+        assert!(std::fs::read_dir(&workspace).unwrap().all(|entry| {
+            !entry.unwrap().file_name().to_string_lossy().starts_with(".rustx-domain-stage-")
+        }));
         current.close().await;
         detach_then_shutdown(&mut replacement).await;
         assert!(replacement.wait().await.unwrap().success());
