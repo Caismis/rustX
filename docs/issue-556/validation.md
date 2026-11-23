@@ -197,8 +197,10 @@ before any page read, capacity, replacement and refresh, and unknown settlement.
 The local checkout regression runs the real rebuild recipe and Git archive
 against small repositories, with a sentinel at compiler configuration. It
 rejects staged and unstaged edits and excludes untracked and ignored C++ files.
-An additional preparation-only run compared all 16 importer-tree files against
-the pinned Git blobs and reviewed overrides. The recipe hash was refreshed.
+It also moves both local HEADs after validation and checks the exact archived
+commit arguments and materialized files against both pinned fixture trees.
+The preparation-only run compared 16 importer-tree files and 35,508 OCCT files
+against the pinned Git blobs and reviewed overrides. The recipe hash was refreshed.
 The bundled JS/WASM were verified by checksum and were not rebuilt for this
 follow-up.
 
