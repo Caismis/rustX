@@ -26,8 +26,10 @@ export function ResourceCard({ name, subtitle, label, icon, description, diagnos
           {subtitle && <span className={catalog.cardId}>{subtitle}</span>}
         </span>
       </button>
-      {availability && <div className={catalog.enable}>{availability}</div>}
-      {menu}
+      {(availability || menu) && <div className={css.headControls}>
+        {availability && <div className={catalog.enable}>{availability}</div>}
+        {menu}
+      </div>}
     </div>
     {(diagnostic || description) && <p className={clsx(catalog.cardDescription, css.description, diagnostic && catalog.invalid)}>{diagnostic ?? description}</p>}
     {actions && <div className={css.cardActions}>{actions}</div>}

@@ -255,7 +255,9 @@
 }
 
 .cardBody .cardDescription { margin-top: 0; flex: 1; min-width: 0; }
-.cardBody .cardFoot { margin-top: 0; flex: none; }
+/* The foot yields to the description on narrow rows: it shrinks and its path
+ * truncates instead of squeezing FileFacts to nothing. */
+.cardBody .cardFoot { margin-top: 0; flex: 0 1 auto; min-width: 0; }
 
 .card {
   display: flex;

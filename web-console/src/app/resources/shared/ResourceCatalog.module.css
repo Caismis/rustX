@@ -5,6 +5,9 @@
 .group + .group { margin-top: 24px; }
 .groupTitle { margin: 0 0 10px; font-size: 13px; font-weight: 500; }
 .cardHeading > button { flex: 1; }
+/* Head controls (scope switch + actions menu) cluster at the right edge of the
+ * card; the open button alone stretches, so the controls never drift mid-card. */
+.headControls { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; position: relative; z-index: 1; }
 .cardHeading > :last-child { min-width: 0; }
 .resourceCard .description { min-height: 0; padding: 0; }
 .cardActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; position: relative; z-index: 1; margin-block-start: auto; }
