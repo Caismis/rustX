@@ -488,12 +488,7 @@ impl LocalConversationCore {
                 session_id: session_id.clone(),
                 diagnostic: error.diagnostic,
             })?
-            .admit(|| {
-                dependencies.credentials.as_deref().map_or_else(
-                    || paths.credentials.clone(),
-                    CredentialEnvironment::snapshot,
-                )
-            })
+            .admit(|| standalone_credentials(paths, dependencies))
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
         let database = catalog.database_path(&session_id, &node.conversation_id);
         let allocation = database
@@ -1103,6 +1098,16 @@ impl LocalConversationCore {
         self.runtime.activate();
         HeadlessConversationRuntime { core: self }
     }
+}
+
+fn standalone_credentials(
+    authored: &AdmittedSessionConfig,
+    dependencies: &LocalRuntimeDependencies,
+) -> crate::credentials::CredentialSnapshot {
+    dependencies.credentials.as_deref().map_or_else(
+        || authored.credentials.clone(),
+        CredentialEnvironment::snapshot,
+    )
 }
 
 async fn prepare_standalone_configuration(
