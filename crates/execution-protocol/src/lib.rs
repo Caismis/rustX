@@ -1698,8 +1698,8 @@ pub enum ReadError {
     SearchNeedsDirectory,
     /// The read could not be completed for another reason.
     Unavailable,
-    /// The connection's bounded preparation budget is full — the caller
-    /// may retry after another ticket is consumed.
+    /// Bounded preparation or cleanup remains occupied. The operation
+    /// defines whether and how the caller can retry.
     Busy,
 }
 

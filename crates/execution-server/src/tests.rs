@@ -1232,6 +1232,67 @@ fn a_prewire_invalid_output_bound_leaves_the_pair_healthy() {
 }
 
 #[test]
+fn a_pending_watch_retirement_keeps_the_data_lane_open() {
+    let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+    let (mut connection, mut peer) = live(&binding, &hello);
+    let leaf = WatchId::new(NonZeroU64::MIN);
+    let directory = WatchId::new(NonZeroU64::new(2).unwrap());
+    let retired = WatchChange {
+        id: leaf,
+        changed_paths: Vec::new(),
+        resync_required: true,
+        retired: true,
+    };
+    let active = WatchChange {
+        id: directory,
+        changed_paths: vec!["directory/new".into()],
+        resync_required: false,
+        retired: false,
+    };
+    let expected = [
+        (
+            leaf,
+            WatchReply::Refused {
+                id: leaf,
+                kind: ReadError::Busy,
+            },
+        ),
+        (directory, WatchReply::Changed(active.clone())),
+        (leaf, WatchReply::Changed(retired.clone())),
+    ];
+    let answers = thread::spawn(move || {
+        for (id, reply) in expected {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Watch(WatchRequest::Poll { id }));
+            write_record(&mut peer, &ClientReply::Watch(reply)).unwrap();
+        }
+        let request: ClientRequest = read_record(&mut peer).unwrap();
+        assert_eq!(request, ClientRequest::Ping);
+        write_record(&mut peer, &ClientReply::Pong).unwrap();
+    });
+    assert_eq!(
+        connection
+            .poll_watch(leaf, Path::new("leaf"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::WouldBlock
+    );
+    assert_eq!(
+        connection
+            .poll_watch(directory, Path::new("directory"))
+            .unwrap(),
+        active
+    );
+    assert_eq!(
+        connection.poll_watch(leaf, Path::new("leaf")).unwrap(),
+        retired
+    );
+    connection.ping().unwrap();
+    answers.join().unwrap();
+    assert_eq!(binding.status().phase, BindingPhase::Live);
+}
+
+#[test]
 fn a_size_contradiction_retires_the_stream_and_detaches_the_binding() {
     let (binding, hello) = reserved(BTreeSet::from([
         Capability::Connection,

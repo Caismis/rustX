@@ -232,7 +232,10 @@ impl Watches {
 
     fn poll(&self, root: &PackageDirectory, id: WatchId) -> WatchReply {
         let (path, expected, delta) = {
-            let state = self.active.lock().expect("watch registry");
+            let mut state = self.active.lock().expect("watch registry");
+            if state.stopping.contains_key(&id) {
+                return Self::poll_retirement(&mut state, id);
+            }
             let Some(entry) = state.entries.get(&id) else {
                 return WatchReply::Refused {
                     id,
@@ -250,15 +253,9 @@ impl Watches {
             .is_ok_and(|meta| meta.identity == expected);
         let pending = std::mem::take(&mut *delta.lock().expect("watch delta"));
         if !same || pending.retired {
-            if !self.stop(id) {
-                return WatchReply::Unknown { id };
-            }
-            return WatchReply::Changed(WatchChange {
-                id,
-                changed_paths: Vec::new(),
-                resync_required: true,
-                retired: true,
-            });
+            let mut state = self.active.lock().expect("watch registry");
+            Self::begin_stop(&mut state, id);
+            return Self::poll_retirement(&mut state, id);
         }
         WatchReply::Changed(WatchChange {
             id,
@@ -270,10 +267,38 @@ impl Watches {
 
     pub(super) fn stop(&self, id: WatchId) -> bool {
         let mut state = self.active.lock().expect("watch registry");
+        Self::begin_stop(&mut state, id);
+        Self::await_stopped(&mut state, id, CLEANUP_BUDGET)
+    }
+
+    fn begin_stop(state: &mut State, id: WatchId) {
         if let Some(entry) = state.entries.remove(&id) {
             state.stopping.insert(id, entry.stop());
         }
-        Self::await_stopped(&mut state, id, CLEANUP_BUDGET)
+    }
+
+    fn poll_retirement(state: &mut State, id: WatchId) -> WatchReply {
+        if let Some(pending) = state.stopping.get(&id) {
+            match pending.try_recv() {
+                Ok(()) => {
+                    state.stopping.remove(&id);
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    return WatchReply::Refused {
+                        id,
+                        kind: ReadError::Busy,
+                    };
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return WatchReply::Unknown { id },
+            }
+        }
+        // Concurrent control stop also removes the entry only after proof.
+        WatchReply::Changed(WatchChange {
+            id,
+            changed_paths: Vec::new(),
+            resync_required: true,
+            retired: true,
+        })
     }
 
     fn await_stopped(state: &mut State, id: WatchId, budget: Duration) -> bool {
@@ -334,18 +359,94 @@ mod tests {
     ) -> WatchChange {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let WatchReply::Changed(change) = watches.poll(root, id) else {
-                panic!("watch disappeared before a physical change was reported");
-            };
-            if want(&change) {
-                return change;
+            let notice = watches.poll(root, id);
+            match &notice {
+                WatchReply::Changed(change) if want(change) => return change.clone(),
+                WatchReply::Changed(_)
+                | WatchReply::Refused {
+                    id: _,
+                    kind: ReadError::Busy,
+                } => (),
+                _ => panic!("watch disappeared before a physical change was reported: {notice:?}"),
             }
             assert!(
                 Instant::now() < deadline,
-                "watch did not publish the expected change: {change:?}"
+                "watch did not publish the expected change: {notice:?}"
             );
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn pending_native_retirement_keeps_independent_watches_live() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let path = base.join("leaf");
+        fs::write(&path, b"original").unwrap();
+        fs::create_dir(base.join("directory")).unwrap();
+        let root = PackageDirectory::open(&base).unwrap();
+        let watches = Watches::new();
+        let leaf = id(1);
+        let directory = id(2);
+        watches
+            .register(&root, &base, leaf, "leaf".into(), |_| {})
+            .unwrap();
+        watches
+            .register(&root, &base, directory, "directory".into(), |_| {})
+            .unwrap();
+        // Withhold the stopped observer's cleanup receipt after replacing its path.
+        let (finish, pending) = mpsc::channel();
+        watches
+            .active
+            .lock()
+            .unwrap()
+            .entries
+            .get_mut(&leaf)
+            .unwrap()
+            .finished = pending;
+        fs::rename(&path, base.join("previous")).unwrap();
+        fs::write(&path, b"replacement").unwrap();
+        let busy = WatchReply::Refused {
+            id: leaf,
+            kind: ReadError::Busy,
+        };
+        assert_eq!(watches.poll(&root, leaf), busy);
+        assert_eq!(watches.poll(&root, leaf), busy);
+        assert_eq!(
+            watches
+                .register(&root, &base, leaf, "leaf".into(), |_| {})
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+
+        fs::write(base.join("directory/new"), b"independent change").unwrap();
+        wait_for_change(&watches, &root, directory, |notice| {
+            assert!(!notice.retired);
+            notice
+                .changed_paths
+                .contains(&PathBuf::from("directory/new"))
+                || cfg!(target_os = "macos") && notice.resync_required
+        });
+
+        finish.send(()).unwrap();
+        assert_eq!(
+            watches.poll(&root, leaf),
+            WatchReply::Changed(WatchChange {
+                id: leaf,
+                changed_paths: Vec::new(),
+                resync_required: true,
+                retired: true,
+            })
+        );
+        assert_eq!(
+            watches.poll(&root, leaf),
+            WatchReply::Refused {
+                id: leaf,
+                kind: ReadError::NotFound
+            }
+        );
+        assert!(watches.stop(directory));
     }
 
     #[test]

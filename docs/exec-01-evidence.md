@@ -317,6 +317,13 @@ sentinel, and all 28 existing App Server environment boundary tests on
 the watcher slice. Native macOS descriptor and teardown coverage still
 requires a macOS runner.
 
+`pending_native_retirement_keeps_independent_watches_live` holds the native
+cleanup receipt for a replaced leaf. Polls keep the watch identity and
+slot owned while a real directory observer reports an independent write.
+The original identity retires after its receipt. The paired Server test
+accepts the typed pending reply, observes the second watch, and completes
+Ping without retiring the connection.
+
 ## Session relay and Workspace Python
 
 Root and native Workflow dispatch share one live Session binding. The staged

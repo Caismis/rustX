@@ -1001,7 +1001,10 @@ Server-created incarnation and checks the native source identity before
 and after attaching. `Watch::Poll` returns a coalesced, source-relative
 delta of at most 16 paths and 16 KiB of escaped path bytes. Each Client
 binding holds at most 32 observers. An unavailable or changed identity
-retires the observer with an empty resync hint.
+starts retirement. A poll that has yet to obtain native cleanup proof
+returns `Busy` for the exact watch identity, with the slot still owned by
+that observer. Subsequent polls can collect the empty retired resync hint
+after the receipt arrives. Other observers and the data lane remain live.
 
 `StopWatch` uses the independent control lane. Its exact keyed receipt
 distinguishes physical cleanup from an unknown result. A detached or

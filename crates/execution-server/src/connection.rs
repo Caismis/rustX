@@ -1076,6 +1076,15 @@ impl LocalConnection {
         )?;
         let notice = match result {
             ClientReply::Watch(WatchReply::Changed(notice)) if notice.id == id => notice,
+            ClientReply::Watch(WatchReply::Refused {
+                id: echoed,
+                kind: ReadError::Busy,
+            }) if echoed == id => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "watch cleanup is pending",
+                ));
+            }
             ClientReply::Watch(WatchReply::Refused { id: echoed, kind }) if echoed == id => {
                 return Err(read_error(kind));
             }
