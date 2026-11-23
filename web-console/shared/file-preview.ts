@@ -42,7 +42,10 @@ export function validateFileRead(read: FileReadOptions): void {
 /** An aborted preview cannot validate a copy. Close rejects with this error
  * only after its physical work settles. */
 export class PreviewCancelled extends Error {
-  constructor() { super('Preview operation cancelled'); }
+  constructor() {
+    super('Preview operation cancelled');
+    this.name = 'AbortError';
+  }
 }
 
 /** A bounded source owner. Idle owners hold no physical read permit. */

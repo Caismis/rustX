@@ -187,7 +187,8 @@ including all three browser shards and [Merge verification](https://github.com/C
 GitHub also recorded a separate failing Devin Review status for that head.
 
 The cancellation follow-up exercises real Host HTTP operations with a
-controllable native socket. The regressions cover retirement before
+controllable native socket. The explicit cancellation error retains the
+standard `AbortError` name. The regressions cover retirement before
 acknowledgement, repeat cancellation, unexpected native errors, and unknown
 settlement. The streaming STL checks use the actual source scheduler and
 content owner with a disposable Worker test double. They verify size rejection
