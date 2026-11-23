@@ -308,11 +308,12 @@ impl SessionRuntimeManager {
                 .park()
                 .await;
         }
-        if let Some(endpoint) = endpoint {
-            endpoint
-                .settle()
-                .await
-                .map_err(|failure| error(format!("Client revocation is unconfirmed: {failure}")))?;
+        if let Some(endpoint) = endpoint
+            && let Err(failure) = endpoint.settle().await
+        {
+            // The catalog may publish logical deletion after native writers
+            // stop. Physical cleanup checks the durable execution fence.
+            tracing::warn!(%session, %failure, "Client revocation is unconfirmed during deletion");
         }
         for id in residents {
             match self.retire(&id).await {
@@ -391,11 +392,10 @@ impl SessionRuntimeManager {
                 "writer retirement must be proven before deletion recovery",
             ));
         }
-        if let Some(endpoint) = self.execution.close_session_admission(session) {
-            endpoint
-                .settle()
-                .await
-                .map_err(|failure| error(format!("Client revocation is unconfirmed: {failure}")))?;
+        if let Some(endpoint) = self.execution.close_session_admission(session)
+            && let Err(failure) = endpoint.settle().await
+        {
+            tracing::warn!(%session, %failure, "Client revocation is unconfirmed during deletion recovery");
         }
         let result = if matches!(observed, SessionDeleteResult::NotFound { .. }) {
             self.sessions.confirm_deletion_absence(session).await

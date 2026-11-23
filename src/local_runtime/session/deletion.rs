@@ -147,6 +147,8 @@ impl CleanupWork {
     }
 
     fn run_private_allocations(&self) -> std::io::Result<()> {
+        let session = rustx_execution_protocol::SessionId::new(self.record.session_id.as_str());
+        rustx_execution_server::RecoveryFence::require_session_settled(self.root.root(), &session)?;
         // Admission consults the catalog while holding ConversationAccess. Since
         // the record is durably authoritative, new normal access cannot enter.
         // Existing holders still exclude cleanup. Lock only one private unit at

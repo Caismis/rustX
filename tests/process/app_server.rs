@@ -5097,6 +5097,15 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         let fixture = Fixture::new().await;
         let (_bin, executable) = isolated_server_pair();
         let session = &fixture.sessions[0];
+        let private_database = {
+            let controller = SessionController::open(&fixture.root.path().join("runtime")).unwrap();
+            controller
+                .acquire_session(session, None)
+                .await
+                .unwrap()
+                .database_path
+        };
+        assert!(private_database.is_file());
         let workspace = fixture.root.path().join("a");
         let other_workspace = fixture.root.path().join("b");
         grant_environment_roots(&fixture, &[workspace.clone(), other_workspace.clone()]);
@@ -5160,9 +5169,62 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             result,
             rustx::app_server::protocol::MethodResult::SessionHistory { .. }
         ));
+        assert_offline_session_deletion(&driver, session).await;
+        assert!(private_database.is_file());
+        assert_eq!(std::fs::read(&first_probe).unwrap(), b"a");
+        await_admission(&driver, other, &other_probe).await;
         driver.close().await;
         detach_then_shutdown(&mut replacement).await;
         assert!(replacement.wait().await.unwrap().success());
     })
     .await;
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_offline_session_deletion(driver: &driver::Driver, session: &SessionId) {
+    use rustx::app_server::{
+        protocol::{Method, MethodResult},
+        session_deletion::SessionDeletionResult,
+    };
+    let MethodResult::Deletion {
+        result: SessionDeletionResult::Preview { preview },
+    } = result(
+        driver,
+        Method::SessionDeletePreview {
+            session_id: session.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("offline Session should remain eligible for logical deletion");
+    };
+    let deleted = result(
+        driver,
+        Method::SessionDelete {
+            session_id: session.clone(),
+            expected_target_revision: preview.target_revision,
+        },
+    )
+    .await;
+    let MethodResult::Deletion {
+        result: SessionDeletionResult::CommittedCleanupPending { session_id },
+    } = deleted
+    else {
+        panic!("unconfirmed physical owner must retain cleanup: {deleted:?}");
+    };
+    assert_eq!(&session_id, session);
+    let recovered = result(
+        driver,
+        Method::SessionRecoverDeletion {
+            session_id: session.clone(),
+        },
+    )
+    .await;
+    let MethodResult::Deletion {
+        result: SessionDeletionResult::CommittedCleanupPending { session_id },
+    } = recovered
+    else {
+        panic!("retry still lacks physical cleanup evidence: {recovered:?}");
+    };
+    assert_eq!(&session_id, session);
 }

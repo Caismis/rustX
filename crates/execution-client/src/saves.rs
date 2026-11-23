@@ -4,8 +4,8 @@ use std::{
     collections::HashMap,
     io::{self, Read},
     path::Path,
-    sync::Arc,
-    time::Instant,
+    sync::{Arc, Mutex, TryLockError, mpsc},
+    time::{Duration, Instant},
 };
 
 use rustx_confined_fs::PackageDirectory;
@@ -24,6 +24,7 @@ use crate::bash_capture::{CaptureFile, Captures};
 const MAX_FILES: usize = 16;
 const MAX_BYTES_PER_FILE: u64 = 17 * 1024 * 1024;
 const MAX_OPERATIONS: usize = 4096;
+const CLEANUP_INTERVAL: Duration = Duration::from_millis(250);
 
 pub(crate) struct Saves {
     admission: Admission,
@@ -51,6 +52,30 @@ impl Saves {
             files: Captures::with_capacity("rustx-save-", MAX_FILES),
             entries: HashMap::new(),
             closed: false,
+        }
+    }
+
+    /// Cleans abandoned files even when the Server could not send Abort and
+    /// no other save requests arrive. The maintenance owner runs off both
+    /// transport lanes. A failed unlink leaves the entry and its quota held.
+    pub(crate) fn maintain(registry: &Mutex<Self>, stop: &mpsc::Receiver<()>) {
+        while let Err(mpsc::RecvTimeoutError::Timeout) = stop.recv_timeout(CLEANUP_INTERVAL) {
+            if let Ok(mut saves) = registry.try_lock() {
+                saves.reap_expired(Instant::now());
+            }
+        }
+    }
+
+    fn reap_expired(&mut self, now: Instant) {
+        if self.closed {
+            return;
+        }
+        for entry in self.entries.values_mut() {
+            // A sent Publish can have succeeded even when its reply was
+            // lost. Expiry only retires files with no physical publication.
+            if now >= entry.expires && entry.storage.published.is_none() {
+                entry.storage.remove();
+            }
         }
     }
 
@@ -94,11 +119,7 @@ impl Saves {
         if self.entries.len() >= MAX_OPERATIONS {
             return refused(SaveCode::Capacity);
         }
-        for entry in self.entries.values_mut() {
-            if now >= entry.expires && entry.storage.published.is_none() {
-                entry.storage.remove();
-            }
-        }
+        self.reap_expired(now);
         let file = match self.files.create(owner.operation) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -153,6 +174,21 @@ impl Saves {
             );
         }
         clean && self.files.close().is_ok()
+    }
+
+    pub(crate) fn close_by(registry: &Mutex<Self>, cutoff: Instant) -> bool {
+        loop {
+            match registry.try_lock() {
+                Ok(mut saves) => return saves.close(),
+                Err(TryLockError::Poisoned(_)) => return false,
+                Err(TryLockError::WouldBlock) => {}
+            }
+            let remaining = cutoff.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(5)));
+        }
     }
 }
 
@@ -249,9 +285,8 @@ mod tests {
         process::ServerIncarnation, save::ContentFormat,
     };
 
-    #[test]
-    fn abort_retries_unlink_and_retains_the_slot_until_removal_is_proven() {
-        let admission = Admission {
+    fn fixture_admission() -> Admission {
+        Admission {
             version: PROTOCOL_VERSION,
             server_incarnation: ServerIncarnation::generate(),
             session: SessionId::new("session-1"),
@@ -259,7 +294,11 @@ mod tests {
             instance: ClientInstanceId::new("instance-1"),
             generation: Generation::new(std::num::NonZeroU64::MIN),
             workspace: "/unused".into(),
-        };
+        }
+    }
+
+    fn begin(saves: &mut Saves, now: Instant) -> SaveKey {
+        let admission = &saves.admission;
         let owner = SaveOwner {
             incarnation: admission.server_incarnation,
             session: admission.session.clone(),
@@ -268,8 +307,6 @@ mod tests {
             conversation: ConversationId::parse("conv-1").unwrap(),
             operation: OperationId::new(),
         };
-        let mut saves = Saves::new(admission);
-        let now = Instant::now();
         let SaveReply::Begun { key } = saves.dispatch(
             &SaveRequest::Begin {
                 owner,
@@ -279,6 +316,14 @@ mod tests {
         ) else {
             panic!("candidate owns a file");
         };
+        key
+    }
+
+    #[test]
+    fn abort_retries_unlink_and_retains_the_slot_until_removal_is_proven() {
+        let mut saves = Saves::new(fixture_admission());
+        let now = Instant::now();
+        let key = begin(&mut saves, now);
         let root = saves.files.path().unwrap();
         let file = saves.entries[&key.owner.operation]
             .storage
@@ -309,5 +354,76 @@ mod tests {
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
         assert!(saves.close());
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn expired_save_cleanup_retries_unlink_and_preserves_published_output() {
+        let mut saves = Saves::new(fixture_admission());
+        let now = Instant::now();
+        let cutoff = now + OPTIONAL_SAVE_DEADLINE;
+        let abandoned = begin(&mut saves, now);
+        let completed = begin(&mut saves, now);
+        let length = 4_u64.into();
+        let sha256 =
+            rustx_execution_protocol::save::Sha256Hex::from_digest(Sha256::digest(b"done").into());
+        let extent = rustx_execution_protocol::save::SaveExtent::Complete;
+        assert!(matches!(
+            saves.dispatch(
+                &SaveRequest::Chunk {
+                    key: completed.clone(),
+                    sequence: 1_u64.into(),
+                    offset: 0_u64.into(),
+                    data_base64: "ZG9uZQ==".to_owned(),
+                    sha256,
+                },
+                now
+            ),
+            SaveReply::Chunked { .. }
+        ));
+        assert!(matches!(
+            saves.dispatch(
+                &SaveRequest::Seal {
+                    key: completed.clone(),
+                    length,
+                    sha256,
+                    extent,
+                },
+                now
+            ),
+            SaveReply::Sealed { .. }
+        ));
+        let SaveReply::Published { locator, .. } = saves.dispatch(
+            &SaveRequest::Publish {
+                key: completed.clone(),
+                length,
+                sha256,
+                extent,
+            },
+            now,
+        ) else {
+            panic!("completed output was not published");
+        };
+        saves.entries[&abandoned.owner.operation]
+            .storage
+            .file
+            .as_ref()
+            .unwrap()
+            .fail_next_unlink
+            .store(true, std::sync::atomic::Ordering::Release);
+        saves.reap_expired(cutoff);
+        assert_eq!(saves.files.available(), MAX_FILES - 2);
+        saves.reap_expired(cutoff + CLEANUP_INTERVAL);
+        assert_eq!(saves.files.available(), MAX_FILES - 1);
+        assert_eq!(
+            saves
+                .with_published(&locator, &completed.owner.conversation, |root, path| {
+                    let mut output = Vec::new();
+                    root.file(path).unwrap().read_to_end(&mut output).unwrap();
+                    output
+                })
+                .unwrap(),
+            b"done"
+        );
+        assert!(saves.close());
     }
 }

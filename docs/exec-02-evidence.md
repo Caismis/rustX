@@ -43,8 +43,20 @@ retirement. The Linux process regression
 admits the Client and reads a fixture file, sends SIGKILL to the real
 Server, then verifies that a fresh Server refuses the original Session
 binding. An independent Session admits its own Client and the original
-Session's history remains accessible. This proves the admission fence.
-Independent attestation of an old physical domain remains open.
+Session's history remains accessible. The same process test then commits
+deletion of the offline Session and checks that both the initial cleanup
+and retry report cleanup pending. The private database and the Client's
+Workspace file remain intact. Independent attestation and cleanup-only
+reconnection remain open.
+
+Client save expiry is owned by a maintenance thread outside the data and
+control lanes. An abandoned unpublished file is retried after its deadline
+even if Abort could not be sent and no later save request arrives. The
+descriptor and its slot remain held until removal; an already published
+file is excluded from expiry, including when its publication reply was
+lost. The storage regression injects one unlink failure, verifies retained
+capacity, then proves retry releases exactly one slot and the published
+file remains readable.
 
 ## Open gates
 
@@ -56,6 +68,6 @@ Independent attestation of an old physical domain remains open.
   admission fence retains the unresolved identity. The Linux SIGKILL case observes one business socket
   and exercises isolation between Sessions.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
-  run through the bound Client in EXEC-03. Offline cleanup, complete child
+  run through the bound Client in EXEC-03. Cleanup-only reconnection, complete child
   integration and the Client-owned Managed Python Store remain open. Native
   macOS fault injection and final exact-head verification remain open.

@@ -279,15 +279,27 @@ fn serve_session(
         watches.clone(),
         saves.clone(),
     );
-    let result = serve(
-        &mut channel,
-        root,
-        &arbitration,
-        &operations,
-        &workspace,
-        &watches,
-        &saves,
-    );
+    let result = std::thread::scope(|scope| {
+        let (stop, retired) = std::sync::mpsc::channel();
+        let registry = &saves;
+        let maintenance = std::thread::Builder::new()
+            .name("execution-save-cleanup".to_owned())
+            .spawn_scoped(scope, move || saves::Saves::maintain(registry, &retired));
+        let result = match maintenance {
+            Ok(_) => serve(
+                &mut channel,
+                root,
+                &arbitration,
+                &operations,
+                &workspace,
+                &watches,
+                &saves,
+            ),
+            Err(error) => Err(handshake_error(&error)),
+        };
+        drop(stop);
+        result
+    });
     // Teardown: stop the worker first so its lane ends cleanly, then
     // shut the data lane — never exit with a lane still live.
     control.stop();
@@ -502,6 +514,7 @@ fn client_control_worker(
                         disposition: worker_arbitration.cancel(ticket),
                     },
                     ControlRequest::Revoke => {
+                        let cutoff = std::time::Instant::now() + REVOKE_SETTLE_BUDGET;
                         worker_arbitration.revoke();
                         // `Revoked` is only honest once the process
                         // operations were signalled and their physical
@@ -509,8 +522,9 @@ fn client_control_worker(
                         // Server's own revoke budget still fences.
                         operations.revoke();
                         let watches_settled = watches.shutdown();
-                        let processes_settled = operations.finish_revocation(REVOKE_SETTLE_BUDGET);
-                        let saves_settled = saves.try_lock().is_ok_and(|mut saves| saves.close());
+                        let remaining = cutoff.saturating_duration_since(std::time::Instant::now());
+                        let processes_settled = operations.finish_revocation(remaining);
+                        let saves_settled = saves::Saves::close_by(&saves, cutoff);
                         if !watches_settled || !saves_settled || processes_settled.is_err() {
                             return;
                         }

@@ -1,17 +1,39 @@
 //! Durable admission fence for a physical binding which might outlive Server
 //! memory. Only exact, confirmed binding settlement may remove this record.
+use std::fs::File;
 use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
-use nix::fcntl::{OFlag, openat};
-use nix::sys::stat::{Mode, fstat, mkdirat};
+use nix::fcntl::{AtFlags, OFlag, openat};
+use nix::sys::stat::{Mode, fstat, fstatat, mkdirat};
 use nix::unistd::{UnlinkatFlags, unlinkat};
 use sha2::{Digest, Sha256};
 
 use super::binding::ConnectionOwner;
 
 const DIRECTORY: &str = "execution-pending";
+
+fn pending_directory(root: &File) -> io::Result<File> {
+    let directory = File::from(openat(
+        root,
+        DIRECTORY,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )?);
+    let metadata = directory.metadata()?;
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o777 != 0o700 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "unsafe execution recovery directory",
+        ));
+    }
+    Ok(directory)
+}
+
+fn marker_name(session: &rustx_execution_protocol::SessionId) -> std::ffi::OsString {
+    format!("{:x}.json", Sha256::digest(session.as_str())).into()
+}
 
 /// An exclusive durable reservation for one Session's possible physical work.
 /// Dropping its descriptors retains the record.
@@ -33,24 +55,9 @@ impl RecoveryFence {
             Ok(()) | Err(nix::errno::Errno::EEXIST) => (),
             Err(error) => return Err(error.into()),
         }
-        let directory = std::fs::File::from(openat(
-            &root,
-            DIRECTORY,
-            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-            Mode::empty(),
-        )?);
-        let metadata = directory.metadata()?;
-        if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o777 != 0o700 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "unsafe execution recovery directory",
-            ));
-        }
+        let directory = pending_directory(&root)?;
         root.sync_all()?;
-        let name = std::ffi::OsString::from(format!(
-            "{:x}.json",
-            Sha256::digest(admission.session.as_str())
-        ));
+        let name = marker_name(&admission.session);
         let mut file = std::fs::File::from(
             openat(
                 &directory,
@@ -86,6 +93,36 @@ impl RecoveryFence {
             directory,
         })
     }
+
+    /// Checks the durable fence before destructive cleanup of a deleted Session.
+    /// The caller must already have durably closed Session admission.
+    ///
+    /// # Errors
+    /// Fails while a possible physical owner remains or the trusted directory
+    /// cannot be checked. Even an unreadable marker retains the fence.
+    pub fn require_session_settled(
+        product_root: &Path,
+        session: &rustx_execution_protocol::SessionId,
+    ) -> io::Result<()> {
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        let directory = match pending_directory(&root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match fstatat(
+            &directory,
+            marker_name(session).as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Err(nix::errno::Errno::ENOENT) => directory.sync_all(),
+            Err(error) => Err(error.into()),
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "previous Session execution domain requires physical settlement",
+            )),
+        }
+    }
 }
 
 impl RecoveryFence {
@@ -95,10 +132,10 @@ impl RecoveryFence {
 
     pub(super) fn remove(&self) -> io::Result<()> {
         let retained = fstat(&self.file)?;
-        let current = nix::sys::stat::fstatat(
+        let current = fstatat(
             &self.directory,
             self.name.as_os_str(),
-            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+            AtFlags::AT_SYMLINK_NOFOLLOW,
         )?;
         if current.st_dev != retained.st_dev || current.st_ino != retained.st_ino {
             return Err(io::Error::new(
