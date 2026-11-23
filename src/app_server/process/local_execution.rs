@@ -255,6 +255,7 @@ pub(super) async fn launch_remote(
     listen: std::net::SocketAddr,
     bootstrap: std::path::PathBuf,
     public_url: Option<String>,
+    settlement_grant: Option<std::path::PathBuf>,
     stop: CancellationToken,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
     let session = SessionId::parse(id).map_err(|error| format!("execution: {error}"))?;
@@ -281,6 +282,25 @@ pub(super) async fn launch_remote(
         .reserve_websocket_execution(&session, listen, bootstrap, public_url)
         .await
         .map_err(|error| format!("execution: {error}"))?;
+    if let Some(path) = settlement_grant {
+        let owner = endpoint.clone();
+        let published =
+            tokio::task::spawn_blocking(move || owner.publish_external_settlement_grant(&path))
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(std::convert::identity);
+        if let Err(error) = published {
+            let settled = endpoint.settle().await;
+            return match settled {
+                Ok(()) => Err(format!(
+                    "execution: settlement grant publication failed: {error}"
+                )),
+                Err(settlement) => Err(format!(
+                    "execution: settlement grant publication failed: {error}; {settlement}"
+                )),
+            };
+        }
+    }
     let ExecutionListener::WebSocket(std_listener) = endpoint.listener() else {
         return Err("execution: the Session's endpoint is not a WebSocket listener".into());
     };

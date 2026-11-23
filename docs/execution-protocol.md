@@ -324,6 +324,24 @@ namespace exit the watcher reclaims the exact outstanding directories before
 the guardian can publish settlement. Completed Workspace files and published
 Python fingerprints survive that release.
 
+A separately trusted remote deployment host can receive a one-time
+settlement grant through `--execution-settlement-grant-out`. The Server
+publishes the grant to a new owner-only file outside the Client bootstrap.
+Its receipt is valid only for the previous Session, incarnation, Client
+instance, generation and Workspace. The deployment owner must retain the
+grant outside the Client and its descendants. It may publish the receipt
+only after independently proving that its original physical domain and
+outstanding writers are settled or isolated. A deployment with no such
+owner remains fenced after unconfirmed death.
+
+The grant contains the exact Server `receipt_path` and a 32-byte capability
+encoded as `proof_base64`. The trusted host returns those bytes through an
+authenticated private transfer. An operator publishes them atomically at
+that path as an owner-only regular file. The Server validates the binding's
+original persisted verifier and consumes the receipt before replacement
+admission on restart. The grant never appears in protocol Hello, ordinary
+management authentication or the Client's launch bundle.
+
 The local App Server waits 1, 2 and 4 seconds before attempting successive
 replacements. It permits at most three attempts in a rolling 60 seconds,
 with backoff reset after five stable minutes. A failed replacement launch

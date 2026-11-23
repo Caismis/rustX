@@ -83,6 +83,10 @@ pub(crate) struct AppServerArgs {
     /// Client; its parent is created or must already be owner-only 0700.
     #[arg(long)]
     execution_bootstrap_out: Option<PathBuf>,
+    /// A separate owner-only grant for the trusted remote lifecycle host.
+    /// Deliver it out of band and keep it outside the Client environment.
+    #[arg(long, requires = "execution_bootstrap_out")]
+    execution_settlement_grant_out: Option<PathBuf>,
     /// The public `wss://…/execution/v4` ingress endpoint published in
     /// the bundle instead of the loopback address.
     #[arg(long, requires = "execution_ws_listen")]
@@ -107,6 +111,7 @@ impl AppServerArgs {
             execution_workspace: self.execution_workspace,
             execution_ws_listen: self.execution_ws_listen,
             execution_bootstrap_out: self.execution_bootstrap_out,
+            execution_settlement_grant_out: self.execution_settlement_grant_out,
             execution_public_url: self.execution_public_url,
         }
     }
@@ -131,6 +136,7 @@ pub struct Request {
     execution_workspace: Option<PathBuf>,
     execution_ws_listen: Option<std::net::SocketAddr>,
     execution_bootstrap_out: Option<PathBuf>,
+    execution_settlement_grant_out: Option<PathBuf>,
     execution_public_url: Option<String>,
 }
 
@@ -441,6 +447,7 @@ async fn run(options: Request) -> Result<(), String> {
                     listen,
                     bootstrap.clone(),
                     public_url.clone(),
+                    options.execution_settlement_grant_out.clone(),
                     remote_stop.clone(),
                 )
                 .await?,

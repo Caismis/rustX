@@ -12,7 +12,6 @@ use sha2::{Digest, Sha256};
 
 use super::binding::ConnectionOwner;
 
-#[cfg(target_os = "linux")]
 mod domain;
 #[cfg(target_os = "linux")]
 pub use domain::LocalDomainGrant;
@@ -47,7 +46,6 @@ pub struct RecoveryFence {
     file: std::fs::File,
     name: std::ffi::OsString,
     directory: std::fs::File,
-    #[cfg(target_os = "linux")]
     domain: domain::DomainKey,
 }
 
@@ -106,7 +104,6 @@ impl RecoveryFence {
             file,
             name,
             directory,
-            #[cfg(target_os = "linux")]
             domain: domain::DomainKey::new(product_root.join(DIRECTORY), &bytes),
         })
     }
@@ -135,7 +132,6 @@ impl RecoveryFence {
             Err(nix::errno::Errno::ENOENT) => directory.sync_all(),
             Err(error) => Err(error.into()),
             Ok(_) => {
-                #[cfg(target_os = "linux")]
                 if domain::reconcile(&directory, session)? {
                     return Ok(());
                 }
@@ -149,6 +145,39 @@ impl RecoveryFence {
 }
 
 impl RecoveryFence {
+    /// Create one private grant for a separately trusted deployment host.
+    /// The grant proves only the exact reservation and is withheld from the
+    /// execution transport and its Client bootstrap.
+    ///
+    /// # Errors
+    /// Rejects unsafe destinations, conflicting files or a lost reservation.
+    pub fn publish_external_grant(&self, path: &Path) -> io::Result<()> {
+        use base64::Engine as _;
+
+        #[derive(serde::Serialize)]
+        struct Grant<'a> {
+            receipt_path: &'a Path,
+            proof_base64: String,
+        }
+
+        let parent = super::bootstrap::require_private_child(path)?;
+        self.file.lock()?;
+        let result = (|| {
+            self.verify_marker()?;
+            let grant = self.domain.arm(&self.directory)?;
+            let publication = Grant {
+                receipt_path: grant.receipt(),
+                proof_base64: base64::engine::general_purpose::STANDARD.encode(grant.token()),
+            };
+            super::bootstrap::publish_private(&parent, |file| {
+                serde_json::to_writer(file, &publication).map_err(io::Error::other)
+            })?;
+            Ok(())
+        })();
+        let unlock = self.file.unlock();
+        result.and(unlock)
+    }
+
     /// Arms an independent trusted Linux host before granting Client START.
     /// The durable store retains the verifier. Send the token only to the
     /// helper through its private inherited pipe.
@@ -212,7 +241,6 @@ impl RecoveryFence {
             UnlinkatFlags::NoRemoveDir,
         )?;
         self.directory.sync_all()?;
-        #[cfg(target_os = "linux")]
         self.domain.cleanup(&self.directory)?;
         Ok(())
     }

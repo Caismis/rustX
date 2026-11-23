@@ -355,6 +355,13 @@ impl LocalExecutionEndpoint {
             .arm_local_domain()
     }
 
+    pub(crate) fn publish_external_settlement_grant(&self, path: &Path) -> io::Result<()> {
+        self.recovery_fence
+            .as_ref()
+            .ok_or_else(|| io::Error::other("remote Client requires a durable ownership marker"))?
+            .publish_external_grant(path)
+    }
+
     /// The exact logical workspace this binding reserved — the trusted
     /// catalog identity recorded at claim time, never probed on disk.
     #[must_use]
@@ -1431,7 +1438,7 @@ impl LocalExecutionEndpoint {
         self.connection_released.notify_waiters();
     }
 
-    pub(super) async fn settle(self: Arc<Self>) -> io::Result<()> {
+    pub(crate) async fn settle(self: Arc<Self>) -> io::Result<()> {
         let deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
         tokio::task::spawn_blocking(move || self.fence_connection_by(deadline))

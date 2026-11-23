@@ -5974,6 +5974,130 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
 }
 
 #[cfg(target_os = "linux")]
+#[tokio::test]
+async fn trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session() {
+    use base64::Engine as _;
+    use rustx::app_server::command::ExecParams;
+    use rustx::app_server::protocol::Method;
+    use sha2::{Digest, Sha256};
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("probe");
+        std::fs::write(&probe, b"unchanged bytes").unwrap();
+        let private = || {
+            tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir_in("/tmp")
+                .unwrap()
+        };
+        let operator = private();
+        let bundle = operator.path().join("client");
+        let secret = operator.path().join("custody");
+        let mut original =
+            remote_exec_command(&executable, &fixture, Some(session.as_str()), &bundle)
+                .arg("--execution-settlement-grant-out")
+                .arg(&secret)
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap();
+        let connected = driver::jsonl(original.stdout.take().unwrap(), original.stdin.take().unwrap());
+        initialize_client(&connected).await;
+        let grant: serde_json::Value = serde_json::from_slice(&std::fs::read(&secret).unwrap()).unwrap();
+        assert_eq!(secret.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let proof = std::path::PathBuf::from(grant["receipt_path"].as_str().unwrap());
+        let token = base64::engine::general_purpose::STANDARD.decode(grant["proof_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(token.len(), 32);
+        assert!(!std::fs::read(&bundle).unwrap().windows(token.len()).any(|window| window == token));
+        let deployment = private();
+        let remote_proof = deployment.path().join(proof.file_name().unwrap());
+        let mut authority = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(remote_proof.with_extension("authority")).unwrap();
+        authority.write_all(&Sha256::digest(&token)).unwrap();
+        authority.sync_all().unwrap();
+        drop(authority);
+        let mut guardian = Command::new(bin.path().join("interactive-supervisor"))
+            .arg("client-domain").arg(&remote_proof).arg(bin.path().join("rustx-execution-client"))
+            .arg("--binding-file").arg(&bundle).arg("--workspace").arg(&workspace)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+        let mut lease = guardian.stdin.take().unwrap();
+        lease.write_all(&token).await.unwrap();
+        let mut reports = BufReader::new(guardian.stdout.take().unwrap()).lines();
+        let ready = reports.next_line().await.unwrap().unwrap();
+        let pid: i32 = ready.strip_prefix("ready ").unwrap().parse().unwrap();
+        lease.write_all(b"G").await.unwrap();
+        await_admission(&connected, session, &probe).await;
+
+        let socket = operator.path().join("writer");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut running = Box::pin(result(&connected, Method::CommandExec(ExecParams {
+            session_id: session.clone(),
+            command: vec![
+                "/usr/bin/python3".into(),
+                "-c".into(),
+                "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\ns.sendall(b'owned')\ns.recv(1)".into(),
+                socket.display().to_string(),
+            ],
+            cwd: workspace.display().to_string(),
+            env: std::collections::BTreeMap::new(),
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            size: None,
+        })));
+        let mut writer = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            result = &mut running => panic!("remote process settled before its writer was retained: {result:?}"),
+        };
+        let mut owned = [0; 5];
+        writer.read_exact(&mut owned).await.unwrap();
+        assert_eq!(&owned, b"owned");
+        kill(Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()), Signal::SIGKILL).unwrap();
+        assert!(!original.wait().await.unwrap().success());
+        drop(running);
+        connected.close().await;
+
+        let fresh = operator.path().join("replacement");
+        let refused = remote_exec_command(&executable, &fixture, Some(session.as_str()), &fresh)
+            .output().await.unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr)
+            .contains("previous Session execution domain requires physical settlement"));
+        assert_eq!(writer.try_read(&mut [0]).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert!(!proof.exists());
+
+        kill(Pid::from_raw(pid), Signal::SIGKILL).unwrap();
+        assert_eq!(writer.read(&mut [0]).await.unwrap(), 0);
+        assert_eq!(reports.next_line().await.unwrap().as_deref(), Some("settled 137"));
+        assert!(guardian.wait().await.unwrap().success());
+        assert_eq!(std::fs::read(&remote_proof).unwrap(), token);
+        std::fs::rename(remote_proof, &proof).unwrap();
+        let mut replacement = remote_exec_command(&executable, &fixture, Some(session.as_str()), &fresh)
+            .spawn().unwrap();
+        let restored = driver::jsonl(replacement.stdout.take().unwrap(), replacement.stdin.take().unwrap());
+        initialize_client(&restored).await;
+        let mut new_client = ReapChild(staged_client_command(&fresh, &workspace).spawn().unwrap());
+        await_admission(&restored, session, &probe).await;
+        assert!(!proof.exists());
+        assert_eq!(std::fs::read(probe).unwrap(), b"unchanged bytes");
+        restored.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+        assert!(new_client.0.wait().unwrap().success());
+    }).await;
+}
+
+#[cfg(target_os = "linux")]
 async fn assert_offline_session_deletion(driver: &driver::Driver, session: &SessionId) {
     use rustx::app_server::{
         protocol::{Method, MethodResult},

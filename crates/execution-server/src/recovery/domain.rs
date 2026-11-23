@@ -1,5 +1,5 @@
-//! Independent Linux execution-domain settlement. The durable scope is the
-//! exact Admission in the pending file, including its original incarnation.
+//! Independent execution-domain settlement from a trusted physical owner.
+//! The durable scope is the exact Admission, including its original incarnation.
 
 use super::marker_name;
 use constant_time_eq::constant_time_eq_32;

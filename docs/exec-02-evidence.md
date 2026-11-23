@@ -76,8 +76,20 @@ descriptor-identity test preserves a foreign replacement at the retired
 name. The ordinary Workspace mutation path releases its stage after
 settlement. Independently launched remote Clients own their own staging
 and run without authority to produce this native receipt. The runner needs
-Bubblewrap and the host policy for its namespace setup. Native macOS tests
-and separate operator host attestation remain open.
+Bubblewrap and the host policy for its namespace setup. Native macOS
+verification remains open.
+
+`trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session`
+provisions one private settlement grant separately from the Client's TLS
+bootstrap. An independent host process supervises the real remote Client
+and retains a command writer. After Server SIGKILL a new Server refuses
+the same Session and the original writer remains live. SIGKILL of the exact
+original Client namespace closes the writer. The host publishes the matching
+proof, the replacement admits a fresh Client, and Workspace bytes remain
+unchanged. The test runs both hosts on Linux with separate proof directories.
+The production grant also accepts evidence from other explicitly trusted
+deployment owners. Remote recovery from unconfirmed death currently uses
+a new Server admission. The Server never manages the remote supervisor.
 
 Client save expiry is owned by a maintenance thread outside the data and
 control lanes. An abandoned unpublished file is retried after its deadline
@@ -161,8 +173,8 @@ before reaching that barrier.
 
 - The Linux local proof uses the exact retained physical domain. The
   deferred proofs include the remaining registration/spawn/handoff/ACK
-  fault matrix, interrupted durable stages, operator-provided remote host
-  receipts, and native macOS settlement.
+  fault matrix, remaining interrupted durable stages, and native macOS
+  settlement.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
   run through the bound Client in EXEC-03. Full restart cleanup, the
   cross-role and foreground MCP interaction matrix, and Client Store
