@@ -395,7 +395,9 @@ fn retire(path: &Path, directory: &PackageDirectory) -> Result<(), SettingsError
     let name = path.file_name().ok_or(SettingsError::Invalid)?;
     let metadata = directory_metadata(directory).map_err(SettingsError::Io)?;
     let identity = (metadata.dev(), metadata.ino());
-    let original_mode = Mode::from_raw_mode((metadata.mode() & 0o777) as _);
+    // Keep the special bits (setgid/sticky) as well as the access bits:
+    // 0o777 would silently drop them when the mode is restored on failure.
+    let original_mode = Mode::from_raw_mode((metadata.mode() & 0o7777) as _);
     source.confirm().map_err(SettingsError::Io)?;
     directory.verify().map_err(|_| SettingsError::Invalid)?;
     // Renaming a non-writable directory fails with EACCES on XNU (seen on the
