@@ -223,7 +223,7 @@ child path independently of the stdio relay fixture.
 
 | Required tests | Evidence and open coverage |
 | --- | --- |
-| T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. `shipped_parallel_reverses_completion_without_git_or_parent_orchestration` exercises reverse completion in a real Workflow. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` verifies rooted interaction and one canonical outer result. A single composed test with all three roles and exact Client dispatch counts remains open. |
+| T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. `shipped_parallel_reverses_completion_without_git_or_parent_orchestration` exercises reverse completion in a real Workflow. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` verifies rooted interaction and one canonical outer result. The isolated Root/Subagent/Workflow composition below checks the shared Session and exact provider sequence. Reverse completion and its canonical ordering are exercised in the separate Workflow fixture. |
 | T13, T14, T15, T17, T18 | The Session input RPC covers definition shadowing, explicit permission, joint CAS, stale and invalid candidates, durable readback, and clearing overrides. Isolated cold load covers Client sources. The complete bootstrap and concurrent-activation composition remain open. |
 | T16 | `primary_model_selection_resets_primary_overrides_and_preserves_summary_policy` and `attempt_started_freezes_the_model_across_a_mid_attempt_switch` cover the Runtime Client entry. `r04_manager_selection_and_attempt_admission_have_both_complete_orders` exercises admission races through the App Server. `t05_t09_workflow_only_agent_model_rebuilds_frozen_execution` and `direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_result` exercise frozen Workflow profiles and the direct-model provider. A common acceptance trace across UI and delegated entry points remains open. |
 | T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. Full delegated composition and composed stdio Tasks and interactions remain open. |
@@ -232,7 +232,7 @@ child path independently of the stdio relay fixture.
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |
 | T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. Native disk exhaustion and cancellation at the save cut remain open. |
-| T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. A separate real paired-Client test refuses the retired generation’s Save key on a replacement. The combined Host receive, generation change and canonical late-confirmation case remains open. |
+| T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. The lost-receipt case below composes a real Host publication, late receipt loss and same-instance recovery. A separate paired-Client test refuses the retired generation’s Save key on a replacement. The combined Host receive and generation-change case remains open. |
 | T71, T72, T73 | A real HTTP fixture holds an old lease across activation with identical tool schemas. New and old leases send their respective credentials. A failed candidate preserves the previous version and the old connection closes after its last lease. Concurrent activation and cancellation across the full Session stack remain open. |
 
 ## HTTP MCP and managed output
@@ -285,6 +285,15 @@ The successful save includes two Begin, 23 Chunk, one Seal, one Publish and
 one loser Abort. The refusal includes the failed append, the cleanup reply
 and zero publication requests.
 
+The same Host fixture also forwards a real Save Publish and captures the
+Client's Published reply before closing both lanes. The Host observes one
+canonical successful business result with unavailable storage and one model
+continuation. Only after terminal publication does the original Client
+reattach. The proxy checks the exact prior Workspace observation identity
+receives Accepted on Release and observes zero Save requests on the recovered
+lane. The original 1,200,056-byte publication remains private until the real
+Client acknowledges Revoke and exits.
+
 In a separate untraced run, sampling procfs every 10 ms recorded 204,564 KiB
 peak RSS for the entire Host harness and its in-process Server, with 3.35 s
 user and 0.15 s system CPU. The two Client children peaked at 22,784 and
@@ -311,8 +320,10 @@ markers. The delegated child writes, edits, reads and executes Bash through
 the same Session's binding. The fake provider observes four initial Root
 requests, five child requests and exactly one typed child-completion handoff
 on Root. The Workflow adds no model request. All four child tool results
-reach the provider in the original order. The test closes the real Client
-through normal process drain.
+reach the provider in the original order. The fake uv subprocess holds a
+Unix socket, whose peer credentials identify the process in the Linux host
+PID namespace. Normal drain closes the socket
+and confirms the subprocess and Client have exited.
 
 `a_real_managed_fastmcp_task_completes_through_one_tool_result` and
 `a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction` now

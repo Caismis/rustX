@@ -1834,13 +1834,25 @@ pub(crate) async fn queued_workspace_release_hands_off_to_binding_revocation() {
         crate::runtime::CancellationSignal::new(),
     );
     let released = bounded(recording.observe_release_for_test()).await;
-    let writer = endpoint.writer_for_test().acquire_owned().await.unwrap();
+    let (held, occupying_connection) = oneshot::channel();
+    let (unblock, release_connection) = oneshot::channel();
+    let busy_endpoint = endpoint.clone();
+    let busy = tokio::task::spawn_blocking(move || {
+        busy_endpoint
+            .hold_data_exchange_for_test(|| {
+                held.send(()).unwrap();
+                release_connection.blocking_recv().unwrap();
+            })
+            .unwrap();
+    });
+    bounded(occupying_connection).await.unwrap();
     drop(recording);
-    wait_for_data_capacity(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION - 1).await;
+    wait_for_data_capacity(&endpoint, MAX_DATA_RECORDS_PER_CONNECTION - 2).await;
     let host = fixture.host.clone();
     let drain = tokio::spawn(async move { host.drain().await });
     bounded(revoked).await.unwrap();
-    drop(writer);
+    unblock.send(()).unwrap();
+    bounded(busy).await.unwrap();
     bounded(released).await.unwrap();
     assert!(
         !drain.is_finished(),

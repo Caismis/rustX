@@ -139,6 +139,7 @@ fn capture_bound_package(
         .process_key(OperationId::new())
         .map_err(|_| unavailable())?;
     let owner = std::sync::Arc::new(ClientSource {
+        runtime: tokio::runtime::Handle::try_current().map_err(|_| unavailable())?,
         endpoint: endpoint.clone(),
         key: key.clone(),
     });

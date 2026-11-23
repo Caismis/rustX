@@ -159,6 +159,6 @@ before reaching that barrier.
   receipts, and native macOS settlement.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
   run through the bound Client in EXEC-03. Full restart cleanup, the
-  cross-role and foreground MCP interaction matrix, and Client Store race
-  and failure verification remain open. Native macOS fault injection and
+  cross-role and foreground MCP interaction matrix, and Client Store
+  fault coverage beyond the races documented above remain open. Native macOS fault injection and
   final exact-head verification remain open.

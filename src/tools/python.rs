@@ -217,18 +217,17 @@ impl PackageSource {
 
 #[derive(Debug)]
 pub(crate) struct ClientSource {
+    pub(crate) runtime: tokio::runtime::Handle,
     pub(crate) endpoint: Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
     pub(crate) key: rustx_execution_protocol::process::ProcessOperationKey,
 }
 
 impl Drop for ClientSource {
     fn drop(&mut self) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
         let endpoint = self.endpoint.clone();
         let key = self.key.clone();
-        runtime.spawn(endpoint.release_managed_python_source(key));
+        self.runtime
+            .spawn(endpoint.release_managed_python_source(key));
     }
 }
 

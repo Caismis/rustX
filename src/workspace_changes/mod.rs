@@ -1,5 +1,7 @@
 //! Server ownership of the canonical `WorkspaceChanges` projection.
-use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
+use crate::local_runtime::session_runtime_manager::{
+    LocalExecutionEndpoint, SessionExecutionScope,
+};
 use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
 use crate::runtime::identity::AttemptId;
 use crate::runtime::types::CancellationReason;
@@ -98,6 +100,8 @@ impl ChangesStore {
 
 struct ClientRecord {
     scope: SessionExecutionScope,
+    endpoint: Arc<LocalExecutionEndpoint>,
+    runtime: tokio::runtime::Handle,
     key: ProcessOperationKey,
     #[cfg(test)]
     release_observed: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -143,30 +147,12 @@ impl ClientRecord {
 
 impl Drop for ClientRecord {
     fn drop(&mut self) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let scope = self.scope.clone();
+        let endpoint = self.endpoint.clone();
         let key = self.key.clone();
         #[cfg(test)]
         let release_observed = self.release_observed.get_mut().unwrap().take();
-        handle.spawn(async move {
-            let endpoint = scope.endpoint().ok().filter(|endpoint| {
-                endpoint
-                    .process_key(key.operation)
-                    .is_ok_and(|live| live == key)
-            });
-            let reply = scope
-                .workspace_changes(
-                    ChangeRequest::Release { key },
-                    &cancellation(CancellationSignal::new()),
-                )
-                .await;
-            if !matches!(reply, Ok(ChangeReply::Accepted))
-                && let Some(endpoint) = endpoint
-            {
-                endpoint.cut_pair_if_open();
-            }
+        self.runtime.spawn(async move {
+            endpoint.release_workspace_observation(key).await;
             #[cfg(test)]
             if let Some(observer) = release_observed {
                 let _ = observer.send(());
@@ -210,13 +196,12 @@ impl ChangeRecording {
         let preparation = workspace.execution_scope().cloned().map(|scope| {
             let cancellation = cancellation.clone();
             tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-                let key = scope
-                    .endpoint()
-                    .ok()?
-                    .process_key(OperationId::new())
-                    .ok()?;
+                let endpoint = scope.endpoint().ok()?;
+                let key = endpoint.process_key(OperationId::new()).ok()?;
                 let record = Arc::new(ClientRecord {
                     scope,
+                    endpoint,
+                    runtime: tokio::runtime::Handle::current(),
                     key,
                     #[cfg(test)]
                     release_observed: Mutex::new(None),

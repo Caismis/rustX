@@ -542,7 +542,7 @@ async fn admit_execution_client(
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit_once() {
     tokio::time::timeout(std::time::Duration::from_secs(180),async {
-        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused","stream_save_saturated"] {
+        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused","stream_save_saturated","stream_save_receipt_lost"] {
             let Some(provider)=ProviderEmulator::start("app_server_host_broadcast").await else {return;};
             let ServerFixture { root,workspace,sessions,manager,host,endpoint,shutdown,server }=ServerFixture::start(&provider).await;
             let mut first=Peer::connect(&endpoint).await; let mut second=Peer::connect(&endpoint).await; let mut generic=Peer::connect(&endpoint).await;
@@ -553,9 +553,14 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let scratch = root.path().join("client-scratch");
             std::fs::create_dir(&scratch).unwrap();
             let mut backpressure = None;
+            let mut missing_receipt = None;
             let mut client = if winner == "stream_save_saturated" {
                 let (child, blocked) = save_backpressure::spawn(&manager, &session.id, &scratch).await;
                 backpressure = Some(blocked);
+                Some(child)
+            } else if winner == "stream_save_receipt_lost" {
+                let (child, receipt) = save_backpressure::lose_publication_receipt(&manager, &session.id, &scratch).await;
+                missing_receipt = Some(receipt);
                 Some(child)
             } else if matches!(winner, "stream_saved" | "stream_save_refused") {
                 Some(admit_execution_client(&manager, &session.id, &workspace, &scratch).await)
@@ -595,7 +600,7 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 "error"=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"error":{"code":-32000,"message":"remote result unknown"}}),
                 _=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":"invalid domain payload"}),
             };
-            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated") {
+            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost") {
                 stream_large_result(&mut first, &mut second, &call, &copy, client.as_ref().map(|_| scratch.as_path()), winner == "stream_save_refused", backpressure).await;
             } else {
                 first.reply(selected).await;
@@ -603,18 +608,26 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let ServerMessage::Resolved {params,..}=second.callback().await else {panic!("resolution")}; assert_eq!(params.request_id,call.id);
             second.reply(serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":{"success":true,"contentItems":[{"type":"inputText","text":"late-result"}]}})).await;
             first.settled(&turn_id).await;
+            if let Some(receipt) = missing_receipt.take() {
+                let (key, locator) = receipt.reattach_after_canonical_commit().await;
+                let binding = manager.execution_endpoint(&session.id).unwrap();
+                let admission = binding.admission().unwrap();
+                assert_eq!(key.owner.instance, admission.instance);
+                assert_eq!(key.owner.generation, admission.generation);
+                assert!(String::from(locator).starts_with("save:"));
+            }
             assert!(matches!(generic.callback().await,ServerMessage::Resolved {..}));
             assert!(matches!(first.rpc(Method::InboundSubmissionLookup {target:a.clone(),input_id}).await,MethodResult::InboundSubmission {acceptance:Some(_)}));
             let access=sessions.acquire_session(&session.id,Some(&thread.node_id)).await.unwrap();
             let store=SqliteConversationStore::open_existing(thread.id.clone(),&access.database_path).unwrap();
             let canonical=store.load_canonical().unwrap(); let results:Vec<_>=canonical.iter().filter_map(|message|if let MessageBlock::Tool(tool)=message {Some(&tool.result)}else{None}).collect();
             assert_eq!(results.len(),1,"one canonical ToolResult");
-            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated"));
+            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost"));
             if matches!(winner, "error" | "invalid") {assert!(matches!(results[0].status,ToolExecutionStatus::OutcomeUnknown {..}));}
             assert_eq!(manager.execution_endpoint(&session.id).is_ok(), client.is_some());
             let requests = provider.requests().await;
             assert_eq!(requests.len(),2,"one model continuation");
-            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated") {
+            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost") {
                 let result = results[0];
                 if winner == "stream_saved" {
                     let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output.as_deref() else {
@@ -632,7 +645,12 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 } else {
                     assert!(matches!(result.managed_output.as_deref(), Some(ManagedOutputContinuation::Unavailable { .. })));
                     assert!(result.truncation.as_ref().unwrap().original_bytes.unwrap() > 1_048_576);
-                    assert_eq!(saved_files(&scratch), [] as [std::path::PathBuf; 0]);
+                    if winner == "stream_save_receipt_lost" {
+                        let [file] = saved_files(&scratch).try_into().unwrap();
+                        assert_eq!(file.metadata().unwrap().len(), 1_200_056);
+                    } else {
+                        assert_eq!(saved_files(&scratch), [] as [std::path::PathBuf; 0]);
+                    }
                 }
                 let tool_messages = requests[1]["body"]["messages"].as_array().unwrap()
                     .iter().filter(|message| message["role"] == "tool").collect::<Vec<_>>();

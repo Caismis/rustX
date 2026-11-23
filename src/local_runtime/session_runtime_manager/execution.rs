@@ -731,31 +731,70 @@ impl LocalExecutionEndpoint {
         self: Arc<Self>,
         key: rustx_execution_protocol::process::ProcessOperationKey,
     ) {
+        use rustx_execution_protocol::mcp::{PythonSourceReply, PythonSourceRequest};
+
+        let request = PythonSourceRequest::Release { key };
+        let released = self
+            .release_retained_record(move |connection, deadline| {
+                connection
+                    .python_source_by(&request, deadline)
+                    .map(|reply| reply == PythonSourceReply::Released)
+            })
+            .await;
+        if !released {
+            self.cut_pair_if_open();
+        }
+    }
+
+    pub(crate) async fn release_workspace_observation(
+        self: Arc<Self>,
+        key: rustx_execution_protocol::process::ProcessOperationKey,
+    ) {
+        use rustx_execution_protocol::changes::{ChangeReply, ChangeRequest};
+
+        let request = ChangeRequest::Release { key };
+        let released = self
+            .release_retained_record(move |connection, deadline| {
+                connection
+                    .workspace_changes(request.clone(), deadline, || Ok(()))
+                    .map(|reply| reply == ChangeReply::Accepted)
+            })
+            .await;
+        if !released {
+            self.cut_pair_if_open();
+        }
+    }
+
+    // Release is idempotent on the incarnation that accepted the record.
+    // An owner keeps that endpoint through transient capacity and lane loss.
+    // If revoke has already closed admission, it owns the remaining cleanup.
+    async fn release_retained_record(
+        self: &Arc<Self>,
+        dispatch: impl Fn(&mut LocalConnection, Instant) -> io::Result<bool> + Send + Sync + 'static,
+    ) -> bool {
         use rustx_execution_protocol::{
-            SAME_INSTANCE_RECOVERY_WINDOW,
-            mcp::{PythonSourceReply, PythonSourceRequest},
-            transport::{PAGE_REQUEST_TIMEOUT, recoverable_lane_loss},
+            SAME_INSTANCE_RECOVERY_WINDOW, transport::recoverable_lane_loss,
         };
+
         let deadline = Instant::now() + SAME_INSTANCE_RECOVERY_WINDOW + PAGE_REQUEST_TIMEOUT;
         let Ok(_slot) = wait_for_execution_permit(self.data_slots.clone(), deadline).await else {
-            return;
+            return false;
         };
-        let request = Arc::new(PythonSourceRequest::Release { key });
+        let dispatch = Arc::new(dispatch);
         while Instant::now() < deadline {
             let released = self.connection_released.notified();
             tokio::pin!(released);
             released.as_mut().enable();
             let endpoint = self.clone();
-            let request = request.clone();
-            let exchange_cut = deadline.min(Instant::now() + PAGE_REQUEST_TIMEOUT);
+            let dispatch = dispatch.clone();
             let result = tokio::task::spawn_blocking(move || {
-                endpoint.with_connection_slot(false, |connection| {
-                    connection.python_source_by(&request, exchange_cut)
-                })
+                let exchange_cut = deadline.min(Instant::now() + PAGE_REQUEST_TIMEOUT);
+                endpoint
+                    .with_connection_slot(false, |connection| dispatch(connection, exchange_cut))
             })
             .await;
             match result {
-                Ok(Ok(PythonSourceReply::Released)) => return,
+                Ok(Ok(released)) => return released,
                 Ok(Err(error))
                     if error.kind() == io::ErrorKind::WouldBlock
                         || recoverable_lane_loss(&error) =>
@@ -770,8 +809,7 @@ impl LocalExecutionEndpoint {
                 _ => break,
             }
         }
-        // Revocation retains the last physical cleanup claim if the exact
-        // source could no longer be acknowledged on its original binding.
+        false
     }
 
     pub(crate) fn prepare_managed_python_source(

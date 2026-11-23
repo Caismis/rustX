@@ -1,4 +1,4 @@
-//! Hold the genuine Client Begin reply while the Host sends more fragments.
+//! Interleave Host uploads with receipts from a genuine Client.
 
 use rustx::{
     local_runtime::session_runtime_manager::{
@@ -8,14 +8,16 @@ use rustx::{
 };
 use rustx_execution_protocol::{
     Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, PeerHello,
-    save::{Cleanup, SaveReply, SaveRequest},
+    changes::{ChangeReply, ChangeRequest},
+    process::ProcessOperationKey,
+    save::{Cleanup, Locator, SaveKey, SaveReply, SaveRequest},
     transport::{MAX_RECORD_BYTES, read_record, write_record},
 };
 use serde::Serialize;
 use std::{
     io,
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use tokio::{
@@ -81,11 +83,40 @@ async fn pair_lane(
     (client, server)
 }
 
-pub(super) async fn spawn(
+struct Relay {
+    listener: UnixListener,
+    proxy: UnixListener,
+    server: PathBuf,
+    endpoint: Arc<LocalExecutionEndpoint>,
+}
+
+impl Relay {
+    async fn pair(&self) -> ((UnixStream, UnixStream), (UnixStream, UnixStream)) {
+        let data = pair_lane(
+            &self.proxy,
+            &self.listener,
+            &self.server,
+            self.endpoint.clone(),
+            EndpointAdmission::Pending,
+        )
+        .await;
+        let control = pair_lane(
+            &self.proxy,
+            &self.listener,
+            &self.server,
+            self.endpoint.clone(),
+            EndpointAdmission::Live,
+        )
+        .await;
+        (data, control)
+    }
+}
+
+async fn prepare(
     manager: &SessionRuntimeManager,
     session: &SessionId,
     scratch: &Path,
-) -> (tokio::process::Child, SaveBackpressure) {
+) -> (tokio::process::Child, Relay) {
     let endpoint = manager.reserve_local_execution(session).await.unwrap();
     std::fs::set_permissions(scratch, std::fs::Permissions::from_mode(0o700)).unwrap();
     let proxy_path = scratch.canonicalize().unwrap().join("proxy.sock");
@@ -129,22 +160,24 @@ pub(super) async fn spawn(
     let listener = listener.try_clone().unwrap();
     listener.set_nonblocking(true).unwrap();
     let listener = UnixListener::from_std(listener).unwrap();
-    let (data_peer, data_server) = pair_lane(
-        &proxy,
-        &listener,
-        &socket_path,
-        endpoint.clone(),
-        EndpointAdmission::Pending,
+    (
+        child,
+        Relay {
+            listener,
+            proxy,
+            server: socket_path,
+            endpoint,
+        },
     )
-    .await;
-    let (mut control_peer, mut control_server) = pair_lane(
-        &proxy,
-        &listener,
-        &socket_path,
-        endpoint.clone(),
-        EndpointAdmission::Live,
-    )
-    .await;
+}
+
+pub(super) async fn spawn(
+    manager: &SessionRuntimeManager,
+    session: &SessionId,
+    scratch: &Path,
+) -> (tokio::process::Child, SaveBackpressure) {
+    let (child, relay) = prepare(manager, session, scratch).await;
+    let ((data_peer, data_server), (mut control_peer, mut control_server)) = relay.pair().await;
     tokio::spawn(async move {
         let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
     });
@@ -164,9 +197,116 @@ pub(super) async fn spawn(
             begun,
             resume,
             cleaned,
-            control: endpoint.control().unwrap(),
+            control: relay.endpoint.control().unwrap(),
         },
     )
+}
+
+pub(super) struct LostPublish {
+    observed: oneshot::Receiver<(SaveKey, Locator)>,
+    reconnect: oneshot::Sender<()>,
+    released: oneshot::Receiver<()>,
+}
+
+impl LostPublish {
+    pub(super) async fn reattach_after_canonical_commit(self) -> (SaveKey, Locator) {
+        let publication = self.observed.await.expect("real Client publication");
+        self.reconnect.send(()).unwrap();
+        self.released
+            .await
+            .expect("original Client released its Workspace observation");
+        publication
+    }
+}
+
+pub(super) async fn lose_publication_receipt(
+    manager: &SessionRuntimeManager,
+    session: &SessionId,
+    scratch: &Path,
+) -> (tokio::process::Child, LostPublish) {
+    let (child, relay) = prepare(manager, session, scratch).await;
+    let ((mut data_peer, mut data_server), (mut control_peer, mut control_server)) =
+        relay.pair().await;
+    let (observed, publication) = oneshot::channel();
+    let (reconnect, reconnecting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    tokio::spawn(async move {
+        let control = tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
+        });
+        let mut observations = Vec::new();
+        let (owner, locator) = loop {
+            let request = receive::<ClientRequest>(&mut data_server).await.unwrap();
+            send(&mut data_peer, &request).await;
+            let reply = receive::<ClientReply>(&mut data_peer).await.unwrap();
+            if let (
+                ClientRequest::WorkspaceChanges(ChangeRequest::Begin { key }),
+                ClientReply::WorkspaceChanges(ChangeReply::Accepted),
+            ) = (&request, &reply)
+            {
+                observations.push(key.clone());
+            }
+            if let ClientReply::Save(SaveReply::Published { key, locator, .. }) = reply {
+                assert!(matches!(
+                    request,
+                    ClientRequest::Save(SaveRequest::Publish { key: requested, .. })
+                        if key == requested
+                ));
+                break (key, locator);
+            }
+            send(&mut data_server, &reply).await;
+        };
+        assert_ne!(observations, [] as [ProcessOperationKey; 0]);
+        observed.send((owner, locator)).unwrap();
+        // The Server loses the actual publication response. Canonical
+        // completion and release of the old observation race with the gap.
+        drop(data_server);
+        drop(data_peer);
+        control.abort();
+        let _ = control.await;
+        reconnecting
+            .await
+            .expect("canonical commit before recovery");
+        let ((data_peer, data_server), (mut control_peer, mut control_server)) = relay.pair().await;
+        let _ = tokio::join!(
+            confirm_recovered_release(data_peer, data_server, &observations, release),
+            tokio::io::copy_bidirectional(&mut control_peer, &mut control_server)
+        );
+    });
+    (
+        child,
+        LostPublish {
+            observed: publication,
+            reconnect,
+            released,
+        },
+    )
+}
+
+async fn confirm_recovered_release(
+    mut client: UnixStream,
+    mut server: UnixStream,
+    observations: &[ProcessOperationKey],
+    released: oneshot::Sender<()>,
+) {
+    let mut released = Some(released);
+    while let Ok(request) = receive::<ClientRequest>(&mut server).await {
+        assert!(!matches!(request, ClientRequest::Save(_)), "no Save replay");
+        send(&mut client, &request).await;
+        let reply = receive::<ClientReply>(&mut client).await.unwrap();
+        send(&mut server, &reply).await;
+        if let ClientRequest::WorkspaceChanges(ChangeRequest::Release { key }) = request
+            && observations.contains(&key)
+        {
+            assert_eq!(reply, ClientReply::WorkspaceChanges(ChangeReply::Accepted));
+            released
+                .take()
+                .expect("one cleanup receipt")
+                .send(())
+                .unwrap();
+        }
+    }
+    assert!(released.is_none());
 }
 
 async fn proxy_data(

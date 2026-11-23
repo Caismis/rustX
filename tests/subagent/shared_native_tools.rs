@@ -287,14 +287,27 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
     let bin = root.path().join("probe-bin");
     std::fs::create_dir(&bin).unwrap();
     let uv = bin.join("uv");
+    let witness = root.path().join("python-probe.sock");
+    let listener = tokio::net::UnixListener::bind(&witness).unwrap();
     std::fs::write(
         &uv,
-        r#"#!/bin/sh
-if [ "$1" = --version ]; then echo 'uv 0.10.2'; exit 0; fi
-echo "$$" > .python-probe-pid
-printf 'ready\n' > .python-probe-ready
-exec /bin/cat .python-probe-stop
-"#,
+        format!(
+            r"#!/usr/bin/python3
+import os, pathlib, socket, sys
+if sys.argv[1] == '--version':
+    print('uv 0.10.2')
+    sys.exit(0)
+pathlib.Path('.python-probe-pid').write_text(str(os.getpid()))
+with socket.socket(socket.AF_UNIX) as peer:
+    peer.connect({witness:?})
+    peer.sendall(b'probe owner\n')
+    with open('.python-probe-ready', 'w') as ready:
+        ready.write('ready\n')
+    with open('.python-probe-stop', 'rb') as gate:
+        gate.read()
+",
+            witness = witness.display().to_string(),
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -473,13 +486,34 @@ exec /bin/cat .python-probe-stop
         ids,
         ["shared-write", "shared-edit", "shared-read", "shared-bash"]
     );
-    let probe_pid = std::fs::read_to_string(physical.join(".python-probe-pid"))
-        .unwrap()
-        .trim()
-        .parse::<u32>()
+    let (peer, _) = tokio::time::timeout(LIVENESS, listener.accept())
+        .await
+        .expect("physical probe observation")
         .unwrap();
+    let probe_pid = peer.peer_cred().unwrap().pid().map_or_else(
+        || {
+            std::fs::read_to_string(physical.join(".python-probe-pid"))
+                .unwrap()
+                .trim()
+                .parse::<u32>()
+                .unwrap()
+        },
+        |pid| u32::try_from(pid).unwrap(),
+    );
+    let mut peer = tokio::io::BufReader::new(peer);
+    let mut received = String::new();
+    tokio::io::AsyncBufReadExt::read_line(&mut peer, &mut received)
+        .await
+        .unwrap();
+    assert_eq!(received, "probe owner\n");
     assert!(process_state(probe_pid).is_some_and(|state| state != 'Z'));
     let (status, stderr) = process.shutdown().await;
     assert!(status.success(), "clean shutdown: {stderr}");
+    assert_eq!(
+        tokio::io::AsyncReadExt::read(&mut peer, &mut [0])
+            .await
+            .unwrap(),
+        0
+    );
     wait_for_no_running_processes(&[probe_pid]).await;
 }
