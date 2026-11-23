@@ -119,8 +119,14 @@ impl Locator {
     pub fn parse(value: &str) -> Option<Self> {
         value
             .strip_prefix("save:")
-            .is_some_and(|token| is_token(token, MAX_LOCATOR_TOKEN_BYTES))
-            .then(|| Self(value.to_owned()))
+            .filter(|token| is_token(token, MAX_LOCATOR_TOKEN_BYTES))
+            .map(|token| Self(token.to_owned()))
+    }
+
+    /// The filename displayed to callers of the saved-output locator.
+    #[must_use]
+    pub fn file_name(&self) -> &str {
+        &self.0
     }
 }
 
@@ -133,7 +139,7 @@ impl TryFrom<String> for Locator {
 
 impl From<Locator> for String {
     fn from(value: Locator) -> Self {
-        value.0
+        format!("save:{}", value.0)
     }
 }
 

@@ -1001,9 +1001,10 @@ fn serve_requests(
                         .lock()
                         .expect("managed output")
                         .with_published(&locator, &conversation, |root, path| {
-                            search::search(
+                            search::search_as(
                                 root,
                                 path,
+                                Some(locator.file_name()),
                                 &spec,
                                 std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
                             )

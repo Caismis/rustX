@@ -2669,6 +2669,7 @@ fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
             .kind(),
         std::io::ErrorKind::NotFound,
     );
+    let name = locator.file_name().to_owned();
     let grep = ClientRequest::SearchSavedOutput {
         conversation: owner.conversation.clone(),
         locator,
@@ -2678,12 +2679,13 @@ fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
             context: 0,
             limit: 1.into(),
             pattern: "needle".into(),
-            glob: None,
+            glob: Some(name.clone()),
         },
     };
     assert!(matches!(
         connection.inspect_output(&grep, deadline, || Ok(())).unwrap(),
-        ContinuationPage::Search(page) if page.matches == 1 && page.body.contains("middle needle"),
+        ContinuationPage::Search(page)
+            if page.matches == 1 && page.body == format!("{name}:2: middle needle"),
     ));
 
     let SaveReply::Begun { key } = connection
