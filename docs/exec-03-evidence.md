@@ -328,16 +328,16 @@ child path independently of the stdio relay fixture.
 
 The existing rmcp streamable HTTP transport stays on the Server. It bounds
 SSE events at 16 MiB and runs up to 16 ordinary POSTs per transport. The
-Server shares sixteen ordinary POST slots across all transports. A slot is
-held through complete JSON reads or until the POST SSE stream is released.
-The separate control POST keeps its five-second timeout. The pinned reqwest
-adapter independently caps successful JSON bodies at 16 MiB and error bodies
-at 64 KiB. A declared excess is rejected before reading. A chunked excess is rejected before extending
-the bounded accumulation. The decoder may hold
-the response bytes alongside the parsed result and its allocations. Sixteen
-ordinary requests can concurrently buffer up to 256 MiB of JSON body bytes
-across the Server, plus decoding and transport overhead. Unsolicited GET
-streams and the control exchanges have their independent per-stream limits.
+Server shares 32 ordinary POST receive/decode slots across all transports.
+A slot covers JSON buffering and decoding or ends when the SDK hands off
+an SSE stream. The separate control POST keeps its five-second timeout. The
+pinned reqwest adapter caps successful JSON bodies at 16 MiB and error bodies
+at 64 KiB. A declared excess is rejected before reading. A chunked excess is
+rejected before extending the bounded accumulation. The decoder may hold the
+response bytes alongside the parsed result and its allocations. At
+most 512 MiB of JSON body bytes can be in these ordinary decoders across
+the Server, plus parsed output and transport overhead. SSE streams and
+control exchanges have their independent per-stream limits.
 
 Three real Linux Server-only fixtures ran against the same HTTP implementation.
 Procfs was sampled every 5 ms, excluding the separate `rustx init` enrollment
@@ -445,10 +445,10 @@ RSS, internal queue high-water and profiling across multiple concurrent
 Sessions remain open.
 
 A live HTTP test shares one response slot between independent client
-owners. One POST holds a real response body. A second request is cancelled
-while waiting for its slot and never reaches the peer. An existing control
-notification succeeds during the hold. Closing the first body lets the
-next request enter and return the slot.
+owners. One POST holds a partial JSON body, a waiting request is cancelled
+before reaching the peer, and a control notification succeeds during the
+hold. Completing the JSON lets the next POST enter. Its SSE handoff
+returns the slot while the response stream stays live.
 
 The standalone HTTP process fixture reused the same measure for a 327,680-byte
 result. Its App Server peaked at 188,688 KiB (0.79 s user and 0.03 s system

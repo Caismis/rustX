@@ -187,16 +187,16 @@ use rmcp::transport::streamable_http_client::{
     SseError, StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
 };
 use sse_stream::Sse;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 /// Remote session deletion is best effort, after local requests have stopped.
 /// Match Pi's cleanup bound without shortening any tool-call settlement proof.
 const REMOTE_SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
-// All connections share the ordinary response-buffer budget. The independent
-// control notification and DELETE paths remain available at ordinary saturation.
-const MAX_ORDINARY_POSTS: usize = 16;
+// All connections share the ordinary POST receive and JSON-decode budget.
+// Once the SDK returns an SSE stream, its separate per-event bound applies.
+const MAX_ORDINARY_POSTS: usize = 32;
 static ORDINARY_POST_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 /// The Server-Sent Events stream shape of rmcp's Streamable HTTP client.
@@ -1064,7 +1064,7 @@ impl Drop for RequestOwnershipGuard {
 struct OwnedResponseStream<S> {
     inner: Option<S>,
     terminated: Pin<Box<WaitForCancellationFutureOwned>>,
-    guard: Option<(OwnedSemaphorePermit, RequestOwnershipGuard)>,
+    guard: Option<RequestOwnershipGuard>,
 }
 
 impl<S: Stream + Unpin> Stream for OwnedResponseStream<S> {
@@ -1094,9 +1094,9 @@ impl<S: Stream + Unpin> Stream for OwnedResponseStream<S> {
 
 /// The HTTP client rmcp's Streamable HTTP transport posts through.
 ///
-/// Each request-carrying POST owns local cancellation and one ordinary
-/// response-buffer slot. Out-of-band notifications pass through the existing
-/// control path independently of this budget.
+/// Each request-carrying POST owns local cancellation. A shared slot covers
+/// receipt and decoding, ending when JSON decoding completes or the SDK hands
+/// off an SSE stream. Out-of-band notifications use the existing control path.
 #[derive(Clone)]
 pub(crate) struct McpHttpClient {
     inner: reqwest::Client,
@@ -1203,19 +1203,20 @@ impl McpHttpClient {
         self.ownership.note_http_request(&id, message);
         let guard = self.ownership.register(id);
         let terminate = guard.terminate.clone();
-        let slot = tokio::select! {
-            biased;
-            () = terminate.cancelled() => return Err(locally_terminated()),
-            slot = self.ordinary_posts.clone().acquire_owned() => {
-                slot.expect("ordinary MCP HTTP budget remains open")
-            }
+        let receive = async {
+            let _slot = self
+                .ordinary_posts
+                .acquire()
+                .await
+                .expect("ordinary MCP HTTP budget remains open");
+            post.await
         };
         let response = tokio::select! {
             biased;
-            // Local termination drops the POST future here, inside this
-            // scope, before the guard below is released.
+            // Termination drops the queued or active receive before releasing
+            // the request guard. The decoder and its slot end together.
             () = terminate.cancelled() => Err(locally_terminated()),
-            response = post => response,
+            response = receive => response,
         };
         // An SSE response keeps the HTTP response body open past this
         // function, so ownership travels into the stream rather than ending
@@ -1227,7 +1228,7 @@ impl McpHttpClient {
                     OwnedResponseStream {
                         inner: Some(stream),
                         terminated: Box::pin(terminate.cancelled_owned()),
-                        guard: Some((slot, guard)),
+                        guard: Some(guard),
                     }
                     .boxed(),
                     session,
@@ -1432,9 +1433,9 @@ mod tests {
     #[tokio::test]
     #[allow(
         clippy::too_many_lines,
-        reason = "the same live HTTP peers prove queueing, cancellation and release"
+        reason = "the same live HTTP peers prove JSON admission, cancellation and stream handoff"
     )]
-    async fn independent_http_clients_share_slots_until_body_release() {
+    async fn independent_http_clients_share_decode_slots_and_release_on_sse_handoff() {
         use axum::body::{Body, Bytes};
         use axum::extract::State;
         use axum::http::{StatusCode, header};
@@ -1445,34 +1446,59 @@ mod tests {
             StreamableHttpClient, StreamableHttpPostResponse,
         };
 
+        #[derive(Clone)]
+        struct Peer {
+            observed: tokio::sync::mpsc::UnboundedSender<String>,
+            release_json: Arc<tokio::sync::Notify>,
+        }
+
         async fn receive(
-            State(observed): State<tokio::sync::mpsc::UnboundedSender<String>>,
+            State(peer): State<Peer>,
             axum::Json(message): axum::Json<serde_json::Value>,
         ) -> Response {
-            if let Some(id) = message["id"].as_i64() {
-                observed.send(id.to_string()).unwrap();
-                let stream = futures_util::stream::once(async {
-                    Ok::<_, std::convert::Infallible>(Bytes::from_static(b": waiting\n\n"))
+            let Some(id) = message["id"].as_i64() else {
+                peer.observed
+                    .send(message["method"].as_str().unwrap().to_owned())
+                    .unwrap();
+                return StatusCode::ACCEPTED.into_response();
+            };
+            peer.observed.send(id.to_string()).unwrap();
+            if id == 1 {
+                let partial = futures_util::stream::once(async {
+                    Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        br#"{"jsonrpc":"2.0","id":1,"result":"#,
+                    ))
+                });
+                let rest = futures_util::stream::once(async move {
+                    peer.release_json.notified().await;
+                    Ok(Bytes::from_static(b"{}}"))
                 });
                 return Response::builder()
-                    .header(header::CONTENT_TYPE, "text/event-stream")
-                    .body(Body::from_stream(
-                        stream.chain(futures_util::stream::pending()),
-                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from_stream(partial.chain(rest)))
                     .unwrap();
             }
-            observed
-                .send(message["method"].as_str().unwrap().to_owned())
-                .unwrap();
-            StatusCode::ACCEPTED.into_response()
+            let stream = futures_util::stream::once(async {
+                Ok::<_, std::convert::Infallible>(Bytes::from_static(b": live\n\n"))
+            });
+            Response::builder()
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(
+                    stream.chain(futures_util::stream::pending()),
+                ))
+                .unwrap()
         }
 
         let (seen, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let release_json = Arc::new(tokio::sync::Notify::new());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint: Arc<str> = format!("http://{}", listener.local_addr().unwrap()).into();
         let app = axum::Router::new()
             .route("/", axum::routing::post(receive))
-            .with_state(seen);
+            .with_state(Peer {
+                observed: seen,
+                release_json: release_json.clone(),
+            });
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let (mut first, _) = super::McpHttpClient::new().unwrap();
         let (mut second, owner) = super::McpHttpClient::new().unwrap();
@@ -1486,19 +1512,17 @@ mod tests {
             }))
             .unwrap()
         };
-        let held = first
-            .post_message(
-                endpoint.clone(),
-                ping(1),
-                None,
-                None,
-                std::collections::HashMap::new(),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(held, StreamableHttpPostResponse::Sse(..)));
+        let empty_headers = std::collections::HashMap::new;
+        let first_endpoint = endpoint.clone();
+        let held = tokio::spawn(async move {
+            first
+                .post_message(first_endpoint, ping(1), None, None, empty_headers())
+                .await
+                .unwrap()
+        });
         assert_eq!(calls.recv().await.as_deref(), Some("1"));
         assert_eq!(slots.available_permits(), 0);
+        assert!(!held.is_finished());
 
         let admission = owner.admit(&id(2));
         let OutboundDispatch::Owned(_dispatch) = owner.begin_dispatch(&id(2)) else {
@@ -1509,7 +1533,7 @@ mod tests {
             ping(2),
             None,
             None,
-            std::collections::HashMap::new(),
+            empty_headers(),
         ));
         assert!(futures_util::poll!(&mut queued).is_pending());
         assert_eq!(
@@ -1523,13 +1547,7 @@ mod tests {
         }))
         .unwrap();
         let control = second
-            .post_message(
-                endpoint.clone(),
-                cancellation,
-                None,
-                None,
-                std::collections::HashMap::new(),
-            )
+            .post_message(endpoint.clone(), cancellation, None, None, empty_headers())
             .await
             .unwrap();
         assert!(matches!(control, StreamableHttpPostResponse::Accepted));
@@ -1546,20 +1564,23 @@ mod tests {
         );
         assert_eq!(slots.available_permits(), 0);
 
-        let mut resumed = std::pin::pin!(second.post_message(
-            endpoint,
-            ping(3),
-            None,
-            None,
-            std::collections::HashMap::new(),
-        ));
+        let mut resumed =
+            std::pin::pin!(second.post_message(endpoint, ping(3), None, None, empty_headers()));
         assert!(futures_util::poll!(&mut resumed).is_pending());
-        drop(held);
+        release_json.notify_one();
+        assert!(matches!(
+            held.await.unwrap(),
+            StreamableHttpPostResponse::Json(..)
+        ));
         let response = resumed.await.unwrap();
         assert_eq!(calls.recv().await.as_deref(), Some("3"));
         assert!(matches!(response, StreamableHttpPostResponse::Sse(..)));
+        assert_eq!(
+            slots.available_permits(),
+            1,
+            "handoff returns the JSON decode slot"
+        );
         drop(response);
-        assert_eq!(slots.available_permits(), 1);
         server.abort();
         let _ = server.await;
     }
