@@ -83,7 +83,7 @@ pub(crate) struct AppServerArgs {
     /// Client; its parent is created or must already be owner-only 0700.
     #[arg(long)]
     execution_bootstrap_out: Option<PathBuf>,
-    /// The public `wss://…/execution/v3` ingress endpoint published in
+    /// The public `wss://…/execution/v4` ingress endpoint published in
     /// the bundle instead of the loopback address.
     #[arg(long, requires = "execution_ws_listen")]
     execution_public_url: Option<String>,

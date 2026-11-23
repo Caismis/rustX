@@ -186,7 +186,7 @@ pub struct PythonToolPackage {
     /// Excludes [`PERMISSIONS_FILE`]: that document is resource metadata
     /// captured onto this package, not frozen server source.
     files: Vec<PathBuf>,
-    source: Arc<PythonSource>,
+    source: PackageSource,
     source_digest: String,
     /// The normalized dependency lines of `requirements.txt` (comments and
     /// blank lines removed), in file order.
@@ -195,6 +195,91 @@ pub struct PythonToolPackage {
     permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
     /// Exact-tool permission exceptions from [`PERMISSIONS_FILE`].
     tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+}
+
+#[derive(Debug, Clone)]
+enum PackageSource {
+    Local(Arc<PythonSource>),
+    Client(Arc<ClientSource>),
+    Unprepared,
+}
+
+impl PackageSource {
+    fn local(&self) -> &PythonSource {
+        match self {
+            Self::Local(source) => source,
+            Self::Client(_) | Self::Unprepared => {
+                unreachable!("only an explicit fixture uses the local Store")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ClientSource {
+    pub(crate) endpoint: Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    pub(crate) key: rustx_execution_protocol::process::ProcessOperationKey,
+}
+
+impl Drop for ClientSource {
+    fn drop(&mut self) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let endpoint = self.endpoint.clone();
+        let key = self.key.clone();
+        runtime.spawn(endpoint.release_managed_python_source(key));
+    }
+}
+
+impl ClientSource {
+    async fn prepare(
+        &self,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Result<(), String> {
+        use rustx_execution_protocol::{
+            ReadError,
+            mcp::PythonSourceReply as Reply,
+            transport::{PAGE_REQUEST_TIMEOUT, recoverable_lane_loss},
+        };
+        use std::time::{Duration, Instant};
+        // Each subprocess retains its own legacy hard limit. The waiter
+        // additionally caps the full probe + lock + sync sequence.
+        let cutoff = Instant::now() + Duration::from_mins(22);
+        loop {
+            if cancellation.is_cancelled() || Instant::now() >= cutoff {
+                return Err(
+                    "Managed Python preparation did not finish in the admitted lifetime".into(),
+                );
+            }
+            let endpoint = self.endpoint.clone();
+            let signal = cancellation.clone();
+            let key = self.key.clone();
+            let one_exchange = cutoff.min(Instant::now() + PAGE_REQUEST_TIMEOUT);
+            let result = tokio::task::spawn_blocking(move || {
+                endpoint.prepare_managed_python_source(key, one_exchange, &signal)
+            })
+            .await
+            .map_err(|_| String::from("Managed Python preparation owner failed"))?;
+            match result {
+                Ok(Reply::Prepared) => return Ok(()),
+                Ok(Reply::Capturing | Reply::Preparing | Reply::Refused(ReadError::Busy)) => {}
+                Err(error)
+                    if recoverable_lane_loss(&error)
+                        || error.kind() == std::io::ErrorKind::WouldBlock => {}
+                _ => {
+                    return Err(
+                        "the admitted Client could not prepare the frozen Python environment"
+                            .into(),
+                    );
+                }
+            }
+            tokio::select! {
+                () = cancellation.cancelled() => return Err("Managed Python preparation cancelled".into()),
+                () = tokio::time::sleep(Duration::from_millis(50)) => {},
+            }
+        }
+    }
 }
 
 /// One anonymous backing file, with bounded in-memory file coordinates. Its last
@@ -249,6 +334,89 @@ impl PythonSource {
 }
 
 impl PythonToolPackage {
+    pub(crate) fn inspect_authoring(root: &Path, name: &str) -> Result<Self, PythonToolError> {
+        validate_identifier(name)?;
+        let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
+        for required in [SERVER_FILE, REQUIREMENTS_FILE] {
+            directory.file(Path::new(required)).map_err(|_| {
+                PythonToolError::InvalidPackage(format!(
+                    "package {name:?} has no readable {required}"
+                ))
+            })?;
+        }
+        let (permissions, tool_permissions) = match directory.file(Path::new(PERMISSIONS_FILE)) {
+            Ok(_) => parse_permissions_document(root, &PythonToolError::InvalidPackage)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, BTreeMap::new()),
+            Err(error) => return Err(io_error(error)),
+        };
+        Ok(Self {
+            name: name.to_owned(),
+            root: root.to_path_buf(),
+            files: Vec::new(),
+            source: PackageSource::Unprepared,
+            source_digest: String::new(),
+            requirements: Vec::new(),
+            permissions,
+            tool_permissions,
+        })
+    }
+
+    pub(crate) fn from_client(
+        name: String,
+        root: PathBuf,
+        source_digest: String,
+        permissions: Option<&[u8]>,
+        source: Arc<ClientSource>,
+    ) -> Result<Self, PythonToolError> {
+        validate_identifier(&name)?;
+        let (permissions, tool_permissions) = permissions.map_or_else(
+            || Ok((None, BTreeMap::new())),
+            |bytes| {
+                parse_permissions_bytes(bytes, &|reason| PythonToolError::InvalidPackage(reason))
+            },
+        )?;
+        Ok(Self {
+            name,
+            root,
+            files: Vec::new(),
+            source: PackageSource::Client(source),
+            source_digest,
+            requirements: Vec::new(),
+            permissions,
+            tool_permissions,
+        })
+    }
+
+    pub(crate) fn client_binding(&self) -> Option<McpServerBinding> {
+        let PackageSource::Client(source) = &self.source else {
+            return None;
+        };
+        Some(McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            transport: McpTransportConfig::ManagedPython {
+                source: crate::tools::mcp::ManagedPythonSource::retain(source.clone()),
+            },
+            policy: ToolInvocationPolicy::default(),
+            permissions: self.permissions,
+            tool_permissions: self.tool_permissions.clone(),
+        })
+    }
+
+    pub(crate) async fn prepare_on_client(
+        &self,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Option<Result<McpServerBinding, String>> {
+        let PackageSource::Client(owner) = &self.source else {
+            return None;
+        };
+        Some(
+            owner
+                .prepare(cancellation)
+                .await
+                .map(|()| self.client_binding().expect("Client source")),
+        )
+    }
+
     /// Validated package identity, immutable after capture.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -366,7 +534,7 @@ pub(crate) fn discover_package(
         name: name.to_owned(),
         root: root.to_path_buf(),
         files,
-        source: Arc::new(source),
+        source: PackageSource::Local(Arc::new(source)),
         source_digest,
         requirements,
         permissions,
@@ -484,7 +652,20 @@ fn parse_permissions_document(
             "{PERMISSIONS_FILE}: cannot read resource permissions: {error}"
         ))
     })?;
-    let document: ManagedPythonPermissionsDocument = crate::toml_authoring::parse(&bytes)
+    parse_permissions_bytes(&bytes, invalid)
+}
+
+fn parse_permissions_bytes(
+    bytes: &[u8],
+    invalid: &impl Fn(String) -> PythonToolError,
+) -> Result<
+    (
+        Option<crate::runtime::permission::ResourcePermissionSet>,
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ),
+    PythonToolError,
+> {
+    let document: ManagedPythonPermissionsDocument = crate::toml_authoring::parse(bytes)
         .map_err(|error| invalid(format!("{PERMISSIONS_FILE}: {error}")))?;
     let tool_permissions = document
         .tools
@@ -1265,55 +1446,6 @@ fn venv_python(state_dir: &Path) -> PathBuf {
     })
 }
 
-#[cfg(test)]
-mod cached_verification_gate {
-    use super::*;
-    type Gate = (
-        tokio::sync::oneshot::Sender<()>,
-        std::sync::mpsc::Receiver<()>,
-    );
-    fn gates() -> &'static std::sync::Mutex<std::collections::BTreeMap<PathBuf, Gate>> {
-        static GATES: std::sync::OnceLock<
-            std::sync::Mutex<std::collections::BTreeMap<PathBuf, Gate>>,
-        > = std::sync::OnceLock::new();
-        GATES.get_or_init(Default::default)
-    }
-    pub(super) fn register(
-        path: PathBuf,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        std::sync::mpsc::Sender<()>,
-    ) {
-        let (entered, arrival) = tokio::sync::oneshot::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        assert!(
-            gates()
-                .lock()
-                .unwrap()
-                .insert(path, (entered, wait))
-                .is_none()
-        );
-        (arrival, release)
-    }
-    pub(super) fn wait(path: &Path) {
-        let gate = gates().lock().unwrap().remove(path);
-        if let Some((entered, release)) = gate {
-            let _ = entered.send(());
-            let _ = release.recv();
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn gate_cached_verification_for_test(
-    path: PathBuf,
-) -> (
-    tokio::sync::oneshot::Receiver<()>,
-    std::sync::mpsc::Sender<()>,
-) {
-    cached_verification_gate::register(path)
-}
-
 /// Validates a published state against the exact deterministic inputs that
 /// derive it, and returns the handle. A state whose directory exists but
 /// does not verify — missing/invalid manifest, mismatched identity inputs
@@ -1366,8 +1498,6 @@ fn read_prepared_state(
             package.name
         )));
     }
-    #[cfg(test)]
-    cached_verification_gate::wait(state_dir);
     let source_root = state_dir.join(SOURCE_DIRECTORY);
     let files = collect_files(&source_root, cancellation)?;
     if source_digest(&source_root, &files, cancellation)? != manifest.source_digest {
@@ -1630,9 +1760,11 @@ async fn stage_source(
     tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&copy_root).map_err(io_error)?;
         for relative in &snapshot.files {
-            snapshot
-                .source
-                .copy_to(relative, &copy_root.join(relative), &copy_cancellation)?;
+            snapshot.source.local().copy_to(
+                relative,
+                &copy_root.join(relative),
+                &copy_cancellation,
+            )?;
         }
         if source_digest(&copy_root, &snapshot.files, &copy_cancellation)? != snapshot.source_digest
         {
@@ -1819,6 +1951,7 @@ mod tests {
             std::fs::create_dir_all(to.parent().unwrap()).unwrap();
             package
                 .source
+                .local()
                 .copy_to(relative, &to, &crate::runtime::CancellationSignal::new())
                 .unwrap();
         }
@@ -2636,6 +2769,7 @@ full_access = "ask"
         for relative in &package.files {
             package
                 .source
+                .local()
                 .copy_to(
                     relative,
                     &source_root.join(relative),
@@ -2880,6 +3014,7 @@ full_access = "ask"
             };
             Box::pin(async move {
                 Ok(CapturedProcessResult {
+                    physical_settlement_proven: true,
                     exit_code: Some(0),
                     intent: ProcessOutcomeIntent::Completed,
                     stdout,
@@ -3206,7 +3341,7 @@ full_access = "ask"
                 .metadata()
                 .unwrap()
                 .len(),
-            package.source.entries[Path::new(SERVER_FILE)].1,
+            package.source.local().entries[Path::new(SERVER_FILE)].1,
         );
         let stored = temporary.path().join(PACKAGES_DIRECTORY);
         assert_eq!(stored.read_dir().unwrap().count(), 1);
@@ -3249,12 +3384,12 @@ full_access = "ask"
             let cancellation = crate::runtime::CancellationSignal::new();
             let package = discover_package(&source, "demo", &cancellation).unwrap();
             assert_eq!(
-                package.source.file.metadata().unwrap().nlink(),
+                package.source.local().file.metadata().unwrap().nlink(),
                 0,
                 "capture has no named cleanup residue"
             );
-            assert_eq!(package.source.entries.len(), 3);
-            let captured_bytes = package.source.file.metadata().unwrap().len();
+            assert_eq!(package.source.local().entries.len(), 3);
+            let captured_bytes = package.source.local().file.metadata().unwrap().len();
             assert!(captured_bytes > size_mib * 1024 * 1024);
             std::fs::OpenOptions::new()
                 .write(true)

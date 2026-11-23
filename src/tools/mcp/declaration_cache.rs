@@ -55,7 +55,7 @@ impl DeclarationKey {
                 fingerprint.add(secret.expose().as_bytes());
             }
         }
-        if matches!(binding.transport, McpTransportConfig::Stdio { .. }) {
+        if !matches!(binding.transport, McpTransportConfig::StreamableHttp { .. }) {
             let scope = workspace.execution_scope()?;
             if scope.delegated_work().is_some() {
                 return None;

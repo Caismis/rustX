@@ -87,8 +87,33 @@ race tests hold the physical fixture at `uv sync`. Independent Store instances
 both build, verify the same published winner and remove their own stages. A
 different actor claiming the fingerprint with an empty directory keeps its
 original inode and content while preparation fails. This establishes the
-exclusive Store publication cut. The production Managed Python migration
-to the Client remains open.
+exclusive Store publication cut for the original runtime fixture. In the
+Client implementation, the Store and its private scratch are scoped to the
+physical Client environment. The Server stores typed source identities and
+authorization metadata. The Client owns snapshotting, preparation and the
+stdio launch through the existing supervisor.
+
+The Client-owned Store adds two direct regressions for fingerprint inputs and
+corrupt occupancy. `exact_store_identity_ignores_origin_and_permissions_but_keeps_runtime_and_source`
+checks exact source paths, requirement bytes, both runtime path/version pairs
+and the FastMCP pin. `a_dangling_fingerprint_entry_is_refused_without_attempting_repair`
+keeps the existing symlink intact. Both passed on Linux.
+
+`managed_python_prepares_and_runs_in_the_bound_client_mount` uses a real App
+Server and Execution Client. It seeds only the required wheels, then admits
+an isolated Workspace with package files visible only to Client. The Client
+locks, installs and starts a real `FastMCP` 4.0.3 server. A fake provider sees
+exactly two requests and the tool records one call in the Client Workspace.
+The Session deletion returns `Deleted`. The original Workspace bytes and
+published Store remain. This run supplies the isolated T69 Store/deletion
+and stdio evidence. The Server's PATH excludes uv, and its filesystem view
+contains neither the package directory nor the published Store location.
+
+`t12_cached_python_catalog_disconnect_retains_worker_and_listing_permit`
+pauses the actual Client's uv identity proof through a socket gate and shows
+that closing the UI does not drop the finite request or listing permit. The
+Client settles cleanly after the gate opens, and exactly one environment
+remains installed.
 
 ## Open gates
 
@@ -97,6 +122,7 @@ to the Client remains open.
   admission fence retains the unresolved identity. The Linux SIGKILL case
   observes one business socket and exercises isolation between Sessions.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
-  run through the bound Client in EXEC-03. The Client-owned Managed Python
-  Store, full restart cleanup and complete child integration remain open.
-  Native macOS fault injection and final exact-head verification remain open.
+  run through the bound Client in EXEC-03. Full restart cleanup, the
+  cross-role and foreground MCP interaction matrix, and Client Store race
+  and failure verification remain open. Native macOS fault injection and
+  final exact-head verification remain open.

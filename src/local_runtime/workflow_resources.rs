@@ -41,7 +41,7 @@ pub(super) fn load_sources(
         let bound = bound.filter(|_| scope == SourceScope::Workspace);
         let paths = match bound.map_or_else(
             || super::resource_directory::files(boundary, &root, "yaml"),
-            |bound| Ok(bound.files(&root)),
+            |bound| bound.files(&root),
         ) {
             Ok(paths) => paths,
             Err(error) => {

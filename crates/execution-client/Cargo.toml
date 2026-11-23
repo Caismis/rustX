@@ -17,6 +17,10 @@ test-support = []
 [dependencies]
 futures-util = "0.3"
 pep440_rs = "0.7.3"
+pep-508 = "0.5.0"
+chumsky = "=1.0.0-alpha.8"
+uv-normalize = "0.0.40"
+thiserror = "2"
 toml_edit = "0.22"
 similar = "3.2.0"
 tracing = "0.1"

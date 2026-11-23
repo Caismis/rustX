@@ -269,20 +269,6 @@ pub(crate) fn revision_with_cancellation(
     }
 }
 
-/// Managed Python still admits a native package source independently of the
-/// bound Session's Client-owned Agent, Workflow and guidance definitions.
-pub(super) fn native_python_revision(
-    root: &Path,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> String {
-    let mut hash = Sha256::new();
-    hash.update(b"rustx-native-python-resource-domain-v1");
-    match evidence::include_python(&mut hash, root, cancellation) {
-        Ok(()) => format!("sha256:{:x}", hash.finalize()),
-        Err(reason) => format!("incomplete:{}:unavailable:{reason}", uuid::Uuid::now_v7()),
-    }
-}
-
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;

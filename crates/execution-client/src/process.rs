@@ -3842,6 +3842,7 @@ mod tests {
                 ops.clone(),
                 Arc::new(crate::watch::Watches::new()),
                 Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
+                crate::managed_python::SourceCleanup::default(),
             );
             server
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -4009,6 +4010,7 @@ mod tests {
             ops.clone(),
             Arc::new(crate::watch::Watches::new()),
             Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
+            crate::managed_python::SourceCleanup::default(),
         );
         server
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -4136,6 +4138,7 @@ mod tests {
             ops.clone(),
             Arc::new(crate::watch::Watches::new()),
             Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
+            crate::managed_python::SourceCleanup::default(),
         );
         control_server
             .set_read_timeout(Some(Duration::from_secs(5)))

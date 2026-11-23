@@ -1,8 +1,9 @@
 //! Server-side logical peer for one Client-owned stdio connection.
 
 use std::{
+    collections::BTreeMap,
     io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -58,6 +59,28 @@ pub(crate) fn launch_spec(
     server: &crate::runtime::identity::McpServerId,
     workspace: &Path,
 ) -> Result<Option<Launch>, McpError> {
+    if let McpTransportConfig::ManagedPython { source } = &binding.transport {
+        if !server
+            .as_str()
+            .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
+        {
+            return Err(McpError::Configuration(
+                "managed stdio must have an admitted Python source".into(),
+            ));
+        }
+        return Ok(Some(Launch {
+            program: PathBuf::new(),
+            args: Vec::new(),
+            cwd: PathBuf::new(),
+            environment: BTreeMap::new(),
+            versions: super::supported_protocol_versions()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            legacy_version: None,
+            python_source: Some(Box::new(source.key.clone())),
+        }));
+    }
     let McpTransportConfig::Stdio {
         program,
         args,
@@ -103,6 +126,7 @@ pub(crate) fn launch_spec(
         environment: explicit_environment,
         versions: preferred.iter().map(ToString::to_string).collect(),
         legacy_version: legacy.map(|version| version.to_string()),
+        python_source: None,
     }))
 }
 

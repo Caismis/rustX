@@ -692,7 +692,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope }, 'workflow_tool_catalog');
+          const execution_session = operation.execution_session?.cwd === cwd ? operation.execution_session.id : undefined;
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope, execution_session }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -769,15 +770,23 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
       && Number.isInteger(row.offset) && Number(row.offset) >= 0 && Number(row.offset) <= 4294967295
       && Object.keys(row).every(key => ['offset', 'digest'].includes(key));
   };
+  const catalogSession = (session: unknown) => {
+    if (session === undefined) return true;
+    if (!object(session)) return false;
+    const row = session as Record<string, unknown>;
+    return typeof row.id === 'string' && row.id.length > 0 && row.id.length <= 64
+      && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd.length <= 4096
+      && Object.keys(row).every(key => ['id', 'cwd'].includes(key));
+  };
   const valid = object(value) && (
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory'])
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory', 'execution_session'])
           && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
           && (value!.expected_scope == null || value!.source != null && (value!.expected_scope === 'user' || value!.expected_scope === 'workspace'))
           && (value!.expected_directory === undefined || typeof value!.expected_directory === 'string' && value!.expected_directory.length > 0)
-          && catalogCursor(value!.cursor)
+          && catalogCursor(value!.cursor) && catalogSession(value!.execution_session)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)

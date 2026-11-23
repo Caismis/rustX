@@ -1059,6 +1059,7 @@ mod tests {
             environment: BTreeMap::new(),
             versions: vec!["2025-11-25".into()],
             legacy_version: None,
+            python_source: None,
         };
         let authority = Authority {
             conversation: "child".into(),
@@ -1150,6 +1151,7 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
             )]),
             versions: vec!["2025-11-25".into()],
             legacy_version: None,
+            python_source: None,
         };
         let conversation = crate::runtime::identity::ConversationId::new(
             "conv_0410af39-84e2-7896-a1f1-06c4c338553d",

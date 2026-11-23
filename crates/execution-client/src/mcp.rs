@@ -34,7 +34,10 @@ use rustx_process_supervisor::{
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::process::{Operations, WorkerGuard};
+use crate::{
+    managed_python,
+    process::{Operations, WorkerGuard},
+};
 
 const MAX_IDENTITIES: usize = 4096;
 const MAX_ADMISSION_BYTES: usize = 64 * 1024;
@@ -72,10 +75,15 @@ enum Status {
 }
 
 impl Sessions {
-    pub(crate) fn exchange(&mut self, request: Request, operations: &Arc<Operations>) -> Response {
+    pub(crate) fn exchange(
+        &mut self,
+        request: Request,
+        operations: &Arc<Operations>,
+        python: &managed_python::Catalog,
+    ) -> Response {
         let key = request.key().clone();
         let reply = if operations.own_key(&key) {
-            self.dispatch(request, &key, operations)
+            self.dispatch(request, &key, operations, python)
         } else {
             Reply::Failed(Failure::Foreign)
         };
@@ -87,9 +95,10 @@ impl Sessions {
         request: Request,
         key: &ProcessOperationKey,
         operations: &Arc<Operations>,
+        python: &managed_python::Catalog,
     ) -> Reply {
         if let Request::Open { launch, .. } = request {
-            return self.open(key.operation, launch, operations);
+            return self.open(key.operation, launch, operations, python);
         }
         let Some(entry) = self.entries.get_mut(&key.operation) else {
             return Reply::Failed(Failure::Unavailable);
@@ -119,7 +128,13 @@ impl Sessions {
         }
     }
 
-    fn open(&mut self, id: OperationId, launch: Launch, operations: &Arc<Operations>) -> Reply {
+    fn open(
+        &mut self,
+        id: OperationId,
+        launch: Launch,
+        operations: &Arc<Operations>,
+        python: &managed_python::Catalog,
+    ) -> Reply {
         let Ok(bytes) = serde_json::to_vec(&launch) else {
             return Reply::Failed(Failure::Invalid);
         };
@@ -141,7 +156,7 @@ impl Sessions {
         {
             return Reply::Failed(Failure::Capacity);
         }
-        let Some((spec, lifecycle, info)) = launch_parameters(launch, operations) else {
+        let Some((spec, lifecycle, info)) = launch_parameters(launch, operations, python) else {
             return Reply::Failed(Failure::Invalid);
         };
         let (outgoing, requests) = mpsc::channel(MAX_PENDING_SENDS);
@@ -290,10 +305,10 @@ fn known_version(value: &str) -> Option<ProtocolVersion> {
 fn launch_parameters(
     launch: Launch,
     operations: &Operations,
+    python: &managed_python::Catalog,
 ) -> Option<(InteractiveProcessSpec, ClientLifecycleMode, ClientInfo)> {
     if launch.versions.is_empty()
         || launch.versions.len() > ProtocolVersion::KNOWN_VERSIONS.len()
-        || launch.program.as_os_str().is_empty()
         || launch.args.len() > 128
         || launch.environment.len() > 128
         || launch
@@ -333,6 +348,20 @@ fn launch_parameters(
     );
     if let Some(Some(version)) = launch.legacy_version.as_deref().map(known_version) {
         info = info.with_protocol_version(version);
+    }
+    if let Some(source) = &launch.python_source {
+        if !launch.program.as_os_str().is_empty()
+            || !launch.args.is_empty()
+            || !launch.environment.is_empty()
+            || !launch.cwd.as_os_str().is_empty()
+            || launch.legacy_version.is_some()
+        {
+            return None;
+        }
+        return Some((python.prepared_launch(source, operations)?, lifecycle, info));
+    }
+    if launch.program.as_os_str().is_empty() {
+        return None;
     }
     let program = if launch.program.is_relative()
         && (launch.program.components().count() > 1 || launch.program.starts_with("."))

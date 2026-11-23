@@ -36,6 +36,7 @@ import css from './ResourceSurface.module.css';
 interface Props {
   module: ResourceModule; visible: boolean; client: AppServerClient; host: ProductHostWorkspaces;
   authority: WorkspaceAuthority; associations: WorkspaceAssociations; initialWorkspace?: string;
+  executionSession?: { id: string; cwd: string };
 }
 
 /** Retain each module's presentation independently of its source transactions. */
@@ -45,7 +46,7 @@ export function ResourceSurface(props: Props) {
   return (visited || props.visible) && <ResourcePage {...props} />;
 }
 
-function ResourcePage({ module, visible, client, host, authority, associations, initialWorkspace }: Props) {
+function ResourcePage({ module, visible, client, host, authority, associations, initialWorkspace, executionSession }: Props) {
   const tx = useTranslation();
   const catalog = useSyncExternalStore(authority.subscribe, authority.getCatalog);
   useEffect(() => { if (visible) void authority.observe().catch(() => {}); }, [authority, visible]);
@@ -128,11 +129,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     const hostAuthority = authority.capture();
     const currentHost = hostAuthority && JSON.stringify([hostAuthority.scope.authorityId, hostAuthority.scope.endpoint]);
     if (scope === 'workspace' && (!workspaceId || !directory || !hostAuthority || currentHost !== hostOwner)) return;
-    const port = createWorkflowPort({ client, host: () => host, hostAuthority, expectedWorkspaceDirectory: directory,
+    const port = createWorkflowPort({ client, host: () => host, hostAuthority, expectedWorkspaceDirectory: directory, executionSession,
       scope: scope === 'workspace' && workspaceId ? { kind: 'workspace', workspaceId } : USER_SCOPE });
     const catalog = await readToolCatalog(port, server, owner, () => owns() && (scope === 'user' || !!hostAuthority?.current()));
     return catalog.sources.find(entry => entry.source_id === server);
-  }, [client, host, authority, workspaceId, directory, hostOwner]);
+  }, [client, host, authority, workspaceId, directory, hostOwner, executionSession]);
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);
   useEffect(() => {

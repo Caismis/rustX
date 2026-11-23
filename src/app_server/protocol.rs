@@ -1190,6 +1190,9 @@ pub enum Method {
     #[serde(rename = "workflow/toolCatalog")]
     WorkflowToolCatalog {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session authorized to list executable Client sources.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         #[serde(default)]
         source: Option<String>,
         #[serde(default)]

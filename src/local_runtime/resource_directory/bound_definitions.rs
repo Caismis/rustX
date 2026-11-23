@@ -2,7 +2,7 @@
 use super::{MAX_DIRECTORY_ENTRIES, MAX_RESOURCE_FILES};
 use crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint;
 use crate::runtime::resources::RuntimeResourceLoadError;
-use rustx_execution_protocol::{EntryKind, MAX_DIRECTORY_PAGE_ENTRIES, PageEntry};
+use rustx_execution_protocol::{EntryKind, EntryStamp, MAX_DIRECTORY_PAGE_ENTRIES, PageEntry};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -12,8 +12,18 @@ const CAPTURE_BUDGET: Duration = Duration::from_secs(5);
 
 pub(in crate::local_runtime) struct BoundDefinitions<'a> {
     endpoint: &'a LocalExecutionEndpoint,
-    collections: [(PathBuf, Option<Collection>); COLLECTIONS.len()],
+    collections: [(PathBuf, Observation); COLLECTIONS.len()],
     deadline: Instant,
+}
+
+#[derive(PartialEq, Eq, serde::Serialize)]
+enum Observation {
+    Missing,
+    Invalid {
+        entry: EntryStamp,
+        reason: &'static str,
+    },
+    Directory(Collection),
 }
 
 #[derive(PartialEq, Eq, serde::Serialize)]
@@ -27,7 +37,8 @@ impl<'a> BoundDefinitions<'a> {
         endpoint: &'a LocalExecutionEndpoint,
     ) -> Result<Self, RuntimeResourceLoadError> {
         let deadline = Instant::now() + CAPTURE_BUDGET;
-        let mut collections = COLLECTIONS.map(|(name, _)| (endpoint.workspace().join(name), None));
+        let mut collections =
+            COLLECTIONS.map(|(name, _)| (endpoint.workspace().join(name), Observation::Missing));
         for ((root, entries), (_, extension)) in collections.iter_mut().zip(COLLECTIONS) {
             *entries = list(endpoint, root, extension, deadline)?;
         }
@@ -38,15 +49,27 @@ impl<'a> BoundDefinitions<'a> {
         })
     }
 
-    pub(in crate::local_runtime) fn files(&self, root: &Path) -> Vec<PathBuf> {
-        self.collections
+    pub(in crate::local_runtime) fn files(
+        &self,
+        root: &Path,
+    ) -> Result<Vec<PathBuf>, RuntimeResourceLoadError> {
+        match self
+            .collections
             .iter()
             .find(|(collection, _)| collection == root)
-            .and_then(|(_, collection)| collection.as_ref())
-            .into_iter()
-            .flat_map(|collection| &collection.entries)
-            .map(|entry| root.join(&entry.name))
-            .collect()
+        {
+            Some((_, Observation::Directory(collection))) => Ok(collection
+                .entries
+                .iter()
+                .map(|entry| root.join(&entry.name))
+                .collect()),
+            Some((_, Observation::Invalid { reason, .. })) => Err(failure(root, reason)),
+            Some((_, Observation::Missing)) => Ok(Vec::new()),
+            None => Err(failure(
+                root,
+                "resource collection is outside the bound catalog",
+            )),
+        }
     }
 
     pub(in crate::local_runtime) fn read(
@@ -56,11 +79,10 @@ impl<'a> BoundDefinitions<'a> {
     ) -> Result<Vec<u8>, RuntimeResourceLoadError> {
         let stamp = self.collections.iter().find_map(|(root, entries)| {
             let name = path.strip_prefix(root).ok()?.to_str()?;
-            entries
-                .as_ref()?
-                .entries
-                .iter()
-                .find(|entry| entry.name == name)
+            let Observation::Directory(collection) = entries else {
+                return None;
+            };
+            collection.entries.iter().find(|entry| entry.name == name)
         });
         let Some(entry) = stamp.filter(|entry| entry.metadata.kind == EntryKind::RegularFile)
         else {
@@ -113,7 +135,7 @@ impl<'a> BoundDefinitions<'a> {
         self.collections.iter().any(|(root, collection)| {
             path == root
                 || (path.parent() == Some(root)
-                    && collection.as_ref().is_some_and(|collection| {
+                    && matches!(collection, Observation::Directory(collection) if {
                         path.file_name().is_some_and(|name| {
                             collection
                                 .entries
@@ -130,18 +152,18 @@ fn list(
     root: &Path,
     extension: &str,
     deadline: Instant,
-) -> Result<Option<Collection>, RuntimeResourceLoadError> {
+) -> Result<Observation, RuntimeResourceLoadError> {
     let directory = match endpoint.read_workspace_source(root, deadline, |connection, relative| {
         connection.entry_metadata_until(relative, deadline)
     }) {
-        Ok(directory) if directory.kind == EntryKind::Directory => directory.stamp,
-        Ok(_) => {
-            return Err(failure(
-                root,
-                "canonical resource root must be a directory, not a symlink",
-            ));
+        Ok(directory) if directory.kind == EntryKind::Directory => directory,
+        Ok(entry) => {
+            return Ok(Observation::Invalid {
+                entry,
+                reason: "canonical resource root must be a directory, not a symlink",
+            });
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Observation::Missing),
         Err(error) => return Err(failure(root, error)),
     };
     let mut entries = Vec::new();
@@ -159,7 +181,7 @@ fn list(
                 relative,
                 offset,
                 limit,
-                Some(&directory.revision),
+                Some(&directory.stamp.revision),
                 deadline,
             )
         });
@@ -177,10 +199,10 @@ fn list(
             }
             count += 1;
             if count > MAX_DIRECTORY_ENTRIES {
-                return Err(failure(
-                    root,
-                    "canonical resource root exceeds 1024 entries",
-                ));
+                return Ok(Observation::Invalid {
+                    entry: directory,
+                    reason: "canonical resource root exceeds 1024 entries",
+                });
             }
             if Path::new(&entry.name)
                 .extension()
@@ -188,13 +210,16 @@ fn list(
             {
                 entries.push(entry);
                 if entries.len() > MAX_RESOURCE_FILES {
-                    return Err(failure(root, "canonical catalog exceeds 128 resources"));
+                    return Ok(Observation::Invalid {
+                        entry: directory,
+                        reason: "canonical catalog exceeds 128 resources",
+                    });
                 }
             }
         }
         let Some(next) = page.next_offset else {
-            return Ok(Some(Collection {
-                identity: directory.identity,
+            return Ok(Observation::Directory(Collection {
+                identity: directory.stamp.identity,
                 entries,
             }));
         };

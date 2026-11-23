@@ -8,6 +8,199 @@ use crate::runtime::resources::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Captures package metadata and exact source identities through the admitted Client.
+///
+/// # Errors
+/// Returns the typed source observation or authority failure.
+#[doc(hidden)]
+pub fn discover_bound(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    user_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    discover_bound_for(endpoint, user_root, true, cancellation)
+}
+
+pub(super) fn discover_bound_for(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    user_root: &Path,
+    include_workspace: bool,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    use crate::runtime::resources::ResourceLocation;
+    use rustx_execution_protocol::mcp::{
+        PythonSourceReply as Reply, PythonSourceRequest as Request, PythonSourceScope,
+    };
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut candidates = BTreeMap::new();
+    let mut locations = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for (scope, physical, root) in [
+        (
+            SourceScope::User,
+            PythonSourceScope::User,
+            user_root.join("tools"),
+        ),
+        (
+            SourceScope::Workspace,
+            PythonSourceScope::Workspace,
+            endpoint.workspace().join(".agents/tools"),
+        ),
+    ] {
+        if scope == SourceScope::Workspace && !include_workspace {
+            continue;
+        }
+        let names =
+            match endpoint.managed_python_source(&Request::List { scope: physical }, deadline) {
+                Ok(Reply::Names(names)) if names.len() <= 128 => names,
+                Ok(Reply::CollectionInvalid) => {
+                    candidates.clear();
+                    locations.clear();
+                    diagnostics.push(
+                        RuntimeResourceLoadError::new(
+                            "Client Managed Python collection must be a directory",
+                        )
+                        .at(&root, "tools"),
+                    );
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+                    return Ok(ManagedPythonCatalog::default());
+                }
+                Ok(_) | Err(_) => {
+                    return Err(RuntimeResourceLoadError::new(
+                        "cannot observe Client Managed Python sources",
+                    )
+                    .at(&root, "tools"));
+                }
+            };
+        for name in names {
+            if name.len() > 128 || crate::tools::python::validate_identifier(&name).is_err() {
+                return Err(RuntimeResourceLoadError::new(
+                    "invalid Client Managed Python identity",
+                )
+                .at(&root, "tools"));
+            }
+            let source = ToolSourceId::ManagedPython(name.clone());
+            let path = root.join(&name);
+            let shadowed = locations
+                .remove(&source)
+                .map(|owner: ResourceLocation| owner.path);
+            locations.insert(
+                source.clone(),
+                ResourceLocation {
+                    scope,
+                    path: path.clone(),
+                    shadowed,
+                },
+            );
+            candidates.insert(source, (name, physical, path));
+        }
+    }
+    if candidates.len() > 128 {
+        return Err(
+            RuntimeResourceLoadError::new("Managed Python catalog exceeds 128 packages")
+                .at(user_root, "tools"),
+        );
+    }
+    let packages = candidates
+        .into_iter()
+        .map(|(source, (name, physical, path))| {
+            let result =
+                capture_bound_package(endpoint, physical, name, path, deadline, cancellation);
+            (source, result)
+        })
+        .collect();
+    let mut catalog = ManagedPythonCatalog::new(packages);
+    catalog.locations = locations;
+    catalog.discovery_diagnostics = diagnostics;
+    Ok(catalog)
+}
+
+fn capture_bound_package(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    scope: rustx_execution_protocol::mcp::PythonSourceScope,
+    name: String,
+    path: std::path::PathBuf,
+    deadline: std::time::Instant,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<crate::tools::python::PythonToolPackage, crate::tools::python::PythonToolError> {
+    use crate::tools::python::{ClientSource, PythonToolError, PythonToolPackage};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use rustx_execution_protocol::{
+        mcp::{PythonSourceReply as Reply, PythonSourceRequest as Request},
+        process::OperationId,
+    };
+    let unavailable =
+        || PythonToolError::Storage("the admitted Client could not capture the package".into());
+    let key = endpoint
+        .process_key(OperationId::new())
+        .map_err(|_| unavailable())?;
+    let owner = std::sync::Arc::new(ClientSource {
+        endpoint: endpoint.clone(),
+        key: key.clone(),
+    });
+    let mut request = Request::Capture {
+        key: key.clone(),
+        scope,
+        name: name.clone(),
+    };
+    loop {
+        if cancellation.is_cancelled() || std::time::Instant::now() >= deadline {
+            return Err(unavailable());
+        }
+        match endpoint
+            .managed_python_source(&request, deadline)
+            .map_err(|_| unavailable())?
+        {
+            Reply::Capturing => {
+                request = Request::State { key: key.clone() };
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Reply::Captured {
+                digest,
+                permissions_base64,
+            } => {
+                let valid = digest.strip_prefix("sha256:").is_some_and(|hash| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                });
+                if !valid {
+                    return Err(unavailable());
+                }
+                let permissions = permissions_base64
+                    .as_deref()
+                    .map(|encoded| STANDARD.decode(encoded))
+                    .transpose()
+                    .map_err(|_| unavailable())?;
+                if permissions
+                    .as_ref()
+                    .is_some_and(|bytes| bytes.len() > 512 * 1024)
+                {
+                    return Err(unavailable());
+                }
+                return PythonToolPackage::from_client(
+                    name,
+                    path,
+                    digest,
+                    permissions.as_deref(),
+                    owner,
+                );
+            }
+            Reply::Refused(rustx_execution_protocol::ReadError::Invalid) => {
+                return Err(PythonToolError::InvalidPackage(format!(
+                    "the admitted Client rejected package {name:?}"
+                )));
+            }
+            _ => return Err(unavailable()),
+        }
+    }
+}
+
 /// Captures the User root and the explicitly supplied Workspace, shadowing before parsing.
 /// With no Workspace, discovery reads only User resources; it never infers a cwd.
 /// This operation reads package bytes but never imports code or prepares Python.
@@ -18,10 +211,11 @@ pub fn discover(
     workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
-    discover_controlled(
+    discover_authoring(
         workspace,
         user_root,
         &crate::runtime::CancellationSignal::new(),
+        true,
     )
 }
 
@@ -29,6 +223,15 @@ pub(crate) fn discover_controlled(
     workspace: Option<&Path>,
     user_root: &Path,
     cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    discover_authoring(workspace, user_root, cancellation, cfg!(test))
+}
+
+fn discover_authoring(
+    workspace: Option<&Path>,
+    user_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+    freeze_fixture_sources: bool,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
     crate::package_io::check_cancelled(cancellation)
         .map_err(|error| RuntimeResourceLoadError::new(error.to_string()).at(user_root, "tools"))?;
@@ -109,7 +312,13 @@ pub(crate) fn discover_controlled(
                 .map_err(|error| {
                     crate::tools::python::PythonToolError::InvalidPackage(error.to_string())
                 })
-                .and_then(|()| crate::tools::python::discover_package(&path, &name, cancellation));
+                .and_then(|()| {
+                    if freeze_fixture_sources {
+                        crate::tools::python::discover_package(&path, &name, cancellation)
+                    } else {
+                        crate::tools::python::PythonToolPackage::inspect_authoring(&path, &name)
+                    }
+                });
             (ToolSourceId::ManagedPython(name), package)
         })
         .collect();

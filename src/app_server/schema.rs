@@ -1074,6 +1074,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     fixtures.push(request(
         "workflow-tool-catalog",
         Method::WorkflowToolCatalog {
+            execution_session: None,
             target: target.clone(),
             source: Some("github".into()),
             cursor: None,

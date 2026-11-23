@@ -495,6 +495,201 @@ for line in sys.stdin:
     })).await;
 }
 
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+async fn seed_managed_python_wheel_cache(
+    bin: &std::path::Path,
+    uv: &std::path::Path,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    let fixture = tempfile::tempdir().unwrap();
+    let interpreter = ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .expect("Client Python");
+    let minor = std::process::Command::new(interpreter)
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .output()
+        .unwrap();
+    assert!(minor.status.success());
+    let minor = std::str::from_utf8(&minor.stdout).unwrap().trim();
+    std::fs::write(
+        fixture.path().join("pyproject.toml"),
+        format!(
+            r#"
+[project]
+name = "wheel-cache-fixture"
+version = "0.0.0"
+requires-python = "=={minor}.*"
+dependencies = ["fastmcp==4.0.3"]
+"#
+        ),
+    )
+    .unwrap();
+    let store = bin.join("client-home/.local/share/rustx/environments/python-tools");
+    let cache = store.join("uv-cache");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&cache)
+        .unwrap();
+    let mut uv_sync = tokio::process::Command::new(uv);
+    if let Some(warmed) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE") {
+        let source = std::path::PathBuf::from(warmed).join(".");
+        let copied = tokio::process::Command::new("/bin/cp")
+            .args(["-a", "--reflink=auto"])
+            .arg(source)
+            .arg(&cache)
+            .kill_on_drop(true)
+            .status()
+            .await
+            .unwrap();
+        assert!(copied.success(), "copy the verified test wheel cache");
+        uv_sync.arg("--offline");
+    }
+    let output = tokio::time::timeout(
+        std::time::Duration::from_mins(2),
+        uv_sync
+            .args([
+                "sync",
+                "--no-config",
+                "--no-install-project",
+                "--no-default-groups",
+            ])
+            .current_dir(fixture.path())
+            .env("UV_CACHE_DIR", &cache)
+            .env("UV_NO_PYTHON_DOWNLOADS", "1")
+            .env("UV_PYTHON", interpreter)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("wheel cache setup liveness")
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "populate fixture wheels: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!store.join("packages").exists());
+    let uv_path = uv.to_str().unwrap().replace('\'', "'\\''");
+    let directory = bin.join("tools");
+    std::fs::create_dir(&directory).unwrap();
+    let wrapper = directory.join("uv");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec '{uv_path}' --offline \"$@\"\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    directory
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+#[ignore = "requires Linux mount namespace and uv; run test-support/prove_execution_mount_view.sh"]
+async fn managed_python_prepares_and_runs_in_the_bound_client_mount() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    let uv = crate::common::provider_emulator::required_uv("the Client Managed Python boundary")
+        .expect("the isolated Managed Python proof requires uv");
+    let (bin, rustx) = isolated_server_pair();
+    // Set up only wheels. The authenticated Client still creates the first
+    // fingerprint, resolves its lock offline, and installs the venv itself.
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    bounded(Box::pin(async {
+        use rustx::app_server::{protocol::{Method, MethodResult}, session_deletion::SessionDeletionResult};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = Fixture::new().await;
+        let provider = crate::common::FixtureServer::start(move |attempt, _| match attempt {
+            0 => crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse"),
+            1 => crate::common::sse_fixture("openai_chat", "plain_text.sse"),
+            _ => panic!("unexpected model request"),
+        }).await;
+        let workspace = fixture.root.path().join("a").canonicalize().unwrap();
+        let settings = fixture.root.path().join("home/rustx/rustx.toml");
+        let raw = std::fs::read_to_string(&settings).unwrap()
+            .replace("http://127.0.0.1:9/v1", &provider.url("/v1"));
+        let mut authored: toml::Value = toml::from_str(&raw).unwrap();
+        authored.as_table_mut().unwrap().insert("approval_mode".into(), "full_access".into());
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".into(), toml::from_str("'python:echo' = ['echo']").unwrap()
+        );
+        std::fs::write(settings, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        let launcher = bin.path().join("rustx-execution-client");
+        std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+        for supervisor in ["bash-supervisor", "interactive-supervisor"] {
+            let staged = std::env::current_exe().unwrap().with_file_name(supervisor);
+            stage_binary(bin.path(), supervisor, &staged);
+        }
+        let physical = bin.path().join("physical");
+        let package = physical.join(".agents/tools/echo");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("requirements.txt"), b"# no extra dependencies\n").unwrap();
+        std::fs::write(package.join("common.py"), b"answer = 'isolated-managed-python-result'\n").unwrap();
+        std::fs::write(package.join("server.py"), br"
+from pathlib import Path
+from fastmcp import FastMCP
+from common import answer
+
+mcp = FastMCP('echo')
+@mcp.tool
+def echo() -> str:
+    with Path('managed-calls').open('a') as calls:
+        calls.write('echo\n')
+    return answer
+").unwrap();
+        assert!(!workspace.join(".agents/tools").exists());
+        std::fs::create_dir(bin.path().join("tmp")).unwrap();
+        std::fs::write(&launcher, format!(r#"#!/bin/sh
+set -eu
+bin=${{0%/*}}
+export PATH='{}':/usr/local/bin:/usr/bin:/bin HOME="$bin/client-home" TMPDIR="$bin/tmp"
+export XDG_DATA_HOME="$HOME/.local/share"
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --bind "$HOME" "$HOME" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@"
+"#, uv_path.display().to_string().replace('\'', "'\\''"))).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let session = &fixture.sessions[0];
+        let mut server = local_exec_command(&rustx, &fixture, session.as_str(), &workspace)
+            .env("TEST_KEY", "fixture").env("PATH", "/usr/bin:/bin").spawn().unwrap();
+        let peer = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&peer).await;
+        let target = attach(&peer, session.clone(), 2).await;
+        start_turn(&peer, &target, "call the Client-owned Python package").await;
+        let state = settled(&peer, &target).await;
+        assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("isolated-managed-python-result"), "{}", requests[1]);
+        assert_eq!(std::fs::read(physical.join("managed-calls")).unwrap(), b"echo\n");
+        assert!(!workspace.join("managed-calls").exists());
+        let store = bin.path().join("client-home/.local/share/rustx/environments/python-tools/packages");
+        let [installed] = store.read_dir().unwrap().collect::<Result<Vec<_>, _>>().unwrap().try_into().unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(installed.path().join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["fastmcp"], "4.0.3");
+        assert_eq!(manifest["package"], "echo");
+        assert!(!fixture.root.path().join("home/.local/share/rustx/environments/python-tools").exists());
+        let MethodResult::Deletion { result: SessionDeletionResult::Preview { preview } } =
+            result(&peer, Method::SessionDeletePreview { session_id: session.clone() }).await
+        else { panic!("Session deletion preview is unavailable"); };
+        let deletion = result(&peer, Method::SessionDelete {
+            session_id: session.clone(),
+            expected_target_revision: preview.target_revision,
+        }).await;
+        assert!(matches!(&deletion, MethodResult::Deletion {
+            result: SessionDeletionResult::Deleted { session_id }
+        } if session_id == session), "{deletion:?}");
+        assert!(installed.path().join("source/common.py").is_file());
+        assert_eq!(std::fs::read(physical.join("managed-calls")).unwrap(), b"echo\n");
+        peer.close().await;
+        detach_then_shutdown(&mut server).await;
+        assert!(server.wait().await.unwrap().success());
+        assert!(installed.path().join("source/common.py").is_file());
+    })).await;
+}
+
 #[cfg(feature = "mcp-fixture")]
 async fn http_mcp_output(with_client: bool, over_limit: bool) {
     bounded(Box::pin(async {

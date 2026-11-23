@@ -4797,6 +4797,7 @@ name = "rustx-execution-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chumsky",
  "futures-util",
  "getrandom 0.3.4",
  "globset",
@@ -4805,6 +4806,7 @@ dependencies = [
  "libc",
  "nix",
  "notify",
+ "pep-508",
  "pep440_rs",
  "rmcp",
  "rustix",
@@ -4820,10 +4822,12 @@ dependencies = [
  "sha2 0.10.9",
  "similar 3.2.0",
  "tempfile",
+ "thiserror",
  "tokio",
  "tokio-util",
  "toml_edit 0.22.27",
  "tracing",
+ "uv-normalize",
 ]
 
 [[package]]

@@ -268,7 +268,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v3`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v4`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -698,6 +698,79 @@ impl LocalExecutionEndpoint {
         self.with_bounded_data_connection(deadline, |connection| {
             let relative = workspace_entry(self.workspace(), path)?;
             read(connection, &relative)
+        })
+    }
+
+    pub(crate) fn managed_python_source(
+        &self,
+        request: &rustx_execution_protocol::mcp::PythonSourceRequest,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
+        self.with_bounded_data_connection(deadline, |connection| {
+            connection.python_source_by(request, deadline)
+        })
+    }
+
+    pub(crate) async fn release_managed_python_source(
+        self: Arc<Self>,
+        key: rustx_execution_protocol::process::ProcessOperationKey,
+    ) {
+        use rustx_execution_protocol::{
+            SAME_INSTANCE_RECOVERY_WINDOW,
+            mcp::{PythonSourceReply, PythonSourceRequest},
+            transport::{PAGE_REQUEST_TIMEOUT, recoverable_lane_loss},
+        };
+        let deadline = Instant::now() + SAME_INSTANCE_RECOVERY_WINDOW + PAGE_REQUEST_TIMEOUT;
+        let Ok(_slot) = wait_for_execution_permit(self.data_slots.clone(), deadline).await else {
+            return;
+        };
+        let request = Arc::new(PythonSourceRequest::Release { key });
+        while Instant::now() < deadline {
+            let released = self.connection_released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            let endpoint = self.clone();
+            let request = request.clone();
+            let exchange_cut = deadline.min(Instant::now() + PAGE_REQUEST_TIMEOUT);
+            let result = tokio::task::spawn_blocking(move || {
+                endpoint.with_connection_slot(false, |connection| {
+                    connection.python_source_by(&request, exchange_cut)
+                })
+            })
+            .await;
+            match result {
+                Ok(Ok(PythonSourceReply::Released)) => return,
+                Ok(Err(error))
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || recoverable_lane_loss(&error) =>
+                {
+                    if tokio::time::timeout_at(deadline.into(), released)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        // Revocation retains the last physical cleanup claim if the exact
+        // source could no longer be acknowledged on its original binding.
+    }
+
+    pub(crate) fn prepare_managed_python_source(
+        &self,
+        key: rustx_execution_protocol::process::ProcessOperationKey,
+        deadline: Instant,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
+        let request = rustx_execution_protocol::mcp::PythonSourceRequest::Prepare { key };
+        self.with_bounded_data_connection(deadline, |connection| {
+            connection.python_source_admitted(&request, deadline, || {
+                cancellation
+                    .with_active(|| ())
+                    .ok_or_else(|| io::ErrorKind::Interrupted.into())
+            })
         })
     }
 
@@ -2867,6 +2940,32 @@ impl StandaloneExecution {
             session: self.session.clone(),
             route: ExecutionRoute::Registry(Arc::downgrade(&self.registry)),
         }
+    }
+
+    pub(crate) async fn capture_configuration(
+        &self,
+        manager: super::super::configuration::UserConfigManager,
+        input: super::super::configuration::SessionConfigInput,
+        authored: super::super::configuration::AdmittedSessionConfig,
+    ) -> Result<super::super::configuration::AdmittedSessionConfig, String> {
+        let Some(endpoint) = self
+            .registry
+            .configuration_endpoint(&self.session)
+            .map_err(|error| error.to_string())?
+        else {
+            // The durable fence still permits reopening the canonical view.
+            return Ok(authored);
+        };
+        tokio::task::spawn_blocking(move || {
+            super::super::configuration::application::ApplicationState::initial_bound_session(
+                &manager,
+                &input,
+                &authored.credentials,
+                &endpoint,
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {

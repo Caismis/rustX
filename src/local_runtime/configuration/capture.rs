@@ -20,7 +20,7 @@ use crate::local_runtime::session_runtime_manager::{
 enum ResourceSource<'a> {
     Authored,
     Bound {
-        endpoint: &'a LocalExecutionEndpoint,
+        endpoint: &'a std::sync::Arc<LocalExecutionEndpoint>,
         retained: Option<WorkspaceResourceIdentity>,
     },
 }
@@ -187,7 +187,10 @@ impl UserConfigManager {
         &self,
         input: &SessionConfigInput,
         credentials: &crate::credentials::CredentialSnapshot,
-        workspace: Option<(&LocalExecutionEndpoint, Option<WorkspaceResourceIdentity>)>,
+        workspace: Option<(
+            &std::sync::Arc<LocalExecutionEndpoint>,
+            Option<WorkspaceResourceIdentity>,
+        )>,
     ) -> Result<application::CapturedApplication, String> {
         let mut default = input.clone();
         default.model = None;
@@ -213,11 +216,14 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
-        workspace: Option<(&LocalExecutionEndpoint, Option<WorkspaceResourceIdentity>)>,
+        workspace: Option<(
+            &std::sync::Arc<LocalExecutionEndpoint>,
+            Option<WorkspaceResourceIdentity>,
+        )>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
-            .capture_layers(request, workspace.map(|(endpoint, _)| endpoint))
+            .capture_layers(request, workspace.map(|(endpoint, _)| endpoint.as_ref()))
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -240,7 +246,7 @@ impl UserConfigManager {
                 layers,
                 true,
                 credentials,
-                workspace.map(|(endpoint, _)| endpoint),
+                workspace.map(|(endpoint, _)| endpoint.as_ref()),
                 request.authoring.session_resources.as_ref(),
             )
             .and_then(|capture| {
@@ -818,7 +824,7 @@ impl UserConfigManager {
         }
         let authored_workspace = authored_identity.map(|_| locations.workspace.as_path());
         let bound_definitions = workspace_endpoint
-            .map(BoundDefinitions::capture)
+            .map(|endpoint| BoundDefinitions::capture(endpoint))
             .transpose()
             .map_err(LaunchFailure::resource)?;
         let definitions_workspace =
@@ -962,22 +968,38 @@ impl UserConfigManager {
             &subagents,
             &models,
         ));
-        let native_python = authored_workspace
-            .filter(|_| workspace_endpoint.is_some())
-            .map(|workspace| {
-                let root = workspace.join(".agents");
-                let revision = super::super::resource_directory::native_python_revision(
-                    &root,
-                    &self.resource_io,
-                );
-                (root, revision)
-            });
-        let managed_python = super::super::managed_python_resources::discover_controlled(
-            authored_workspace,
-            &host.home_directory.join("rustx/.agents"),
-            &self.resource_io,
-        )
+        let python_user = host.home_directory.join("rustx/.agents");
+        let managed_python = if let Some(endpoint) = workspace_endpoint {
+            super::super::managed_python_resources::discover_bound(
+                endpoint,
+                &python_user,
+                &self.resource_io,
+            )
+        } else {
+            super::super::managed_python_resources::discover_controlled(
+                authored_workspace,
+                &python_user,
+                &self.resource_io,
+            )
+        }
         .map_err(LaunchFailure::resource)?;
+        if workspace_endpoint.is_some() {
+            let mut manifest = Sha256::new();
+            for (source, outcome) in managed_python.packages() {
+                manifest.update(source.to_string().as_bytes());
+                if let Ok(package) = outcome {
+                    manifest.update(package.source_digest().as_bytes());
+                    manifest.update(
+                        serde_json::to_vec(&(package.permissions(), package.tool_permissions()))
+                            .map_err(|error| error.to_string())?,
+                    );
+                }
+            }
+            revisions.insert(
+                locations.workspace.join(".agents/tools"),
+                format!("sha256:{:x}", manifest.finalize()),
+            );
+        }
         let MetadataAdmission {
             definitions,
             catalog: available_catalog,
@@ -1108,20 +1130,6 @@ impl UserConfigManager {
             definitions.verify().map_err(LaunchFailure::resource)?;
             revisions.extend(definitions.revisions());
         }
-        if let Some((root, expected)) = native_python {
-            let actual =
-                super::super::resource_directory::native_python_revision(&root, &self.resource_io);
-            if !super::super::resource_directory::same_capture(&expected, &actual) {
-                return Err(LaunchFailure::at(
-                    Some(root),
-                    "resources",
-                    "Managed Python source changed during candidate construction",
-                    "rescan after source edits settle",
-                    "candidate discarded".into(),
-                ));
-            }
-            revisions.insert(root, expected);
-        }
         for (root, scope) in
             std::iter::once((host.home_directory.join("rustx/.agents"), SourceScope::User)).chain(
                 authored_workspace
@@ -1165,6 +1173,8 @@ impl UserConfigManager {
             // fenced through their admitted directories by the capture.
             if path == &host.home_directory.join("rustx/.agents")
                 || path == &locations.workspace.join(".agents")
+                || workspace_endpoint.is_some()
+                    && path == &locations.workspace.join(".agents/tools")
                 || path == &host.config_path
                 || path == &locations.workspace.join("rustx.toml")
                 || path == Path::new(super::super::session_inputs::CONFIG_DOCUMENT)
@@ -1391,7 +1401,9 @@ fn read_bound_document(
         .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
 }
 
-fn read_bound_mcp(endpoint: &LocalExecutionEndpoint) -> std::io::Result<Option<Vec<u8>>> {
+pub(in crate::local_runtime) fn read_bound_mcp(
+    endpoint: &LocalExecutionEndpoint,
+) -> std::io::Result<Option<Vec<u8>>> {
     let name = super::super::mcp_resources::WORKSPACE_DOCUMENT;
     endpoint
         .workspace_document(Path::new(name))

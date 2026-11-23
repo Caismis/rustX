@@ -19,6 +19,34 @@ pub(crate) async fn launch_sibling(
     }
 }
 
+fn spawn(
+    sibling: &std::path::Path,
+    endpoint: &LocalExecutionEndpoint,
+) -> Result<tokio::process::Child, String> {
+    // Local deployment contributes its trusted runtime discovery paths.
+    // The Session and model cannot add process environment entries here.
+    let mut command = tokio::process::Command::new(sibling);
+    command
+        .arg("--binding-file")
+        .arg(endpoint.bootstrap_path())
+        .arg("--workspace")
+        .arg(endpoint.workspace())
+        .current_dir("/")
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for key in ["HOME", "PATH", "XDG_DATA_HOME"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("local execution: client spawn failed: {error}"))
+}
+
 async fn start_sibling(
     endpoint: Arc<LocalExecutionEndpoint>,
 ) -> Result<tokio::process::Child, String> {
@@ -38,21 +66,7 @@ async fn start_sibling(
         .map_err(|error| format!("local execution: {error}"))?;
     let listener = tokio::net::UnixListener::from_std(std_listener)
         .map_err(|error| format!("local execution: {error}"))?;
-    // Empty environment, root working directory, sealed stdio: the child
-    // receives only the binding file and the workspace on its command line.
-    let mut child = tokio::process::Command::new(&sibling)
-        .arg("--binding-file")
-        .arg(endpoint.bootstrap_path())
-        .arg("--workspace")
-        .arg(endpoint.workspace())
-        .current_dir("/")
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("local execution: client spawn failed: {error}"))?;
+    let mut child = spawn(&sibling, &endpoint)?;
     // One bounded paired admission: the data lane's `Hello` earns a
     // pairing challenge and `Pending`; the Client's control lane — a
     // second connection carrying `ControlHello` with the challenge

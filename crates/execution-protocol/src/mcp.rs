@@ -16,6 +16,84 @@ pub const MAX_SEND_BYTES: usize = 512 * 1024;
 /// Pending outbound records per session.
 pub const MAX_PENDING_SENDS: usize = 4;
 
+/// The two authored source roots provisioned by the Client's host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PythonSourceScope {
+    /// The deployed Client's user resource collection.
+    User,
+    /// The authenticated Session Workspace's package collection.
+    Workspace,
+}
+
+/// Observe a bounded catalog or capture one package in the Client's view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PythonSourceRequest {
+    /// Only logical names are returned. Package files are never listed here.
+    List { scope: PythonSourceScope },
+    /// Reserve one capture identity before its filesystem worker starts.
+    Capture {
+        key: ProcessOperationKey,
+        scope: PythonSourceScope,
+        name: String,
+    },
+    /// Observe the original capture and its authenticated frozen identifier.
+    State { key: ProcessOperationKey },
+    /// Attach to or start preparation of one retained source identity.
+    Prepare { key: ProcessOperationKey },
+    /// Relinquish a source that no Server candidate or lease still owns.
+    Release { key: ProcessOperationKey },
+}
+
+/// Small metadata for constructing a Server-side resource candidate.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PythonSourceReply {
+    /// Logical package names, sorted, with at most 128 entries per scope.
+    Names(Vec<String>),
+    /// A physically observed source root is structurally invalid.
+    CollectionInvalid,
+    /// One acknowledged snapshot worker is still running.
+    Capturing,
+    /// The stable Client Store still owns the physical preparation.
+    Preparing,
+    /// The Store verified the installed environment for this capture.
+    Prepared,
+    /// The digest identifies captured package bytes. The optional TOML is
+    /// authorization metadata only and is validated by the Server.
+    Captured {
+        digest: String,
+        permissions_base64: Option<String>,
+    },
+    /// Capture was released; the published cache is a separate owner.
+    Released,
+    /// A bounded, typed refusal without paths or authored text.
+    Refused(crate::ReadError),
+}
+
+impl fmt::Debug for PythonSourceReply {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Names(names) => formatter.debug_tuple("Names").field(names).finish(),
+            Self::CollectionInvalid => formatter.write_str("CollectionInvalid"),
+            Self::Capturing => formatter.write_str("Capturing"),
+            Self::Preparing => formatter.write_str("Preparing"),
+            Self::Prepared => formatter.write_str("Prepared"),
+            Self::Captured {
+                digest,
+                permissions_base64,
+            } => formatter
+                .debug_struct("Captured")
+                .field("digest", digest)
+                .field("has_permissions", &permissions_base64.is_some())
+                .finish(),
+            Self::Released => formatter.write_str("Released"),
+            Self::Refused(error) => formatter.debug_tuple("Refused").field(error).finish(),
+        }
+    }
+}
+
 /// Immutable Client-side launch parameters. Cwd is relative to the bound root.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -33,6 +111,9 @@ pub struct Launch {
     /// The authorized legacy handshake version for an external source.
     /// A managed package uses discovery only.
     pub legacy_version: Option<String>,
+    /// Optional exact Client capture. A managed launch supplies no caller
+    /// program, argv, cwd or environment overrides.
+    pub python_source: Option<Box<ProcessOperationKey>>,
 }
 
 impl fmt::Debug for Launch {
@@ -48,6 +129,7 @@ impl fmt::Debug for Launch {
             )
             .field("versions", &self.versions)
             .field("legacy_version", &self.legacy_version)
+            .field("python_source", &self.python_source)
             .finish()
     }
 }

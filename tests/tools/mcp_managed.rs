@@ -710,14 +710,14 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         ],
     );
 
-    let execution = crate::common::session_execution::ExecutionFixture::new(&workspace_root);
+    let execution =
+        crate::common::session_execution::ExecutionFixture::for_managed_python(&workspace_root);
     let bound_root = workspace_root.canonicalize().expect("canonical workspace");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            source_demand: crate::common::source_demand(
-                &workspace_root,
-                ["crasher", "exportless"].map(|name| format!("python:{name}")),
-            ),
+            source_demand: execution
+                .managed_demand(["python:crasher", "python:exportless"])
+                .await,
             conversation_id: ConversationId::new("conv_23577bcd-3dfd-7a47-88a7-5bb137bd7483"),
             workspace: Workspace::for_session(&bound_root, execution.scope.clone())
                 .expect("workspace"),
@@ -769,6 +769,16 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
     ));
     assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
+    assert_eq!(
+        execution
+            .managed_store()
+            .join("packages")
+            .read_dir()
+            .unwrap()
+            .count(),
+        2,
+        "both physical environments exist before their independent stdio failures"
+    );
 }
 
 /// Executes one managed tool through a committed capability snapshot's
@@ -857,12 +867,13 @@ def add(a: int, b: int) -> str:
         &[("server.py", server_v1), ("requirements.txt", "# none\n")],
     );
 
-    let execution = crate::common::session_execution::ExecutionFixture::new(&workspace_root);
+    let execution =
+        crate::common::session_execution::ExecutionFixture::for_managed_python(&workspace_root);
     let bound_root = workspace_root.canonicalize().expect("canonical workspace");
-    let compose = || {
+    let compose = |source_demand| {
         rustx::capabilities::CapabilityCoordinator::new(
             rustx::capabilities::CapabilityCoordinatorConfig {
-                source_demand: crate::common::source_demand(&workspace_root, ["python:calc"]),
+                source_demand,
                 conversation_id: ConversationId::new("conv_c2f567d7-f47b-7cca-8f44-f679764e6ecd"),
                 workspace: Workspace::for_session(&bound_root, execution.scope.clone())
                     .expect("workspace"),
@@ -901,7 +912,7 @@ def add(a: int, b: int) -> str:
         )
         .expect("coordinator")
     };
-    let coordinator = compose();
+    let coordinator = compose(execution.managed_demand(["python:calc"]).await);
     let server_id = python_server_id("calc");
 
     // Commit generation v1 and admit an execution against it.
@@ -939,7 +950,7 @@ def add(a: int, b: int) -> str:
         Arc::ptr_eq(&v1_snapshot, &coordinator.current_snapshot()),
         "disk edits do not publish runtime changes"
     );
-    let coordinator = compose();
+    let coordinator = compose(execution.managed_demand(["python:calc"]).await);
     let candidate_v2 = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
         .await
         .unwrap()
@@ -972,7 +983,7 @@ def add(a: int, b: int) -> str:
 
     // The frozen source copy of generation v1 is byte-identical: filesystem
     // edits never mutate a prepared state.
-    let states = std::fs::read_dir(directory.path().join("skill-env/python-tools/packages"))
+    let states = std::fs::read_dir(execution.managed_store().join("packages"))
         .expect("packages")
         .map(|entry| entry.expect("entry").path())
         .filter(|path| path.join("source/server.py").is_file())
@@ -1195,14 +1206,14 @@ def ping() -> str:
         )])
         .expect("base registry");
 
-    let execution = crate::common::session_execution::ExecutionFixture::new(&workspace_root);
+    let execution =
+        crate::common::session_execution::ExecutionFixture::for_managed_python(&workspace_root);
     let bound_root = workspace_root.canonicalize().expect("canonical workspace");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            source_demand: crate::common::source_demand(
-                &workspace_root,
-                ["conflicting", "healthy"].map(|name| format!("python:{name}")),
-            ),
+            source_demand: execution
+                .managed_demand(["python:conflicting", "python:healthy"])
+                .await,
             conversation_id: ConversationId::new("conv_14bebb23-81a2-7139-846e-ee88c0abad28"),
             workspace: Workspace::for_session(&bound_root, execution.scope.clone())
                 .expect("workspace"),
@@ -1248,6 +1259,19 @@ def ping() -> str:
         rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
     ));
     assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
+    let [healthy] = execution
+        .managed_store()
+        .join("packages")
+        .read_dir()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(healthy.path().join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["package"], "healthy");
 }
 
 /// A registry-composition placeholder: the unrelated native capability of

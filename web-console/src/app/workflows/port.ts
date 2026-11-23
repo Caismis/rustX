@@ -146,14 +146,16 @@ const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 
  * received: a later authority change marks its reread unobserved but never
  * erases the commit. Results that would come from a replacement authority
  * are refused. */
-export function createWorkflowPort({ client, host, hostAuthority, scope, expectedWorkspaceDirectory }: {
+export function createWorkflowPort({ client, host, hostAuthority, scope, expectedWorkspaceDirectory, executionSession }: {
   client: AppServerClient;
   host: () => ProductHostWorkspaces | undefined;
   /** The Product Host authority current at creation, if one is observed. */
   hostAuthority: WorkspaceAuthorityObservation | undefined;
   scope: WorkflowScope;
   expectedWorkspaceDirectory?: string;
+  executionSession?: { id: string; cwd: string };
 }): WorkflowScopePort {
+  const catalogSession = executionSession && { id: executionSession.id, cwd: executionSession.cwd };
   // The native authority is the `initialize` identity already observed;
   // it is never filled in later from another connection.
   const { endpoint = '', authorityRevision, authorityId: native } = client.getSnapshot();
@@ -199,7 +201,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
-      toolCatalog: (source, cursor, expected_scope) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor, expected_scope, expected_directory: expectedWorkspaceDirectory })).catalog),
+      toolCatalog: (source, cursor, expected_scope) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor, expected_scope, expected_directory: expectedWorkspaceDirectory, execution_session: catalogSession })).catalog),
       analyze: (id, document, generation, query, owns) => read(async () => {
         if (owns && !owns()) throw new Error('Workflow analysis request superseded');
         return (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query }, owns)).report;
@@ -223,7 +225,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
     read: id => read(() => readWorkflowSource(client, request, target, id)),
     modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
-    toolCatalog: (source, cursor, expected_scope) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor, expected_scope } }, 'workflow_tool_catalog')).catalog),
+    toolCatalog: (source, cursor, expected_scope) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor, expected_scope, execution_session: executionSession?.id } }, 'workflow_tool_catalog')).catalog),
     analyze: (id, document, generation, query, owns) => read(async () => {
       const { report } = await withWorkflowDocument(client, request, target, document, reference => client.request({ method: 'workflow/analyze', params: { target, id, document: reference, generation, query } }, 'workflow_analysis'), owns);
       if (!analysisMatches(report, target, id, generation, query)) throw new Error('Mismatched Workflow analysis target or query');

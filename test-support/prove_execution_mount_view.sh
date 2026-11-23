@@ -80,6 +80,9 @@ cargo test -p rustx --all-features --locked \
 cargo test -p rustx --all-features --locked \
     --test process app_server::stdio_mcp_session_runs_and_publishes_from_the_client_mount_view \
     -- --exact --ignored --nocapture
+cargo test -p rustx --all-features --locked \
+    --test process app_server::managed_python_prepares_and_runs_in_the_bound_client_mount \
+    -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
     tools::background::tests::background_live_output_is_readable_while_running_and_reused_at_settlement \
     -- --exact --nocapture

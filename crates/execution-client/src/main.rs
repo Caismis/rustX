@@ -58,6 +58,7 @@ use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
 mod bash_capture;
 mod changes;
+mod managed_python;
 mod mcp;
 mod mutation;
 mod process;
@@ -233,6 +234,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::AgentBash,
             Capability::ManagedOutput,
             Capability::StdioMcp,
+            Capability::ManagedPython,
         ]),
         credential: bootstrap.credential,
     };
@@ -359,7 +361,12 @@ fn serve_session(
             .spawn_scoped(scope, move || saves::Saves::maintain(registry, &retired));
         let result = match maintenance {
             Ok(_) => {
-                let mut state = DataState::default();
+                let mut state = DataState {
+                    mcp: mcp::Sessions::default(),
+                    python: managed_python::Catalog::new(&admission.workspace),
+                    changes: changes::Changes::default(),
+                    next_ticket: None,
+                };
                 loop {
                     let arbitration = Arc::new(mutation::Arbitration::new());
                     let shutdown = pair
@@ -374,6 +381,7 @@ fn serve_session(
                         operations.clone(),
                         watches.clone(),
                         saves.clone(),
+                        state.python.cleanup(),
                     );
                     let outcome = serve(
                         &mut pair.data,
@@ -574,6 +582,25 @@ impl Drop for LaneFence {
 /// final poll. When no request is outstanding the worker paces the next
 /// poll by a bounded period — the lane never busy-spins, and every
 /// frame runs under an absolute deadline.
+fn settle_revocation(
+    arbitration: &mutation::Arbitration,
+    operations: &process::Operations,
+    watches: &watch::Watches,
+    saves: &std::sync::Arc<std::sync::Mutex<saves::Saves>>,
+    python: &managed_python::SourceCleanup,
+) -> bool {
+    // Leave time in the Server's command budget for the physical receipt.
+    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    arbitration.revoke();
+    operations.revoke();
+    let watches_settled = watches.shutdown();
+    let remaining = cutoff.saturating_duration_since(std::time::Instant::now());
+    let processes_settled = operations.finish_revocation(remaining);
+    let python_settled = python.close();
+    let saves_settled = saves::Saves::close_by(saves, cutoff);
+    watches_settled && processes_settled.is_ok() && python_settled && saves_settled
+}
+
 fn client_control_worker(
     mut channel: RecordChannel,
     arbitration: std::sync::Arc<mutation::Arbitration>,
@@ -581,11 +608,8 @@ fn client_control_worker(
     operations: std::sync::Arc<process::Operations>,
     watches: std::sync::Arc<watch::Watches>,
     saves: std::sync::Arc<std::sync::Mutex<saves::Saves>>,
+    python: managed_python::SourceCleanup,
 ) -> ClientControlWorker {
-    /// Physical process containment the worker awaits before `Revoked`
-    /// is delivered — inside the Server's 5-second command budget so
-    /// the receipt is the honest settlement, not a hope.
-    const REVOKE_SETTLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
     let worker_arbitration = arbitration.clone();
     let join = std::thread::Builder::new()
         .name("execution-control".to_owned())
@@ -647,18 +671,13 @@ fn client_control_worker(
                         disposition: worker_arbitration.cancel(ticket),
                     },
                     ControlRequest::Revoke => {
-                        let cutoff = std::time::Instant::now() + REVOKE_SETTLE_BUDGET;
-                        worker_arbitration.revoke();
-                        // `Revoked` is only honest once the process
-                        // operations were signalled and their physical
-                        // containment actually settled — bounded so the
-                        // Server's own revoke budget still fences.
-                        operations.revoke();
-                        let watches_settled = watches.shutdown();
-                        let remaining = cutoff.saturating_duration_since(std::time::Instant::now());
-                        let processes_settled = operations.finish_revocation(remaining);
-                        let saves_settled = saves::Saves::close_by(&saves, cutoff);
-                        if !watches_settled || !saves_settled || processes_settled.is_err() {
+                        if !settle_revocation(
+                            &worker_arbitration,
+                            &operations,
+                            &watches,
+                            &saves,
+                            &python,
+                        ) {
                             return ControlEnd::Revoked;
                         }
                         ControlReply::Revoked
@@ -823,9 +842,9 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
         .ok_or_else(|| String::from("untrusted admission"))
 }
 
-#[derive(Default)]
 struct DataState {
     mcp: mcp::Sessions,
+    python: managed_python::Catalog,
     changes: changes::Changes,
     next_ticket: Option<u64>,
 }
@@ -933,7 +952,16 @@ fn serve_requests(
                 }
             }
             ClientRequest::Mcp(request) => {
-                ClientReply::Mcp(state.mcp.exchange(request, operations))
+                ClientReply::Mcp(state.mcp.exchange(request, operations, &state.python))
+            }
+            ClientRequest::PythonSource(request) => {
+                ClientReply::PythonSource(if arbitration.is_revoked() {
+                    rustx_execution_protocol::mcp::PythonSourceReply::Refused(
+                        ReadError::Unavailable,
+                    )
+                } else {
+                    state.python.exchange(request, operations)
+                })
             }
             ClientRequest::Save(request) => ClientReply::Save(if arbitration.is_revoked() {
                 rustx_execution_protocol::save::SaveReply::Refused {

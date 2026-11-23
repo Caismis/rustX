@@ -24,6 +24,7 @@ use crate::tools::mcp::McpServerRuntime;
 use crate::tools::mcp::{
     McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet, McpServerBindings,
 };
+#[cfg(test)]
 use crate::tools::python::PythonToolStore;
 use crate::tools::workspace::Workspace;
 
@@ -184,6 +185,7 @@ struct CoordinatorInner {
     ///
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
+    #[cfg(test)]
     python_store: Mutex<Option<PythonToolStore>>,
     /// Closed Plugin Tool registrations backed by this conversation's domain owners.
     /// The owner-backed registration set is stable. Each candidate's resolved
@@ -746,6 +748,7 @@ impl CapabilityCoordinator {
                 ),
                 initial_mcp: Mutex::new(preparation),
                 python_store_root,
+                #[cfg(test)]
                 python_store: Mutex::new(None),
                 extension_tools,
                 state: Mutex::new(CoordinatorState {
@@ -1506,30 +1509,10 @@ impl CapabilityCoordinator {
                 .map(|entry| (entry.server_id, Err(entry.outcome.unwrap_err().to_string())))
                 .collect();
         }
-        let store = match self.python_store() {
-            Ok(store) => store,
-            Err(error) => {
-                // The store is shared preparation infrastructure: its
-                // failure rejects every discovered package with the same
-                // diagnostic, but nothing else.
-                let reason = error.to_string();
-                return discovered
-                    .into_iter()
-                    .map(|entry| {
-                        let outcome = match entry.outcome {
-                            Ok(_) => Err(reason.clone()),
-                            Err(error) => Err(error.to_string()),
-                        };
-                        (entry.server_id, outcome)
-                    })
-                    .collect();
-            }
-        };
         let cancellation = cancellation.unwrap_or(&self.inner.preparation_cancellation);
         self.inner
             .mcp_owner
             .prepare_sources(discovered, cancellation, |entry| {
-                let store = &store;
                 let prepared = &prepared;
                 async move {
                     let outcome = match entry.outcome {
@@ -1537,11 +1520,21 @@ impl CapabilityCoordinator {
                         Ok(_) if cancellation.is_cancelled() => {
                             Err("Python package preparation cancelled".to_owned())
                         }
-                        Ok(package) => store
-                            .ensure_prepared(&package, &self.inner.preparation_cancellation.child())
-                            .await
-                            .map(|prepared| prepared.server_binding())
-                            .map_err(|error| error.to_string()),
+                        Ok(package) => {
+                            if let Some(binding) = package.prepare_on_client(cancellation).await {
+                                binding
+                            } else {
+                                #[cfg(test)]
+                                {
+                                    match self.python_store() {
+                                        Ok(store) => store.ensure_prepared(&package, &self.inner.preparation_cancellation.child()).await.map(|prepared| prepared.server_binding()).map_err(|error| error.to_string()),
+                                        Err(error) => Err(error.to_string()),
+                                    }
+                                }
+                                #[cfg(not(test))]
+                                Err(String::from("Managed Python requires a frozen source from the admitted Execution Client"))
+                            }
+                        }
                     };
                     let outcome = match outcome {
                         Ok(_) if cancellation.is_cancelled() => {
@@ -1578,6 +1571,7 @@ impl CapabilityCoordinator {
     /// environment build coalescing. The mutex is never held across
     /// `.await`: construction is a bounded synchronous `create_dir_all`
     /// sequence.
+    #[cfg(test)]
     fn python_store(&self) -> Result<PythonToolStore, crate::tools::python::PythonToolError> {
         let mut slot = self
             .inner
@@ -4872,6 +4866,9 @@ mod mcp_race_tests {
             }
             other @ McpTransportConfig::StreamableHttp { .. } => {
                 panic!("the fixture binding is stdio: {other:?}")
+            }
+            McpTransportConfig::ManagedPython { .. } => {
+                unreachable!("configured fixture has no managed source")
             }
         };
     }

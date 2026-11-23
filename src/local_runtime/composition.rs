@@ -490,10 +490,6 @@ impl LocalConversationCore {
             })?
             .admit(|| paths.credentials.clone())
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        startup
-            .bind_policy(current.config.mcp_startup_policy)
-            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        let registry = load_model_registry(&current, dependencies)?;
         let database = catalog.database_path(&session_id, &node.conversation_id);
         let allocation = database
             .parent()
@@ -506,6 +502,15 @@ impl LocalConversationCore {
         )
         .await
         .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let (current, registry) = prepare_standalone_configuration(
+            &execution,
+            manager,
+            intent.input(),
+            current,
+            dependencies,
+            &startup,
+        )
+        .await?;
         let composed = Self::compose_from_config_started(
             &current,
             dependencies,
@@ -1094,6 +1099,33 @@ impl LocalConversationCore {
         self.runtime.activate();
         HeadlessConversationRuntime { core: self }
     }
+}
+
+async fn prepare_standalone_configuration(
+    execution: &super::session_runtime_manager::StandaloneExecution,
+    manager: super::configuration::UserConfigManager,
+    input: super::configuration::SessionConfigInput,
+    authored: AdmittedSessionConfig,
+    dependencies: &LocalRuntimeDependencies,
+    startup: &McpInitialSubmission,
+) -> Result<(AdmittedSessionConfig, ModelBindingRegistry), LocalRuntimeError> {
+    let prepared = execution
+        .capture_configuration(manager, input, authored)
+        .await
+        .map_err(|detail| LocalRuntimeError::Capability { detail })
+        .and_then(|current| {
+            startup
+                .bind_policy(current.config.mcp_startup_policy)
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+            let registry = load_model_registry(&current, dependencies)?;
+            Ok((current, registry))
+        });
+    if prepared.is_err()
+        && let Err(settlement) = execution.shutdown().await
+    {
+        tracing::warn!(%settlement, "execution settlement after configuration refusal");
+    }
+    prepared
 }
 
 /// Loads the current model catalog and constructs its resolved binding

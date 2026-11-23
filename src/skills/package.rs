@@ -482,6 +482,17 @@ fn merge_candidates(
     }
 }
 
+fn invalid_collection(
+    root: &AutomaticSkillRoot,
+    reason: impl std::fmt::Display,
+) -> SkillDiagnostic {
+    SkillDiagnostic::SourceRootInvalid {
+        source: root.source,
+        root: root.root.display().to_string(),
+        detail: reason.to_string(),
+    }
+}
+
 fn collect_automatic_source(
     root: &AutomaticSkillRoot,
     diagnostics: &mut Vec<SkillDiagnostic>,
@@ -500,10 +511,13 @@ fn collect_automatic_source(
             });
             return Ok(Vec::new());
         }
-        Ok(Some(_)) => Err(io::Error::new(
-            io::ErrorKind::NotADirectory,
-            "Skill collection is not a directory",
-        )),
+        Ok(Some(_)) => {
+            diagnostics.push(invalid_collection(
+                root,
+                "Skill collection is not a directory",
+            ));
+            return Ok(Vec::new());
+        }
         Err(error) => Err(error),
     }
     .map(|directory| super::discovery::collect_from(&directory, cancellation, tree));
@@ -517,11 +531,7 @@ fn collect_automatic_source(
             if bound {
                 return Err(error);
             }
-            diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-                source,
-                root: root.root.display().to_string(),
-                detail: error.to_string(),
-            });
+            diagnostics.push(invalid_collection(root, error));
             return Ok(Vec::new());
         }
     };

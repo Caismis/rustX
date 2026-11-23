@@ -179,7 +179,7 @@ impl SessionRuntimeManager {
             &self.credentials,
             endpoint
                 .as_ref()
-                .map(|endpoint| (endpoint.as_ref(), native_resources)),
+                .map(|endpoint| (endpoint, native_resources)),
         );
         if endpoint
             .as_ref()

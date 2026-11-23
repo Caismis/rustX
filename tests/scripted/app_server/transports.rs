@@ -167,31 +167,44 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
     target
 }
 
-pub(crate) async fn cached_python_catalog_disconnect_scenario() {
+pub(crate) async fn cached_python_catalog_disconnect_scenario(uv: std::path::PathBuf) {
     use futures_util::FutureExt as _;
     use tokio::io::AsyncWriteExt as _;
     Box::pin(bounded(async {
-        let fixture = Fixture::with_session_count(None, 0).await;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let sandbox = tempfile::tempdir().unwrap();
+        let socket_path = sandbox.path().join("gate.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        let launcher = managed_catalog_gate(sandbox.path(), &socket_path, &uv);
+        let mut execution = fixture.start_execution_via(0, Some(&launcher)).await;
+        let session = fixture.sessions[0].id.clone();
         let package = fixture.workspaces[0].join(".agents/tools/demo");
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(package.join("requirements.txt"), "").unwrap();
         std::fs::write(package.join("server.py"), "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n@mcp.tool\ndef hello() -> str:\n    return 'hello'\nif __name__ == '__main__':\n    mcp.run()\n").unwrap();
         let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() };
-        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some("python:demo".into()), None, None).await.unwrap();
-        assert!(!catalog.sources[0].tools.is_empty(), "warm the real prepared environment: {catalog:?}");
-        let packages = fixture.manager.configuration.sources.runtime_root.join("environments/python-tools/packages");
-        let states: Vec<_> = std::fs::read_dir(packages).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.is_dir()).collect();
-        assert_eq!(states.len(), 1);
-        let (entered, release) = crate::tools::python::gate_cached_verification_for_test(states[0].clone());
+        let scope = fixture.manager.execution_scope(&session);
+        let endpoint = scope.endpoint().unwrap();
+        let user = sandbox.path().join("rustx/.agents");
+        let frozen = tokio::task::spawn_blocking(move || crate::local_runtime::managed_python_resources::discover_bound(
+            &endpoint, &user, &crate::runtime::CancellationSignal::new(),
+        )).await.unwrap().unwrap();
+        let (_, package) = frozen.packages().iter().next().unwrap();
+        package.as_ref().unwrap().prepare_on_client(&crate::runtime::CancellationSignal::new()).await.unwrap().unwrap();
+        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some(session.clone()), Some("python:demo".into()), None, None).await.unwrap();
+        assert_eq!(catalog.sources[0].tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["hello"]);
+        let installed = sandbox.path().join(".local/share/rustx/environments/python-tools/packages");
+        assert_eq!(std::fs::read_dir(&installed).unwrap().count(), 1);
+        std::fs::write(sandbox.path().join("arm"), b"one uv probe").unwrap();
         let listings = crate::local_runtime::workflow_tools::listings_for_test();
         let _other_listings = listings.acquire_many(3).await.unwrap();
         let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
         super::protocol::initialize(&connection).await;
         let (mut input, reader) = tokio::io::duplex(65_536);
         let serving = tokio::spawn(stdio::serve(connection.clone(), reader, tokio::io::sink(), CancellationToken::new()));
-        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(713), call: Method::WorkflowToolCatalog { target, source: Some("python:demo".into()), cursor: None, expected_scope: None } };
+        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(713), call: Method::WorkflowToolCatalog { target, execution_session: Some(session), source: Some("python:demo".into()), cursor: None, expected_scope: None } };
         input.write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes()).await.unwrap();
-        entered.await.unwrap();
+        let (mut parked_probe, _) = listener.accept().await.unwrap();
         let mut operations = fixture.host.request_operations();
         assert_eq!(*operations.borrow(), 1);
         assert_eq!(listings.available_permits(), 0);
@@ -203,12 +216,81 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario() {
         let draining = fixture.host.drain();
         tokio::pin!(draining);
         assert!(draining.as_mut().now_or_never().is_none());
-        release.send(()).unwrap();
+        parked_probe.write_all(b"release").await.unwrap();
         operations.wait_for(|count| *count == 0).await.unwrap();
         assert_eq!(listings.available_permits(), 1);
         assert_eq!(draining.await, [] as [std::string::String; 0]);
+        assert!(execution.wait().await.unwrap().success());
+        assert_eq!(std::fs::read_dir(installed).unwrap().count(), 1);
         fixture.close().await;
     })).await;
+}
+
+fn managed_catalog_gate(
+    root: &std::path::Path,
+    socket: &std::path::Path,
+    uv: &std::path::Path,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let python = std::process::Command::new(uv)
+        .args(["python", "find"])
+        .output()
+        .unwrap();
+    assert!(python.status.success());
+    let python = std::str::from_utf8(&python.stdout).unwrap().trim();
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"));
+    let gate = root.join("gate.py");
+    std::fs::write(
+        &gate,
+        r"import os, socket, sys
+try:
+    os.unlink(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(0)
+with socket.socket(socket.AF_UNIX) as peer:
+    peer.connect(sys.argv[2])
+    assert peer.makefile('rb').read(7) == b'release'
+",
+    )
+    .unwrap();
+    let wrapper = root.join("uv");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = --version ]; then {} {} {} {}; fi\nexec {} \"$@\"\n",
+            quote(std::path::Path::new(python)),
+            quote(&gate),
+            quote(&root.join("arm")),
+            quote(socket),
+            quote(uv)
+        ),
+    )
+    .unwrap();
+    let launcher = root.join("client");
+    let binary = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    let original_path = std::env::var_os("PATH").unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(root.to_path_buf()).chain(std::env::split_paths(&original_path)),
+    )
+    .unwrap();
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexport HOME={} PATH={}\nexec {} \"$@\"\n",
+            quote(root),
+            quote(std::path::Path::new(&path)),
+            quote(&binary)
+        ),
+    )
+    .unwrap();
+    for path in [&wrapper, &launcher] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    launcher
 }
 
 #[tokio::test]
@@ -240,6 +322,7 @@ async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting()
         super::protocol::initialize(&connection).await;
         let method = |source, expected_scope| Method::WorkflowToolCatalog {
             target: target.clone(),
+            execution_session: None,
             source,
             expected_scope,
             cursor: None,

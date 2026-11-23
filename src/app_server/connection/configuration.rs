@@ -338,14 +338,27 @@ impl AppServerConnection {
             }
             Method::WorkflowToolCatalog {
                 target,
+                execution_session,
                 source,
                 cursor,
                 expected_scope,
             } => {
+                if let Some(session) = &execution_session {
+                    self.sessions
+                        .read_session_summary(session)
+                        .await
+                        .map_err(session_error)?;
+                }
                 let catalog = self
                     .host
                     .manager()
-                    .workflow_tool_catalog(target, source, cursor, expected_scope)
+                    .workflow_tool_catalog(
+                        target,
+                        execution_session,
+                        source,
+                        cursor,
+                        expected_scope,
+                    )
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::WorkflowToolCatalog { catalog })

@@ -37,7 +37,7 @@ export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
-  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null; expected_scope?: SourceScope | null; expected_directory?: string }
+  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null; expected_scope?: SourceScope | null; expected_directory?: string; execution_session?: { id: string; cwd: string } }
   | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
   | { kind: 'check'; id: string; document: WorkflowFileDocument }

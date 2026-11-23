@@ -231,48 +231,62 @@ pub(super) async fn execute(
                 results.push(result);
                 continue;
             };
-            let prepare_store = || {
-                let product =
-                    crate::runtime::local_storage::ProductRoot::create(&launch.runtime_root)
-                        .map_err(|error| error.to_string())?;
-                let path = product
-                    .confined(&product.root().join("environments/python-tools"))
-                    .map_err(|error| error.to_string())?;
-                crate::tools::python::PythonToolStore::new(path).map_err(|error| error.to_string())
-            };
-            #[cfg(test)]
-            let store = plan
-                .hooks
-                .python_store
-                .clone()
-                .map_or_else(prepare_store, Ok);
-            #[cfg(not(test))]
-            let store = prepare_store();
-            let Ok(store) = store else {
-                result.state = ProbeState::Failed;
-                result.reason = "managed environment store could not be opened";
-                results.push(result);
-                continue;
-            };
-            let owned = cancellation.child();
-            let step = store.ensure_prepared(package, &owned);
-            let (state, prepared) =
-                await_owned(step, &owned, tokio::time::sleep_until(deadline)).await;
-            result.state = state;
-            let prepared = if state == ProbeState::Unresolved {
-                prepared.ok()
+            if let Some(binding) = package.client_binding() {
+                binding
             } else {
-                None
-            };
-            let Some(prepared) = prepared else {
-                if result.state == ProbeState::Unresolved {
-                    result.state = ProbeState::Failed;
+                #[cfg(not(test))]
+                {
+                    result.state = ProbeState::Unavailable;
+                    result.reason =
+                        "Managed Python preparation requires an admitted Session Execution Client";
+                    results.push(result);
+                    continue;
                 }
-                result.reason = "managed preparation did not complete; owner settled";
-                results.push(result);
-                continue;
-            };
-            prepared.server_binding()
+                #[cfg(test)]
+                {
+                    let prepare_store = || {
+                        let product = crate::runtime::local_storage::ProductRoot::create(
+                            &launch.runtime_root,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let path = product
+                            .confined(&product.root().join("environments/python-tools"))
+                            .map_err(|error| error.to_string())?;
+                        crate::tools::python::PythonToolStore::new(path)
+                            .map_err(|error| error.to_string())
+                    };
+                    let store = plan
+                        .hooks
+                        .python_store
+                        .clone()
+                        .map_or_else(prepare_store, Ok);
+                    let Ok(store) = store else {
+                        result.state = ProbeState::Failed;
+                        result.reason = "managed environment store could not be opened";
+                        results.push(result);
+                        continue;
+                    };
+                    let owned = cancellation.child();
+                    let step = store.ensure_prepared(package, &owned);
+                    let (state, prepared) =
+                        await_owned(step, &owned, tokio::time::sleep_until(deadline)).await;
+                    result.state = state;
+                    let prepared = if state == ProbeState::Unresolved {
+                        prepared.ok()
+                    } else {
+                        None
+                    };
+                    let Some(prepared) = prepared else {
+                        if result.state == ProbeState::Unresolved {
+                            result.state = ProbeState::Failed;
+                        }
+                        result.reason = "managed preparation did not complete; owner settled";
+                        results.push(result);
+                        continue;
+                    };
+                    prepared.server_binding()
+                }
+            }
         } else {
             let Ok(mut bindings) =
                 super::composition::captured_mcp_bindings(&launch.config, &credentials)

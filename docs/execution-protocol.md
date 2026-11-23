@@ -66,7 +66,7 @@ and directory-page readers —
 The implemented Client supports authenticated local and WebSocket binding,
 bounded file queries and tree mutations, conditional writes and edits,
 supervised processes, workspace observation, file watches, Workspace
-Python, managed output and stdio MCP. The authenticated Hello advertises the
+Python, managed output, stdio MCP and Managed Python. The authenticated Hello advertises the
 individual services that this Client implements. The Server checks the
 specific capability before dispatch.
 
@@ -111,9 +111,11 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client opens a pair with a revision 3 Hello. Revision 3 retains
+The Client opens a pair with a revision 4 Hello. It retains
 `physical_settlement_proven` in terminal process snapshots and requires the
-same-instance recovery handshake after a transport loss. Older revisions
+same-instance recovery handshake after a transport loss. Managed Python
+source capture and generic stdio launch carry exact binding identity in
+this revision. Older revisions
 are rejected during bootstrap or Hello, before execution admission:
 
 ```rust
@@ -412,7 +414,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v3` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v4` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -466,7 +468,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v3]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v4]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1339,6 +1341,47 @@ envelope.
   Data exchanges share the endpoint's finite permits and absolute deadline.
   Malformed or lost replies retire the pair when framing or ownership
   becomes uncertain.
+
+### Managed Python sources and stdio
+
+Execution revision 4 adds a typed `PythonSource` data exchange and an
+optional exact source key on the existing stdio MCP launch. Revision 3
+peers are rejected before paired admission or business dispatch. The
+Server can list logical names, capture an authored package, observe and
+prepare its frozen identity, and release that capture. Package contents,
+interpreter paths, uv output and the Store stay on Client. The capture
+reply returns only a content digest and bounded authorization TOML. Missing
+collections, observed invalid shapes and transport failures remain distinct.
+
+Each capture key includes the original Session binding identity. The Client
+allows at most 128 names per authored scope, 256 retained capture identities,
+four capture workers and four preparation workers per binding. A capture is
+limited to 512 MiB and the binding to 1 GiB of frozen inputs. A stdio launch
+can name a prepared identity and its negotiation versions. An exact managed
+launch supplies no caller program, cwd, environment or argv. The Client runs
+FastMCP in the bound Workspace cwd with its own prepared venv and sealed
+source path. The same stdio connection and cleanup protocol handles the
+process. A delegated child receives a source key for the parent's frozen
+launch and its authorized tool names. The parent relay owns the physical
+stdio session and validates the child launch bytes.
+
+The Client environment Store is under its trusted `XDG_DATA_HOME` or
+`HOME/.local/share` and disjoint from the Workspace and Client scratch. Its
+fingerprint includes package identity, selected relative paths and exact
+bytes, Client Python and uv path/version, pinned FastMCP and OS/architecture.
+Permissions stay attached to the current candidate and outside the fingerprint.
+The Store verifies the manifest, source bytes and launch interpreter before
+reuse. Within one Client, overlapping builds of one fingerprint attach to
+a stable coordinator. Independent Clients share only the on-disk result and
+publish with an exclusive rename under the cancellation grant. Losing
+staging directories are owned by the preparing Client. Published environments
+outlive Session deletion. Revocation waits for the actual physical workers,
+source cleanup and stdio settlement before confirming the binding.
+
+Workflow tool catalogs can name the exact admitted Session for physical
+listing. A Workspace catalog checks its authored target against that Session's
+authorized logical Workspace before reading declarations or listing tools.
+The authoring catalog can still show inert names without a binding.
 
 ### Root, Subagent and Workflow dispatch
 

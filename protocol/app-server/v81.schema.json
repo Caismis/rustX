@@ -31749,6 +31749,7 @@
       ]
     },
     "WorkflowToolSourceKind": {
+      "description": "Preparing a Python environment may install its requirements first.",
       "type": "string",
       "enum": [
         "mcp",
@@ -31764,6 +31765,7 @@
             "listed",
             "invalid",
             "preparation_failed",
+            "execution_unavailable",
             "connection_failed",
             "list_failed",
             "timed_out",
@@ -40475,6 +40477,17 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "description": "Exact Session authorized to list executable Client sources.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "source": {
                   "type": [

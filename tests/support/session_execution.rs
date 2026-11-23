@@ -31,7 +31,7 @@ use rustx::local_runtime::configuration::{
 use rustx::local_runtime::session::SessionPersistentState;
 use rustx::local_runtime::session_controller::SessionController;
 use rustx::local_runtime::session_runtime_manager::{
-    RuntimeResidencyPolicy, SessionExecutionScope, SessionRuntimeManager,
+    LocalExecutionEndpoint, RuntimeResidencyPolicy, SessionExecutionScope, SessionRuntimeManager,
 };
 use rustx::runtime::identity::SessionId;
 use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
@@ -62,16 +62,18 @@ pub struct ExecutionFixture {
     /// The non-owning Session execution route tests bind into a
     /// `Workspace` or a `ConversationRuntimeConfig`.
     pub scope: SessionExecutionScope,
+    #[allow(dead_code)] // Managed Python integration tests use the exact bound source owner.
+    endpoint: std::sync::Arc<LocalExecutionEndpoint>,
     /// The admitted Execution Client child, wrapped in its kill/reap
     /// guard from the moment `spawn` returns so a mid-setup panic can
     /// never leave a running Client behind.
-    _child: ChildGuard,
+    child: ChildGuard,
     /// The owning manager: dropping it unclaims the endpoint claim, which
     /// is also why the scope's `Weak` never outlives the rig.
-    _manager: SessionRuntimeManager,
+    manager: SessionRuntimeManager,
     /// The private runtime/home root the controller and manager state
     /// live under, declared last so handles drop first.
-    _temporary: tempfile::TempDir,
+    temporary: tempfile::TempDir,
     _mount_parent: Option<MountParent>,
 }
 
@@ -127,7 +129,7 @@ impl ExecutionFixture {
         let setup = std::thread::Builder::new().name("execution-fixture".to_owned());
         let Some(physical) = physical.map(Path::to_path_buf) else {
             return setup
-                .spawn(move || Self::setup(&workspace, None, None))
+                .spawn(move || Self::setup(&workspace, None, None, false))
                 .expect("execution fixture setup thread")
                 .join()
                 .expect("execution fixture setup panicked");
@@ -137,7 +139,7 @@ impl ExecutionFixture {
         let thread = setup
             .spawn(move || {
                 if ready
-                    .send(Self::setup(&workspace, Some(&physical), None))
+                    .send(Self::setup(&workspace, Some(&physical), None, false))
                     .is_ok()
                 {
                     let _ = release.recv();
@@ -164,10 +166,69 @@ impl ExecutionFixture {
         let workspace = workspace.canonicalize().expect("fixture workspace root");
         std::thread::Builder::new()
             .name("execution-fixture".to_owned())
-            .spawn(move || Self::setup(&workspace, None, Some((controller, session))))
+            .spawn(move || Self::setup(&workspace, None, Some((controller, session)), false))
             .expect("execution fixture setup thread")
             .join()
             .expect("execution fixture setup panicked")
+    }
+
+    /// Provision a private deployment home for a real Python Store and uv.
+    #[allow(dead_code)] // used by the tools integration harness
+    pub fn for_managed_python(workspace: &Path) -> Self {
+        let workspace = workspace.canonicalize().expect("fixture workspace root");
+        std::thread::spawn(move || Self::setup(&workspace, None, None, true))
+            .join()
+            .unwrap()
+    }
+
+    #[allow(dead_code)] // used by the tools integration harness
+    pub async fn managed_demand(
+        &self,
+        sources: impl IntoIterator<Item = impl Into<String>>,
+    ) -> rustx::capabilities::source::ToolSourceDemand {
+        let endpoint = self.endpoint.clone();
+        let user = self.temporary.path().join("home/rustx/.agents");
+        let catalog = tokio::task::spawn_blocking(move || {
+            rustx::local_runtime::managed_python_resources::discover_bound(
+                &endpoint,
+                &user,
+                &rustx::runtime::CancellationSignal::new(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        rustx::capabilities::source::ToolSourceDemand::new(
+            sources
+                .into_iter()
+                .map(|source| rustx::capabilities::ToolSourceId::try_from(source.into()).unwrap()),
+            catalog,
+        )
+    }
+
+    #[allow(dead_code)] // used by the tools integration harness
+    pub fn managed_store(&self) -> PathBuf {
+        self.temporary
+            .path()
+            .join("home/.local/share/rustx/environments/python-tools")
+    }
+
+    #[allow(dead_code)] // used by the native Managed Python boundary suites
+    pub async fn settle(mut self) {
+        let host = rustx::app_server::host::AppServerHost::new(
+            self.manager.clone(),
+            rustx::local_runtime::app_server_policy::AppServerPolicy::default(),
+        );
+        let failures = host.drain().await;
+        assert!(failures.is_empty(), "Client settlement: {failures:?}");
+        let status = tokio::task::spawn_blocking(move || self.child.0.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            status.success(),
+            "Client exits cleanly after drain: {status}"
+        );
     }
 
     /// The async setup, run on a dedicated current-thread runtime so the
@@ -176,6 +237,7 @@ impl ExecutionFixture {
         workspace: &Path,
         physical: Option<&Path>,
         session: Option<(SessionController, SessionId)>,
+        prepare_python: bool,
     ) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -236,8 +298,12 @@ impl ExecutionFixture {
             } else {
                 Command::new(staged_client())
             };
+            command.env_clear();
+            if prepare_python {
+                command.env("HOME", &home).env("PATH", std::env::var_os("PATH").unwrap_or_default());
+            }
             let mut child = ChildGuard(
-                command.env_clear()
+                command
                     .current_dir("/")
                     .arg("--binding-file")
                     .arg(endpoint.bootstrap_path())
@@ -300,9 +366,10 @@ impl ExecutionFixture {
             let scope = manager.execution_scope(&session);
             Self {
                 scope,
-                _child: child,
-                _manager: manager,
-                _temporary: temporary,
+                endpoint,
+                child,
+                manager,
+                temporary,
                 _mount_parent: None,
             }
         })

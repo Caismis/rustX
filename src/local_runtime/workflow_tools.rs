@@ -9,7 +9,8 @@ use super::configuration::{
     settings::{SettingsError, SourceTarget},
 };
 use super::probes::{PROBE_TIMEOUT, ProbeState, await_owned};
-use super::session_runtime_manager::SessionRuntimeManager;
+use super::session::SessionId;
+use super::session_runtime_manager::{SessionExecutionScope, SessionRuntimeManager};
 use crate::runtime::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::runtime::resources::SourceScope;
@@ -17,7 +18,6 @@ use crate::runtime::workflow::{WorkflowToolChoice, WorkflowToolResult};
 use crate::tools::mcp::{McpInvalidationState, McpServerBinding, McpServerRuntime, OwnedConnect};
 use crate::tools::workspace::Workspace;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Sources connected at once, across requests.
@@ -28,7 +28,6 @@ pub(crate) fn listings_for_test() -> &'static tokio::sync::Semaphore {
     &LISTINGS
 }
 /// Preparing a Python environment may install its requirements first.
-const PREPARE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -50,6 +49,7 @@ pub enum WorkflowToolSourceState {
     Listed,
     Invalid,
     PreparationFailed,
+    ExecutionUnavailable,
     ConnectionFailed,
     ListFailed,
     TimedOut,
@@ -185,6 +185,7 @@ impl SessionRuntimeManager {
     pub(crate) async fn workflow_tool_catalog(
         &self,
         target: SourceTarget,
+        execution_session: Option<SessionId>,
         source: Option<String>,
         cursor: Option<WorkflowToolCatalogCursor>,
         expected_scope: Option<SourceScope>,
@@ -193,8 +194,11 @@ impl SessionRuntimeManager {
             return Err(SettingsError::Invalid);
         }
         let owner = self.configuration.clone();
-        let (plans, workspace, runtime_root) =
-            tokio::task::spawn_blocking(move || capture(&owner, &target))
+        let scope = execution_session
+            .as_ref()
+            .map(|id| self.execution_scope(id));
+        let (plans, workspace) =
+            tokio::task::spawn_blocking(move || capture(&owner, &target, scope))
                 .await
                 .map_err(|_| SettingsError::Io)??;
         let Some(source) = source else {
@@ -226,13 +230,7 @@ impl SessionRuntimeManager {
             .filter(|plan| expected_scope.is_none_or(|scope| plan.scope == scope))
             .ok_or(SettingsError::Invalid)?;
         let _permit = LISTINGS.acquire().await.map_err(|_| SettingsError::Io)?;
-        let mut listed = list(
-            plan,
-            &workspace,
-            &runtime_root,
-            &self.configuration.resource_io,
-        )
-        .await;
+        let mut listed = list(plan, &workspace, &self.configuration.resource_io).await;
         listed
             .tools
             .sort_by(|left, right| left.name.cmp(&right.name));
@@ -252,11 +250,32 @@ impl SessionRuntimeManager {
 fn capture(
     owner: &UserConfigManager,
     target: &SourceTarget,
-) -> Result<(Vec<Plan>, Workspace, PathBuf), SettingsError> {
-    target.validate()?;
+    scope: Option<SessionExecutionScope>,
+) -> Result<(Vec<Plan>, Workspace), SettingsError> {
+    let endpoint = scope
+        .as_ref()
+        .map(SessionExecutionScope::endpoint)
+        .transpose()
+        .map_err(|_| SettingsError::Io)?;
     let user_root = owner.resource_root(&SourceTarget::User);
     let directory = target.workspace();
-    let mcp = super::mcp_resources::load(&user_root, directory);
+    if let Some(endpoint) = &endpoint {
+        if directory.is_some_and(|directory| directory != endpoint.workspace()) {
+            return Err(SettingsError::Invalid);
+        }
+    } else {
+        target.validate()?;
+    }
+    let mcp = match &endpoint {
+        Some(endpoint) => super::mcp_resources::load_with_workspace(&user_root, directory, |_| {
+            super::configuration::capture::read_bound_mcp(endpoint).map_err(|_| {
+                crate::runtime_client::types::RuntimeClientError::InvalidRequest {
+                    message: "Client MCP source is unavailable".into(),
+                }
+            })
+        }),
+        None => super::mcp_resources::load(&user_root, directory),
+    };
     let credentials = crate::credentials::CredentialSnapshot::capture();
     let scope_of = |location: Option<&crate::runtime::resources::ResourceLocation>| {
         location.map_or(SourceScope::User, |location| location.scope)
@@ -281,31 +300,41 @@ fn capture(
             }),
         });
     }
-    if let Ok(python) = super::managed_python_resources::discover_controlled(
-        directory,
-        &user_root,
-        &owner.resource_io,
-    ) {
-        for (source, package) in python.packages() {
-            plans.push(Plan {
-                source_id: source.to_string(),
-                kind: WorkflowToolSourceKind::Python,
-                scope: scope_of(python.locations.get(source)),
-                connect: package.as_ref().map_or(Connect::Invalid, |package| {
-                    Connect::Python(Box::new(package.clone()))
-                }),
-            });
-        }
+    let python = match &endpoint {
+        Some(endpoint) => super::managed_python_resources::discover_bound_for(
+            endpoint,
+            &user_root,
+            directory.is_some(),
+            &owner.resource_io,
+        ),
+        None => super::managed_python_resources::discover_controlled(
+            directory,
+            &user_root,
+            &owner.resource_io,
+        ),
     }
-    let workspace = Workspace::new(directory.unwrap_or(&owner.sources.home_directory))
-        .map_err(|_| SettingsError::Invalid)?;
-    Ok((plans, workspace, owner.sources.runtime_root.clone()))
+    .map_err(|_| SettingsError::Io)?;
+    for (source, package) in python.packages() {
+        plans.push(Plan {
+            source_id: source.to_string(),
+            kind: WorkflowToolSourceKind::Python,
+            scope: scope_of(python.locations.get(source)),
+            connect: package.as_ref().map_or(Connect::Invalid, |package| {
+                Connect::Python(Box::new(package.clone()))
+            }),
+        });
+    }
+    let workspace = match (endpoint, scope) {
+        (Some(endpoint), Some(scope)) => Workspace::for_session(endpoint.workspace(), scope),
+        _ => Workspace::new(directory.unwrap_or(&owner.sources.home_directory)),
+    }
+    .map_err(|_| SettingsError::Invalid)?;
+    Ok((plans, workspace))
 }
 
 async fn list(
     plan: Plan,
     workspace: &Workspace,
-    runtime_root: &std::path::Path,
     cancellation: &CancellationSignal,
 ) -> WorkflowToolSource {
     let state = |state| WorkflowToolSource {
@@ -315,27 +344,39 @@ async fn list(
         state,
         tools: Vec::new(),
     };
+    let owned = cancellation.child();
+    let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
     let binding = match plan.connect {
         Connect::Invalid => return state(WorkflowToolSourceState::Invalid),
         Connect::Mcp(binding) => *binding,
-        Connect::Python(ref package) => {
-            let Ok(store) = python_store(runtime_root) else {
-                return state(WorkflowToolSourceState::PreparationFailed);
-            };
-            let owned = cancellation.child();
-            let deadline = tokio::time::sleep(PREPARE_TIMEOUT);
-            match await_owned(store.ensure_prepared(package, &owned), &owned, deadline).await {
-                (ProbeState::Unresolved, Ok(prepared)) => prepared.server_binding(),
-                (ProbeState::TimedOut, _) => return state(WorkflowToolSourceState::TimedOut),
-                (ProbeState::Cancelled, _) => return state(WorkflowToolSourceState::Cancelled),
-                _ => return state(WorkflowToolSourceState::PreparationFailed),
+        Connect::Python(package) => {
+            if workspace.execution_scope().is_none() {
+                return state(WorkflowToolSourceState::ExecutionUnavailable);
+            }
+            let preparing = package.prepare_on_client(&owned);
+            let (status, prepared) = Box::pin(await_owned(
+                async {
+                    preparing
+                        .await
+                        .unwrap_or_else(|| Err("Client source is unavailable".into()))
+                },
+                &owned,
+                tokio::time::sleep_until(deadline),
+            ))
+            .await;
+            match prepared {
+                Ok(binding) => binding,
+                Err(_) => {
+                    return state(match status {
+                        ProbeState::TimedOut => WorkflowToolSourceState::TimedOut,
+                        ProbeState::Cancelled => WorkflowToolSourceState::Cancelled,
+                        _ => WorkflowToolSourceState::PreparationFailed,
+                    });
+                }
             }
         }
     };
-    // A package's synthesized server identity is its `python:<package>` ID.
     let id = McpServerId::new(&plan.source_id);
-    let owned = cancellation.child();
-    let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
     let connect = McpServerRuntime::connect_owned(OwnedConnect::new(
         &id,
         &binding,
@@ -380,18 +421,6 @@ async fn list(
         Ok(_) => state(WorkflowToolSourceState::ConnectionFailed),
         Err(failed) => state(failed),
     }
-}
-
-/// The same environment store live Sessions prepare packages in.
-fn python_store(
-    runtime_root: &std::path::Path,
-) -> Result<crate::tools::python::PythonToolStore, String> {
-    let product = crate::runtime::local_storage::ProductRoot::create(runtime_root)
-        .map_err(|error| error.to_string())?;
-    let path = product
-        .confined(&product.root().join("environments/python-tools"))
-        .map_err(|error| error.to_string())?;
-    crate::tools::python::PythonToolStore::new(path).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

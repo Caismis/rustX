@@ -170,6 +170,8 @@ pub struct CapturedProcessResult {
     pub exit_code: Option<i32>,
     /// The outcome intent owning the settlement.
     pub intent: ProcessOutcomeIntent,
+    /// Terminal physical ownership proof from the exact runner.
+    pub physical_settlement_proven: bool,
     /// The bounded captured stdout bytes.
     pub stdout: Vec<u8>,
     /// The bounded captured stderr bytes.
@@ -1736,6 +1738,7 @@ pub async fn run_supervised_command(
     Ok(CapturedProcessResult {
         exit_code,
         intent: termination.intent,
+        physical_settlement_proven: termination.physical_settlement_proven,
         stdout,
         stderr,
     })
@@ -1776,6 +1779,7 @@ pub async fn run_supervised_program(
     Ok(CapturedProcessResult {
         exit_code,
         intent: termination.intent,
+        physical_settlement_proven: termination.physical_settlement_proven,
         stdout,
         stderr,
     })

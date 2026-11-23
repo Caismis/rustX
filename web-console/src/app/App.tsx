@@ -111,8 +111,16 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   // edits survive leaving the route, and never follow conversation focus.
   // Each port binds the App Server and Product Host authorities current when
   // it is created; transactions keep their port, so they are never retargeted.
-  const workflows = useActorRef(workflowSurfaceMachine, { input: { ports: scope => createWorkflowPort({ client, host: () => workspaceHost, hostAuthority: workspaceAuthority.capture(), scope }) } });
+  const shellForCatalogs = useRef<ShellNavigationActor | undefined>(undefined);
+  const workflows = useActorRef(workflowSurfaceMachine, { input: { ports: scope => {
+    const shell = shellForCatalogs.current;
+    const sessionId = shell && navigationSession(shell);
+    const snapshot = client.getSnapshot();
+    const executionSession = sessionId ? (snapshot.views[sessionId]?.summary ?? snapshot.sessions.find(session => session.id === sessionId)) : undefined;
+    return createWorkflowPort({ client, host: () => workspaceHost, hostAuthority: workspaceAuthority.capture(), scope, executionSession });
+  } } });
   const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, host: workspaceHost, workspaces: workspaceAuthority, workflows, route: savedRoute?.kind === 'session' && !client.isAttachmentControlCurrent(savedRoute.sessionId, client.getSnapshot().views[savedRoute.sessionId]?.attachmentObservation) ? undefined : savedRoute } });
+  shellForCatalogs.current = navigation;
   return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements} workflows={workflows}/>;
 }
 /** The Session a gesture or startup open is acquiring. Recent-view release must not detach it. */
@@ -436,7 +444,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     </OverlayScope>
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} host={workspaceHost} authority={workspaceAuthority} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
-    {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
+    {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace} executionSession={activeSummary}/></OverlayScope>)}
     <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${agentCss.root}`} data-phase={activeSessionId ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={activeSessionId ? 'session-title' : undefined} aria-label={activeSessionId ? undefined : tx('agent:conversation-header.product-title')}>
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} sessionId={activeSessionId} summary={activeSummary} view={view} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}

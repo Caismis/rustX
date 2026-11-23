@@ -1,4 +1,4 @@
-//! Single wire definition for the rustX execution protocol (v2).
+//! Single wire definition for the rustX execution protocol (v4).
 //!
 //! The execution protocol is the physical environment/output channel between
 //! the Agent Server (package `rustx`) and the physical Execution Client
@@ -28,10 +28,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v3";
+pub const EXECUTION_PATH: &str = "/execution/v4";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -478,6 +478,8 @@ pub enum Capability {
     Python,
     /// Client-hosted stdio MCP sessions.
     StdioMcp,
+    /// Frozen Managed Python resources and Client-local Store preparation.
+    ManagedPython,
     /// Bounded byte-chunk content transfer and upload staging.
     ContentTransfer,
     /// Client-owned managed output: private allocation, unpublished
@@ -1069,6 +1071,8 @@ pub enum ClientRequest {
     Process(crate::process::ProcessRequest),
     /// One operation on a Client-owned stdio MCP session.
     Mcp(crate::mcp::Request),
+    /// Observe and retain a frozen Managed Python source in the Client view.
+    PythonSource(crate::mcp::PythonSourceRequest),
     /// Read lines of a Client-owned Bash continuation.
     ReadBashOutput {
         /// The operation under the current binding.
@@ -1383,6 +1387,8 @@ pub enum ClientReply {
     Process(crate::process::ProcessReply),
     /// A reply from the Client-owned stdio MCP session.
     Mcp(crate::mcp::Response),
+    /// Result of a bounded Managed Python source request.
+    PythonSource(crate::mcp::PythonSourceReply),
     /// The reply to a `Save` request.
     Save(crate::save::SaveReply),
     /// The verified range the Client physically read.
@@ -1674,7 +1680,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v3` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v4` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

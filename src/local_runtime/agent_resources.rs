@@ -34,7 +34,7 @@ fn candidates(
 ) -> Result<BTreeMap<SubagentName, PathBuf>, RuntimeResourceLoadError> {
     let mut result = BTreeMap::new();
     let paths = match bound {
-        Some(bound) => bound.files(root),
+        Some(bound) => bound.files(root)?,
         None => super::resource_directory::files(boundary, root, "toml")?,
     };
     for path in paths {

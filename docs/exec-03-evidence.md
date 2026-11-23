@@ -177,9 +177,8 @@ its User document and resolves the effective credentials before connection.
 The Client owns stdio supervision and negotiates the peer's protocol. The
 Server uses the original admission data and resumes the SDK request sequence,
 then sends and receives through the bound data lane. The protocol ADR records
-the memory and transport bounds. Managed Python preparations, delegated
-stdio composition through the full child Agent Loop, and wider optional
-startup acceptance remain open. The delegated relay itself now assigns a
+the memory and transport bounds. Managed Python uses the same framed stdio
+owner with an exact Client capture key. The delegated relay assigns a
 separate physical identity, admits only frozen launches and authorized tool
 names, and retains physical responsibility through Client close or binding
 settlement.
@@ -302,6 +301,27 @@ oversized JSON case peaked at 185,724 KiB in App Server, required one remote
 call and completed in 2.146 s with zero Client launches. These are individual
 debug fixture observations. The HTTP service and provider run in the
 separate fixture process. Startup, VCS and SQLite state are included.
+
+## Shared Session routing and foreground Managed MCP
+
+`a_real_child_executes_native_tools_in_the_frozen_nested_workspace` mounts an
+independent Client Workspace with authored Agent and Workflow files absent
+from the Server view. Root Read and Workflow Read observe distinct Client
+markers. The delegated child writes, edits, reads and executes Bash through
+the same Session's binding. The fake provider observes four initial Root
+requests, five child requests and exactly one typed child-completion handoff
+on Root. The Workflow adds no model request. All four child tool results
+reach the provider in the original order. The test closes the real Client
+through normal process drain.
+
+`a_real_managed_fastmcp_task_completes_through_one_tool_result` and
+`a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction` now
+exercise the admitted Client's venv and physical stdio connection. The Task
+case observes `2026-07-28`, exact one execution marker and one terminal tool
+result. The MRTR case observes two physical call rounds and one Interaction
+request/settlement pair, with the exact human answer in the final result.
+Both use the native close path and await a clean Client exit. The other
+resource and cancellation combinations remain individually mapped below.
 
 ## Local Linux verification
 

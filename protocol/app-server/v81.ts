@@ -1376,6 +1376,10 @@ export type Request1 =
       method: 'workflow/toolCatalog';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session authorized to list executable Client sources.
+         */
+        execution_session?: SessionId | null;
         source?: string | null;
         cursor?: WorkflowToolCatalogCursor | null;
         expected_scope?: SourceScope | null;
@@ -6838,6 +6842,8 @@ export type WorkflowModelChoices =
       type: 'profiles';
     };
 /**
+ * Preparing a Python environment may install its requirements first.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowToolSourceKind".
  */
@@ -6853,6 +6859,7 @@ export type WorkflowToolSourceState =
       | 'listed'
       | 'invalid'
       | 'preparation_failed'
+      | 'execution_unavailable'
       | 'connection_failed'
       | 'list_failed'
       | 'timed_out'

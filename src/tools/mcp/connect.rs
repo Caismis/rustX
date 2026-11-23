@@ -195,6 +195,36 @@ impl McpServerRuntime {
         let mut request_ownership: Option<Arc<streamable_http::McpHttpRequestOwnership>> = None;
         let mut remote_stdio = None;
         let (service, process) = match &binding.transport {
+            McpTransportConfig::Stdio { .. } | McpTransportConfig::ManagedPython { .. }
+                if workspace.execution_scope().is_some() =>
+            {
+                let scope = workspace
+                    .execution_scope()
+                    .expect("checked execution scope");
+                let launch = super::stdio::launch_spec(binding, server_id, workspace.root())?
+                    .expect("matched stdio transport");
+                let (owner, transport, admission) = super::stdio::Session::open(
+                    scope,
+                    workspace.root(),
+                    launch,
+                    &cancellation,
+                    protocol_violation.clone(),
+                )
+                .await?;
+                let transport = dispatch::ObservingTransport::new(
+                    transport,
+                    Arc::new(dispatch::McpDispatchSeam::new(
+                        Arc::clone(&handler.progress),
+                        None,
+                    )),
+                );
+                let service =
+                    rmcp::service::serve_admitted_client(handler.clone(), transport, admission);
+                disable_sdk_response_cache(service.peer()).await;
+                remote_stdio = Some(owner);
+                (service, None)
+            }
+            McpTransportConfig::ManagedPython { .. } => return Err(stdio_requires_binding()),
             McpTransportConfig::Stdio {
                 program,
                 args,
@@ -206,154 +236,129 @@ impl McpServerRuntime {
                         "stdio program must be non-empty".to_owned(),
                     ));
                 }
-                if let Some(scope) = workspace.execution_scope() {
-                    let launch = super::stdio::launch_spec(binding, server_id, workspace.root())?
-                        .expect("matched stdio transport");
-                    let (owner, transport, admission) = super::stdio::Session::open(
-                        scope,
-                        workspace.root(),
-                        launch,
-                        &cancellation,
-                        protocol_violation.clone(),
+                if !fixture_stdio {
+                    return Err(stdio_requires_binding());
+                }
+                let mut explicit_environment =
+                    vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
+                explicit_environment.extend(
+                    environment
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+                explicit_environment.extend(
+                    credentials
+                        .environment
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.expose().to_owned())),
+                );
+                let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
+                let process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
+                    program: PathBuf::from(program),
+                    args: args.clone(),
+                    cwd,
+                    environment: explicit_environment,
+                })
+                .map_err(McpError::Discovery)?;
+                let process = Arc::new(tokio::sync::Mutex::new(process));
+                // Physical process ownership now exists and the handshake has
+                // not started. This is the exact window in which a dropped
+                // caller future used to leave a detached physical owner with
+                // no retained runtime behind it.
+                #[cfg(test)]
+                if let Some(pause) = &ownership_pause {
+                    pause.record_process(process.lock().await.supervisor_child_pid());
+                    pause.park().await;
+                }
+                let stdout = {
+                    let mut process_guard = process.lock().await;
+                    process_guard.stdout.take()
+                };
+                let Some(stdout) = stdout else {
+                    return Err(settle_connect_failure(
+                        &binding.credentials,
+                        Some(&process),
+                        McpError::Discovery("stdio stdout unavailable".to_owned()),
                     )
-                    .await?;
-                    let transport = dispatch::ObservingTransport::new(
-                        transport,
-                        Arc::new(dispatch::McpDispatchSeam::new(
-                            Arc::clone(&handler.progress),
-                            None,
-                        )),
-                    );
-                    let service =
-                        rmcp::service::serve_admitted_client(handler.clone(), transport, admission);
-                    disable_sdk_response_cache(service.peer()).await;
-                    remote_stdio = Some(owner);
-                    (service, None)
-                } else {
-                    if !fixture_stdio {
-                        return Err(stdio_requires_binding());
-                    }
-                    let mut explicit_environment =
-                        vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
-                    explicit_environment.extend(
-                        environment
-                            .iter()
-                            .map(|(key, value)| (key.clone(), value.clone())),
-                    );
-                    explicit_environment.extend(
-                        credentials
-                            .environment
-                            .iter()
-                            .map(|(key, value)| (key.clone(), value.expose().to_owned())),
-                    );
-                    let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
-                    let process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
-                        program: PathBuf::from(program),
-                        args: args.clone(),
-                        cwd,
-                        environment: explicit_environment,
-                    })
-                    .map_err(McpError::Discovery)?;
-                    let process = Arc::new(tokio::sync::Mutex::new(process));
-                    // Physical process ownership now exists and the handshake has
-                    // not started. This is the exact window in which a dropped
-                    // caller future used to leave a detached physical owner with
-                    // no retained runtime behind it.
-                    #[cfg(test)]
-                    if let Some(pause) = &ownership_pause {
-                        pause.record_process(process.lock().await.supervisor_child_pid());
-                        pause.park().await;
-                    }
-                    let stdout = {
-                        let mut process_guard = process.lock().await;
-                        process_guard.stdout.take()
-                    };
-                    let Some(stdout) = stdout else {
-                        return Err(settle_connect_failure(
-                            &binding.credentials,
-                            Some(&process),
-                            McpError::Discovery("stdio stdout unavailable".to_owned()),
-                        )
-                        .await);
-                    };
-                    let stdin = {
-                        let mut process_guard = process.lock().await;
-                        process_guard.stdin.take()
-                    };
-                    let Some(stdin) = stdin else {
-                        return Err(settle_connect_failure(
-                            &binding.credentials,
-                            Some(&process),
-                            McpError::Discovery("stdio stdin unavailable".to_owned()),
-                        )
-                        .await);
-                    };
-                    let transport = rmcp::transport::async_rw::AsyncRwTransport::new_client(
-                        // The observation tee: rmcp remains the one
-                        // framing/protocol authority over exactly these
-                        // bytes; the tee only records a confirmed
-                        // structurally invalid message and then ends the
-                        // stream, so the violation becomes a rustX fact.
-                        framing::ViolationObservingReader::new(stdout, protocol_violation.clone()),
-                        stdin,
-                    );
-                    // The outbound ownership seam. Stdio owns no per-request
-                    // local half, so the seam here carries only the progress
-                    // token linearization: a request's token becomes known
-                    // before the request can reach the server.
-                    let transport = dispatch::ObservingTransport::new(
-                        transport,
-                        Arc::new(dispatch::McpDispatchSeam::new(
-                            Arc::clone(&handler.progress),
-                            None,
-                        )),
-                    );
-                    // A handshake failure explicitly awaits the same physical
-                    // settlement proof as normal runtime drain. Dropping the
-                    // process handle would only request shutdown and would leave
-                    // this preparation operation unable to prove terminality.
-                    // The handshake races the ownership cancellation. Cancelling
-                    // drops the handshake future but never the process: the owner
-                    // still awaits the same physical settlement proof drain uses.
-                    let started = tokio::select! {
-                        biased;
-                        () = cancellation.cancelled() => Err(McpError::Discovery(
-                            "MCP connection cancelled during the handshake".to_owned(),
-                        )),
-                        started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id), &binding.credentials) => started,
-                    };
-                    let service = match started {
-                        Ok(service) => {
-                            // Fail closed: a structurally invalid peer message
-                            // during the handshake fails the connection even if
-                            // rmcp's own peer-facing recovery let the handshake
-                            // complete — the violation is a rustX fact, never
-                            // peer-only traffic.
-                            if let Some(violation) = protocol_violation.violation() {
-                                return Err(settle_connect_failure(
-                                    &binding.credentials,
-                                    Some(&process),
-                                    protocol_violation_error(server_id, &violation),
-                                )
-                                .await);
-                            }
-                            service
-                        }
-                        Err(error) => {
-                            let error = match protocol_violation.violation() {
-                                Some(violation) => protocol_violation_error(server_id, &violation),
-                                None => error,
-                            };
+                    .await);
+                };
+                let stdin = {
+                    let mut process_guard = process.lock().await;
+                    process_guard.stdin.take()
+                };
+                let Some(stdin) = stdin else {
+                    return Err(settle_connect_failure(
+                        &binding.credentials,
+                        Some(&process),
+                        McpError::Discovery("stdio stdin unavailable".to_owned()),
+                    )
+                    .await);
+                };
+                let transport = rmcp::transport::async_rw::AsyncRwTransport::new_client(
+                    // The observation tee: rmcp remains the one
+                    // framing/protocol authority over exactly these
+                    // bytes; the tee only records a confirmed
+                    // structurally invalid message and then ends the
+                    // stream, so the violation becomes a rustX fact.
+                    framing::ViolationObservingReader::new(stdout, protocol_violation.clone()),
+                    stdin,
+                );
+                // The outbound ownership seam. Stdio owns no per-request
+                // local half, so the seam here carries only the progress
+                // token linearization: a request's token becomes known
+                // before the request can reach the server.
+                let transport = dispatch::ObservingTransport::new(
+                    transport,
+                    Arc::new(dispatch::McpDispatchSeam::new(
+                        Arc::clone(&handler.progress),
+                        None,
+                    )),
+                );
+                // A handshake failure explicitly awaits the same physical
+                // settlement proof as normal runtime drain. Dropping the
+                // process handle would only request shutdown and would leave
+                // this preparation operation unable to prove terminality.
+                // The handshake races the ownership cancellation. Cancelling
+                // drops the handshake future but never the process: the owner
+                // still awaits the same physical settlement proof drain uses.
+                let started = tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => Err(McpError::Discovery(
+                        "MCP connection cancelled during the handshake".to_owned(),
+                    )),
+                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id), &binding.credentials) => started,
+                };
+                let service = match started {
+                    Ok(service) => {
+                        // Fail closed: a structurally invalid peer message
+                        // during the handshake fails the connection even if
+                        // rmcp's own peer-facing recovery let the handshake
+                        // complete — the violation is a rustX fact, never
+                        // peer-only traffic.
+                        if let Some(violation) = protocol_violation.violation() {
                             return Err(settle_connect_failure(
                                 &binding.credentials,
                                 Some(&process),
-                                error,
+                                protocol_violation_error(server_id, &violation),
                             )
                             .await);
                         }
-                    };
-                    (service, Some(process))
-                }
+                        service
+                    }
+                    Err(error) => {
+                        let error = match protocol_violation.violation() {
+                            Some(violation) => protocol_violation_error(server_id, &violation),
+                            None => error,
+                        };
+                        return Err(settle_connect_failure(
+                            &binding.credentials,
+                            Some(&process),
+                            error,
+                        )
+                        .await);
+                    }
+                };
+                (service, Some(process))
             }
             McpTransportConfig::StreamableHttp { endpoint, headers } => {
                 if endpoint.trim().is_empty() {

@@ -767,6 +767,45 @@ impl LocalConnection {
     ///
     /// Missing capability, a pre-dispatch refusal, lost connection or
     /// contradictory operation identity.
+    pub fn python_source_by(
+        &mut self,
+        request: &rustx_execution_protocol::mcp::PythonSourceRequest,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
+        self.python_source_admitted(request, deadline, || Ok(()))
+    }
+
+    /// Dispatches a Python source exchange after the caller's dispatch grant.
+    ///
+    /// # Errors
+    /// Returns grant, transport, correlation and capability failures.
+    pub fn python_source_admitted(
+        &mut self,
+        request: &rustx_execution_protocol::mcp::PythonSourceRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
+        if !self.supports(Capability::ManagedPython) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        match self.exchange_admitted(
+            &ClientRequest::PythonSource(request.clone()),
+            Some(deadline),
+            admit,
+            || (),
+        )? {
+            ClientReply::PythonSource(reply) => Ok(reply),
+            _ => Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid Python source reply",
+            ))),
+        }
+    }
+
+    /// One typed exchange on the admitted Client's stdio MCP session.
+    ///
+    /// # Errors
+    /// Returns a physical refusal, transport failure, or expired deadline.
     pub fn mcp_by(
         &mut self,
         request: rustx_execution_protocol::mcp::Request,

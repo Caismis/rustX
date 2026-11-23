@@ -309,6 +309,11 @@ pub enum McpTransportConfig {
         /// Explicit child environment.
         environment: BTreeMap<String, String>,
     },
+    /// A synthesized Managed Python connection rooted in an exact Client capture.
+    ManagedPython {
+        /// Frozen source identity of the original Session and generation.
+        source: ManagedPythonSource,
+    },
     /// A stateless Streamable HTTP endpoint with explicit headers.
     StreamableHttp {
         /// Endpoint URL.
@@ -317,6 +322,32 @@ pub enum McpTransportConfig {
         headers: BTreeMap<String, String>,
     },
 }
+
+/// A frozen Client capture. Only its admitted key crosses the child boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedPythonSource {
+    key: rustx_execution_protocol::process::ProcessOperationKey,
+    #[serde(skip)]
+    _owner: Option<std::sync::Arc<crate::tools::python::ClientSource>>,
+}
+
+impl ManagedPythonSource {
+    pub(crate) fn retain(source: std::sync::Arc<crate::tools::python::ClientSource>) -> Self {
+        Self {
+            key: source.key.clone(),
+            _owner: Some(source),
+        }
+    }
+}
+
+impl PartialEq for ManagedPythonSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for ManagedPythonSource {}
 
 impl std::fmt::Debug for McpTransportConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -332,6 +363,10 @@ impl std::fmt::Debug for McpTransportConfig {
                 .field("arg_count", &args.len())
                 .field("cwd", cwd)
                 .field("environment_keys", &environment.keys().collect::<Vec<_>>())
+                .finish(),
+            Self::ManagedPython { source } => formatter
+                .debug_tuple("ManagedPython")
+                .field(source)
                 .finish(),
             Self::StreamableHttp { endpoint, headers } => formatter
                 .debug_struct("StreamableHttp")
@@ -385,7 +420,7 @@ impl McpServerBinding {
                         .map(|value| crate::model::catalog::ResolvedCredential::new(value.clone())),
                 );
             }
-            McpTransportConfig::Stdio { .. } => (),
+            McpTransportConfig::Stdio { .. } | McpTransportConfig::ManagedPython { .. } => (),
             McpTransportConfig::StreamableHttp { headers, .. } => {
                 let mut header = |name: &str, value: &str| {
                     values.push(crate::model::catalog::ResolvedCredential::new(value));

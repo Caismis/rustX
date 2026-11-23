@@ -421,7 +421,9 @@ impl ApplicationState {
         configuration: &super::UserConfigManager,
         input: &super::SessionConfigInput,
         credentials: &crate::credentials::CredentialSnapshot,
-        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        endpoint: &std::sync::Arc<
+            crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        >,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let capture = configuration
             .capture_session_application(input, credentials, Some((endpoint, None)))?

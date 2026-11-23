@@ -104,6 +104,7 @@ fn resource_only_child_profile_digest_excludes_physical_binding_and_tool_schedul
     type BindingMutation = fn(&mut McpServerBinding);
     let mutations: [(&str, BindingMutation); 3] = [
         ("transport", |binding| match &mut binding.transport {
+            McpTransportConfig::ManagedPython { .. } => unreachable!("configured fixture"),
             McpTransportConfig::StreamableHttp { endpoint, .. } => {
                 *endpoint = "https://relocated.invalid/resources".into();
             }
