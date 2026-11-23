@@ -52,6 +52,8 @@ pub use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 
 mod binding;
 mod bootstrap;
+mod recovery;
+pub use recovery::RecoveryFence;
 mod connection;
 mod control;
 #[cfg(test)]

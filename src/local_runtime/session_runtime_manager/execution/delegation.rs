@@ -86,6 +86,7 @@ impl ChildExecutionGrant {
             admission: std::sync::OnceLock::from(self.admission),
             managed_output: std::sync::OnceLock::from(false),
             stdio_mcp: std::sync::OnceLock::from(stdio_mcp),
+            recovery_fence: None,
             workspace: workspace.to_path_buf(),
         };
         Ok(SessionExecutionScope {

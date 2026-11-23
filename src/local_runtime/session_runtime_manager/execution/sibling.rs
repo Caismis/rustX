@@ -8,6 +8,20 @@ use std::sync::Arc;
 pub(crate) async fn launch_sibling(
     endpoint: Arc<LocalExecutionEndpoint>,
 ) -> Result<tokio::process::Child, String> {
+    match start_sibling(endpoint.clone()).await {
+        Ok(child) => Ok(child),
+        Err(error) => match endpoint.settle().await {
+            Ok(()) => Err(error),
+            Err(settlement) => Err(format!(
+                "{error}; local execution settlement is unconfirmed: {settlement}"
+            )),
+        },
+    }
+}
+
+async fn start_sibling(
+    endpoint: Arc<LocalExecutionEndpoint>,
+) -> Result<tokio::process::Child, String> {
     // Trusted resolution only: the executable shipped beside this Server.
     let sibling = rustx_process_supervisor::invocation::companion_binary("rustx-execution-client");
     if !sibling.is_file() {

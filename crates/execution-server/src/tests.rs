@@ -3806,3 +3806,44 @@ fn a_lost_control_lane_detaches_the_pair_and_blocks_new_dispatch() {
     assert!(connection.ping().is_err() || binding.control().is_none());
     drop(connection);
 }
+
+#[test]
+fn recovery_marker_requires_the_exact_settled_binding_owner() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (original, _) = Binding::reserve(reservation()).unwrap();
+    let fence = original.retain_recovery_fence(&root).unwrap();
+    assert!(original.release_recovery_fence(&fence).is_err());
+
+    let (impostor, _) = Binding::reserve(reservation()).unwrap();
+    impostor.settle_revocation_by(Instant::now()).unwrap();
+    assert!(impostor.release_recovery_fence(&fence).is_err());
+    assert_eq!(
+        impostor.retain_recovery_fence(&root).err().unwrap().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+
+    original.settle_revocation_by(Instant::now()).unwrap();
+    original.release_recovery_fence(&fence).unwrap();
+    assert!(impostor.retain_recovery_fence(&root).is_ok());
+}
+
+#[test]
+fn lost_live_binding_does_not_release_its_durable_recovery_marker() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (original, credential) = Binding::reserve(reservation()).unwrap();
+    let fence = original.retain_recovery_fence(&root).unwrap();
+    original
+        .connect(&valid_hello(&credential), ConnectionId::new("original"))
+        .unwrap();
+    assert!(original.settle_revocation_by(Instant::now()).is_err());
+    original.revoke();
+    assert!(original.release_recovery_fence(&fence).is_err());
+    drop((original, fence));
+    let (new, _) = Binding::reserve(reservation()).unwrap();
+    assert_eq!(
+        new.retain_recovery_fence(&root).err().unwrap().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+}

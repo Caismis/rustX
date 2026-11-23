@@ -5088,3 +5088,78 @@ else:
     })
     .await;
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (_bin, executable) = isolated_server_pair();
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        let other_workspace = fixture.root.path().join("b");
+        grant_environment_roots(&fixture, &[workspace.clone(), other_workspace.clone()]);
+        let first_probe = workspace.join("admitted");
+        let other_probe = other_workspace.join("admitted");
+        std::fs::write(&first_probe, b"a").unwrap();
+        std::fs::write(&other_probe, b"b").unwrap();
+        let mut original = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let driver = driver::jsonl(
+            original.stdout.take().unwrap(),
+            original.stdin.take().unwrap(),
+        );
+        initialize_client(&driver).await;
+        await_admission(&driver, session, &first_probe).await;
+        kill(
+            Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()),
+            Signal::SIGKILL,
+        )
+        .unwrap();
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(original.wait().await.unwrap().signal(), Some(libc::SIGKILL));
+        driver.close().await;
+
+        let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .output()
+            .await
+            .unwrap();
+        assert!(!rejected.status.success());
+        let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            diagnostic.contains("previous Session execution domain requires physical settlement"),
+            "{diagnostic}"
+        );
+
+        let other = &fixture.sessions[1];
+        let mut replacement =
+            local_exec_command(&executable, &fixture, other.as_str(), &other_workspace)
+                .spawn()
+                .unwrap();
+        let driver = driver::jsonl(
+            replacement.stdout.take().unwrap(),
+            replacement.stdin.take().unwrap(),
+        );
+        initialize_client(&driver).await;
+        await_admission(&driver, other, &other_probe).await;
+        let result = result(
+            &driver,
+            rustx::app_server::protocol::Method::SessionHistory {
+                session_id: session.clone(),
+                node_id: None,
+                at: rustx::durable::reading::ConversationWindowAt::Latest,
+                limit: 4,
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            rustx::app_server::protocol::MethodResult::SessionHistory { .. }
+        ));
+        driver.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+    })
+    .await;
+}

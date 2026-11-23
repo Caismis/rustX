@@ -94,6 +94,7 @@ pub struct LocalExecutionEndpoint {
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
     managed_output: std::sync::OnceLock<bool>,
     stdio_mcp: std::sync::OnceLock<bool>,
+    recovery_fence: Option<rustx_execution_server::RecoveryFence>,
 }
 
 enum Settlement {
@@ -255,6 +256,7 @@ impl LocalExecutionEndpoint {
             admission: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
+            recovery_fence: None,
             workspace,
         })
     }
@@ -312,6 +314,7 @@ impl LocalExecutionEndpoint {
             admission: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
+            recovery_fence: None,
             workspace,
         })
     }
@@ -323,6 +326,15 @@ impl LocalExecutionEndpoint {
                 unreachable!("delegated endpoints never reserve")
             }
         }
+    }
+
+    fn with_recovery_fence(mut self, product_root: &Path) -> io::Result<Self> {
+        self.recovery_fence = Some(
+            self.reservation()
+                .binding
+                .retain_recovery_fence(product_root)?,
+        );
+        Ok(self)
     }
 
     /// The exact logical workspace this binding reserved — the trusted
@@ -840,7 +852,7 @@ impl LocalExecutionEndpoint {
             return Ok(());
         }
         if result.is_err() {
-            self.cut_pair();
+            self.cut_pair_if_open();
         }
         result.map_err(Into::into)
     }
@@ -1269,7 +1281,11 @@ impl LocalExecutionEndpoint {
             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => fenced.shutdown(),
         }
         self.connection_released.notify_waiters();
-        result
+        result?;
+        if let Some(fence) = &self.recovery_fence {
+            binding.release_recovery_fence(fence)?;
+        }
+        Ok(())
     }
 
     /// Delivers one keyed cancellation on the control lane under one absolute
@@ -2612,6 +2628,9 @@ fn spawn_preparation(
         let mut guard = CloseOnFailure(Some(slot.as_ref()));
         let endpoint = Arc::new(prepare(slot.workspace.clone()).map_err(error)?);
         if !slot.publish(&endpoint) {
+            endpoint
+                .fence_connection_by(Instant::now())
+                .map_err(error)?;
             return Err(error("execution binding fenced before publication"));
         }
         guard.0 = None;
@@ -2635,7 +2654,11 @@ pub(crate) struct StandaloneExecution {
 }
 
 impl StandaloneExecution {
-    pub(crate) async fn start(session: SessionId, workspace: PathBuf) -> Result<Self, String> {
+    pub(crate) async fn start(
+        session: SessionId,
+        workspace: PathBuf,
+        product_root: PathBuf,
+    ) -> Result<Self, String> {
         let registry = Arc::new(SessionExecutionRegistry::default());
         let Claim::Create(slot) = registry
             .claim(&session, workspace, ExecutionTransport::Unix)
@@ -2645,7 +2668,8 @@ impl StandaloneExecution {
         };
         let session_for_endpoint = session.clone();
         let endpoint = spawn_preparation(slot, move |workspace| {
-            LocalExecutionEndpoint::new(&session_for_endpoint, workspace)
+            LocalExecutionEndpoint::new(&session_for_endpoint, workspace)?
+                .with_recovery_fence(&product_root)
         })
         .await
         .map_err(|error| error.to_string())?
@@ -2908,9 +2932,12 @@ impl SessionRuntimeManager {
                 // The spawned preparation owns publication: a dropped
                 // caller never reissues and never strands the slot.
                 let session = session.clone();
-                spawn_preparation(slot, move |workspace| prepare(&session, workspace))
-                    .await
-                    .map_err(error)?
+                let product_root = self.configuration.runtime_root().to_path_buf();
+                spawn_preparation(slot, move |workspace| {
+                    prepare(&session, workspace)?.with_recovery_fence(&product_root)
+                })
+                .await
+                .map_err(error)?
             }
         }
     }

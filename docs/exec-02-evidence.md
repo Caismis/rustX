@@ -27,14 +27,33 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
 | T61 | `revision_one_cannot_admit_either_lane_in_revision_two`, `websocket_session_version_and_generation_mismatches_stay_reserved` | The revised snapshot is mandatory in wire revision 2. Revision 1 is refused during Client bootstrap or on either Server Hello before a business lane exists. |
 | T63 (stdio START cut) | `cancellation_at_the_retained_anchor_prevents_interactive_start` | A shared supervisor waits for the anchor acknowledgement, then observes cancellation before writing START. The fixture proves an absent business marker and settlement of the exact retained anchor. The same driver runs Client-owned stdio. |
 
+## Restart admission fence
+
+The App Server and standalone Server persist one exclusive record for the
+exact Session binding before either lane can admit a Client. The record
+contains identity and Workspace authority. The credential remains in its
+private bootstrap. The live binding owner releases the record only after
+an acknowledged physical Revoke or proof that the pair never admitted
+work. An unconfirmed disconnection leaves the record in place across
+Server restart.
+
+Two execution-server tests cover exact owner release and unconfirmed
+retirement. The Linux process regression
+`server_sigkill_keeps_prior_client_binding_unavailable_after_restart`
+admits the Client and reads a fixture file, sends SIGKILL to the real
+Server, then verifies that a fresh Server refuses the original Session
+binding. An independent Session admits its own Client and the original
+Session's history remains accessible. This proves the admission fence.
+Independent attestation of an old physical domain remains open.
+
 ## Open gates
 
 - Bounded same-instance reconnection and the two detection orders still
   require transport changes and virtual-clock tests. The current code
   fences the pair on disconnect.
-- Replacement admission and Server restart still require independent
-  attestation tied to the old physical domain. Client guard evidence lives
-  in process memory. The Linux SIGKILL case observes one business socket
+- Replacement admission and post-restart environment recovery still require
+  independent attestation tied to the original physical domain. The durable
+  admission fence retains the unresolved identity. The Linux SIGKILL case observes one business socket
   and exercises isolation between Sessions.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
   run through the bound Client in EXEC-03. Offline cleanup, complete child

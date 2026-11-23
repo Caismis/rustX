@@ -502,10 +502,11 @@ impl LocalConversationCore {
         let execution = super::session_runtime_manager::StandaloneExecution::start(
             session_id.clone(),
             current.locations.workspace.clone(),
+            lifecycle.root().to_path_buf(),
         )
         .await
         .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        let mut core = Self::compose_from_config_started(
+        let composed = Self::compose_from_config_started(
             &current,
             dependencies,
             registry,
@@ -518,9 +519,26 @@ impl LocalConversationCore {
             startup,
             Some(execution.scope()),
         )
-        .await?;
-        catalog.commit_planned(planned)?;
+        .await;
+        let mut core = match composed {
+            Ok(core) => core,
+            Err(error) => {
+                if let Err(settlement) = execution.shutdown().await {
+                    tracing::warn!(%settlement, "local execution settlement after failed composition");
+                }
+                return Err(error);
+            }
+        };
         core.standalone_execution = Some(execution);
+        if let Err(error) = catalog.commit_planned(planned) {
+            if let Err(settlement) = core.shutdown().await {
+                tracing::warn!(
+                    ?settlement,
+                    "local execution settlement after failed catalog publication"
+                );
+            }
+            return Err(error.into());
+        }
         Ok(core)
     }
 

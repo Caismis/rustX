@@ -766,6 +766,39 @@ impl Binding {
         self.inner.inner().settlement == PhysicalSettlement::Confirmed
     }
 
+    /// Record this binding's identity before accepting its first lane.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an existing unsettled marker, an unsafe directory or a write
+    /// whose durability cannot be established. No credential is persisted.
+    pub fn retain_recovery_fence(&self, product_root: &Path) -> io::Result<RecoveryFence> {
+        RecoveryFence::create(product_root, &self.admission(), Arc::downgrade(&self.inner))
+    }
+
+    /// Remove the exact marker after this binding's physical settlement.
+    ///
+    /// # Errors
+    ///
+    /// Refuses missing settlement, foreign ownership or an unconfirmed unlink.
+    pub fn release_recovery_fence(&self, fence: &RecoveryFence) -> io::Result<()> {
+        if !fence.belongs_to(&self.inner) || !self.closed_with_settlement() {
+            return Err(io::Error::other(
+                "binding settlement does not authorize marker release",
+            ));
+        }
+        fence.remove()
+    }
+
+    fn closed_with_settlement(&self) -> bool {
+        let state = self.inner();
+        state.phase == BindingPhase::Revoked
+            && matches!(
+                state.settlement,
+                PhysicalSettlement::NeverAdmitted | PhysicalSettlement::Confirmed
+            )
+    }
+
     /// A consistent snapshot of the binding's phase and live connection.
     ///
     /// This is observation only: nothing may dispatch on a snapshot,
