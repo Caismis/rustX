@@ -1281,17 +1281,17 @@ envelope.
   same wire budget and runs outside the configuration publication lock.
   Publication rechecks the current binding and source generations.
   The Server parses and authorizes the document, combines it with User
-  policy, and applies native units. The path-keyed Session-creation
-  catalog, authored resource discovery, and automatic source watching
-  still use Server-authored inputs. Cold loading and explicit Workspace
-  reconciliation can use an authenticated binding when its logical path
-  is absent on the Server. Workspace-authored resources remain a separate
-  discovery source. Once admitted, its directory identity stays part of
-  the Session's authority. Loss or replacement fails resource adoption
-  while independent policy can still apply. Explicit unavailable resource
-  selections have their own diagnostics, and reconciliation tracks each Client capture in its
-  own Session scope. Host resource snapshots and remote
-  resource discovery are tracked in [#578](https://github.com/Caismis/rustX/issues/578).
+  policy, and applies native units. Bound runtime capture reads Workspace
+  MCP declarations, Agent TOML, Workflow YAML, and Skill discovery inputs
+  through that same Client. Agent and Workflow collections use stamped
+  directory pages and bounded file reads. The Server rechecks each
+  collection before publication and retains the adopted generation when a
+  definition changes during capture. Cold loading and explicit Workspace
+  reconciliation can succeed with no corresponding directory on the Server.
+  The Server still owns its User sources and the path-keyed Session-creation
+  catalog. Automatic Workspace source watching and native Managed Python
+  source discovery remain separate open work in [#578](https://github.com/Caismis/rustX/issues/578)
+  and [#577](https://github.com/Caismis/rustX/issues/577).
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
   search and document work and returns the verified projection. Artifact

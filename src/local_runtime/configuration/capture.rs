@@ -11,6 +11,7 @@ use super::{
     SourceScope, UserConfigManager, UserConfigSources, WorkspaceResourceAuthority,
     WorkspaceResourceIdentity, application, read_bounded, repair,
 };
+use crate::local_runtime::resource_directory::BoundDefinitions;
 use crate::local_runtime::session_runtime_manager::{
     LocalExecutionEndpoint, WorkspaceDocumentSnapshot,
 };
@@ -530,13 +531,16 @@ impl UserConfigManager {
             mut provenance,
             scoped_workflows,
         } = capture;
-        for (root, scope) in [
-            (
-                self.sources.home_directory.join("rustx/.agents"),
-                SourceScope::User,
-            ),
-            (locations.workspace.join(".agents"), SourceScope::Workspace),
-        ] {
+        for (root, scope) in [(
+            self.sources.home_directory.join("rustx/.agents"),
+            SourceScope::User,
+        )]
+        .into_iter()
+        .chain(
+            workspace_endpoint
+                .is_none()
+                .then(|| (locations.workspace.join(".agents"), SourceScope::Workspace)),
+        ) {
             revisions.insert(
                 root.clone(),
                 super::super::resource_directory::revision_with_cancellation(
@@ -802,15 +806,12 @@ impl UserConfigManager {
             ));
         }
         let authored_workspace = authored_identity.map(|_| locations.workspace.as_path());
-        if authored_workspace.is_none() && !scoped_workflows[1].is_empty() {
-            return Err(LaunchFailure::at(
-                None,
-                "agent.workflows",
-                "selected Workspace Workflows are unavailable through Server resource discovery",
-                "remove the unavailable Workflow selection",
-                locations.workspace.display().to_string(),
-            ));
-        }
+        let bound_definitions = workspace_endpoint
+            .map(BoundDefinitions::capture)
+            .transpose()
+            .map_err(LaunchFailure::resource)?;
+        let definitions_workspace =
+            workspace_endpoint.map_or(authored_workspace, |_| Some(locations.workspace.as_path()));
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
         let agent_root = normalize_missing(&user_resource_root.join("agents"))?;
         let read_authored_instructions = || {
@@ -826,9 +827,12 @@ impl UserConfigManager {
         let bound_instructions = workspace_endpoint
             .map(|endpoint| BoundInstructions::read(endpoint, &locations.workspace))
             .transpose()?;
-        let (subagents, role_sources) =
-            super::super::agent_resources::load_authorized(authored_workspace, &agent_root)
-                .map_err(LaunchFailure::resource)?;
+        let (subagents, role_sources) = super::super::agent_resources::load(
+            definitions_workspace,
+            &agent_root,
+            bound_definitions.as_ref(),
+        )
+        .map_err(LaunchFailure::resource)?;
         revisions.extend(
             role_sources
                 .values()
@@ -843,9 +847,10 @@ impl UserConfigManager {
         // An enabled Workflow that fails its check stays off: it is never
         // admitted, and never keeps a Session from starting.
         let mut workflows = {
-            super::super::workflow_resources::load(
-                authored_workspace,
+            super::super::workflow_resources::load_sources(
+                definitions_workspace,
                 &host.home_directory.join("rustx/.agents"),
+                bound_definitions.as_ref(),
             )
             .map_err(LaunchFailure::resource)?
         };
@@ -918,6 +923,16 @@ impl UserConfigManager {
             &subagents,
             &models,
         ));
+        let native_python = authored_workspace
+            .filter(|_| workspace_endpoint.is_some())
+            .map(|workspace| {
+                let root = workspace.join(".agents");
+                let revision = super::super::resource_directory::native_python_revision(
+                    &root,
+                    &self.resource_io,
+                );
+                (root, revision)
+            });
         let managed_python = super::super::managed_python_resources::discover_controlled(
             authored_workspace,
             &host.home_directory.join("rustx/.agents"),
@@ -1050,9 +1065,29 @@ impl UserConfigManager {
         }
         #[cfg(test)]
         self.test_hooks.reach("before_resource_verification");
+        if let Some(definitions) = &bound_definitions {
+            definitions.verify().map_err(LaunchFailure::resource)?;
+            revisions.extend(definitions.revisions());
+        }
+        if let Some((root, expected)) = native_python {
+            let actual =
+                super::super::resource_directory::native_python_revision(&root, &self.resource_io);
+            if !super::super::resource_directory::same_capture(&expected, &actual) {
+                return Err(LaunchFailure::at(
+                    Some(root),
+                    "resources",
+                    "Managed Python source changed during candidate construction",
+                    "rescan after source edits settle",
+                    "candidate discarded".into(),
+                ));
+            }
+            revisions.insert(root, expected);
+        }
         for (root, scope) in
             std::iter::once((host.home_directory.join("rustx/.agents"), SourceScope::User)).chain(
-                authored_workspace.map(|root| (root.join(".agents"), SourceScope::Workspace)),
+                authored_workspace
+                    .filter(|_| workspace_endpoint.is_none())
+                    .map(|root| (root.join(".agents"), SourceScope::Workspace)),
             )
         {
             let actual = super::super::resource_directory::revision_with_cancellation(
@@ -1093,6 +1128,9 @@ impl UserConfigManager {
                 || path == &locations.workspace.join(".agents")
                 || path == &host.config_path
                 || path == &locations.workspace.join("rustx.toml")
+                || bound_definitions
+                    .as_ref()
+                    .is_some_and(|definitions| definitions.owns_revision(path))
             {
                 continue;
             }

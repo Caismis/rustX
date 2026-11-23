@@ -1313,6 +1313,8 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}"
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn bound_configuration_load_and_reconcile_without_any_server_workspace_directory() {
     use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::runtime::subagent::SubagentName;
+    use crate::runtime::workflow::WorkflowId;
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
@@ -1321,7 +1323,28 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         let physical = mount.path().join("physical");
         std::fs::rename(workspace, &physical).unwrap();
         let document = physical.join("rustx.toml");
-        std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 23456\n").unwrap();
+        let write_config = |deadline| {
+            std::fs::write(&document, format!(
+                "[agent]\nagents=['reviewer']\nworkflows=['client-resource']\n[tool_deadline_policy]\nhard_deadline_ms={deadline}\n"
+            )).unwrap();
+        };
+        write_config(23_456);
+        let agent_dir = physical.join(".agents/agents");
+        let workflow_dir = physical.join(".agents/workflows");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::create_dir_all(&workflow_dir).unwrap();
+        let role = agent_dir.join("reviewer.toml");
+        let workflow = workflow_dir.join("client-resource.yaml");
+        let write_agent = |instructions| {
+            std::fs::write(&role, format!("description='Review'\ninstructions='{instructions}'\nskills=[]\n")).unwrap();
+        };
+        let write_workflow = |description| {
+            std::fs::write(&workflow, format!(
+                "description: {description}\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  edges: [{{from: workflow_start, to: done}}]\n  nodes:\n    workflow_start: {{type: start}}\n    done: {{type: return, outputs: []}}\n"
+            )).unwrap();
+        };
+        write_agent("Client-only Agent");
+        write_workflow("Client-only Workflow");
         let instructions = physical.join("AGENTS.md");
         std::fs::write(&instructions, "\u{feff}Client instructions").unwrap();
         let launcher = workspace_overlay_launcher(mount.path());
@@ -1341,13 +1364,26 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
             assert_eq!(file.content, expected);
         };
         assert_instructions("Client instructions");
+        let reviewer = SubagentName::parse("reviewer").unwrap();
+        let workflow_id = WorkflowId::parse("client-resource").unwrap();
+        let assert_definitions = |agent_text: &str, workflow_description: &str| {
+            let resources = runtime.runtime_resources();
+            let agent = resources.subagents().get(&reviewer).unwrap();
+            assert_eq!(agent.instructions(), agent_text);
+            let workflows = resources.workflows();
+            assert_eq!(workflows.enabled_ids(), std::collections::BTreeSet::from([workflow_id.clone()]));
+            assert_eq!(workflows.get(&workflow_id).unwrap().description(), workflow_description);
+        };
+        assert_definitions("Client-only Agent", "Client-only Workflow");
 
         let source = SourceTarget::Workspace { directory: workspace.clone() };
         let old = {
             let state = fixture.manager.applications.lock();
             state.view(fixture.sessions[0].id.as_ref()).and_then(|application| application.desired.input_revision)
         };
-        std::fs::write(&document, "[tool_deadline_policy]\nhard_deadline_ms = 34567\n").unwrap();
+        write_config(34_567);
+        write_agent("Reconciled Agent");
+        write_workflow("Reconciled Workflow");
         std::fs::write(&instructions, "Reconciled instructions").unwrap();
         let observation = fixture.manager.reconcile_configuration(&source).await.unwrap();
         assert_eq!(observation.scope, source.application_scope());
@@ -1357,6 +1393,7 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
         assert_eq!(application.units[&ApplyUnit::Instructions], UnitApplication::Applied);
         assert_instructions("Reconciled instructions");
+        assert_definitions("Reconciled Agent", "Reconciled Workflow");
         let effective = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap();
         assert_eq!(effective.tool_deadline.hard_deadline_ms, 34_567);
 
@@ -1369,13 +1406,28 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         assert_instructions("Reconciled instructions");
         std::fs::write(&instructions, "Reconciled instructions").unwrap();
 
-        std::fs::write(&document, "[agent]\nworkflows = [\"client-resource\"]\n").unwrap();
+        let changed_during_capture = workflow.clone();
+        let stable_workflow = std::fs::read(&workflow).unwrap();
+        fixture.manager.configuration.test_hooks.insert("before_resource_verification", move || {
+            std::fs::write(changed_during_capture, b"content changed after the definition read").unwrap();
+        });
         fixture.manager.reconcile_configuration(&source).await.unwrap();
         let application = settled(&fixture, 0).await;
         assert!(matches!(
             &application.units[&ApplyUnit::Capabilities],
-            UnitApplication::Failed { diagnostic } if diagnostic.contains("selected Workspace Workflows are unavailable")
+            UnitApplication::Failed { diagnostic } if diagnostic.contains("resource definitions changed during capture")
         ), "{application:?}");
+        assert_definitions("Reconciled Agent", "Reconciled Workflow");
+        std::fs::write(&workflow, stable_workflow).unwrap();
+
+        std::fs::write(&role, "invalid = [").unwrap();
+        fixture.manager.reconcile_configuration(&source).await.unwrap();
+        let application = settled(&fixture, 0).await;
+        assert!(matches!(
+            &application.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { diagnostic } if diagnostic == "canonical Agent TOML violates its strict typed authoring contract"
+        ), "{application:?}");
+        assert_definitions("Reconciled Agent", "Reconciled Workflow");
         assert!(!workspace.exists());
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         assert!(client.wait().await.unwrap().success());
@@ -1404,13 +1456,15 @@ async fn bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_l
         };
         write_policy(23_456);
         let user_agents = fixture.manager.configuration.source_bindings().home_directory.join("rustx/.agents/agents");
-        let workspace_agents = workspace.join(".agents/agents");
+        let workspace_agents = physical.join(".agents/agents");
+        let server_decoy = workspace.join(".agents/agents");
         let write_role = |root: &std::path::Path, label| {
             std::fs::create_dir_all(root).unwrap();
             std::fs::write(root.join("reviewer.toml"), format!("description='Review'\ninstructions='{label}'\nskills=[]\n")).unwrap();
         };
         write_role(&user_agents, "User reviewer");
         write_role(&workspace_agents, "Workspace reviewer");
+        write_role(&server_decoy, "Server decoy reviewer");
         let launcher = workspace_overlay_launcher(mount.path());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
         fixture.load(0).await.unwrap().unwrap();

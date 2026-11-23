@@ -572,6 +572,16 @@ impl ProspectiveSessionConfig {
             .values()
             .filter(|role| agents.contains(&role.identity))
         {
+            if role.layer == "workspace"
+                && matches!(
+                    self.workspace_resources,
+                    super::WorkspaceResourceAuthority::Bound(_)
+                )
+            {
+                // The Client fenced these immutable definition bytes. The
+                // Server's path can name an entirely different resource.
+                continue;
+            }
             let boundary = if role.layer == "workspace" {
                 &self.workspace
             } else {

@@ -3,7 +3,10 @@ use crate::runtime::resources::{RuntimeResourceLoadError, validate_project_resou
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+mod bound_definitions;
 mod evidence;
+
+pub(super) use bound_definitions::BoundDefinitions;
 
 /// Capture equality uses complete bytes, or the independently complete finite
 /// domain fence carried by an incomplete observation. The incomplete tree's
@@ -263,6 +266,20 @@ pub(crate) fn revision_with_cancellation(
                 .unwrap_or_else(|_| "unavailable".into());
             format!("incomplete:{}:{fence}:{reason}", uuid::Uuid::now_v7())
         }
+    }
+}
+
+/// Managed Python still admits a native package source independently of the
+/// bound Session's Client-owned Agent, Workflow and guidance definitions.
+pub(super) fn native_python_revision(
+    root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"rustx-native-python-resource-domain-v1");
+    match evidence::include_python(&mut hash, root, cancellation) {
+        Ok(()) => format!("sha256:{:x}", hash.finalize()),
+        Err(reason) => format!("incomplete:{}:unavailable:{reason}", uuid::Uuid::now_v7()),
     }
 }
 
