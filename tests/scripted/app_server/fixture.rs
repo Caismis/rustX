@@ -423,14 +423,6 @@ impl Fixture {
             binary.is_file(),
             "staged Execution Client is absent: {binary:?}"
         );
-        let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(std_listener) =
-            endpoint.listener()
-        else {
-            panic!("the reserved local endpoint is a Unix listener");
-        };
-        let std_listener = std_listener.try_clone().unwrap();
-        std_listener.set_nonblocking(true).unwrap();
-        let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
         let child = tokio::process::Command::new(launcher.unwrap_or(&binary))
             .arg("--binding-file")
             .arg(endpoint.bootstrap_path())
@@ -444,6 +436,21 @@ impl Fixture {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
+        Self::admit_execution_pair(&endpoint).await;
+        child
+    }
+
+    pub(super) async fn admit_execution_pair(
+        endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    ) {
+        let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(std_listener) =
+            endpoint.listener()
+        else {
+            panic!("the reserved local endpoint is a Unix listener");
+        };
+        let std_listener = std_listener.try_clone().unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
         bounded(async {
             let deadline = std::time::Instant::now()
                 + rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
@@ -467,7 +474,6 @@ impl Fixture {
         })
         .await
         .unwrap();
-        child
     }
     pub(super) async fn close(&self) {
         for gate in &self.gates {

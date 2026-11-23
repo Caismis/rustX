@@ -1803,6 +1803,19 @@ impl LocalExecutionEndpoint {
         drop(guard);
         self.connection_released.notify_waiters();
     }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn detach_live_pair_for_test(&self) {
+        let id = self
+            .connection
+            .lock()
+            .expect("execution connection")
+            .as_ref()
+            .expect("live data lane")
+            .connection_id()
+            .clone();
+        self.reservation().binding.disconnect(&id);
+    }
 }
 
 impl Drop for LocalExecutionEndpoint {

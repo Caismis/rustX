@@ -1751,6 +1751,7 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+#[allow(clippy::too_many_lines)] // The same isolated Client serves both physical watch lanes.
 async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registration() {
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {
@@ -1816,6 +1817,74 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
             }
             changed.changed().await.unwrap();
         }
+
+        let endpoint = fixture.manager.execution_endpoint(&id).unwrap();
+        let admission = endpoint.admission().unwrap().clone();
+        let retired_lane = endpoint.control().unwrap();
+        let (captured, stale_result) = tokio::sync::oneshot::channel();
+        let (release, parked) = std::sync::mpsc::channel();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("bound_watch_captured", move || {
+                captured.send(()).unwrap();
+                let _ = parked.recv();
+            });
+        std::fs::write(&instructions, "stale before detach").unwrap();
+        stale_result.await.unwrap();
+        endpoint.detach_live_pair_for_test();
+        assert!(endpoint.control().is_none());
+
+        let (resynced, rebound) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                resynced.send(()).unwrap();
+            },
+        );
+        std::fs::write(&instructions, "current after detach").unwrap();
+        write_marker("Current after detach");
+        Fixture::admit_execution_pair(&endpoint).await;
+        assert_eq!(endpoint.admission(), Some(&admission));
+        assert!(!endpoint.control().unwrap().same_pair(&retired_lane));
+        rebound.await.unwrap();
+        loop {
+            let resources = runtime.runtime_resources();
+            if resources.capability().skills().packages()[0].description() == "Current after detach"
+                && resources
+                    .project_context_files()
+                    .iter()
+                    .any(|file| file.content == "current after detach")
+            {
+                break;
+            }
+            changed.changed().await.unwrap();
+        }
+        let (completed, old_finished) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                completed.send(()).unwrap();
+            },
+        );
+        release.send(()).unwrap();
+        old_finished.await.unwrap();
+        let _ = settled(&fixture, 0).await;
+        let resources = runtime.runtime_resources();
+        assert_eq!(
+            resources.capability().skills().packages()[0].description(),
+            "Current after detach"
+        );
+        assert_eq!(
+            resources
+                .project_context_files()
+                .iter()
+                .map(|file| file.content.as_str())
+                .collect::<Vec<_>>(),
+            ["current after detach"]
+        );
+        assert!(fixture.provider.request_bodies().is_empty());
         assert!(!workspace.exists());
         stop.cancel();
         watcher.await.unwrap().unwrap();

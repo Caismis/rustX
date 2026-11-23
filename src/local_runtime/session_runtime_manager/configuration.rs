@@ -825,6 +825,10 @@ impl SessionRuntimeManager {
                 &self.credentials,
                 Some(&endpoint),
             );
+            #[cfg(all(test, target_os = "linux"))]
+            if watch.is_some() {
+                self.configuration.test_hooks.reach("bound_watch_captured");
+            }
             let mut application = self.applications.lock();
             if !application.finish_bound_capture(&session, &ticket) {
                 continue;
