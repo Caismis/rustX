@@ -224,7 +224,21 @@ test('skill directories copy, move and delete from their exact scopes', async ({
       await action(row, name);
       const dialog = page.getByRole('dialog', {name: `${operation} resource`, exact: true});
       // The stale-revision write must not run until this dialog is actually open.
-      await expect(dialog).toBeVisible();
+      try {
+        await expect(dialog).toBeVisible();
+      } catch (error) {
+        const menus = page.getByRole('menu', {exact: true});
+        const dump = {
+          menus: await menus.count(),
+          menuitems: await page.getByRole('menuitem').count(),
+          dialogs: await page.getByRole('dialog').count(),
+          lifecycle: await page.locator('[data-resource-module]').getAttribute('data-lifecycle'),
+          openMenuItems: await menus.first().getByRole('menuitem').allTextContents().catch(() => []),
+          pageErrors: errors,
+        };
+        console.log(`[resources-transfer] ${operation} "${name}" dialog missing: ${JSON.stringify(dump)}`);
+        throw error;
+      }
       return dialog;
     };
     const submit = async (dialog: Locator, operation: 'Copy' | 'Move') => {

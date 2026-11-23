@@ -372,7 +372,9 @@ it('older child transcript retains its original observation proof through native
   expect(ui.queryByText('current child page')).toBeNull();
   const fresh = await server.waitFor('agent/observe', 2);
   await act(async () => { server.socket.success(fresh, childConversation(page('fresh child page', '20'))); });
-  expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
+  // The committed row at cursor 10 is durable history the reattached head
+  // window already moved past; it stays retained beside the fresh row.
+  expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.getByText('current child page')).toBeTruthy();
   expect(server.requests.filter(row => row.request.method === 'agent/transcript' && row.request.params.target.attachment_id === originalTarget.attachment_id)).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);

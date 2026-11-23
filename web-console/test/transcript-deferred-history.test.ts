@@ -27,10 +27,13 @@ it.each(['initial','gesture','child'] as const)('%s history retains deferred pos
  } else if (mode === 'initial') await server.client.loadInitialHistory('A');
  else await server.client.loadEarlier('A');
  const history = () => mode === 'child' ? reader!.getSnapshot().history! : server!.client.getSnapshot().views.A.history!;
- expect(history().window).toBeUndefined(); expect(history().page.entries?.some(item => item.cursor === '69')).toBe(true); check(history().page,70); check(history().page,38); expect(pages).toBe(2);
+ expect(history().window).toBeUndefined(); expect(history().page.entries?.some(item => item.cursor === '69')).toBe(true); check(history().page,70); check(history().page,38);
+ // The child reader's coverage walk issues one extra probe: positions 39..68
+ // and 71..88 are real holes the fixture has no rows for.
+ expect(pages).toBe(mode === 'child' ? 3 : 2);
  const next = { ...live, transcript: { entries: [row(90),row(91)], next_cursor: '90' } };
  if (reader) reader.observe(next); else await server.update('A', next);
- check(history().page,70); check(history().page,38); expect(pages).toBe(2);
+ check(history().page,70); check(history().page,38); expect(pages).toBe(mode === 'child' ? 3 : 2);
 });
 it('multi-page aggregation keeps each descriptor, native binding and frontier, and inline promotion replaces it', () => {
  let cache = replaceTranscript({ entries: [row(89)], next_cursor: '89' });
