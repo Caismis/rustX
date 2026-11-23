@@ -52,8 +52,9 @@ Published locators remain owned by the binding for its lifetime. Ranged
 logical Read and bounded Grep validate the exact Conversation and locator.
 The files live under a private Client directory. The Server can retain up to
 four fragments per writer across at most sixteen imports, plus a bounded
-prefix and the fragment in flight. Offline cleanup after a killed Client
-and same-instance reconnect remain open.
+prefix and the fragment in flight. The saturation fixture observes all
+four queue slots occupied while Health progresses. The restart and
+same-instance tests below cover physical scratch cleanup and receipt loss.
 
 ## Workspace instructions
 
@@ -249,7 +250,7 @@ child path independently of the stdio relay fixture.
 | T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. `shipped_parallel_reverses_completion_without_git_or_parent_orchestration` exercises reverse completion in a real Workflow. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` verifies rooted interaction and one canonical outer result. The isolated Root/Subagent/Workflow composition below checks the shared Session and exact provider sequence. `client_bash_reversed_settlement_keeps_canonical_order` holds the first real Bash behind a socket until the second settles. Both start exactly once, two model requests occur, and the durable results retain the original order before the sole final Attempt terminal. |
 | T13, T14, T15, T17, T18 | The Session input RPC covers definition shadowing, explicit permission, joint CAS, stale and invalid candidates, durable readback, and clearing overrides. Isolated cold load covers Client sources. The complete bootstrap and concurrent-activation composition remain open. |
 | T16 | `primary_model_selection_resets_primary_overrides_and_preserves_summary_policy` and `attempt_started_freezes_the_model_across_a_mid_attempt_switch` cover the Runtime Client entry. `r04_manager_selection_and_attempt_admission_have_both_complete_orders` exercises admission races through the App Server. `t05_t09_workflow_only_agent_model_rebuilds_frozen_execution` and `direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_result` exercise frozen Workflow profiles and the direct-model provider. A common acceptance trace across UI and delegated entry points remains open. |
-| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. The real Client-owned Manager Store fixtures below cover foreground Tasks and MRTR. The bound management inventory uses one physical stdio process across both resource pages and waits for its witnessed exit. The independent HTTP probe requires zero business calls. |
+| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. The real Client-owned Managed Python Store fixtures below cover foreground Tasks and MRTR. The bound management inventory uses one physical stdio process across both resource pages and waits for its witnessed exit. The independent HTTP probe requires zero business calls. |
 | T22, T40, T47 | Isolated Workspace tests cover Client-owned AGENTS.md, Agent TOML and Workflow YAML on cold load and explicit reconciliation. The verification hook rejects a changed in-flight capture and preserves the last valid generation. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. The Linux watch fixture verifies automatic guidance and Skill metadata updates after physical registration. Overflow and retired-watch races across reconnect still require composed proof. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. Real Client refusal, cancellation after Seal, and late publication across replacement each preserve the already validated result. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
@@ -389,7 +390,12 @@ resource and cancellation combinations remain individually mapped below.
 
 ## Local Linux verification
 
-- Formatting, workspace check and strict workspace Clippy passed.
+- The `007d77cd8` feature slice passed 10 focused native regressions,
+  including the exact-Session MCP paths, original stdio process close,
+  ordinary and deferred draft ownership, and reverse Bash settlement.
+  Web Console type checking and 77 focused tests passed.
+- Formatting, workspace check and strict workspace Clippy passed on the
+  earlier revisions listed with their evidence.
 - The callback broker and upload request-ID filters, real WebSocket
   conformance, real HTTP import, no-Client HTTP overflow, and HTTP over-limit
   no-replay tests passed. The isolated mount proof and committed artifact
