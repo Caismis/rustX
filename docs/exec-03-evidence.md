@@ -85,6 +85,24 @@ request, and the ignored package stays absent. The local Skill group had
 27 passing tests and the configuration group had 359 passing tests and
 two opt-in cases.
 
+## Workspace Agent and Workflow definitions
+
+Bound configuration reads Agent TOML and Workflow YAML through the
+admitted Client. The Server uses the same parsers, whole-definition
+shadowing, and source-level Workflow authorization as authored discovery.
+Each definition is read under the Client's directory-entry stamp. A final
+directory observation rejects changes after the file read. The separate
+native Managed Python source still has its existing authority check.
+
+The Linux mount fixture has no Server directory at the Workspace path.
+Cold load and explicit reconciliation both apply the Client's definitions
+and guidance. A hook modifies a Workflow after capture and before final
+verification. The next application reports failed capabilities and keeps
+the previous Agent and Workflow; invalid higher-scope Agent TOML also keeps
+the last valid generation. A second mount fixture gives User, Client and
+Server-side decoy Agents different contents. The bound runtime selects the
+Client version.
+
 ## Client stdio MCP
 
 For a bound Session the Client reads `.agents/mcp.toml` and the Server
@@ -139,7 +157,7 @@ Workflow ordering tests remain separate acceptance requirements.
 | T13, T14, T15, T17, T18 | Session input/configuration/resource layering, safe activation and bootstrap remain open for EXEC-03. |
 | T16 | Model reset and freeze still need cross-entry integration evidence. |
 | T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. MCP declaration cache, optional startup, full delegated composition and composed stdio Tasks and interactions remain open. |
-| T22, T40, T47 | The isolated Workspace test covers Client-owned AGENTS.md on cold load and explicit reconciliation, BOM stripping and retention of the last valid instructions. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. Automatic Client watches and reconnect repair remain open. |
+| T22, T40, T47 | Isolated Workspace tests cover Client-owned AGENTS.md, Agent TOML and Workflow YAML on cold load and explicit reconciliation. The verification hook rejects a changed in-flight capture and preserves the last valid generation. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. Automatic Client watches and reconnect repair remain open. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |
@@ -221,6 +239,17 @@ separate fixture process. Startup, VCS and SQLite state are included.
   refusal of obsolete MCP background policy. These cover their existing
   owners. Cross-entry model integration and credential rotation through the
   full Session stack remain open.
+- The MCP adapter suite passed 162 tests. A non-foreground binding is
+  rejected before the real stdio program can write a start marker. The
+  adapter's legacy Server-local MCP output sink has been removed. An
+  unknown result without a correlated reply retains its status and carries
+  no locator.
+- Browser acceptance ran 42 targeted cases across pinned Linux browser
+  runs. Workspace drafts and read-only catalog tests used real HTTP MCP.
+  The two desktop/mobile switch regressions observe both cancellation of
+  the held POST and deletion of its HTTP session. Root and child execution
+  tests used the real bound Client for stdio. The two resource-authoring
+  cases passed their separate rerun after editing the HTTP URL field.
 - The real Execution Client saved and read normalized output through the
   wire. The execution boundary crates passed 412 tests with three ignored,
   including a confirmed unlink retry. The pinned rmcp fork passed two
@@ -231,4 +260,4 @@ separate fixture process. Startup, VCS and SQLite state are included.
 - `git diff --check` passed.
 
 Final FULL and Merge verification, native macOS, whole-frame HTTP parser
-occupancy and Browser acceptance remain open.
+occupancy and the complete Browser acceptance matrix remain open.

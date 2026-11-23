@@ -159,6 +159,11 @@ impl McpServerRuntime {
             #[cfg(test)]
             ownership_pause,
         } = request;
+        if binding.policy.execution != crate::tools::types::ToolExecutionPolicy::ForegroundOnly {
+            return Err(McpError::Configuration(format!(
+                "source {server_id}: MCP requires foreground execution; remove the obsolete background policy"
+            )));
+        }
         let credentials = binding
             .credentials
             .resolve()
@@ -733,6 +738,42 @@ fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn obsolete_mcp_background_policy_is_refused_before_the_peer_can_start() {
+        use crate::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
+
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(root.path()).unwrap();
+        let id = McpServerId::new("foreground-only");
+        for policy in [
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolExecutionPolicy::ModelSelectable,
+        ] {
+            let binding = McpServerBinding {
+                credentials: crate::credentials::SourceCredentials::default(),
+                transport: McpTransportConfig::Stdio {
+                    program: "/bin/sh".into(),
+                    args: vec!["-c".into(), "printf started > peer-started".into()],
+                    cwd: None,
+                    environment: std::collections::BTreeMap::new(),
+                },
+                policy: ToolInvocationPolicy::new(policy),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
+            };
+            let result = McpServerRuntime::connect_fixture(
+                &id,
+                &binding,
+                &workspace,
+                Arc::new(McpInvalidationState::default()),
+            )
+            .await;
+            assert!(matches!(result, Err(McpError::Configuration(reason))
+                if reason.contains("remove the obsolete background policy")));
+            assert!(!root.path().join("peer-started").exists());
+        }
+    }
 
     #[test]
     fn sanitized_error_and_complete_stderr_share_one_final_diagnostic_budget() {

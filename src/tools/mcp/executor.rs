@@ -428,11 +428,10 @@ fn pre_dispatch_failure(
                 reason: context.cancellation.reason(),
                 phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
             },
-            context,
             started,
         )
     } else {
-        failed_mcp(message, context, started)
+        failed_mcp(message, started)
     }
 }
 

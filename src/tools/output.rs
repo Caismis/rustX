@@ -4,10 +4,8 @@
 //! result fragments. This module owns the mode-independent representation
 //! policy and the mode-dependent storage lifecycle:
 //!
-//! - foreground MCP output stays in a bounded preview only: no eligible
-//!   Execution Client save binding exists for it yet, so an overflow
-//!   truncates the preview and honestly settles `Unavailable` — it never
-//!   allocates a local spill;
+//! - MCP keeps a bounded model preview and can stream normalized text to
+//!   its separately owned Execution Client import;
 //! - the explicit supervisor regression fixture uses the standalone lazy
 //!   spill capture ([`ForegroundOutputCapture`]). Native Bash capture lives
 //!   in the Execution Client;
@@ -28,7 +26,9 @@ use std::path::PathBuf;
 
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
 use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSpill};
-use crate::tools::types::{ManagedOutputContinuation, TruncationState};
+#[cfg(test)]
+use crate::tools::types::ManagedOutputContinuation;
+use crate::tools::types::TruncationState;
 
 mod stdout;
 pub(crate) use stdout::BoundedStdoutCapture;
@@ -57,79 +57,34 @@ pub(crate) struct CapturedOutput {
     pub(crate) output_locator: Option<PathBuf>,
 }
 
-/// One Tool Plane capture with the invocation-mode-selected storage
-/// lifecycle. Origin adapters use this same seam; they do not select their
-/// own overflow policy.
-///
-/// Foreground capture is preview-only: no eligible Execution Client save
-/// binding exists for it, so nothing is spilled, retained, or published —
-/// only normalized and counted. Background capture owns the
-/// dispatch-allocated sink lifecycle.
-pub(crate) enum ToolOutputCapture {
-    /// A bounded preview with no complete-result store behind it.
-    PreviewOnly(TextPreviewCapture),
-    /// A background capture writing into the dispatch-owned output sink.
-    Background(BackgroundOutputCapture),
-}
+/// A bounded Tool Plane preview with no file storage behind it.
+pub(crate) struct ToolOutputCapture(TextPreviewCapture);
 
 impl ToolOutputCapture {
-    /// Creates the foreground preview-only capture.
     pub(crate) fn preview_only() -> Self {
-        Self::PreviewOnly(TextPreviewCapture::new(
+        Self(TextPreviewCapture::new(
             FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
         ))
     }
 
-    /// Creates a capture over an already dispatch-owned background sink.
-    pub(crate) fn background(sink: BackgroundOutput, watch: AppendWatch) -> Self {
-        Self::Background(BackgroundOutputCapture::new(
-            FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
-            sink,
-            watch,
-        ))
-    }
-
-    /// The complete logical byte count normalized so far. The preview
-    /// counts every pushed fragment even when a background sink write
-    /// failed, so this remains accurate after a capture failure.
     pub(crate) fn total_bytes(&self) -> u64 {
-        match self {
-            Self::PreviewOnly(capture) => capture.total(),
-            Self::Background(capture) => capture.total(),
-        }
+        self.0.total()
     }
 
-    /// Adds one logical UTF-8 fragment through the mode-specific storage
-    /// implementation. Preview-only capture is infallible: it only normalizes
-    /// and counts.
-    pub(crate) fn push(&mut self, text: &str) -> Result<(), String> {
-        match self {
-            Self::PreviewOnly(capture) => {
-                capture.push(text);
-                Ok(())
-            }
-            Self::Background(capture) => capture.push(text),
-        }
+    pub(crate) fn push(&mut self, text: &str) {
+        self.0.push(text);
     }
 
-    /// Settles the capture without changing the storage identity. For a
-    /// preview-only capture `complete` records that every observed fragment
-    /// was normalized — never that output was published — and
-    /// `output_locator` is always `None`.
+    /// `complete` records that every observed fragment was normalized.
     pub(crate) fn finish(self, complete: bool) -> CapturedOutput {
-        match self {
-            Self::PreviewOnly(capture) => {
-                let total_bytes = capture.total();
-                let (preview, truncated) = capture.finish();
-                CapturedOutput {
-                    preview,
-                    truncated,
-                    total_bytes,
-                    complete,
-                    output_locator: None,
-                }
-            }
-            Self::Background(capture) => capture.finish(complete),
+        let total_bytes = self.0.total();
+        let (preview, truncated) = self.0.finish();
+        CapturedOutput {
+            preview,
+            truncated,
+            total_bytes,
+            complete,
+            output_locator: None,
         }
     }
 }
@@ -347,11 +302,6 @@ impl BackgroundOutputCapture {
         }
     }
 
-    /// The complete logical byte count observed by the capture.
-    pub(crate) fn total(&self) -> u64 {
-        self.preview.total()
-    }
-
     /// Adds one fragment and appends it to the already advertised path.
     pub(crate) fn push(&mut self, text: &str) -> Result<(), String> {
         self.preview.push(text);
@@ -382,7 +332,8 @@ impl BackgroundOutputCapture {
     }
 }
 
-/// Derives typed continuation metadata from one settled capture.
+/// Derives typed continuation metadata for the trace projection fixture.
+#[cfg(test)]
 pub(crate) fn continuation_for_capture(
     captured: &CapturedOutput,
     background: bool,
@@ -495,9 +446,7 @@ mod tests {
         let root = directory.path().join("tool-output");
         let managed = store(&root);
         let mut capture = ToolOutputCapture::preview_only();
-        capture
-            .push(&"x".repeat(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1))
-            .expect("push");
+        capture.push(&"x".repeat(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1));
         let settled = capture.finish(true);
         assert!(settled.complete, "input was fully normalized");
         assert!(settled.truncated);
@@ -521,10 +470,13 @@ mod tests {
 
     #[test]
     fn structured_writer_streams_split_utf8_into_the_shared_capture() {
-        let mut capture = ToolOutputCapture::PreviewOnly(TextPreviewCapture::new(
+        let mut capture = ToolOutputCapture(TextPreviewCapture::new(
             FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
         ));
-        let mut writer = ToolOutputWriter::over_sink(|text| capture.push(text));
+        let mut writer = ToolOutputWriter::over_sink(|text| {
+            capture.push(text);
+            Ok(())
+        });
         writer.write_all(b"\"a\\n").expect("JSON prefix");
         writer.write_all(&[0xf0]).expect("split UTF-8 prefix");
         writer
@@ -545,7 +497,10 @@ mod tests {
     #[test]
     fn a_multi_mib_single_write_never_parks_unbounded_pending_bytes() {
         let mut capture = ToolOutputCapture::preview_only();
-        let mut writer = ToolOutputWriter::over_sink(|text| capture.push(text));
+        let mut writer = ToolOutputWriter::over_sink(|text| {
+            capture.push(text);
+            Ok(())
+        });
         writer
             .write_all(&vec![b'x'; 4 * 1024 * 1024])
             .expect("multi-MiB write");

@@ -83,7 +83,7 @@ impl McpConnection {
         let started = Instant::now();
         let request = match operation.request() {
             Ok(request) => request,
-            Err(error) => return failed_mcp(error, context, started),
+            Err(error) => return failed_mcp(error, started),
         };
         if context.cancellation.is_cancelled() {
             return cancelled(context, started);
@@ -91,7 +91,7 @@ impl McpConnection {
         let transport = match self.validate_resources(context).await {
             Ok(transport) => transport,
             Err(_) if context.cancellation.is_cancelled() => return cancelled(context, started),
-            Err(error) => return failed_mcp(&error.to_string(), context, started),
+            Err(error) => return failed_mcp(&error.to_string(), started),
         };
         let runtime = transport.runtime();
         let outcome = runtime
@@ -137,7 +137,6 @@ impl McpServerRuntime {
             McpPhysicalOutcome::Refused { result, .. } => *result,
             McpPhysicalOutcome::CancelledPostFrontier { requested, .. } => mcp_empty_terminal(
                 post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
-                context,
                 started,
             ),
             McpPhysicalOutcome::Observed { response, .. } => match response {
@@ -146,12 +145,11 @@ impl McpServerRuntime {
                         translate_resource_response(response, operation, context, started)
                     }
                     Err(rmcp::service::ServiceError::McpError(error)) => {
-                        translate_resource_error(error, &self.credentials, context, started)
+                        translate_resource_error(error, &self.credentials, started)
                     }
                     Err(error) => {
                         self.resource_unknown(
                             &super::diagnostics::service_error(&error, &self.credentials),
-                            context,
                             generation,
                             started,
                         )
@@ -161,7 +159,6 @@ impl McpServerRuntime {
                 McpResponseOutcome::ChannelEnded => {
                     self.resource_unknown(
                         "response channel ended without a correlated reply",
-                        context,
                         generation,
                         started,
                     )
@@ -174,7 +171,6 @@ impl McpServerRuntime {
     async fn resource_unknown(
         &self,
         error: &str,
-        context: &ToolExecutionContext<'_>,
         generation: u64,
         started: Instant,
     ) -> ToolExecutionResult {
@@ -189,7 +185,6 @@ impl McpServerRuntime {
             ToolExecutionStatus::OutcomeUnknown {
                 detail: bound_error(&detail),
             },
-            context,
             started,
         )
     }
@@ -201,11 +196,10 @@ impl McpServerRuntime {
 fn translate_resource_error(
     error: rmcp::ErrorData,
     credentials: &crate::credentials::SourceCredentials,
-    context: &ToolExecutionContext<'_>,
     started: Instant,
 ) -> ToolExecutionResult {
     let error = super::diagnostics::protocol_error(error, credentials);
-    let mut result = failed_mcp(&error.to_string(), context, started);
+    let mut result = failed_mcp(&error.to_string(), started);
     let data = error
         .data
         .filter(|value| bounded_json(value, MAX_METADATA_BYTES).is_ok());
@@ -223,7 +217,6 @@ fn cancelled(context: &ToolExecutionContext<'_>, started: Instant) -> ToolExecut
             reason: context.cancellation.reason(),
             phase: ToolCancellationPhase::DuringExecution,
         },
-        context,
         started,
     )
 }
@@ -263,7 +256,7 @@ fn translate_resource_response(
         (McpResourceOperation::Read { .. }, ServerResult::ReadResourceResult(page)) => {
             return match translate_resource_contents(page.contents, context, started) {
                 Ok(result) => result,
-                Err(error) => failed_mcp(&error, context, started),
+                Err(error) => failed_mcp(&error, started),
             };
         }
         _ => Err("unexpected MCP resource response".to_owned()),
@@ -272,11 +265,11 @@ fn translate_resource_response(
         Ok(value) => {
             // Pages are already fully bounded. Preserve structured pagination
             // (including its opaque cursor) rather than truncating it as text.
-            let mut result = mcp_empty_terminal(ToolExecutionStatus::Success, context, started);
+            let mut result = mcp_empty_terminal(ToolExecutionStatus::Success, started);
             result.content.push(ToolResultContent::Json { value });
             result
         }
-        Err(error) => failed_mcp(&error, context, started),
+        Err(error) => failed_mcp(&error, started),
     }
 }
 

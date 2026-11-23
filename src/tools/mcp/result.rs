@@ -4,9 +4,8 @@
 //!
 //! The transport bounds the HTTP record before rmcp materializes its result.
 //! This adapter independently bounds model content and offers normalized text
-//! to the Session's Client. Background results retain their dispatch sink.
+//! to the Session's Client.
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use base64::Engine;
@@ -17,8 +16,7 @@ use crate::tools::executor::ToolExecutionContext;
 use crate::tools::limits::{FOREGROUND_TOOL_RESULT_PREVIEW_BYTES, MAX_MODEL_TOOL_RESULT_BYTES};
 use crate::tools::managed_import::{BufferedImport, Import};
 use crate::tools::output::{
-    CapturedOutput, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter,
-    continuation_for_capture, truncation_for_capture,
+    CapturedOutput, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter, truncation_for_capture,
 };
 use crate::tools::types::{
     ManagedOutputContinuation, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
@@ -31,15 +29,7 @@ pub(super) fn translate_result(
     context: &ToolExecutionContext<'_>,
     started: Instant,
 ) -> ToolExecutionResult {
-    translate_output(
-        result,
-        open_mcp_output_capture(context),
-        context.artifacts,
-        context.execution_id.is_some(),
-        started,
-        &mut |_| {},
-    )
-    .0
+    translate_output(result, context.artifacts, started, &mut |_| {}).0
 }
 
 pub(super) async fn translate_remote_result(
@@ -48,11 +38,7 @@ pub(super) async fn translate_remote_result(
     started: Instant,
     credentials: &crate::credentials::SourceCredentials,
 ) -> ToolExecutionResult {
-    let Some(scope) = context
-        .workspace
-        .execution_scope()
-        .filter(|_| context.execution_id.is_none())
-    else {
+    let Some(scope) = context.workspace.execution_scope() else {
         return translate_result(scrub_credentials(result, credentials), context, started);
     };
     let producer = Import::new(
@@ -66,9 +52,7 @@ pub(super) async fn translate_remote_result(
         let mut producer = BufferedImport::new(producer);
         let (result, validated) = translate_output(
             scrub_credentials(result, &credentials),
-            Ok(ToolOutputCapture::preview_only()),
             &artifacts,
-            false,
             started,
             &mut |text| producer.push(text),
         );
@@ -80,7 +64,6 @@ pub(super) async fn translate_remote_result(
             ToolExecutionStatus::OutcomeUnknown {
                 detail: "MCP result could not be projected".to_owned(),
             },
-            context,
             started,
         );
     };
@@ -116,18 +99,11 @@ fn scrub_credentials(
 
 fn translate_output(
     result: CallToolResult,
-    capture: Result<ToolOutputCapture, (PathBuf, String)>,
     artifacts: &ArtifactStore,
-    background: bool,
     started: Instant,
     import: &mut impl FnMut(&str),
 ) -> (ToolExecutionResult, bool) {
-    let mut capture = match capture {
-        Ok(capture) => capture,
-        Err((locator, diagnostic)) => {
-            return (failed_mcp_storage(&diagnostic, locator, started), false);
-        }
-    };
+    let mut capture = ToolOutputCapture::preview_only();
     let reported_error = result.is_error == Some(true);
     let captured = capture_mcp_content(
         result.content,
@@ -135,26 +111,15 @@ fn translate_output(
         &mut capture,
         import,
     );
-    let capture_result = capture.finish(captured.storage_error.is_none());
-    let output_diagnostic = captured
-        .storage_error
-        .as_deref()
-        .or(captured.unsupported.as_deref());
-    let continuation = continuation_for_capture(&capture_result, background, output_diagnostic);
-    // A foreground preview that crossed its bound has no eligible Execution
-    // Client save binding: the honest continuation is typed `Unavailable`
-    // with no locator and no Read/Grep promise. A storage failure still
-    // wins its own diagnostic above; a small complete result carries no
-    // continuation at all.
-    let continuation = if !background && capture_result.truncated && continuation.is_none() {
-        Some(ManagedOutputContinuation::Unavailable {
+    let capture_result = capture.finish(captured.encoding_error.is_none());
+    // Storage is optional; this bounded projection can settle independently.
+    let continuation = capture_result
+        .truncated
+        .then(|| ManagedOutputContinuation::Unavailable {
             diagnostic: "Full output was not saved: no eligible Execution Client save binding \
-                         at the preview threshold."
+                     at the preview threshold."
                 .to_owned(),
-        })
-    } else {
-        continuation
-    };
+        });
     let (model_blocks, aggregate_error) =
         materialize_mcp_blocks(captured.pending_blocks, &capture_result, artifacts);
     let unsupported = captured
@@ -162,9 +127,9 @@ fn translate_output(
         .or(captured.aggregate_error)
         .or(aggregate_error);
     let validated = capture_result.complete && unsupported.is_none();
-    let status = if let Some(error) = captured.storage_error {
+    let status = if let Some(error) = captured.encoding_error {
         ToolExecutionStatus::Failed {
-            error: format!("MCP result output storage failed: {error}"),
+            error: format!("MCP result normalization failed: {error}"),
         }
     } else if let Some(error) = unsupported {
         ToolExecutionStatus::Failed { error }
@@ -319,32 +284,10 @@ fn materialize_mcp_blocks(
     (model_blocks, aggregate_error)
 }
 
-fn open_mcp_output_capture(
-    context: &ToolExecutionContext<'_>,
-) -> Result<ToolOutputCapture, (PathBuf, String)> {
-    let Some(execution_id) = context.execution_id else {
-        // Foreground has no eligible Execution Client save binding: the
-        // capture is preview-only, no execution id is allocated, and no
-        // store is consulted.
-        return Ok(ToolOutputCapture::preview_only());
-    };
-    let locator = context.tool_output.background_output_path(execution_id);
-    let sink = context
-        .tool_output
-        .open_background_output_sink(execution_id)
-        .map_err(|error| {
-            (
-                locator,
-                format!("cannot open the background MCP result output: {error}"),
-            )
-        })?;
-    Ok(ToolOutputCapture::background(sink, None))
-}
-
 struct McpContentCapture {
     pending_blocks: Vec<McpPendingBlock>,
     unsupported: Option<String>,
-    storage_error: Option<String>,
+    encoding_error: Option<String>,
     aggregate_error: Option<String>,
 }
 
@@ -357,7 +300,7 @@ fn capture_mcp_content(
     let mut captured = McpContentCapture {
         pending_blocks: Vec::new(),
         unsupported: None,
-        storage_error: None,
+        encoding_error: None,
         aggregate_error: None,
     };
     // Ordered display candidates are selected online against ONE shared
@@ -370,22 +313,19 @@ fn capture_mcp_content(
     let mut remaining_aggregate = MAX_MODEL_TOOL_RESULT_BYTES;
     let mut first_textual_block = true;
     {
-        let mut push_textual = |text: &str| -> Result<(), String> {
+        let mut push_textual = |text: &str| {
             if !first_textual_block {
-                capture.push("\n")?;
+                capture.push("\n");
                 import("\n");
             }
             first_textual_block = false;
-            capture.push(text)?;
+            capture.push(text);
             import(text);
-            Ok(())
         };
         for block in blocks {
             match block {
                 ContentBlock::Text(text) => {
-                    if let Err(error) = push_textual(&text.text) {
-                        captured.storage_error = Some(error);
-                    }
+                    push_textual(&text.text);
                     let mut preview = TextPreviewCapture::new(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES);
                     preview.push(&text.text);
                     if let Some(display) =
@@ -468,42 +408,21 @@ fn capture_mcp_structured_content(
     captured: &mut McpContentCapture,
     import: &mut impl FnMut(&str),
 ) {
-    if captured.storage_error.is_none() && !first_textual_block {
-        match capture.push("\n") {
-            Ok(()) => import("\n"),
-            Err(error) => captured.storage_error = Some(error),
-        }
+    if !first_textual_block {
+        capture.push("\n");
+        import("\n");
     }
     let normalized_before_json = capture.total_bytes();
-    // One streaming serialization feeds an independent saturating byte
-    // count and a bounded serialized preview tap — both consume ALL UTF-8
-    // even after the aggregate capture stops accepting writes, so a failed
-    // sink never sees further bytes, the first storage diagnostic is
-    // preserved, and the measured length stays complete rather than a
-    // partial count.
+    // Stream the serialization into the aggregate preview, its own bounded
+    // display tap, and the separately owned import on the same textual order.
     let mut serialized_bytes = 0usize;
-    let mut capture_failed = captured.storage_error.is_some();
     let mut block_preview = TextPreviewCapture::new(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES);
     let serialization_error = {
-        let capture = &mut *capture;
-        let block_preview = &mut block_preview;
-        let serialized_bytes = &mut serialized_bytes;
-        let capture_failed = &mut capture_failed;
-        let storage_error = &mut captured.storage_error;
-        let mut writer = ToolOutputWriter::over_sink(move |text| {
-            *serialized_bytes = serialized_bytes.saturating_add(text.len());
+        let mut writer = ToolOutputWriter::over_sink(|text| {
+            serialized_bytes = serialized_bytes.saturating_add(text.len());
             block_preview.push(text);
-            if !*capture_failed {
-                match capture.push(text) {
-                    Ok(()) => import(text),
-                    Err(error) => {
-                        *capture_failed = true;
-                        if storage_error.is_none() {
-                            *storage_error = Some(error);
-                        }
-                    }
-                }
-            }
+            capture.push(text);
+            import(text);
             Ok(())
         });
         serde_json::to_writer(&mut writer, &value)
@@ -514,12 +433,9 @@ fn capture_mcp_structured_content(
     if let Some(error) = serialization_error {
         // A value the serializer itself rejects never becomes content —
         // neither raw Json nor a partial preview is retained.
-        if captured.storage_error.is_none() {
-            captured.storage_error = Some(error);
-        }
-    } else if captured.storage_error.is_none()
-        && normalized_before_json.saturating_add(serialized_bytes as u64)
-            <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES as u64
+        captured.encoding_error = Some(error);
+    } else if normalized_before_json.saturating_add(serialized_bytes as u64)
+        <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES as u64
         && consume_aggregate(
             remaining_aggregate,
             serialized_bytes,
@@ -563,113 +479,29 @@ pub(super) fn write_artifact(
     Ok(id)
 }
 
-fn failed_mcp_storage(diagnostic: &str, locator: PathBuf, started: Instant) -> ToolExecutionResult {
-    let diagnostic = bound_error(diagnostic);
+pub(super) fn failed_mcp(message: &str, started: Instant) -> ToolExecutionResult {
+    mcp_empty_terminal(
+        ToolExecutionStatus::Failed {
+            error: bound_error(message),
+        },
+        started,
+    )
+}
+
+pub(super) fn mcp_empty_terminal(
+    status: ToolExecutionStatus,
+    started: Instant,
+) -> ToolExecutionResult {
     ToolExecutionResult {
         deliveries: Vec::new(),
-        status: ToolExecutionStatus::Failed {
-            error: format!("MCP result output storage failed: {diagnostic}"),
-        },
+        status,
         content: Vec::new(),
         duration_ms: duration_ms(started),
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
         workflow: None,
-        managed_output: Some(Box::new(
-            crate::tools::types::ManagedOutputContinuation::Partial {
-                locator,
-                diagnostic,
-            },
-        )),
-    }
-}
-
-pub(super) fn failed_mcp(
-    message: &str,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-) -> ToolExecutionResult {
-    mcp_empty_terminal(
-        ToolExecutionStatus::Failed {
-            error: bound_error(message),
-        },
-        context,
-        started,
-    )
-}
-
-/// Retains the dispatch-owned background locator for MCP outcomes that do
-/// not carry a remote `CallToolResult` (unknown outcomes after dispatch or
-/// a local protocol error). A healthy preallocated empty file is a complete
-/// record of a call that produced no logical result; a sink-open failure is
-/// explicitly Partial.
-pub(super) fn mcp_empty_terminal(
-    status: ToolExecutionStatus,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-) -> ToolExecutionResult {
-    let Some(execution_id) = context.execution_id else {
-        return ToolExecutionResult {
-            deliveries: Vec::new(),
-            status,
-            content: Vec::new(),
-            duration_ms: duration_ms(started),
-            exit_code: None,
-            artifacts: Vec::new(),
-            truncation: None,
-            workflow: None,
-            managed_output: None,
-        };
-    };
-    let locator = context.tool_output.background_output_path(execution_id);
-    match context
-        .tool_output
-        .open_background_output_sink(execution_id)
-    {
-        Ok(sink) => {
-            drop(sink);
-            ToolExecutionResult {
-                deliveries: Vec::new(),
-                status,
-                content: Vec::new(),
-                duration_ms: duration_ms(started),
-                exit_code: None,
-                artifacts: Vec::new(),
-                truncation: None,
-                workflow: None,
-                managed_output: Some(Box::new(ManagedOutputContinuation::Complete { locator })),
-            }
-        }
-        Err(error) => {
-            let diagnostic = format!("cannot open the background MCP result output: {error}");
-            // An output-storage failure never rewrites execution-outcome
-            // certainty: a known failure gains the storage diagnostic, while
-            // any other status keeps its own certainty claim and reports the
-            // storage failure only through the managed-output continuation.
-            let status = match status {
-                ToolExecutionStatus::Failed { error } => ToolExecutionStatus::Failed {
-                    error: bound_error(&format!(
-                        "{error}; MCP result output storage failed: {diagnostic}"
-                    )),
-                },
-                status => status,
-            };
-            ToolExecutionResult {
-                deliveries: Vec::new(),
-                status,
-                content: Vec::new(),
-                duration_ms: duration_ms(started),
-                exit_code: None,
-                artifacts: Vec::new(),
-                truncation: None,
-                workflow: None,
-                managed_output: Some(Box::new(ManagedOutputContinuation::Partial {
-                    locator,
-                    diagnostic: bound_error(&diagnostic),
-                })),
-            }
-        }
+        managed_output: None,
     }
 }
 
@@ -681,8 +513,6 @@ mod tests {
     use rmcp::model::{CallToolResult, ContentBlock};
 
     use super::{mcp_empty_terminal, translate_result};
-    use crate::runtime::identity::ToolExecutionId;
-    use crate::runtime::types::CancellationReason;
     use crate::tools::mcp::test_context::{NoProgress, context, runtime};
     use crate::tools::types::{
         ManagedOutputContinuation, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
@@ -705,6 +535,17 @@ mod tests {
                 ToolResultContent::Image(_) => "image",
             })
             .collect()
+    }
+
+    #[test]
+    fn terminal_without_a_remote_result_preserves_uncertainty_and_exposes_no_locator() {
+        let status = ToolExecutionStatus::OutcomeUnknown {
+            detail: "lost correlated reply".into(),
+        };
+        let result = mcp_empty_terminal(status.clone(), Instant::now());
+        assert_eq!(result.status, status);
+        assert_eq!(result.content, [] as [ToolResultContent; 0]);
+        assert!(result.managed_output.is_none());
     }
 
     /// Issue #240: `structuredContent` is arbitrary JSON at the adapter
@@ -1179,156 +1020,6 @@ mod tests {
         assert_unavailable_no_save(&result, runtime.tool_output());
     }
 
-    #[test]
-    fn background_mcp_empty_terminal_reuses_the_dispatch_locator() {
-        let (_directory, runtime) = runtime("conv_b9fa698c-d676-7a72-8ddf-b9a5eb8d09cf");
-        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000b");
-        let advertised = runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch output");
-        let progress = NoProgress;
-        let result = mcp_empty_terminal(
-            ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::UserRequested,
-                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
-            },
-            &context(&runtime, Some(&execution_id), &progress),
-            Instant::now(),
-        );
-        assert!(matches!(
-            result.status,
-            ToolExecutionStatus::Cancelled { .. }
-        ));
-        assert_eq!(
-            result.managed_output.map(|value| *value),
-            Some(ManagedOutputContinuation::Complete {
-                locator: advertised
-            })
-        );
-        assert_eq!(
-            std::fs::read(runtime.tool_output().background_output_path(&execution_id))
-                .expect("empty background output"),
-            b""
-        );
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().unwrap())
-                .expect("results directory")
-                .filter(|entry| entry
-                    .as_ref()
-                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
-                .count(),
-            0
-        );
-    }
-
-    /// Issue #202: an output-sink-open failure never rewrites execution
-    /// outcome certainty. A non-`Failed` terminal status keeps its own
-    /// certainty claim; the storage failure is reported only through the
-    /// managed-output continuation as explicitly Partial.
-    #[test]
-    fn background_mcp_sink_open_failure_preserves_outcome_certainty() {
-        let (_directory, runtime) = runtime("conv_e1de8e98-031f-7225-a705-b3c8b7bbd52a");
-        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000c");
-        let advertised = runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch output");
-        runtime.tool_output().set_force_open_failures(true);
-        let progress = NoProgress;
-        let result = mcp_empty_terminal(
-            ToolExecutionStatus::OutcomeUnknown {
-                detail: "MCP transport closed during tools/call without a response".to_owned(),
-            },
-            &context(&runtime, Some(&execution_id), &progress),
-            Instant::now(),
-        );
-        assert!(
-            matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }),
-            "a storage failure must not rewrite the outcome status: {:?}",
-            result.status
-        );
-        let Some(ManagedOutputContinuation::Partial {
-            locator,
-            diagnostic,
-        }) = result.managed_output.as_deref()
-        else {
-            panic!("a sink-open failure is honestly Partial: {result:?}");
-        };
-        assert_eq!(*locator, advertised);
-        assert!(
-            diagnostic.contains("cannot open the background MCP result output"),
-            "the continuation names the storage failure: {diagnostic}"
-        );
-    }
-
-    /// Issue #202: with the same sink-open failure, a known `Failed` status
-    /// stays `Failed` and gains the storage diagnostic appended.
-    #[test]
-    fn background_mcp_sink_open_failure_appends_the_diagnostic_to_a_known_failure() {
-        let (_directory, runtime) = runtime("conv_b8aea0c2-995c-7b75-ae2d-babec6181e66");
-        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000d");
-        runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch output");
-        runtime.tool_output().set_force_open_failures(true);
-        let progress = NoProgress;
-        let result = mcp_empty_terminal(
-            ToolExecutionStatus::Failed {
-                error: "peer said no".to_owned(),
-            },
-            &context(&runtime, Some(&execution_id), &progress),
-            Instant::now(),
-        );
-        let ToolExecutionStatus::Failed { error } = &result.status else {
-            panic!("a known failure stays Failed: {result:?}");
-        };
-        assert!(
-            error.contains("peer said no") && error.contains("MCP result output storage failed"),
-            "the failure gains the storage diagnostic: {error}"
-        );
-        assert!(matches!(
-            result.managed_output.as_deref(),
-            Some(ManagedOutputContinuation::Partial { .. })
-        ));
-    }
-
-    #[test]
-    fn background_mcp_storage_write_failure_keeps_the_dispatch_locator_partial() {
-        let (_directory, runtime) = runtime("conv_cf322b11-3d5e-788f-ab17-a026fb84e14f");
-        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-000000000004");
-        let advertised = runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch output");
-        runtime.tool_output().fail_writes_after(0);
-        let progress = NoProgress;
-        let result = translate_result(
-            CallToolResult::success(vec![ContentBlock::text(
-                "x".repeat(crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
-            )]),
-            &context(&runtime, Some(&execution_id), &progress),
-            Instant::now(),
-        );
-        let Some(ManagedOutputContinuation::Partial { locator, .. }) =
-            result.managed_output.as_deref()
-        else {
-            panic!("background MCP write failure must remain Partial: {result:?}");
-        };
-        assert_eq!(locator, &advertised);
-        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().unwrap())
-                .expect("results directory")
-                .filter(|entry| entry
-                    .as_ref()
-                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
-                .count(),
-            0
-        );
-    }
-
     /// Hundreds of large text blocks retain a shared bounded preview
     /// window, not one bounded capture per block: the summed display bytes
     /// cannot exceed the preview bound even though every block normalized
@@ -1623,61 +1314,5 @@ mod tests {
                 .is_some_and(|truncation| truncation.original_bytes == Some(preview as u64 + 1))
         );
         assert_unavailable_no_save(&result, runtime.tool_output());
-    }
-
-    /// A background sink failing mid-serialization keeps its first storage
-    /// diagnostic and never retains the unrestricted upstream value: the
-    /// failed capture selects the bounded serialized preview instead of an
-    /// oversized `Json` measured by a partial count.
-    #[test]
-    fn background_mcp_sink_failure_mid_json_keeps_only_the_bounded_preview() {
-        let (_directory, runtime) = runtime("conv_5e4d3c2b-1a0f-7e9d-b8c7-a6b5c4d3e2f1");
-        let execution_id = ToolExecutionId::new("exec_01900000-0000-7000-8000-00000000000e");
-        runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch output");
-        // Enough bytes for the text head, separator, and the first JSON
-        // fragments; every later write fails inside the serialization.
-        runtime.tool_output().fail_writes_after(32);
-        let mut call = CallToolResult::success(vec![ContentBlock::text("head")]);
-        call.structured_content = Some(serde_json::json!(
-            "x".repeat(crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 1024)
-        ));
-        let progress = NoProgress;
-        let result = translate_result(
-            call,
-            &context(&runtime, Some(&execution_id), &progress),
-            Instant::now(),
-        );
-
-        let ToolExecutionStatus::Failed { error } = &result.status else {
-            panic!("a mid-serialization sink failure must fail explicitly: {result:?}");
-        };
-        assert!(
-            error.contains("MCP result output storage failed"),
-            "the first storage diagnostic is preserved: {error}"
-        );
-        assert!(
-            !result
-                .content
-                .iter()
-                .any(|content| matches!(content, ToolResultContent::Json { .. })),
-            "an oversized upstream value is never retained: {:?}",
-            result.content
-        );
-        for content in &result.content {
-            if let ToolResultContent::Text(text) = content {
-                assert!(
-                    text.text.len() <= crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
-                    "every retained display candidate is bounded: {} bytes",
-                    text.text.len()
-                );
-            }
-        }
-        assert!(matches!(
-            result.managed_output.as_deref(),
-            Some(ManagedOutputContinuation::Partial { .. })
-        ));
     }
 }

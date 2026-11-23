@@ -84,7 +84,6 @@ impl McpServerRuntime {
                 &created.task.task_id,
                 "the MCP server answered tools/call with a task result without advertising the \
                  io.modelcontextprotocol/tasks extension",
-                context,
                 started,
                 generation,
             );
@@ -95,7 +94,6 @@ impl McpServerRuntime {
                 return self.task_outcome_unknown(
                     &created.task.task_id,
                     &violation.diagnostic,
-                    context,
                     started,
                     generation,
                 );
@@ -152,7 +150,6 @@ impl McpServerRuntime {
                                     .to_string()
                             )
                         ),
-                        context,
                         started,
                     );
                 }
@@ -166,7 +163,6 @@ impl McpServerRuntime {
                             "the MCP server cancelled the task and it produced no result ({})",
                             self.generation_tag(generation)
                         ),
-                        context,
                         started,
                     );
                 }
@@ -187,7 +183,7 @@ impl McpServerRuntime {
         };
         match failure {
             TaskDriveFailure::Unreachable(detail) => {
-                self.task_outcome_unknown(task.task_id(), &detail, context, started, generation)
+                self.task_outcome_unknown(task.task_id(), &detail, started, generation)
             }
             TaskDriveFailure::AbandonAddressable(detail) | TaskDriveFailure::Cancelled(detail) => {
                 self.abandon_active_task(task.task_id(), &detail, context, started, generation)
@@ -514,7 +510,6 @@ impl McpServerRuntime {
             return self.task_outcome_unknown(
                 task_id,
                 &format!("{detail}; no tasks/cancel: Tasks was not negotiated"),
-                context,
                 started,
                 generation,
             );
@@ -523,7 +518,6 @@ impl McpServerRuntime {
             return self.task_outcome_unknown(
                 task_id,
                 &format!("{detail}; no tasks/cancel: {reason}"),
-                context,
                 started,
                 generation,
             );
@@ -559,7 +553,6 @@ impl McpServerRuntime {
         self.task_outcome_unknown(
             task_id,
             &format!("{detail}; {requested}"),
-            context,
             started,
             generation,
         )
@@ -588,7 +581,6 @@ impl McpServerRuntime {
             Err(violation) => self.task_outcome_unknown(
                 &created.task.task_id,
                 &format!("{detail}; {}", violation.diagnostic),
-                context,
                 started,
                 generation,
             ),
@@ -607,7 +599,6 @@ impl McpServerRuntime {
         &self,
         task_id: &str,
         detail: &str,
-        context: &ToolExecutionContext<'_>,
         started: Instant,
         generation: u64,
     ) -> ToolExecutionResult {
@@ -620,7 +611,6 @@ impl McpServerRuntime {
                     self.generation_tag(generation)
                 )),
             },
-            context,
             started,
         )
     }
