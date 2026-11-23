@@ -347,19 +347,25 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
 #[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_spilling() {
-    http_mcp_output(false, false).await;
+    http_mcp_output(HttpMcpOutput::PreviewOverflow).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client() {
+    http_mcp_output(HttpMcpOutput::NearLimit).await;
 }
 
 #[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn http_mcp_imports_complete_output_through_the_bound_client() {
-    http_mcp_output(true, false).await;
+    http_mcp_output(HttpMcpOutput::BoundImport).await;
 }
 
 #[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn oversized_http_mcp_body_is_refused_without_replaying_the_call() {
-    http_mcp_output(false, true).await;
+    http_mcp_output(HttpMcpOutput::Oversized).await;
 }
 
 #[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
@@ -852,7 +858,15 @@ export XDG_DATA_HOME="$HOME/.local/share"
 }
 
 #[cfg(feature = "mcp-fixture")]
-async fn http_mcp_output(with_client: bool, over_limit: bool) {
+enum HttpMcpOutput {
+    PreviewOverflow,
+    NearLimit,
+    BoundImport,
+    Oversized,
+}
+
+#[cfg(feature = "mcp-fixture")]
+async fn http_mcp_output(case: HttpMcpOutput) {
     bounded(Box::pin(async {
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -871,12 +885,14 @@ async fn http_mcp_output(with_client: bool, over_limit: bool) {
         use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 
         let fixture = Fixture::new().await;
-        let original_bytes = if over_limit {
-            16 * 1024 * 1024 + 1
-        } else if with_client {
-            5 * rustx_execution_protocol::MAX_RAW_CHUNK_BYTES
-        } else {
-            FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1
+        let with_client = matches!(case, HttpMcpOutput::BoundImport);
+        let over_limit = matches!(case, HttpMcpOutput::Oversized);
+        let original_bytes = match case {
+            HttpMcpOutput::PreviewOverflow => FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1,
+            HttpMcpOutput::BoundImport => 5 * rustx_execution_protocol::MAX_RAW_CHUNK_BYTES,
+            // Allow room for the MCP JSON envelope.
+            HttpMcpOutput::NearLimit => 16 * 1024 * 1024 - 4096,
+            HttpMcpOutput::Oversized => 16 * 1024 * 1024 + 1,
         };
         let mcp_calls = fixture.root.path().join("mcp-calls");
         let mcp = McpFixture {
@@ -1066,6 +1082,10 @@ exec "$bin/client-real" "$@"
             panic!("canonical tool result");
         };
         let preview = tool.result.model_facing_projection();
+        assert!(
+            serde_json::to_vec(&tool.result).unwrap().len() <= 64 * 1024,
+            "the canonical ToolResult must stay bounded with the preview"
+        );
         assert_eq!(std::fs::read_to_string(mcp_calls).unwrap(), "echo\n");
         if over_limit {
             assert!(matches!(
