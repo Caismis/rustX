@@ -458,6 +458,10 @@
   .table .optionalColumn { display: none; }
 }
 
+/* The inherited-scope section is separated from the owned resources above it
+ * by a hairline + extra air, so the two scopes read as distinct groups. */
 .scopeGroup {
-  margin-top: 24px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: .5px solid var(--dsw-alias-border-l2);
 }
