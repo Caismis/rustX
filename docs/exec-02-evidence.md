@@ -176,7 +176,9 @@ before reaching that barrier.
   fault matrix, remaining interrupted durable stages, and native macOS
   settlement.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
-  run through the bound Client in EXEC-03. Full restart cleanup, the
-  cross-role and foreground MCP interaction matrix, and Client Store
-  fault coverage beyond the races documented above remain open. Native macOS fault injection and
-  final exact-head verification remain open.
+  run through the bound Client in EXEC-03. Three real stdio boundary tests
+  cover MRTR continuation, the original Questionnaire owner and cancellation
+  before the next task poll. They confirm physical close and reap the Client.
+  Full restart cleanup and additional cross-role and Client Store fault
+  coverage remain open, along with native macOS fault injection and final
+  exact-head verification.

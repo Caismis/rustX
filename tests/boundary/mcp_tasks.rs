@@ -24,6 +24,7 @@ use crate::events::interaction::{
     AnswerSpecification, OptionAnswer, OptionSpecification, QuestionSpecification,
     QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSubmission,
 };
+use crate::local_runtime::session_runtime_manager::StandaloneExecution;
 use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, McpServerId, ToolCallId};
 use crate::runtime::interaction::{
     InteractionCoordinator, InteractionObserver, InteractionRequest, InteractionResponse,
@@ -128,6 +129,7 @@ struct Harness {
     server: String,
     _directory: tempfile::TempDir,
     runtime: Arc<McpServerRuntime>,
+    execution: Option<StandaloneExecution>,
     tool_runtime: ConversationToolRuntime,
     coordinator: Arc<InteractionCoordinator>,
     audit: Arc<RecordingInteractionAudit>,
@@ -139,6 +141,7 @@ struct Harness {
 /// The environment overlay one fixture launch runs with.
 #[derive(Default)]
 struct FixtureOptions {
+    client_owned: bool,
     /// Publish the Tasks guard tools **without** advertising the extension.
     unadvertised: bool,
     /// Narrow the fixture to one legacy MCP revision.
@@ -161,6 +164,7 @@ impl Harness {
         let directory = tempfile::tempdir().expect("fixture root");
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace_root = workspace_root.canonicalize().expect("workspace identity");
         let observations = directory.path().join("task-observations.jsonl");
         let prefix = tool_prefix(test_name);
         let server = server_id(test_name);
@@ -204,7 +208,26 @@ impl Harness {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let execution = if options.client_owned {
+            let execution_root = directory.path().join("execution");
+            std::fs::create_dir(&execution_root).expect("private execution root");
+            Some(
+                StandaloneExecution::start(
+                    crate::runtime::identity::SessionId::generate(),
+                    workspace_root.clone(),
+                    execution_root,
+                )
+                .await
+                .expect("paired Execution Client"),
+            )
+        } else {
+            None
+        };
+        let workspace = match &execution {
+            Some(client) => Workspace::for_session(&workspace_root, client.scope()),
+            None => Workspace::new(&workspace_root),
+        }
+        .expect("workspace");
         let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new(&server),
             &binding,
@@ -246,6 +269,7 @@ impl Harness {
             server,
             _directory: directory,
             runtime,
+            execution,
             tool_runtime,
             coordinator,
             audit,
@@ -388,7 +412,11 @@ impl Harness {
     }
 
     async fn shutdown(&self) {
-        let _ = self.runtime.close().await;
+        let settlement = self.runtime.close().await;
+        if let Some(client) = &self.execution {
+            settlement.expect("stdio process settled before Client revocation");
+            client.shutdown().await.expect("paired Client exited");
+        }
     }
 }
 
@@ -695,7 +723,10 @@ async fn a_continuation_round_may_materialize_the_task() {
     }
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::a_continuation_round_may_materialize_the_task",
-        FixtureOptions::default(),
+        FixtureOptions {
+            client_owned: true,
+            ..FixtureOptions::default()
+        },
     )
     .await;
     let progress = RecordingProgress::default();
@@ -742,7 +773,10 @@ async fn task_input_uses_the_existing_questionnaire_owner() {
     }
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::task_input_uses_the_existing_questionnaire_owner",
-        FixtureOptions::default(),
+        FixtureOptions {
+            client_owned: true,
+            ..FixtureOptions::default()
+        },
     )
     .await;
     let progress = RecordingProgress::default();
@@ -1080,7 +1114,10 @@ async fn cancellation_before_the_next_poll_dispatches_no_further_get() {
     }
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::cancellation_before_the_next_poll_dispatches_no_further_get",
-        FixtureOptions::default(),
+        FixtureOptions {
+            client_owned: true,
+            ..FixtureOptions::default()
+        },
     )
     .await;
     // The first poll runs to completion; the second is held at its frontier.

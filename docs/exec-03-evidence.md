@@ -207,6 +207,14 @@ The credential catalog test runs tools, resources and templates through a
 real bound Client, checks that the peer receives literal and referenced
 credentials, and verifies that native inventory redacts the echoed fields.
 
+Three MCP boundary tests now drive a real Client-owned stdio session.
+The MRTR test observes exactly two `tools/call` requests and the typed
+answer before the remote task is created. The task input test checks one
+Questionnaire and one `tasks/update`. The cancellation test holds the
+second poll before dispatch, observes one physical `tasks/get` and one
+cooperative `tasks/cancel`, and retains the unknown outcome. Each waits
+for the physical stdio close before reaping its paired Client.
+
 The finite MCP management route can also select an exact Session. The
 mounted Workspace regression reads its Client-only MCP definition and
 observes one HTTP catalog request from Server, five declarations and zero
