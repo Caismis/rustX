@@ -91,7 +91,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
       await expect(page.getByText('Unfinished source output.', { exact: true })).toHaveCount(0);
       if (width === 390) await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
-      await send('Fork follow-up'); await expect(page.getByText('Fork kept the completed answer.', { exact: true })).toBeVisible();
+      await send('Fork follow-up'); await expect(page.getByText('Fork kept the completed answer.', { exact: true })).toBeVisible({ timeout: 15_000 });
       await expect(retry).toBeEnabled();
       await actions(child); await page.getByRole('menuitem', { name: zh ? '删除会话' : 'Delete Session', exact: true }).click();
       await expect(deletion).toBeVisible(); await deletion.getByRole('button', { name: zh ? '删除' : 'Delete', exact: true }).click(); await expect(deletion).toHaveCount(0);

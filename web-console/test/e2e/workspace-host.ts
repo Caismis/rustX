@@ -55,9 +55,20 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
     }
     const write = route.request().url().endsWith('/configuration') && route.request().postDataJSON()?.operation?.kind === 'write';
     if (write) await writeGate?.before();
-    const response = await fetch(`${fixture.workspaceHostUrl}${new URL(route.request().url()).pathname}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
-    });
+    // The fixture host can still be binding its listener when the first routed
+    // request lands (ECONNREFUSED on a fresh app-server); give it a few seconds.
+    let response: Response | undefined;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await fetch(`${fixture.workspaceHostUrl}${new URL(route.request().url()).pathname}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
+        });
+        break;
+      } catch (error) {
+        if (attempt >= 30 || (error as NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }).cause?.code !== 'ECONNREFUSED') throw error;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
     if (write) await writeGate?.observed();
     const buffered = { status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) };
     // Observe the same terminal bytes delivered below, without retrieving a
