@@ -193,8 +193,15 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     };
   };
   const bindSkillDisplayWrite = (skill: SkillDescriptor): SkillDisplayWriter | undefined => {
-    const write = bindSkillWrite(skill, skill.display?.revision ?? undefined);
-    if (write) return (authored, upload) => write({ kind: 'skill_display', name: skill.catalog.name, authored, upload });
+    if (!skill.display?.revision || !editable) return;
+    // The CAS revision is supplied per call from the draft's own base — never
+    // captured at bind time — so a second save fences the post-write revision
+    // and an external advance surfaces as a conflict.
+    return (authored, upload, expected_revision) => {
+      const write = bindSkillWrite(skill, expected_revision);
+      if (!write) return Promise.reject(new Error(tx('resources:scope.unavailable')));
+      return write({ kind: 'skill_display', name: skill.catalog.name, authored, upload });
+    };
   };
   const bindSkillDelete = (skill: SkillDescriptor) => {
     const write = bindSkillWrite(skill, skill.operation_revision ?? undefined);

@@ -225,6 +225,6 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>
     </form>
-    {focus.name && <Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
+    {focus.name && <Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail embedded source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
   </>;
 }

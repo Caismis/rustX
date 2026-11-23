@@ -337,15 +337,13 @@ it('keeps a new provider template as a draft across provider and settings page c
   fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Provider' })).getByRole('button', { name: 'DeepSeek' }));
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
-  // The unguarded breadcrumb returns to the list and keeps the draft.
+  // Leaving the detail asks; staying keeps the draft.
   fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
-  fireEvent.click(await screen.findByRole('button', { name: 'DeepSeek →' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
   // Leaving the Settings page asks first; staying keeps the draft.
-  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(screen.getByRole('tab', { name: 'Agent' }));
   fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
-  fireEvent.click(screen.getByRole('button', { name: 'DeepSeek →' }));
   await providerAction('Delete', within(screen.getByRole('form', { name: 'Provider DeepSeek' })));
   const crumb = screen.queryByRole('button', { name: 'Model Settings' });
   if (crumb) fireEvent.click(crumb);

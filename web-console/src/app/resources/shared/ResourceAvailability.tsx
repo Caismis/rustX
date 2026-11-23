@@ -2,7 +2,7 @@ import type { SourceMutation, SourceScope, SourceSettings } from '../../../../..
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
-import { UnitOutcomeNotice, useUnitEditing } from '../../settings/forms/bridge';
+import { UnitOutcomeNotice, useUnitEditing, type UnitEditing } from '../../settings/forms/bridge';
 import { Choice } from '../../settings/primitives/aria';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
 import { toolSourceId } from '../../settings/capability';
@@ -37,12 +37,23 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
         if (next === 'inherit') { if (unit.authoredPresent) unit.submit(true); }
         else unit.apply(next === 'all' ? 'all' : next === 'none' ? [] : selection === 'all' ? skillNames! : selection);
       }} />
-    {unit.reviewNeeded && <div className={css.availability}>
-      <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>
-    </div>}
+    <FailedIntentRecovery unit={unit} />
     <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined} />
     <UnitOutcomeNotice title={tx('resources:skills.title')} outcome={unit.outcome}/>
   </section>;
+}
+
+/** A refused quick gesture keeps its draft intent — the control it disabled
+ * must offer the recovery itself: rebase on the reviewed revision and retry,
+ * or abandon the intent and show the committed fact again. */
+function FailedIntentRecovery({ unit }: { unit: UnitEditing<Selection> }) {
+  const tx = useTranslation();
+  const refused = unit.outcome.kind === 'rejected' || unit.outcome.kind === 'uncertain';
+  if (!unit.draft || !(unit.reviewNeeded || refused)) return null;
+  return <div className={css.availability}>
+    <Button size="sm" onClick={() => { unit.review(); unit.submit(false); }}>{tx('settings:aria.retry')}</Button>
+    <Button size="sm" variant="ghost" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>
+  </div>;
 }
 
 /** Quick selection edits the same semantic unit as the full permission editor. */
@@ -76,7 +87,7 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
       disabled={review || !unit.writable || !unit.admitted || unit.busy || valid === false && !selected
         || family === 'skill' && selection === 'all' && skillNames === undefined}
       onChange={enabled => unit.apply(family === 'mcp' ? enabled ? 'all' : [] : enabled ? [...new Set([...names, name])] : names.filter(item => item !== name))}/>
-    {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
+    <FailedIntentRecovery unit={unit} />
     <UnitOutcomeNotice title={name} outcome={unit.outcome}/>
   </div>;
 }

@@ -15,7 +15,12 @@ import { IconPicker } from '../../workflows/ui/WorkflowIcon';
 import { SkillIcon, skillAssetUrl } from './SkillIcon';
 import css from './SkillDetail.module.css';
 
-export type SkillDisplayWriter = (authored: SkillDisplayWrite, upload?: SkillIconUpload) => Promise<void>;
+/** The display write fences its own compare-and-set: `expected_revision` is
+ * the authoritative revision the draft was seeded from — supplied per call,
+ * never captured at bind time, so a second save fences the post-write
+ * revision and an external advance surfaces as a CAS conflict instead of
+ * being silently overwritten. */
+export type SkillDisplayWriter = (authored: SkillDisplayWrite, upload: SkillIconUpload | undefined, expected_revision: string) => Promise<void>;
 
 const MAX_ICON_BYTES = 32 * 1024;
 const IMAGE_TYPES: Readonly<Record<string, SkillIconMediaType>> = {
@@ -28,7 +33,7 @@ const IMAGE_TYPES: Readonly<Record<string, SkillIconMediaType>> = {
 export function SkillDetail({ client, target, name, display, owner, write, onDelete, close, bodyDisabled = false }: {
   client: AppServerClient; target: SourceTarget; name: string;
   display?: SkillDisplay | null; owner: SourceScope;
-  write?: (authored: SkillDisplayWrite, upload?: SkillIconUpload) => Promise<void>;
+  write?: SkillDisplayWriter;
   onDelete?: () => void; close: () => void; bodyDisabled?: boolean;
 }) {
   const tx = useTranslation();
@@ -75,6 +80,11 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
   const lastRevision = useRef(display?.revision);
   const userEdited = useRef(false);
   const ownWrite = useRef(false);
+  // The authoritative revision this draft was seeded from — the CAS fence
+  // every save carries. It advances only with a re-seed (own write's echo or
+  // an untouched draft), never mid-flight.
+  const draftBase = useRef(display?.revision);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (lastRevision.current === display?.revision) return;
     lastRevision.current = display?.revision;
@@ -83,6 +93,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
       setSelectedImage(undefined);
       setFailure('');
       userEdited.current = false;
+      draftBase.current = display?.revision;
     }
     ownWrite.current = false;
   }, [display]);
@@ -132,22 +143,30 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
   };
 
   // Display fields stage as a page-local draft: the footer commits them
-  // through the same save gesture as every other unit on the page.
+  // through the same save gesture as every other unit on the page. The save
+  // returns its write promise, so `page.saving` covers the whole submit +
+  // settle window — a second Save waits on it, the navigation guard stays
+  // armed through `changed`, and the fields stay locked below, so no edit
+  // can be lost under an in-flight read-back and the page never reports a
+  // batch done before this write answered.
   useEffect(() => {
-    const editable = !!write && !!display?.revision;
+    const editable = !!write && !!display?.revision && !!draftBase.current;
     page?.setLocal(editable && changed,
       editable ? () => {
+        if (saving) return Promise.resolve();
+        setSaving(true);
         ownWrite.current = true;
-        void Promise.resolve(write(clean, selectedImage?.upload))
+        return Promise.resolve(write(clean, selectedImage?.upload, draftBase.current!))
           // A committed upload must release the preview intent — keeping it
           // would hold `changed` true and the page would stay dirty forever.
           .then(() => setSelectedImage(undefined))
-          .catch(error => { ownWrite.current = false; setFailure(String(error)); });
+          .catch(error => { ownWrite.current = false; setFailure(String(error)); })
+          .finally(() => setSaving(false));
       } : undefined,
-      editable ? () => { setDraft(authored ?? {}); setSelectedImage(undefined); setFailure(''); userEdited.current = false; } : undefined);
+      editable ? () => { setDraft(authored ?? {}); setSelectedImage(undefined); setFailure(''); userEdited.current = false; draftBase.current = display?.revision; } : undefined);
     // `draft`/`selectedImage` must be deps: the save closure commits exactly
     // what they captured — a boolean `changed` alone would keep a stale clean.
-  }, [page, changed, draft, selectedImage, write, display?.revision]);
+  }, [page, changed, draft, selectedImage, write, display?.revision, saving]);
 
   const title = display?.authored.display_name ?? name;
   const editable = !!write && !!display?.revision;
@@ -165,23 +184,23 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
     </div>
     {editable && <SettingsGroup title={tx('resources:skills.edit-display')}>
       <SettingsRow label={tx('resources:skills.display-name')}>
-        <input value={draft.display_name ?? ''} maxLength={128} aria-label={tx('resources:skills.display-name')}
+        <input value={draft.display_name ?? ''} maxLength={128} aria-label={tx('resources:skills.display-name')} disabled={saving}
           onChange={event => update('display_name', event.target.value)} />
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.short-description')} vertical>
-        <textarea value={draft.short_description ?? ''} rows={2} maxLength={1024} aria-label={tx('resources:skills.short-description')}
+        <textarea value={draft.short_description ?? ''} rows={2} maxLength={1024} aria-label={tx('resources:skills.short-description')} disabled={saving}
           onChange={event => update('short_description', event.target.value)} />
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.icon')} vertical description={iconLabel}>
         <div className={css.iconActions}>
           <input ref={fileInput} type="file" hidden accept=".png,.jpg,.jpeg,.webp,.svg"
             aria-label={tx('resources:skills.upload-image')} onChange={event => void chooseImage(event)} />
-          <Button variant="outline" size="sm" disabled={reading} onClick={() => fileInput.current?.click()}>
+          <Button variant="outline" size="sm" disabled={reading || saving} onClick={() => fileInput.current?.click()}>
             {tx('resources:skills.upload-image')}
           </Button>
           <IconPicker value={clean.icon ?? ''} label={tx('resources:skills.choose-iconify')}
-            onChange={setIcon} disabled={reading} />
-          {(selectedImage || assetPath || clean.icon) && <Button variant="ghost" size="sm" onClick={() => setIcon()}>
+            onChange={setIcon} disabled={reading || saving} />
+          {(selectedImage || assetPath || clean.icon) && <Button variant="ghost" size="sm" disabled={saving} onClick={() => setIcon()}>
             {tx('resources:skills.clear-icon')}
           </Button>}
         </div>
@@ -189,10 +208,10 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
       <SettingsRow label={tx('resources:skills.asset-paths')} vertical>
         <div className={css.pathFields} id={iconSectionId}>
           <label>{tx('resources:skills.small-icon-path')}
-            <input value={draft.icon_small ?? ''} spellCheck={false} maxLength={1024}
+            <input value={draft.icon_small ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
               onChange={event => update('icon_small', event.target.value)} /></label>
           <label>{tx('resources:skills.large-icon-path')}
-            <input value={draft.icon_large ?? ''} spellCheck={false} maxLength={1024}
+            <input value={draft.icon_large ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
               onChange={event => update('icon_large', event.target.value)} /></label>
         </div>
       </SettingsRow>

@@ -35,7 +35,9 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
   const workspaceRemovals: SourceMutation[] = scope === 'workspace' ? [
     ...(document.approval_mode != null ? [{ kind: 'config', mutation: { unit: 'approval', authored: null } } as const] : []),
     ...(agent?.tools?.builtin != null ? [{ kind: 'config', mutation: { unit: 'native_tools', authored: null } } as const] : []),
-    ...Object.keys(authoredSources).map(id => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored: null } } as const)),
+    // Only the sources this page owns (python:*); other grant kinds keep
+    // their authored selections when this page follows global again.
+    ...Object.keys(authoredSources).filter(id => id.startsWith('python:')).map(id => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored: null } } as const)),
   ] : [];
   const scopeNotice = sourceView(source, scope) === undefined ? tx('settings:tools-page.this-scope-has-no-source-view') : undefined;
 

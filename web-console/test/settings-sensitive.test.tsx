@@ -74,6 +74,9 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
   expect(field.value).toBe('');
   expect(field.type).toBe('password');
   fireEvent.change(field, { target: { value: 'WORKSPACE-ONLY' } });
+  // A write-only field never commits on a typing pause — only its explicit
+  // save gesture crosses the boundary, carrying the complete typed value.
+  fireEvent.click(form.getByRole('button', { name: 'Save Environment SECRET_ENV' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0][0]).toEqual({
     method: 'configuration/sourceWrite',

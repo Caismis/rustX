@@ -11,7 +11,7 @@ import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { OutcomeUncertain } from '../src/client/errors';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import {
   chooseOption, confirmAction, openMcpContractEditor, openResourceRow, openSettingsPage, settingsReady, SettingsSurface,
 } from './settings-harness';
@@ -372,6 +372,62 @@ it('S2-06 a rejected definition and a saved selection are reported as two outcom
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(3));
   expect(writes(s)[2].params.mutation.kind).toBe('mcp');
+});
+
+it('S2-06 connection and permission edits land in a single definition write', async () => {
+  const s = cfg3Client();
+  await mcpDetail(s);
+  // The embedded permissions section shares the connection editor's McpWrite
+  // unit: Command + permission edits are one draft and one document write.
+  await chooseOption('Automatic', 'Allow', within(screen.getByRole('form', { name: 'Permissions' })));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  const mcp = writes(s).filter(op => op.params.mutation.kind === 'mcp');
+  expect(mcp).toHaveLength(1);
+  expect(mcp[0].params.mutation).toEqual({
+    kind: 'mcp', id: 'search',
+    authored: {
+      definition: { type: 'stdio', command: 'search-server-2', args: [], permissions: { plan: 'default', automatic: 'allow', full_access: 'default' } },
+      retained_env: [], retained_headers: [],
+    },
+  });
+});
+
+it('S2-06 a conflicted write keeps the draft; Adopt latest abandons it without another write', async () => {
+  const s = cfg3Client(async op => {
+    if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'mcp')
+      throw new RpcFailure({ code: -32000, message: 'source changed', data: { kind: 'source_conflict', scope: 'user', expected: 'mcp-1', actual: 'mcp-9' } });
+  });
+  await mcpDetail(s);
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  await screen.findByText(/was not saved because it changed elsewhere/);
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
+  // The footer offers the two honest gestures for the conflicted unit only.
+  const alert = (await screen.findAllByRole('alert')).find(el => el.textContent?.includes('A setting was not saved because the source changed'))!;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Adopt latest' }));
+  // Adopt the authoritative revision: the intent is abandoned, no new write.
+  await waitFor(() => expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server'));
+  expect(writes(s)).toHaveLength(2);
+});
+
+it('S2-06 Use latest setting resubmits a conflicted intent with a fresh CAS base', async () => {
+  const s = cfg3Client(async op => {
+    if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'mcp')
+      throw new RpcFailure({ code: -32000, message: 'source changed', data: { kind: 'source_conflict', scope: 'user', expected: 'mcp-1', actual: 'mcp-9' } });
+  });
+  await mcpDetail(s);
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  const alert = (await screen.findAllByRole('alert')).find(el => el.textContent?.includes('A setting was not saved because the source changed'))!;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Use latest setting' }));
+  // The intent is kept and rebased on the reviewed revision: exactly one
+  // resubmission carrying a real CAS — and it stays kept, not adopted, when
+  // the conflict persists.
+  await waitFor(() => expect(writes(s)).toHaveLength(3));
+  expect(writes(s)[2].params.mutation.kind).toBe('mcp');
+  expect(writes(s)[2].params.expected_revision).toBe('mcp-1');
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
 });
 
 // ── S2-07 Workspace constrained surface ─────────────────────────────────────
@@ -849,9 +905,10 @@ it('S2-09 an incomplete Provider draft survives navigation and needs review afte
   fireEvent.change(endpoint(), { target: { value: 'incomplete' } });
   // The draft lives in the actor-owned transaction, not in the form library.
   expect(retained(s)).toContain('incomplete');
-  // Back to the list — the draft stays in the transaction, reopening shows it.
+  // Leaving the detail asks; staying keeps the draft. A detached draft can
+  // never ride another detail's Save — leaving resolves the intent first.
   fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
-  await openResourceRow('transport');
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   expect(endpoint().value).toBe('incomplete');
   // Leaving the page entirely asks; staying keeps the draft.
   fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));

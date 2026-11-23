@@ -12,6 +12,7 @@ import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
 import { IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { PageTransactionFooter, TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
+import { useNavigationGuard } from '../forms/guard';
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
@@ -112,7 +113,13 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
     return !!model && !!provider && !model.hidden && !provider.hidden;
   });
   const application = observedResult(unitApplication(source.application, 'provider'));
-  const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
+  // Every detail boundary (provider back, model open, model close) resolves
+  // unsaved intent through the guard: a draft kept alive behind an unmounted
+  // editor belongs to its own editing task, and Save on the next detail must
+  // never sweep it silently.
+  const guard = useNavigationGuard();
+  const focusWithGuard = (next?: PageFocus['models']) => guard.guard(() => onFocus(next));
+  const closeModel = () => focusWithGuard(selected ? { kind: 'provider', id: selected } : undefined);
   const providerName = selected ? (providerEntry?.authored ?? providerEntry?.effective)?.display_name ?? selected : undefined;
   const listToolbar = <><PageScopeToolbar />{onRefresh && <PageRefreshButton />}</>;
   const wsAuthored = scope === 'workspace' ? sourceView(source, 'workspace')?.authored : undefined;
@@ -129,7 +136,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
 
   if (focus?.kind === 'provider' && providerEntry) return <SettingsPageShell className={`${css.settings} ${css.page}`} title={providerName ?? ''}
     bodyDisabled={bodyDisabled}
-    breadcrumb={<SettingsBackButton label={tx('settings:models-page.models')} current={providerName} onClick={() => onFocus(undefined)} />}
+    breadcrumb={<SettingsBackButton label={tx('settings:models-page.models')} current={providerName} onClick={() => focusWithGuard(undefined)} />}
     toolbar={listToolbar} footer={<PageTransactionFooter leading={undefined}/>}>
     <section ref={landing} tabIndex={-1} aria-label={providerName} className={cards.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
@@ -144,7 +151,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
         {selectedModels.length ? <div className={cards.modelList}>
           {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
             scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
-            onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected! })}/>)}
+            onOpen={() => focusWithGuard({ kind: 'model', id: entry.id, provider: selected! })}/>)}
         </div> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
       </SettingsGroup>
     </section>
@@ -170,14 +177,14 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           <div className={cards.providerList}>
             {navigation.map(entry => <ProviderCard key={entry.id} entry={entry} revision={revision} scope={scope}
               modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
-              onOpen={() => onFocus({ kind: 'provider', id: entry.id })}/>)}
+              onOpen={() => focusWithGuard({ kind: 'provider', id: entry.id })}/>)}
           </div>
           {!navigation.length && <p className={css.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
         </SettingsGroup>
       </WorkspaceFollowGlobal>
     </section>
     {adding === 'provider' && <ProviderNameDialog revision={revision} exists={[...providers.map(entry => entry.id), ...draftedProviders]} onClose={() => setAdding(undefined)}
-      onCreate={id => { setAdding(undefined); onFocus({ kind: 'provider', id }); }} />}
+      onCreate={id => { setAdding(undefined); focusWithGuard({ kind: 'provider', id }); }} />}
     {focus?.kind === 'model' && <ModelDialog source={source} scope={scope} revision={revision} id={focus.id} provider={focus.provider} onClose={closeModel} />}
   </SettingsPageShell>;
 }

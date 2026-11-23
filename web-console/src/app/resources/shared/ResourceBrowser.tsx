@@ -41,7 +41,10 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
 }) {
   const tx = useTranslation();
   const [localRefresh, setLocalRefresh] = useState(0);
-  const [focus, setFocus] = useState<{ name: string; owner: SourceScope; write?: SkillDisplayWriter }>();
+  // The writer is rebound from the live descriptor on every render — never
+  // stored — so each save fences the revision the draft was actually seeded
+  // from and binds under the current endpoint and authority.
+  const [focus, setFocus] = useState<{ name: string; owner: SourceScope }>();
   useEffect(() => {
     onFocusChange?.(!!focus);
   }, [focus, onFocusChange]);
@@ -98,12 +101,11 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     return <ResourceCard key={key} name={name} subtitle={name === row.name ? undefined : row.name}
       icon={<SkillIcon icon={display?.icon} />}
       description={display?.authored.short_description ?? skill?.catalog.description ?? ''}
-      diagnostic={row.diagnostics[0]} onOpen={() => setFocus({ name: row.name, owner: row.owner, write: skill && bindDisplayWrite(skill) })}
+      diagnostic={row.diagnostics[0]} onOpen={() => setFocus({ name: row.name, owner: row.owner })}
       menu={skill && !!items.length && <CardMenu label={tx('resources:card.actions', { p0: name })} items={items}
         onSelect={id => {
           if (id === 'edit') {
-            const write = bindDisplayWrite(skill);
-            if (write) setFocus({ name: row.name, owner: row.owner, write });
+            setFocus({ name: row.name, owner: row.owner });
           } else if (id === 'delete') {
             const remove = bindDelete(skill);
             if (remove) setDeleting({ title: name, owner: row.owner, path: skill.catalog.location.replace(/\/SKILL\.md$/, ''), remove });
@@ -130,14 +132,15 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
 
   if (focus) {
     const skill = descriptors.get(rowKey(focus.owner, focus.name));
+    const writer = skill && bindDisplayWrite(skill);
     return <>
       <PageTransactionProvider>
         <SkillDetail key={rowKey(focus.owner, focus.name)} client={client}
           target={focus.owner === 'user' ? userTarget : source.target}
           name={focus.name} display={skill?.display} owner={focus.owner}
           bodyDisabled={bodyDisabled}
-          write={focus.write ? async (authored, upload) => {
-            try { await focus.write!(authored, upload); }
+          write={writer ? async (authored, upload, expected_revision) => {
+            try { await writer(authored, upload, expected_revision); }
             finally { setLocalRefresh(value => value + 1); }
           } : undefined}
           onDelete={skill && bindDelete(skill) ? () => setDeleting({ title: focus.name, owner: focus.owner,

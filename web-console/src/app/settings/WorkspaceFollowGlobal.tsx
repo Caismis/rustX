@@ -109,6 +109,13 @@ export function WorkspaceFollowGlobal({
     if (conflict) setCustomized(true);
   }, [conflict]);
 
+  // A refused (rejected or unknown-outcome) reset is neither "still
+  // customized" nor "following": the overrides still exist natively while
+  // the removal intent stays staged. The failure belongs to this switch — it
+  // alone owns the visible diagnosis and the retry/abandon recovery, since
+  // the field editors it would inherit from are already hidden.
+  const resetError = page?.moduleResetError;
+
   if (scope !== 'workspace') return <>{children}</>;
 
   const following = !customized;
@@ -154,6 +161,17 @@ export function WorkspaceFollowGlobal({
               <>
                 <Button variant="ghost" size="sm" onClick={conflict.adopt}>{tx('settings:unsaved.adopt-latest')}</Button>
                 <Button variant="ghost" size="sm" onClick={conflict.retry}>{tx('settings:bridge.use-reviewed-revision')}</Button>
+              </>
+            }
+          />
+        )}
+        {resetError && (
+          <SettingsRow
+            label={`${tx('settings:workspace.follow-global.title')} ${tx('settings:bridge.was-not-saved')}${resetError.detail ? ` ${resetError.detail}` : ''}`}
+            control={
+              <>
+                <Button variant="ghost" size="sm" onClick={page?.abandonModuleReset}>{tx('settings:workspace.follow-global.keep-custom')}</Button>
+                <Button variant="ghost" size="sm" onClick={page?.retryModuleReset}>{tx('settings:aria.retry')}</Button>
               </>
             }
           />

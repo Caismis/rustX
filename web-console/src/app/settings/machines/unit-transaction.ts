@@ -96,6 +96,13 @@ export interface UnitTransactionContext {
   /** Pending Provider autosave owns only the draft generation, never a second
    * copy of its value or a native mutation waiting outside the actor. */
   autosaveGeneration?: number;
+  /** The draft generation last handed to a native submission. A generation
+   * whose submit ended in rejection, conflict or an unknown outcome keeps its
+   * intent but never re-earns write authorization by itself: remounting an
+   * editor, switching a filter or refreshing the projection must not replay
+   * it — only a further edit (a newer generation) or the explicit review
+   * gesture clears this. */
+  attempted?: number;
 }
 
 export type UnitTransactionEvent =
@@ -162,6 +169,7 @@ export const unitTransactionMachine = setup({
     followObservation: assign({ base: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     beginSubmission: assign({
       completion: () => undefined,
+      attempted: ({ context }) => context.generation,
       selector: ({ context, event }) => event.type === 'SUBMIT' ? event.selector : context.selector,
       submitted: ({ context, event }) => event.type === 'SUBMIT'
         ? { token: event.token, generation: context.generation }
@@ -182,7 +190,9 @@ export const unitTransactionMachine = setup({
       draft: ({ context, event }) => event.type === 'EDIT' ? { value: event.value } : context.draft,
       generation: ({ context }) => context.generation + 1,
     }),
-    reviewObservation: assign({ base: ({ context }) => context.observed }),
+    /** The explicit review gesture re-arms the write path: the kept draft is
+     * rebased on the reviewed revision and may be submitted again. */
+    reviewObservation: assign({ base: ({ context }) => context.observed, attempted: () => undefined }),
     announceRetirement: sendParent(({ context }) => ({ type: 'UNIT.RETIRED' as const, identity: context.identity })),
     /** The owner replaced what every editor of this unit presents — a
      * discarded intent or a reviewed revision — so editor-local buffers that
