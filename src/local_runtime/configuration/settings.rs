@@ -1451,7 +1451,7 @@ impl UserConfigManager {
             target
                 .validate()
                 .err()
-                .unwrap_or_else(|| SettingsError::Io(error))
+                .unwrap_or(SettingsError::Io(error))
         })?;
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]

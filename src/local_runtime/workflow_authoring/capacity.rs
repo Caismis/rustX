@@ -79,7 +79,7 @@ impl Capacity {
                     target
                         .validate()
                         .err()
-                        .unwrap_or_else(|| SettingsError::Io(error))
+                        .unwrap_or(SettingsError::Io(error))
                 })?;
             // A Workspace whose Workflow directory is the User one (a
             // Workspace at `~/rustx`) shares its one physical capacity lock,
