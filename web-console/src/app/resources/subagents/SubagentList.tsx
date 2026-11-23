@@ -7,8 +7,8 @@ import type { CatalogView } from '../../../presentation/catalog/CatalogControls'
 import { transferActions } from '../shared/ResourceTransfer';
 import { IconAgentPresetOutline16, IconEditOutline16 } from '../../../presentation/primitives/icons';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
+import { ResourceCard, ResourceGroup } from '../shared/ResourceCards';
 import { extensionEntries } from '../shared/inventory';
-import css from './Subagents.module.css';
 
 export function SubagentList({ source, scope, revision, query, group, view, onOpen, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
   canOverride?: (name: string) => boolean; onOverride?: (name: string) => void;
@@ -42,42 +42,10 @@ export function SubagentList({ source, scope, revision, query, group, view, onOp
   };
   if (!entries.length && (needle || !group)) return group ? null : <p className={catalog.state}>{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>;
   const title = group ?? tx('resources:subagents.own-group');
-  return <section className={css.group} role="group" aria-label={title}>
-    <h2>{title} <span>{entries.length}</span></h2>
-    {!entries.length ? <p className={catalog.state}>{tx('resources:empty')}</p> : view === 'cards' ? <ul className={catalog.cards} role="list">
-      {entries.map(entry => <li key={entry.name} aria-label={entry.name} className={catalog.card}>
-        <div className={catalog.cardHead}>
-          <button type="button" className={catalog.cardOpen} aria-label={entry.name} onClick={() => onOpen(entry.name)}>
-            <span className={catalog.fileTile}><IconAgentPresetOutline16 /></span>
-            <span className={catalog.cardName}>
-              <span className={catalog.cardTitle}>{entry.name}</span>
-              <span className={catalog.cardId}>{model(entry)}</span>
-            </span>
-          </button>
-          <div className={catalog.enable}>{availability(entry)}</div>
-          {menu(entry)}
-        </div>
-        {entry.profile?.description && <p className={catalog.cardDescription}>{entry.profile.description}</p>}
-      </li>)}
-    </ul> : <table className={`${catalog.table} ${css.table}`}>
-      <thead><tr>
-        <th scope="col">{tx('resources:subagents.name')}</th>
-        <th scope="col" className={catalog.optionalColumn}>{tx('settings:extension-detail.description')}</th>
-        <th scope="col">{tx('settings:models-page.model')}</th>
-        <th scope="col" className={css.enabledColumn}>{tx('workflows:library.column-enabled')}</th>
-        <th scope="col" aria-label={tx('resources:card.actions', { p0: '' })} />
-      </tr></thead>
-      <tbody>{entries.map(entry => <tr key={entry.name}>
-        <td>
-          <button type="button" className={`${catalog.rowOpen} ${css.rowOpen}`} onClick={() => onOpen(entry.name)}>
-            <IconAgentPresetOutline16 /><span>{entry.name}</span>
-          </button>
-          {entry.profile?.description && <span className={css.narrowDescription}>{entry.profile.description}</span>}
-        </td>
-        <td className={catalog.optionalColumn}>{entry.profile?.description}</td>
-        <td>{model(entry)}</td>
-        <td>{availability(entry)}</td><td>{menu(entry)}</td>
-      </tr>)}</tbody>
-    </table>}
-  </section>;
+  return <ResourceGroup label={title} count={entries.length} view={view}
+    empty={<p role="status">{tx('resources:empty')}</p>}>
+    {entries.map(entry => <ResourceCard key={entry.name} name={entry.name} subtitle={model(entry)}
+      icon={<IconAgentPresetOutline16 />} description={entry.profile?.description ?? ''} diagnostic={entry.diagnostics[0]}
+      onOpen={() => onOpen(entry.name)} availability={availability(entry)} menu={menu(entry)} />)}
+  </ResourceGroup>;
 }

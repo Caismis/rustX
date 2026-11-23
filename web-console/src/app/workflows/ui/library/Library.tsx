@@ -186,8 +186,8 @@ function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTra
   else if (!listing) body = <CatalogListSkeleton label={tx('workflows:library.loading')} />;
   else if (listing.diagnostic) body = <p className={css.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
   else if (!files.length) body = <p className={css.state}>{query.trim() ? tx('workflows:library.empty-search') : tx('workflows:library.empty')}</p>;
-  else if (view === 'cards') body = <ul className={css.list} aria-label={tx('workflows:library.title')}>
-    {files.map(file => <li key={file.file_name} className={clsx(css.card, unreadable(file) && css.invalidCard)}>
+  else body = <ul className={view === 'cards' ? css.cards : css.list} aria-label={tx('workflows:library.title')}>
+    {files.map(file => <li key={file.file_name} className={clsx(css.card, css.fixedCard, unreadable(file) && css.invalidCard)}>
       <div className={css.cardHead}>
         <button type="button" className={css.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.display?.title ?? file.id ?? file.file_name}>
           <span className={css.fileTile}>{unreadable(file) ? <IconFile size={24} /> : <WorkflowIcon icon={file.display?.icon} size={24} />}</span>
@@ -205,15 +205,6 @@ function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTra
       </div>
     </li>)}
   </ul>;
-  else body = <table className={css.table}>
-    <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th className={css.optionalColumn}>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th>{tx('workflows:library.column-enabled')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
-    <tbody>{files.map(file => <tr key={file.file_name}>
-      <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={unreadable(file) ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
-      <td><FileFacts file={file} compact /></td>
-      <td className={css.optionalColumn}><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td><td>{toggle(file)}</td>
-      <td><CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} /></td>
-    </tr>)}</tbody>
-  </table>;
 
   return <>
     {operationFailure && <div className={css.banner} role="alert">
@@ -233,14 +224,14 @@ const unreadable = (file: WorkflowFileSummary) => !!file.diagnostic && file.node
 /** A file the check rejects, unreadable or unfinished: never enabled. */
 const failing = (file: WorkflowFileSummary) => !!file.diagnostic && !presentationWarning(file.diagnostic);
 
-function FileFacts({ file, compact }: { file: WorkflowFileSummary; compact?: boolean }) {
+function FileFacts({ file }: { file: WorkflowFileSummary }) {
   const tx = useTranslation();
   const diagnostic = file.diagnostic;
-  if (diagnostic && unreadable(file)) return <p className={clsx(css.cardDescription, css.invalid, compact && css.compact)}>
+  if (diagnostic && unreadable(file)) return <p className={clsx(css.cardDescription, css.invalid)}>
     <IconWarningOutline16 /><span><strong>{tx('workflows:library.unreadable')}</strong> · {diagnostic.reason}{diagnostic.path !== '$' && <> <code>{diagnostic.path}</code></>}</span>
   </p>;
   const warning = presentationWarning(diagnostic);
-  return <p className={clsx(css.cardDescription, compact && css.compact)}>
+  return <p className={css.cardDescription}>
     {file.display?.description ?? file.description}
     {diagnostic && <span className={clsx(css.badge, css.badgeWarning)} title={`${diagnostic.reason}${diagnostic.path !== '$' ? ` · ${diagnostic.path}` : ''}`}>
       <IconWarningOutline16 />{tx(warning ? 'workflows:library.presentation-warning' : 'workflows:library.unchecked')}

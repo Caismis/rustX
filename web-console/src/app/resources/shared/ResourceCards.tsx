@@ -17,7 +17,7 @@ export function ResourceCard({ name, subtitle, label, icon, description, diagnos
   name: string; subtitle?: string; label?: string; icon: ReactNode; description: string; diagnostic?: string;
   onOpen: () => void; availability?: ReactNode; actions?: ReactNode; menu?: ReactNode;
 }) {
-  return <li aria-label={name} className={clsx(catalog.card, css.resourceCard, diagnostic && catalog.invalidCard)}>
+  return <li aria-label={name} className={clsx(catalog.card, catalog.fixedCard, css.resourceCard, diagnostic && catalog.invalidCard)}>
     <div className={clsx(catalog.cardHead, css.cardHeading)}>
       <button type="button" className={catalog.cardOpen} aria-label={label ?? name} onClick={onOpen}>
         <span className={catalog.fileTile}>{icon}</span>

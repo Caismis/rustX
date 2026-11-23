@@ -172,17 +172,3 @@
   .form .section { gap: 12px; padding: 14px; }
   .form .nativeTools > fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.group { margin-bottom: 24px; }
-.group h2 { font-size: 14px; font-weight: 500; margin: 0 0 8px; }
-.group h2 span { margin-inline-start: 6px; font-size: 12px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
-.table { table-layout: fixed; overflow-wrap: anywhere; }
-.enabledColumn { width: 96px; }
-.rowOpen { max-width: 100%; text-align: start; }
-.rowOpen svg { flex: none; }
-.narrowDescription { display: none; }
-
-
-@media (max-width: 760px) {
-  .table .enabledColumn { width: 72px; }
-  .narrowDescription { display: block; margin-top: 4px; }
-}

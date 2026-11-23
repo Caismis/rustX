@@ -4,17 +4,9 @@
 .scope svg { flex: none; }
 .group + .group { margin-top: 24px; }
 .groupTitle { margin: 0 0 10px; font-size: 13px; font-weight: 500; }
-.group .resourceCard {
-  min-height: 0;
-  padding: 12px 14px;
-  gap: 10px;
-  border-width: .5px;
-  border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-bg-module-platform);
-}
 .cardHeading > button { flex: 1; }
 .cardHeading > :last-child { min-width: 0; }
-.resourceCard .description { display: block; min-height: 0; padding: 0; }
+.resourceCard .description { min-height: 0; padding: 0; }
 .cardActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; position: relative; z-index: 1; margin-block-start: auto; }
 .availability { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .skillPolicy { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 20px; }
@@ -24,6 +16,7 @@
   grid-template-columns: minmax(240px, 3fr) minmax(0, 2fr);
   column-gap: 16px;
   align-items: center;
+  height: auto;
   min-height: 0;
   padding: 8px 10px;
   border: 0;

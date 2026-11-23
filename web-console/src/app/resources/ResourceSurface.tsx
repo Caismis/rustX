@@ -292,7 +292,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         {module === 'subagents' && <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!editable} onClick={() => setNewAgent({})}>{tx('resources:subagents.new')}</Button>}
       </header>}
       <div className={skillFocused ? css.detailSurface : undefined}>
-        <div className={clsx(catalogCss.controls, css.controls)} hidden={skillFocused}>
+        {!skillFocused && <div className={clsx(catalogCss.controls, css.controls)}>
           <div className={catalogCss.controlsLeft}>
             <div className={catalogCss.tabs} role="tablist" aria-label={tx('resources:scope.label')}>
               {(['workspace', 'global'] as const).map(value => (
@@ -332,7 +332,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             <button type="button" className={shellCss.refreshButton} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
               disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></button>
           </div>
-        </div>
+        </div>}
         <div role="tabpanel" aria-label={tx(`resources:scope.${tab}`)} className={skillFocused ? css.detailSurface : undefined}>
           {!skillFocused && !showingWorkspace && <p className={catalogCss.context}>{scopeLabel}</p>}
           {!available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>

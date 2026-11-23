@@ -274,6 +274,39 @@
   border-color: var(--dsw-alias-border-l4);
   background: var(--dsw-alias-interactive-bg-hover);
 }
+
+/* One resource-card spec across MCP, subagents, skills and Workflows: a fixed
+ * footprint so equal cards tile evenly, and text that would overflow truncates
+ * with an ellipsis instead of resizing the card. */
+.fixedCard {
+  height: 180px;
+}
+
+.fixedCard .cardDescription {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Inside a boxed card the body sits under the head row edge-to-edge. */
+.cards .cardBody {
+  padding-inline-start: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+/* List rows reuse the card markup without the fixed card box. */
+.list > .fixedCard {
+  height: auto;
+}
+
+.list .cardDescription {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 /* The whole card opens the editor: the open button's hit area covers it,
  * and only the actions menu sits above. */
 .cardOpen::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }

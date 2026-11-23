@@ -233,13 +233,15 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(jsonEditor.locator('.cm-gutters')).toHaveCount(0);
     await context.fill('256000');
     await modal.getByRole('button', {name:'Cancel',exact:true}).click();
+    const guard = page.getByRole('dialog', {name:'Discard unsaved changes?',exact:true});
+    await guard.getByRole('button', {name:'Discard and leave',exact:true}).click();
     await expect(modal).toHaveCount(0);
     await settings(page).getByRole('listitem', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
-    await expect(context).toHaveValue('1048576'); // Explicit Cancel discards the whole unit.
+    await expect(context).toHaveValue('1048576'); // Explicit Cancel + Discard abandons the whole unit.
     await context.fill('256000');
     await modal.getByRole('button', {name:'Close',exact:true}).click();
-    await settings(page).getByRole('listitem', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
-    await expect(context).toHaveValue('256000'); // Dismissal retains the actor-owned draft.
+    await guard.getByRole('button', {name:'Keep editing',exact:true}).click();
+    await expect(context).toHaveValue('256000'); // Keep editing retains the actor-owned draft.
     await modal.getByRole('button', {name:'Reset form',exact:true}).click();
     await expect(context).toHaveValue('1048576');
     expect(await writes(page)).toBe(0);

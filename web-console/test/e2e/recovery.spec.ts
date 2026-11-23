@@ -66,7 +66,13 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     };
     const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
     const openMcp = async () => {
-      if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
+      if (await model.isVisible()) {
+        await model.getByRole('button', { name: 'Close', exact: true }).click();
+        // The guard also asks on a dirty Close, before the navigation below.
+        if (await leave.waitFor({ state: 'visible', timeout: 3000 }).then(() => true).catch(() => false)) {
+          await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
+        }
+      }
       // A save whose response was deliberately lost above leaves genuinely
       // uncertain intent — the guard may ask, and discarding abandons only the
       // local record (the write already landed server-side). A surface with no
