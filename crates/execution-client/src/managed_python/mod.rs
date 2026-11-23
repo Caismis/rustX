@@ -1578,6 +1578,9 @@ fn read_pass(
 }
 
 #[cfg(test)]
+mod store_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -367,10 +367,12 @@ pub fn supervise(
         .code()
         .or_else(|| status.signal().map(|signal| 128 + signal));
     let mut result = io::stdout().lock();
-    writeln!(
-        result,
-        "settled {}",
-        exit.ok_or_else(|| io::Error::other("invalid Client exit state"))?
-    )?;
-    result.flush()
+    let exit = exit.ok_or_else(|| io::Error::other("invalid Client exit state"))?;
+    match writeln!(result, "settled {exit}").and_then(|()| result.flush()) {
+        Ok(()) => Ok(()),
+        // The durable observation remains authoritative after the Server
+        // and its reporting pipe have gone away.
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error),
+    }
 }

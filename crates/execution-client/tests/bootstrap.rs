@@ -2720,6 +2720,101 @@ fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
     expect_success(&mut child);
 }
 
+#[test]
+fn a_replacement_client_refuses_the_retired_generation_save_identity() {
+    use base64::Engine as _;
+    use rustx_execution_protocol::process::OperationId;
+    use rustx_execution_protocol::save::{
+        ContentFormat, ConversationId, SaveCode, SaveExtent, SaveOwner, SaveReply, SaveRequest,
+        Sha256Hex,
+    };
+
+    let mut rig = rig();
+    let mut child = spawn_client(&rig);
+    let mut original = admit_pair(&rig, &mut child);
+    let owner = |admission: &rustx_execution_protocol::Admission, operation| SaveOwner {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        conversation: ConversationId::parse("unchanged-conversation").unwrap(),
+        operation,
+    };
+    let operation = OperationId::new();
+    let begin = |owner| SaveRequest::Begin {
+        owner,
+        content_format: ContentFormat::NormalizedUtf8V1,
+    };
+    let chunk = |key| SaveRequest::Chunk {
+        key,
+        sequence: 1.into(),
+        offset: 0.into(),
+        sha256: Sha256Hex::of(b"retired bytes"),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(b"retired bytes"),
+    };
+    let original_begin = begin(owner(original.admission(), operation));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let SaveReply::Begun { key: old_key } = original
+        .save_by(&original_begin, deadline, || Ok(()))
+        .unwrap()
+    else {
+        panic!("one old physical candidate");
+    };
+    assert!(matches!(
+        original.save_by(&chunk(old_key.clone()), deadline, || Ok(())).unwrap(),
+        SaveReply::Chunked { key, next_offset, duplicate: false, .. }
+            if key == old_key && next_offset == 13.into()
+    ));
+    drop(original);
+    expect_success(&mut child);
+
+    let mut next = reservation(&rig.workspace_path);
+    next.generation = Generation::new(NonZeroU64::new(2).unwrap());
+    next.instance = ClientInstanceId::new("instance-2");
+    let private = rig.private.path().canonicalize().unwrap();
+    rig.bundle = private.join("bootstrap-2");
+    (rig.binding, rig.listener, _) =
+        Binding::reserve_local(next, &private.join("client-2.sock"), &rig.bundle).unwrap();
+    let mut child = spawn_client(&rig);
+    let mut replacement = admit_pair(&rig, &mut child);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let new_begin = begin(owner(replacement.admission(), operation));
+    let SaveReply::Begun { key: new_key } = replacement
+        .save_by(&new_begin, deadline, || Ok(()))
+        .unwrap()
+    else {
+        panic!("one fresh candidate even with the deliberately reused operation bytes");
+    };
+    assert_ne!(old_key, new_key);
+    for stale in [
+        original_begin,
+        chunk(old_key.clone()),
+        SaveRequest::Publish {
+            key: old_key.clone(),
+            length: 13.into(),
+            sha256: Sha256Hex::of(b"retired bytes"),
+            extent: SaveExtent::Complete,
+        },
+        SaveRequest::Abort { key: old_key },
+    ] {
+        assert_eq!(
+            replacement.save_by(&stale, deadline, || Ok(())).unwrap(),
+            SaveReply::Refused {
+                code: SaveCode::StaleOwner
+            },
+        );
+    }
+    // The new candidate still accepts its first byte at offset zero.
+    assert!(matches!(
+        replacement.save_by(&chunk(new_key.clone()), deadline, || Ok(())).unwrap(),
+        SaveReply::Chunked { key, next_offset, duplicate: false, .. }
+            if key == new_key && next_offset == 13.into()
+    ));
+    replacement.ping().unwrap();
+    drop(replacement);
+    expect_success(&mut child);
+}
+
 fn workspace_listing(workspace: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(workspace)
         .unwrap()

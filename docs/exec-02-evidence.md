@@ -63,6 +63,7 @@ without independent proof from its physical host.
 | T09, T10, T61, T65 | `client_sigkill_advances_only_the_original_session_generation` | The kernel reports the original live Client's exact host PID. After SIGKILL a new PID proves admission, the same running Server keeps the Session and increases generation from 1 to 2, and its real Workspace read succeeds. This test does not deliver a late operation reply. |
 | T62–T64 | `namespace_receipt_covers_a_detached_session_and_requires_the_guardian` | A private Client-init fixture has no physical START before the grant. It creates a private candidate and a descendant in its own session which holds a socket and ignores TERM. Killing namespace init closes the socket and removes the exact scratch directory before the authenticated receipt. Killing the guardian also stops the descendant but emits no receipt. An unrelated process remains live. |
 | T62, T65 | `independent_domain_receipt_retires_only_the_original_session_incarnation`, `local_restart_budget_honors_at_most_three_attempts_and_stable_reset` | The durable fence rejects missing, incorrect and cross-generation evidence. A logical clock checks 1/2/4-second backoff, the rolling 60-second threshold and five-minute stable reset. |
+| T57 (Client) | `a_replacement_client_refuses_the_retired_generation_save_identity` | A real Client receives a physical Chunk and then exits. On the new generation, its old Begin, Chunk, Publish and Abort are all refused, including when the new candidate deliberately reuses the operation bytes. Its first legitimate Chunk still starts at offset zero. |
 
 The independent receipt covers the Linux PID namespace and its exact private
 scratch directory. Retired output scope cannot recreate missing published
@@ -116,6 +117,17 @@ corrupt occupancy. `exact_store_identity_ignores_origin_and_permissions_but_keep
 checks exact source paths, requirement bytes, both runtime path/version pairs
 and the FastMCP pin. `a_dangling_fingerprint_entry_is_refused_without_attempting_repair`
 keeps the existing symlink intact. Both passed on Linux.
+
+`same_store_joins_one_owner_and_waiter_drop_cannot_release_its_stage`
+proves the Client Store's in-flight ownership. A second waiter attaches to
+the first build, and dropping it leaves the single stage owned. Cancelling
+the build owner settles the gated runner and removes its stage. The
+`independent_stores_reuse_the_exclusive_winner_and_refuse_corruption` test
+uses two independently constructed Store coordinators with distinct actual
+staging directories. Both return the original winner, with its inode intact.
+Damaged manifest, source and interpreter entries fail unchanged. These
+deterministic filesystem tests inject supervisor results. The isolated
+process test below verifies real uv, interpreter and stdio execution.
 
 `managed_python_prepares_and_runs_in_the_bound_client_mount` uses a real App
 Server and Execution Client. It seeds only the required wheels, then admits
