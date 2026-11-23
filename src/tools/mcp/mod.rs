@@ -153,6 +153,7 @@ mod resources_executor;
 mod result;
 mod runtime;
 mod stdio;
+pub(crate) use stdio::launch_spec as stdio_launch_spec;
 mod streamable_http;
 mod task_driver;
 mod tasks;

@@ -1915,6 +1915,7 @@ pub(crate) async fn child_relay_joins_the_physical_binding_revocation() {
         endpoint.workspace(),
         conversation,
         &tools,
+        None,
     )
     .unwrap();
     let grant = relay.grant();
@@ -2086,6 +2087,7 @@ async fn unproven_child_settlement(journal_released: bool) {
             name: definition.name.clone(),
             definition,
         }],
+        None,
     )
     .unwrap();
     let (parent, child_startup) = UnixStream::pair().unwrap();
@@ -2337,6 +2339,7 @@ async fn withhold_delegated_reply(fault: WithheldDelegatedReply) {
         endpoint.workspace(),
         conversation,
         &tools,
+        None,
     )
     .unwrap();
     let (parent, child_startup) = UnixStream::pair().unwrap();

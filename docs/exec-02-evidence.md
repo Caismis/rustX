@@ -36,7 +36,7 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
   attestation tied to the old physical domain. Client guard evidence lives
   in process memory. The Linux SIGKILL case observes one business socket
   and exercises isolation between Sessions.
-- The physical candidate Spill writer and Root stdio run through the bound
-  Client in EXEC-03. Offline cleanup, child stdio routing and the Client-owned
-  Managed Python Store remain open. Native macOS fault injection and final
-  exact-head verification remain open.
+- The physical candidate Spill writer, Root stdio and delegated stdio relay
+  run through the bound Client in EXEC-03. Offline cleanup, complete child
+  integration and the Client-owned Managed Python Store remain open. Native
+  macOS fault injection and final exact-head verification remain open.

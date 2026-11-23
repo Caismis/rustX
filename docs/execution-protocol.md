@@ -65,10 +65,10 @@ and directory-page readers —
 
 The implemented Client supports authenticated local and WebSocket binding,
 bounded file queries and tree mutations, conditional writes and edits,
-supervised processes, workspace observation, file watches, and Workspace
-Python. Its negotiated capabilities name the individual services the Client
-provides. A connection does not grant the reserved umbrella
-`Files`, `Python`, `StdioMcp`, `ContentTransfer`, or `ManagedOutput` capabilities.
+supervised processes, workspace observation, file watches, Workspace
+Python, managed output and stdio MCP. The authenticated Hello advertises the
+individual services that this Client implements. The Server checks the
+specific capability before dispatch.
 
 ### Identities
 

@@ -78,7 +78,11 @@ The Client owns stdio supervision and negotiates the peer's protocol. The
 Server uses the original admission data and resumes the SDK request sequence,
 then sends and receives through the bound data lane. The protocol ADR records
 the memory and transport bounds. Managed Python preparations, delegated
-stdio routing and optional discovery/cache remain open.
+stdio composition through the full child Agent Loop, and optional
+discovery/cache remain open. The delegated relay itself now assigns a
+separate physical identity, admits only frozen launches and authorized tool
+names, and retains physical responsibility through Client close or binding
+settlement.
 
 The Linux mount test observed one `server/discover`, one legacy
 `initialize`, one `tools/list`, one `tools/call` and two fake-provider
@@ -88,14 +92,35 @@ passed 82 tests, including the new START cut. Strict workspace Clippy and
 eight Managed Python tool regressions passed. The latter exercise stdio and
 the existing fingerprinted Store and do not measure Client-side preparation.
 
+A separate Linux debug run of the same mount fixture took 2.046 seconds
+including startup and teardown. Sampling procfs every 10 ms recorded peak
+RSS of 185,232 KiB for the App Server and 35,008 KiB for the Execution Client.
+The sample excludes the provider fixture and supervised MCP child from those
+two process totals. Whole-lane traffic, queue occupancy and concurrent
+session measurements remain open.
+
+A separate trace counted 35 stdio exchanges through the execution data lane,
+with 10,392 bytes sent to Client and 1,477,567 bytes returned to Server,
+including the four-byte frame lengths. Eighteen replies carried data pages.
+The counts exclude Save, handshake and other control exchanges. Idle polling
+depends on the scheduler and is part of the observed total.
+
+`child_relay_reaps_its_running_stdio_session_on_the_original_client` observes
+a real subprocess on a separate socket, retires its relay, verifies EOF
+after physical close, then reads exact bytes on the original parent binding.
+`child_stdio_uses_parent_identity_and_keeps_unconfirmed_cleanup` checks the
+independent physical identity, immutable launch and tool authorization, and
+that an unconfirmed Close keeps ownership. The complete Agent Loop and
+Workflow ordering tests remain separate acceptance requirements.
+
 ## Deterministic coverage
 
 | Required tests | Evidence and open coverage |
 | --- | --- |
-| T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. Shared child routes and ordered parallel commits still need EXEC-03 integration evidence. |
+| T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. Full Root/Subagent/Workflow composition and ordered parallel commits still need EXEC-03 integration evidence. |
 | T13, T14, T15, T17, T18 | Session input/configuration/resource layering, safe activation and bootstrap remain open for EXEC-03. |
 | T16 | Model reset and freeze still need cross-entry integration evidence. |
-| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. MCP declaration cache, optional startup, delegated routing and composed stdio Tasks and interactions remain open. |
+| T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. MCP declaration cache, optional startup, full delegated composition and composed stdio Tasks and interactions remain open. |
 | T22, T40, T47 | The isolated Workspace test covers Client-owned AGENTS.md on cold load and explicit reconciliation, BOM stripping and retention of the last valid instructions. Skill discovery, automatic watching and reconnect repair remain open. |
 | T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |

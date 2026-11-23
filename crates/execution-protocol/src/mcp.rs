@@ -119,6 +119,19 @@ impl Request {
             | Self::Close { key } => key,
         }
     }
+
+    /// Re-expresses the request using its parent's physical operation identity.
+    #[must_use]
+    pub fn with_key(mut self, physical_key: ProcessOperationKey) -> Self {
+        match &mut self {
+            Self::Open { key, .. }
+            | Self::State { key }
+            | Self::Send { key, .. }
+            | Self::Receive { key, .. }
+            | Self::Close { key } => *key = physical_key,
+        }
+        self
+    }
 }
 
 /// MCP startup refusal or transport failure, without peer-controlled text.
@@ -211,5 +224,23 @@ impl fmt::Debug for Reply {
             Self::Closed => formatter.write_str("Closed"),
             Self::Failed(failure) => formatter.debug_tuple("Failed").field(failure).finish(),
         }
+    }
+}
+
+impl Reply {
+    /// A Close reply that proves there is no remaining physical session.
+    #[must_use]
+    pub const fn proves_close(&self) -> bool {
+        matches!(
+            self,
+            Self::Closed
+                | Self::Failed(
+                    Failure::Unavailable
+                        | Failure::Handshake
+                        | Failure::UnsupportedRevision
+                        | Failure::InvalidRecord
+                        | Failure::Transport
+                )
+        )
     }
 }

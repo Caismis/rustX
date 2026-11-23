@@ -3,7 +3,11 @@
 use super::{
     EndpointAuthority, ExecutionRoute, LocalExecutionEndpoint, SessionExecutionScope, SessionId,
 };
+use crate::runtime::subagent::{ResolvedSubagentSpec, ResolvedSubagentTool};
 use base64::Engine as _;
+use rustx_execution_protocol::mcp::{
+    Launch as McpLaunch, Reply as McpReply, Request as McpRequest,
+};
 use rustx_execution_protocol::process::{
     BashCaptureState, MAX_PROCESS_IDENTITIES_PER_GENERATION, OperationId, OperationState,
     ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
@@ -51,6 +55,7 @@ impl ChildExecutionGrant {
         }
         let [data, control] = descriptor::receive(startup).await?;
         let shutdown = RecordChannel::unix(data.try_clone()?).shutdown_handle()?;
+        let stdio_mcp = self.capabilities.contains(&Capability::StdioMcp);
         let connection = LocalConnection::delegated(
             self.admission.clone(),
             self.connection,
@@ -80,7 +85,7 @@ impl ChildExecutionGrant {
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             managed_output: std::sync::OnceLock::from(false),
-            stdio_mcp: std::sync::OnceLock::from(false),
+            stdio_mcp: std::sync::OnceLock::from(stdio_mcp),
             workspace: workspace.to_path_buf(),
         };
         Ok(SessionExecutionScope {
@@ -128,7 +133,22 @@ struct Authority {
     tools: BTreeSet<String>,
     operations: Mutex<BTreeMap<OperationId, ChildOperation>>,
     tickets: Mutex<BTreeMap<DecimalU64, u64>>,
+    mcp_sources: Vec<ChildMcpSource>,
+    mcp_operations: Mutex<BTreeMap<OperationId, ChildMcpOperation>>,
     stop: rustx_process_supervisor::signal::ProcessSignal,
+}
+
+struct ChildMcpSource {
+    launch: McpLaunch,
+    tools: BTreeSet<String>,
+    resources: bool,
+}
+
+struct ChildMcpOperation {
+    key: ProcessOperationKey,
+    physical: ProcessOperationKey,
+    sources: Vec<usize>,
+    retained: bool,
 }
 
 struct ChildOperation {
@@ -143,7 +163,8 @@ impl ChildExecutionRelay {
         scope: &SessionExecutionScope,
         workspace: &Path,
         conversation: &crate::runtime::identity::ConversationId,
-        tools: &[crate::runtime::subagent::ResolvedSubagentTool],
+        tools: &[ResolvedSubagentTool],
+        resolved: Option<&ResolvedSubagentSpec>,
     ) -> io::Result<Self> {
         let owner = scope.endpoint()?;
         if workspace != owner.workspace() {
@@ -163,14 +184,15 @@ impl ChildExecutionRelay {
             tools: tools
                 .iter()
                 .filter_map(|tool| match tool {
-                    crate::runtime::subagent::ResolvedSubagentTool::Builtin { .. } => {
-                        Some(tool.definition().name.clone())
-                    }
-                    crate::runtime::subagent::ResolvedSubagentTool::Source { .. } => None,
+                    ResolvedSubagentTool::Builtin { .. } => Some(tool.definition().name.clone()),
+                    ResolvedSubagentTool::Source { .. } => None,
                 })
                 .collect(),
             operations: Mutex::default(),
             tickets: Mutex::default(),
+            mcp_sources: resolved
+                .map_or_else(Vec::new, |resolved| Self::mcp_sources(resolved, workspace)),
+            mcp_operations: Mutex::default(),
             stop: rustx_process_supervisor::signal::ProcessSignal::new(),
         });
         Ok(Self {
@@ -182,6 +204,35 @@ impl ChildExecutionRelay {
             owner,
             authority,
         })
+    }
+
+    fn mcp_sources(resolved: &ResolvedSubagentSpec, workspace: &Path) -> Vec<ChildMcpSource> {
+        resolved
+            .materialization
+            .sources
+            .iter()
+            .filter_map(|(id, binding)| {
+                let server = crate::tools::mcp::source_server_id(id);
+                let launch = crate::tools::mcp::stdio_launch_spec(binding, &server, workspace)
+                    .ok()
+                    .flatten()?;
+                let tools = resolved
+                    .tools
+                    .iter()
+                    .filter_map(|tool| match tool {
+                        ResolvedSubagentTool::Source {
+                            source_id, name, ..
+                        } if source_id == id => Some(name.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Some(ChildMcpSource {
+                    launch,
+                    tools,
+                    resources: resolved.resource_sources.contains(id),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn grant(&self) -> ChildExecutionGrant {
@@ -275,12 +326,119 @@ impl Authority {
             }
             ClientRequest::Process(ProcessRequest::Register { .. }) => false,
             ClientRequest::Process(request) => self.owns_process(request.key()),
+            ClientRequest::Mcp(request) => self.permits_mcp(endpoint, request),
             ClientRequest::ReadBashOutput {
                 key, conversation, ..
             } => tool("read") && *conversation == self.conversation && self.owns_process(key),
             ClientRequest::SearchBashOutput {
                 key, conversation, ..
             } => tool("grep") && *conversation == self.conversation && self.owns_process(key),
+            _ => false,
+        }
+    }
+
+    fn permits_mcp(&self, endpoint: &LocalExecutionEndpoint, request: &McpRequest) -> bool {
+        let key = request.key();
+        if let McpRequest::Open { launch, .. } = request {
+            return endpoint
+                .process_key(key.operation)
+                .is_ok_and(|current| current == *key)
+                && self
+                    .mcp_sources
+                    .iter()
+                    .any(|source| source.launch == *launch);
+        }
+        let operations = self.mcp_operations.lock().expect("child MCP identities");
+        let Some(operation) = operations
+            .get(&key.operation)
+            .filter(|operation| operation.key == *key)
+        else {
+            return false;
+        };
+        if let McpRequest::Send { data_base64, .. } = request {
+            return self.permits_mcp_message(&operation.sources, data_base64);
+        }
+        true
+    }
+
+    fn mcp_physical_request(&self, request: &McpRequest) -> io::Result<McpRequest> {
+        let key = request.key();
+        let mut operations = self.mcp_operations.lock().expect("child MCP identities");
+        let physical = if let Some(operation) = operations.get(&key.operation) {
+            if let McpRequest::Open { launch, .. } = request
+                && !operation
+                    .sources
+                    .iter()
+                    .any(|index| self.mcp_sources[*index].launch == *launch)
+            {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            operation.physical.clone()
+        } else {
+            let McpRequest::Open { launch, .. } = request else {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            };
+            if operations.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let mut physical = key.clone();
+            physical.operation = OperationId::new();
+            let sources = self
+                .mcp_sources
+                .iter()
+                .enumerate()
+                .filter_map(|(index, source)| (source.launch == *launch).then_some(index))
+                .collect();
+            operations.insert(
+                key.operation,
+                ChildMcpOperation {
+                    key: key.clone(),
+                    physical: physical.clone(),
+                    sources,
+                    retained: false,
+                },
+            );
+            physical
+        };
+        Ok(request.clone().with_key(physical))
+    }
+
+    fn permits_mcp_message(&self, sources: &[usize], encoded: &str) -> bool {
+        use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
+        if encoded.len() > rustx_execution_protocol::mcp::MAX_SEND_BYTES.div_ceil(3) * 4 {
+            return false;
+        }
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+            return false;
+        };
+        if bytes.len() > rustx_execution_protocol::mcp::MAX_SEND_BYTES {
+            return false;
+        }
+        let Ok(message) = serde_json::from_slice::<ClientJsonRpcMessage>(&bytes) else {
+            return false;
+        };
+        let ClientJsonRpcMessage::Request(message) = message else {
+            return true;
+        };
+        match message.request {
+            ClientRequest::CallToolRequest(call) => sources.iter().any(|index| {
+                self.mcp_sources[*index]
+                    .tools
+                    .contains(call.params.name.as_ref())
+            }),
+            ClientRequest::ListResourcesRequest(_)
+            | ClientRequest::ListResourceTemplatesRequest(_)
+            | ClientRequest::ReadResourceRequest(_) => sources
+                .iter()
+                .any(|index| self.mcp_sources[*index].resources),
+            ClientRequest::ListToolsRequest(_)
+            | ClientRequest::SubscriptionsListenRequest(_)
+            | ClientRequest::PingRequest(_) => true,
+            ClientRequest::GetTaskRequest(_)
+            | ClientRequest::UpdateTaskRequest(_)
+            | ClientRequest::CancelTaskRequest(_) => sources
+                .iter()
+                .any(|index| !self.mcp_sources[*index].tools.is_empty()),
             _ => false,
         }
     }
@@ -315,6 +473,9 @@ impl Authority {
         match (request, reply) {
             (ClientRequest::Process(request), ClientReply::Process(reply)) => {
                 self.retain_process_reply(request, reply);
+            }
+            (ClientRequest::Mcp(request), ClientReply::Mcp(response)) => {
+                self.retain_mcp_reply(request, &response.reply);
             }
             (
                 ClientRequest::PrepareWrite { data_base64, .. },
@@ -356,6 +517,20 @@ impl Authority {
             _ => {}
         }
         Ok(())
+    }
+
+    fn retain_mcp_reply(&self, request: &McpRequest, reply: &McpReply) {
+        let retained = match (request, reply) {
+            (McpRequest::Open { .. }, McpReply::Opening | McpReply::Ready { .. }) => true,
+            (McpRequest::Close { .. }, reply) if reply.proves_close() => false,
+            _ => return,
+        };
+        self.mcp_operations
+            .lock()
+            .expect("child MCP identities")
+            .get_mut(&request.key().operation)
+            .expect("dispatch registered the exact identity")
+            .retained = retained;
     }
 
     fn retain_ticket(&self, ticket: DecimalU64, size: u64) -> io::Result<()> {
@@ -459,6 +634,7 @@ impl Authority {
         }
         let tickets = std::mem::take(&mut *self.tickets.lock().expect("child mutation tickets"));
         let operations = std::mem::take(&mut *self.operations.lock().expect("child process keys"));
+        let mcp = std::mem::take(&mut *self.mcp_operations.lock().expect("child MCP identities"));
         for ticket in tickets.into_keys() {
             let reply = owner.with_bounded_data_connection(deadline, |connection| {
                 connection.forward_delegated(
@@ -478,7 +654,35 @@ impl Authority {
                 return owner.finish_child_cleanup(deadline);
             }
         }
+        for operation in mcp.into_values().filter(|operation| operation.retained) {
+            if Self::release_mcp(owner, &operation.physical, deadline).is_err() {
+                return owner.finish_child_cleanup(deadline);
+            }
+        }
         Ok(())
+    }
+
+    fn release_mcp(
+        owner: &LocalExecutionEndpoint,
+        key: &ProcessOperationKey,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        loop {
+            let reply = owner.with_bounded_data_connection(deadline, |connection| {
+                connection.mcp_by(McpRequest::Close { key: key.clone() }, deadline, || Ok(()))
+            })?;
+            match reply {
+                reply if reply.proves_close() => return Ok(()),
+                McpReply::Closing if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => {
+                    return Err(io::Error::other(
+                        "child stdio session did not prove settlement",
+                    ));
+                }
+            }
+        }
     }
 
     fn release_operation(
@@ -591,6 +795,7 @@ fn run_data(
             let needs_receipt = matches!(
                 request,
                 ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
+                    | ClientRequest::Mcp(McpRequest::Open { .. })
                     | ClientRequest::PrepareWrite { .. }
                     | ClientRequest::BeginWrite { .. }
                     | ClientRequest::PrepareEdit { .. }
@@ -598,8 +803,15 @@ fn run_data(
             );
             let crossed = Cell::new(false);
             let result = owner.with_bounded_data_connection(deadline, |connection| {
-                let reply = connection.forward_delegated(
-                    &request,
+                let physical;
+                let dispatched = if let ClientRequest::Mcp(command) = &request {
+                    physical = ClientRequest::Mcp(authority.mcp_physical_request(command)?);
+                    &physical
+                } else {
+                    &request
+                };
+                let mut reply = connection.forward_delegated(
+                    dispatched,
                     deadline,
                     authority.commit_size(&request),
                     || {
@@ -612,6 +824,11 @@ fn run_data(
                             .ok_or(io::ErrorKind::Interrupted.into())
                     },
                 )?;
+                if let (ClientRequest::Mcp(logical), ClientReply::Mcp(response)) =
+                    (&request, &mut reply)
+                {
+                    response.key = logical.key().clone();
+                }
                 if let Err(error) = authority.retain_reply(&request, &reply) {
                     connection.disconnect();
                     return Err(error);
@@ -825,6 +1042,179 @@ mod tests {
     }
 
     #[test]
+    fn child_stdio_uses_parent_identity_and_keeps_unconfirmed_cleanup() {
+        let key = ProcessOperationKey {
+            incarnation: ServerIncarnation::generate(),
+            session: rustx_execution_protocol::SessionId::new("session"),
+            instance: ClientInstanceId::new("client"),
+            generation: Generation::new(std::num::NonZeroU64::MIN),
+            operation: OperationId::new(),
+        };
+        let launch = McpLaunch {
+            program: "/bin/cat".into(),
+            args: Vec::new(),
+            cwd: std::path::PathBuf::new(),
+            environment: BTreeMap::new(),
+            versions: vec!["2025-11-25".into()],
+            legacy_version: None,
+        };
+        let authority = Authority {
+            conversation: "child".into(),
+            tools: BTreeSet::new(),
+            operations: Mutex::default(),
+            tickets: Mutex::default(),
+            mcp_sources: vec![ChildMcpSource {
+                launch: launch.clone(),
+                tools: BTreeSet::from(["inspect".into()]),
+                resources: false,
+            }],
+            mcp_operations: Mutex::default(),
+            stop: rustx_process_supervisor::signal::ProcessSignal::new(),
+        };
+        let open = McpRequest::Open {
+            key: key.clone(),
+            launch: launch.clone(),
+        };
+        let physical = authority.mcp_physical_request(&open).unwrap();
+        assert_ne!(physical.key().operation, key.operation);
+        assert_eq!(authority.mcp_physical_request(&open).unwrap(), physical);
+        let mut changed = launch;
+        changed.args.push("different".into());
+        let conflicting = McpRequest::Open {
+            key: key.clone(),
+            launch: changed,
+        };
+        assert_eq!(
+            authority
+                .mcp_physical_request(&conflicting)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+
+        let close = McpRequest::Close { key: key.clone() };
+        assert_eq!(
+            authority.mcp_physical_request(&close).unwrap().key(),
+            physical.key()
+        );
+        authority.retain_mcp_reply(&open, &McpReply::Opening);
+        authority.retain_mcp_reply(
+            &close,
+            &McpReply::Failed(rustx_execution_protocol::mcp::Failure::SettlementUnconfirmed),
+        );
+        assert!(authority.mcp_operations.lock().unwrap()[&key.operation].retained);
+        authority.retain_mcp_reply(&close, &McpReply::Closed);
+        assert!(!authority.mcp_operations.lock().unwrap()[&key.operation].retained);
+        assert_eq!(authority.mcp_physical_request(&open).unwrap(), physical);
+
+        let message = |name: &str| {
+            base64::engine::general_purpose::STANDARD.encode(
+            serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name}})).unwrap()
+        )
+        };
+        assert!(authority.permits_mcp_message(&[0], &message("inspect")));
+        assert!(!authority.permits_mcp_message(&[0], &message("mutate")));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn child_relay_reaps_its_running_stdio_session_on_the_original_client() {
+        use tokio::io::AsyncReadExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let execution = crate::session_execution_support::ExecutionFixture::new(&root);
+        let observer_socket = root.join("started.sock");
+        let observer = tokio::net::UnixListener::bind(&observer_socket).unwrap();
+        let server_code = r"
+import socket, sys
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
+    proof.connect(sys.argv[1])
+    proof.sendall(b'started')
+    for line in sys.stdin:
+        pass
+";
+        let launch = McpLaunch {
+            program: "/usr/bin/env".into(),
+            args: vec![
+                "python3".into(),
+                "-c".into(),
+                server_code.into(),
+                observer_socket.to_string_lossy().into_owned(),
+            ],
+            cwd: std::path::PathBuf::new(),
+            environment: BTreeMap::from([(
+                "PATH".into(),
+                "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin".into(),
+            )]),
+            versions: vec!["2025-11-25".into()],
+            legacy_version: None,
+        };
+        let conversation = crate::runtime::identity::ConversationId::new(
+            "conv_0410af39-84e2-7896-a1f1-06c4c338553d",
+        );
+        let mut relay =
+            ChildExecutionRelay::create(&execution.scope, &root, &conversation, &[], None).unwrap();
+        Arc::get_mut(&mut relay.authority)
+            .unwrap()
+            .mcp_sources
+            .push(ChildMcpSource {
+                launch: launch.clone(),
+                tools: BTreeSet::from(["inspect".into()]),
+                resources: false,
+            });
+        let (parent, child) = tokio::net::UnixStream::pair().unwrap();
+        relay.transfer(&parent).await.unwrap();
+        let child = relay
+            .grant()
+            .open(&execution.scope.session, &root, &child)
+            .await
+            .unwrap();
+        let cleanup = relay.start().unwrap();
+        let binding = child.bind_stdio_mcp(&root).unwrap();
+        let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let reply = binding
+            .exchange(
+                McpRequest::Open {
+                    key: binding.key.clone(),
+                    launch,
+                },
+                Instant::now() + LOCAL_HANDSHAKE_TIMEOUT,
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(reply, McpReply::Opening));
+        let (mut started, _) = tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, observer.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut marker = [0; 7];
+        started.read_exact(&mut marker).await.unwrap();
+        assert_eq!(&marker, b"started");
+
+        cleanup.after_child_reaped().await.unwrap();
+        let mut ended = [0; 1];
+        assert_eq!(
+            tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, started.read(&mut ended))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        std::fs::write(root.join("receipt"), b"parent still bound").unwrap();
+        let read = execution
+            .scope
+            .endpoint()
+            .unwrap()
+            .read_range(&root.join("receipt"), 0, 128, None)
+            .unwrap();
+        assert_eq!(read.bytes, b"parent still bound");
+    }
+
+    #[test]
     fn child_drain_uses_the_physical_output_and_capture_receipts() {
         let key = ProcessOperationKey {
             incarnation: ServerIncarnation::generate(),
@@ -846,6 +1236,8 @@ mod tests {
                 },
             )])),
             tickets: Mutex::default(),
+            mcp_sources: Vec::new(),
+            mcp_operations: Mutex::default(),
             stop: rustx_process_supervisor::signal::ProcessSignal::new(),
         };
         let command = ClientRequest::Process;

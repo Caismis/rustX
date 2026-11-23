@@ -201,39 +201,9 @@ impl McpServerRuntime {
                         "stdio program must be non-empty".to_owned(),
                     ));
                 }
-                let mut explicit_environment =
-                    vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
-                explicit_environment.extend(
-                    environment
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.clone())),
-                );
-                explicit_environment.extend(
-                    credentials
-                        .environment
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.expose().to_owned())),
-                );
                 if let Some(scope) = workspace.execution_scope() {
-                    let cwd = super::stdio::client_relative_cwd(workspace.root(), cwd.as_deref())?;
-                    let (preferred, legacy) = match handshake_lifecycle(server_id) {
-                        rmcp::ClientLifecycleMode::Discover { preferred_versions } => {
-                            (preferred_versions, None)
-                        }
-                        rmcp::ClientLifecycleMode::Auto {
-                            preferred_versions,
-                            legacy_version,
-                        } => (preferred_versions, legacy_version),
-                        _ => unreachable!("stdio handshake policy"),
-                    };
-                    let launch = rustx_execution_protocol::mcp::Launch {
-                        program: PathBuf::from(program),
-                        args: args.clone(),
-                        cwd,
-                        environment: explicit_environment.into_iter().collect(),
-                        versions: preferred.iter().map(ToString::to_string).collect(),
-                        legacy_version: legacy.map(|version| version.to_string()),
-                    };
+                    let launch = super::stdio::launch_spec(binding, server_id, workspace.root())?
+                        .expect("matched stdio transport");
                     let (owner, transport, admission) = super::stdio::Session::open(
                         scope,
                         workspace.root(),
@@ -258,6 +228,19 @@ impl McpServerRuntime {
                     if !fixture_stdio {
                         return Err(stdio_requires_binding());
                     }
+                    let mut explicit_environment =
+                        vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
+                    explicit_environment.extend(
+                        environment
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone())),
+                    );
+                    explicit_environment.extend(
+                        credentials
+                            .environment
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.expose().to_owned())),
+                    );
                     let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
                     let process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
                         program: PathBuf::from(program),

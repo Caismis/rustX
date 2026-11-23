@@ -74,6 +74,15 @@ impl StdioMcpBinding {
     }
 
     pub(crate) async fn settle_binding(&self) -> io::Result<()> {
+        if matches!(
+            self.endpoint.authority,
+            super::EndpointAuthority::Delegated { .. }
+        ) {
+            self.abandon();
+            return Err(io::Error::other(
+                "delegated stdio settlement requires the parent relay",
+            ));
+        }
         self.endpoint.clone().settle().await
     }
 

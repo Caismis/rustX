@@ -228,6 +228,14 @@ impl LocalConnection {
                 .process_admitted(request, deadline, permit)
                 .map(ClientReply::Process);
         }
+        if let ClientRequest::Mcp(request) = request {
+            let key = request.key().clone();
+            let reply = self.mcp_by(request.clone(), deadline, permit)?;
+            return Ok(ClientReply::Mcp(rustx_execution_protocol::mcp::Response {
+                key,
+                reply,
+            }));
+        }
         let reply = self.exchange_admitted(request, Some(deadline), permit, || ())?;
         if matches!(reply, ClientReply::Error { .. }) {
             return Ok(reply);

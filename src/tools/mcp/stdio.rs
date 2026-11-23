@@ -30,8 +30,8 @@ use crate::{
     },
 };
 
-use super::McpError;
 use super::framing::ProtocolViolationRecorder;
+use super::{McpError, McpServerBinding, McpTransportConfig, handshake_lifecycle};
 
 const POLL: Duration = Duration::from_millis(25);
 const MAX_IDLE_POLL: Duration = Duration::from_millis(250);
@@ -53,7 +53,60 @@ pub(super) struct PeerTransport {
     pump: Option<tokio::task::JoinHandle<()>>,
 }
 
-pub(super) fn client_relative_cwd(
+pub(crate) fn launch_spec(
+    binding: &McpServerBinding,
+    server: &crate::runtime::identity::McpServerId,
+    workspace: &Path,
+) -> Result<Option<Launch>, McpError> {
+    let McpTransportConfig::Stdio {
+        program,
+        args,
+        cwd,
+        environment,
+    } = &binding.transport
+    else {
+        return Ok(None);
+    };
+    if program.trim().is_empty() {
+        return Err(McpError::Configuration(
+            "stdio program must be non-empty".into(),
+        ));
+    }
+    let cwd = client_relative_cwd(workspace, cwd.as_deref())?;
+    let credentials = binding
+        .credentials
+        .resolve()
+        .map_err(McpError::Configuration)?;
+    let mut explicit_environment = std::collections::BTreeMap::from([(
+        "PATH".to_owned(),
+        "/usr/local/bin:/usr/bin:/bin".to_owned(),
+    )]);
+    explicit_environment.extend(environment.clone());
+    explicit_environment.extend(
+        credentials
+            .environment
+            .iter()
+            .map(|(key, value)| (key.clone(), value.expose().to_owned())),
+    );
+    let (preferred, legacy) = match handshake_lifecycle(server) {
+        rmcp::ClientLifecycleMode::Discover { preferred_versions } => (preferred_versions, None),
+        rmcp::ClientLifecycleMode::Auto {
+            preferred_versions,
+            legacy_version,
+        } => (preferred_versions, legacy_version),
+        _ => unreachable!("stdio handshake policy"),
+    };
+    Ok(Some(Launch {
+        program: program.into(),
+        args: args.clone(),
+        cwd,
+        environment: explicit_environment,
+        versions: preferred.iter().map(ToString::to_string).collect(),
+        legacy_version: legacy.map(|version| version.to_string()),
+    }))
+}
+
+fn client_relative_cwd(
     workspace: &Path,
     cwd: Option<&Path>,
 ) -> Result<std::path::PathBuf, McpError> {
@@ -193,16 +246,7 @@ impl Session {
                 )
                 .await;
             match reply {
-                Ok(
-                    Reply::Closed
-                    | Reply::Failed(
-                        Failure::Unavailable
-                        | Failure::Handshake
-                        | Failure::UnsupportedRevision
-                        | Failure::InvalidRecord
-                        | Failure::Transport,
-                    ),
-                ) => break Ok(()),
+                Ok(reply) if reply.proves_close() => break Ok(()),
                 Ok(Reply::Closing) if pause(&signal, deadline, POLL).await => (),
                 _ => break self.binding.settle_binding().await,
             }
