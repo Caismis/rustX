@@ -1532,8 +1532,17 @@ async fn materialize_package(
     uv_identity: &str,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<PreparedPythonPackage, PythonToolError> {
-    let staging =
-        state_dir.with_file_name(format!(".build-{}-{}", fingerprint, uuid::Uuid::now_v7()));
+    use std::os::unix::fs::PermissionsExt as _;
+    let package_root = state_dir
+        .parent()
+        .ok_or_else(|| PythonToolError::Storage("prepared state has no parent".into()))?;
+    let directory = crate::package_io::PackageDirectory::open(package_root).map_err(io_error)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".build-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(package_root)
+        .map_err(io_error)?
+        .keep();
     // The existing Python store owns any failed cleanup and retries it before
     // its next preparation. In-flight staging is not in that cleanup set.
     let result = stage_and_build(
@@ -1562,8 +1571,19 @@ async fn materialize_package(
             // before making the directory addressable as prepared state.
             read_prepared_state(&staging, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
                 .ok_or_else(|| PythonToolError::Storage("Python staging did not materialize".into()))?;
-            crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
-            match std::fs::rename(&staging, &destination) {
+            let staging_name = staging.file_name().expect("exclusive staging name");
+            let destination_name = destination.file_name().expect("fingerprint name");
+            directory.verify().map_err(io_error)?;
+            let rename = cancellation.with_active(|| {
+                rustix::fs::renameat_with(
+                    directory.descriptor(),
+                    staging_name,
+                    directory.descriptor(),
+                    destination_name,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )
+            });
+            match rename.ok_or_else(|| PythonToolError::Environment("Python preparation was cancelled before publication".into()))? {
                 // Env publication is code/dependency only; permissions are
                 // attached by `ensure_prepared` from the winning package.
                 Ok(()) => Ok(PreparedPythonPackage {
@@ -1572,7 +1592,7 @@ async fn materialize_package(
                     permissions: None,
                     tool_permissions: BTreeMap::new(),
                 }),
-                Err(_) if destination.exists() => read_prepared_state(&destination, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
+                Err(rustix::io::Errno::EXIST) => read_prepared_state(&destination, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
                     .ok_or_else(|| PythonToolError::Storage("concurrent Python publication disappeared".into())),
                 Err(error) => Err(io_error(error)),
             }
@@ -3063,6 +3083,150 @@ full_access = "ask"
             .expect("rebuild");
         assert_ne!(rebuilt.fingerprint, first.fingerprint);
     }
+
+    struct ClaimPreparedName {
+        runner: FakeRunner,
+        destination: PathBuf,
+        claimed_inode: Mutex<Option<u64>>,
+    }
+
+    impl SupervisedProcessRunner for ClaimPreparedName {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
+        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            if spec.command.contains(" sync ") {
+                use std::os::unix::fs::MetadataExt as _;
+                std::fs::create_dir(&self.destination).unwrap();
+                let inode = self.destination.metadata().unwrap().ino();
+                assert_eq!(self.claimed_inode.lock().unwrap().replace(inode), None);
+            }
+            self.runner.run(spec, control)
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_empty_fingerprint_directory_is_not_overwritten_or_cleaned() {
+        use std::os::unix::fs::MetadataExt as _;
+        let temporary = tempfile::tempdir().unwrap();
+        let package = package("demo");
+        let fingerprint = package_fingerprint(
+            &package,
+            "/usr/bin/python3 (Python 3.12.13)",
+            "/usr/bin/uv (uv 0.11.12)",
+        );
+        let packages = temporary.path().join(PACKAGES_DIRECTORY);
+        let destination = packages.join(fingerprint);
+        let runner = Arc::new(ClaimPreparedName {
+            runner: FakeRunner::default(),
+            destination: destination.clone(),
+            claimed_inode: Mutex::default(),
+        });
+        let store = PythonToolStore::with_binaries_and_runner(
+            temporary.path().to_path_buf(),
+            PathBuf::from("/usr/bin/uv"),
+            PathBuf::from("/usr/bin/python3"),
+            runner.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            store
+                .ensure_prepared(&package, &CancellationSignal::new())
+                .await,
+            Err(PythonToolError::Storage(_))
+        ));
+        assert_eq!(
+            *runner.claimed_inode.lock().unwrap(),
+            Some(destination.metadata().unwrap().ino()),
+        );
+        assert_eq!(destination.read_dir().unwrap().count(), 0);
+        assert_eq!(packages.read_dir().unwrap().count(), 1);
+    }
+
+    struct IndependentBuilds {
+        runner: FakeRunner,
+        built: tokio::sync::Barrier,
+    }
+
+    impl SupervisedProcessRunner for IndependentBuilds {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
+        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            let installing = spec.command.contains(" sync ");
+            let output = self.runner.run(spec, control);
+            Box::pin(async move {
+                let output = output.await;
+                if installing {
+                    self.built.wait().await;
+                }
+                output
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn independent_stores_verify_one_publication_and_remove_their_own_stages() {
+        let temporary = tempfile::tempdir().unwrap();
+        let runner = Arc::new(IndependentBuilds {
+            runner: FakeRunner::default(),
+            built: tokio::sync::Barrier::new(2),
+        });
+        let make_store = || {
+            PythonToolStore::with_binaries_and_runner(
+                temporary.path().to_path_buf(),
+                "/usr/bin/uv".into(),
+                "/usr/bin/python3".into(),
+                runner.clone(),
+            )
+            .unwrap()
+        };
+        let first = make_store();
+        let second = make_store();
+        assert_ne!(first.identity_token(), second.identity_token());
+        let package = package("demo");
+        let signal = CancellationSignal::new();
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                first.ensure_prepared(&package, &signal),
+                second.ensure_prepared(&package, &signal),
+            )
+        })
+        .await
+        .unwrap();
+        let published = first.unwrap();
+        assert_eq!(published, second.unwrap());
+        assert_eq!(
+            published
+                .state_dir
+                .join(SOURCE_DIRECTORY)
+                .join(SERVER_FILE)
+                .metadata()
+                .unwrap()
+                .len(),
+            package.source.entries[Path::new(SERVER_FILE)].1,
+        );
+        let stored = temporary.path().join(PACKAGES_DIRECTORY);
+        assert_eq!(stored.read_dir().unwrap().count(), 1);
+        let commands = runner.runner.commands.lock().unwrap();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.contains(" lock "))
+                .count(),
+            2
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.contains(" sync "))
+                .count(),
+            2
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn issue527_file_backed_packages_scale_without_retaining_asset_bytes() {
         use std::os::unix::fs::MetadataExt;

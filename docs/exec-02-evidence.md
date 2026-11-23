@@ -81,6 +81,15 @@ process or scheduler beyond those assumptions can shorten recoverability.
 The Server admits until 50 s after its observation, and the detached Client
 starts cleanup by 80 s after its own observation. Expiry records no receipt.
 
+The existing Store publishes an environment with an owner-only sibling stage
+and an exclusive rename under the cancellation grant. The two preparation
+race tests hold the physical fixture at `uv sync`. Independent Store instances
+both build, verify the same published winner and remove their own stages. A
+different actor claiming the fingerprint with an empty directory keeps its
+original inode and content while preparation fails. This establishes the
+exclusive Store publication cut. The production Managed Python migration
+to the Client remains open.
+
 ## Open gates
 
 - Replacement admission and post-restart environment recovery still require
