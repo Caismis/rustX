@@ -198,8 +198,12 @@ const REMOTE_SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 // Once the SDK returns an SSE stream, its separate per-event bound applies.
 const MAX_ORDINARY_POSTS: usize = 32;
 static ORDINARY_POST_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
-const MAX_SSE_STREAMS: usize = 32;
-static SSE_STREAM_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+// A real foreground batch can own 64 progress-bearing replies at once.
+// Leave another batch's capacity for unrelated HTTP work on the same Server.
+const MAX_SSE_POST_BODIES: usize = 128;
+const MAX_SSE_GET_BODIES: usize = 32;
+static SSE_POST_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+static SSE_GET_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 /// The Server-Sent Events stream shape of rmcp's Streamable HTTP client.
 type SseStream = BoxStream<'static, Result<Sse, SseError>>;
@@ -1098,14 +1102,16 @@ impl<S: Stream + Unpin> Stream for OwnedResponseStream<S> {
 ///
 /// Each request-carrying POST owns local cancellation. A shared slot covers
 /// receipt and decoding, ending when JSON decoding completes or the SDK hands
-/// off an SSE stream. A separate slot covers each active SSE body, including
-/// GET subscriptions and resumed responses. Control POSTs keep their own path.
+/// off an SSE stream. POST response streams and GET subscriptions/resumes
+/// use separate body slots, so an idle subscription cannot occupy a POST
+/// response slot. Control POSTs keep their own path.
 #[derive(Clone)]
 pub(crate) struct McpHttpClient {
     inner: reqwest::Client,
     ownership: Arc<McpHttpRequestOwnership>,
     ordinary_posts: Arc<Semaphore>,
-    sse_streams: Arc<Semaphore>,
+    sse_posts: Arc<Semaphore>,
+    sse_gets: Arc<Semaphore>,
 }
 
 impl McpHttpClient {
@@ -1145,8 +1151,11 @@ impl McpHttpClient {
                 ordinary_posts: ORDINARY_POST_SLOTS
                     .get_or_init(|| Arc::new(Semaphore::new(MAX_ORDINARY_POSTS)))
                     .clone(),
-                sse_streams: SSE_STREAM_SLOTS
-                    .get_or_init(|| Arc::new(Semaphore::new(MAX_SSE_STREAMS)))
+                sse_posts: SSE_POST_SLOTS
+                    .get_or_init(|| Arc::new(Semaphore::new(MAX_SSE_POST_BODIES)))
+                    .clone(),
+                sse_gets: SSE_GET_SLOTS
+                    .get_or_init(|| Arc::new(Semaphore::new(MAX_SSE_GET_BODIES)))
                     .clone(),
             },
             ownership,
@@ -1177,24 +1186,13 @@ fn locally_terminated() -> StreamableHttpError<reqwest::Error> {
 }
 
 impl McpHttpClient {
-    fn reserve_sse(
-        &self,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, StreamableHttpError<reqwest::Error>> {
-        self.sse_streams.clone().try_acquire_owned().map_err(|_| {
-            StreamableHttpError::Io(std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                "MCP HTTP SSE receive capacity is exhausted",
-            ))
-        })
-    }
-
     fn bound_post_stream(
         &self,
         response: StreamableHttpPostResponse,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
         match response {
             StreamableHttpPostResponse::Sse(stream, session) => Ok(
-                StreamableHttpPostResponse::Sse(bound_sse(stream, self.reserve_sse()?), session),
+                StreamableHttpPostResponse::Sse(bound_sse(stream, &self.sse_posts)?, session),
             ),
             other => Ok(other),
         }
@@ -1269,11 +1267,23 @@ impl McpHttpClient {
     }
 }
 
-fn bound_sse(stream: SseStream, permit: tokio::sync::OwnedSemaphorePermit) -> SseStream {
-    futures_util::stream::unfold((stream, permit), |(mut stream, permit)| async move {
-        stream.next().await.map(|event| (event, (stream, permit)))
-    })
-    .boxed()
+fn bound_sse(
+    stream: SseStream,
+    slots: &Arc<Semaphore>,
+) -> Result<SseStream, StreamableHttpError<reqwest::Error>> {
+    let permit = slots.clone().try_acquire_owned().map_err(|_| {
+        StreamableHttpError::Io(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "MCP HTTP SSE receive capacity is exhausted",
+        ))
+    })?;
+    Ok(
+        futures_util::stream::unfold((stream, permit), |(mut stream, permit)| async move {
+            stream.next().await.map(|event| (event, (stream, permit)))
+        })
+        .fuse()
+        .boxed(),
+    )
 }
 
 impl StreamableHttpClient for McpHttpClient {
@@ -1356,12 +1366,11 @@ impl StreamableHttpClient for McpHttpClient {
         auth_header: Option<String>,
         custom_headers: CustomHeaders,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
-        let permit = self.reserve_sse()?;
         let stream = self
             .inner
             .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
             .await?;
-        Ok(bound_sse(stream, permit))
+        bound_sse(stream, &self.sse_gets)
     }
 
     async fn get_stream_with_max_sse_event_size(
@@ -1373,7 +1382,6 @@ impl StreamableHttpClient for McpHttpClient {
         custom_headers: CustomHeaders,
         max_sse_event_size: usize,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
-        let permit = self.reserve_sse()?;
         let stream = self
             .inner
             .get_stream_with_max_sse_event_size(
@@ -1385,7 +1393,9 @@ impl StreamableHttpClient for McpHttpClient {
                 max_sse_event_size,
             )
             .await?;
-        Ok(bound_sse(stream, permit))
+        // The SDK checks the status and media type before it returns a lazy
+        // event parser. A 405 probe never consumes a body slot.
+        bound_sse(stream, &self.sse_gets)
     }
 }
 
@@ -1538,6 +1548,9 @@ mod tests {
         async fn resume(State(peer): State<Peer>, headers: axum::http::HeaderMap) -> Response {
             let last = headers.get("last-event-id").unwrap().to_str().unwrap();
             peer.observed.send(format!("resume {last}")).unwrap();
+            if last == "unsupported" {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
             Response::builder()
                 .header(header::CONTENT_TYPE, "text/event-stream")
                 .body(Body::from("id: next-3\ndata: resumed\n\n"))
@@ -1560,9 +1573,12 @@ mod tests {
         let slots = Arc::new(super::Semaphore::new(1));
         first.ordinary_posts = slots.clone();
         second.ordinary_posts = slots.clone();
-        let streams = Arc::new(super::Semaphore::new(1));
-        first.sse_streams = streams.clone();
-        second.sse_streams = streams.clone();
+        let post_streams = Arc::new(super::Semaphore::new(1));
+        let get_streams = Arc::new(super::Semaphore::new(1));
+        first.sse_posts = post_streams.clone();
+        second.sse_posts = post_streams.clone();
+        first.sse_gets = get_streams.clone();
+        second.sse_gets = get_streams.clone();
 
         let ping = |id| -> ClientJsonRpcMessage {
             serde_json::from_value(serde_json::json!({
@@ -1645,25 +1661,35 @@ mod tests {
             1,
             "handoff returns the JSON decode slot"
         );
-        assert_eq!(streams.available_permits(), 0);
-        let get_resume = || {
+        assert_eq!(post_streams.available_permits(), 0);
+        let get_resume = |last_event_id: &str| {
             second.get_stream_with_max_sse_event_size(
                 endpoint.clone(),
                 None,
-                Some("cut-3".into()),
+                Some(last_event_id.to_owned()),
                 None,
                 empty_headers(),
                 64 * 1024,
             )
         };
-        let refused = get_resume().await;
+        let mut resumed = get_resume("cut-3").await.unwrap();
+        assert_eq!(calls.recv().await.as_deref(), Some("resume cut-3"));
+        assert_eq!(get_streams.available_permits(), 0);
+        assert_eq!(post_streams.available_permits(), 0);
         assert!(
-            matches!(refused, Err(super::StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+            matches!(get_resume("cut-3").await, Err(super::StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
-        assert_eq!(
-            calls.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        assert_eq!(calls.recv().await.as_deref(), Some("resume cut-3"));
+        assert!(matches!(
+            get_resume("unsupported").await,
+            Err(super::StreamableHttpError::ServerDoesNotSupportSse)
+        ));
+        assert_eq!(calls.recv().await.as_deref(), Some("resume unsupported"));
+        assert!(
+            matches!(second.post_message(endpoint.clone(), ping(5), None, None, empty_headers()).await,
+                Err(super::StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
+        assert_eq!(calls.recv().await.as_deref(), Some("5"));
         assert!(matches!(
             second
                 .post_message(endpoint.clone(), ping(4), None, None, empty_headers())
@@ -1673,13 +1699,12 @@ mod tests {
         ));
         assert_eq!(calls.recv().await.as_deref(), Some("4"));
         drop(response);
-        assert_eq!(streams.available_permits(), 1);
-        let mut resumed = get_resume().await.unwrap();
-        assert_eq!(calls.recv().await.as_deref(), Some("resume cut-3"));
-        assert_eq!(streams.available_permits(), 0);
+        assert_eq!(post_streams.available_permits(), 1);
+        assert_eq!(get_streams.available_permits(), 0);
         assert!(resumed.next().await.unwrap().is_ok());
         assert!(resumed.next().await.is_none());
-        assert_eq!(streams.available_permits(), 1);
+        assert!(resumed.next().await.is_none());
+        assert_eq!(get_streams.available_permits(), 1);
         assert_eq!(
             calls.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)

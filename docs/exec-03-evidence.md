@@ -353,11 +353,16 @@ at 64 KiB. A declared excess is rejected before reading. A chunked excess is
 rejected before extending the bounded accumulation. The decoder may hold the
 response bytes alongside the parsed result and its allocations. At
 most 512 MiB of JSON body bytes can be in these ordinary decoders across
-the Server, plus parsed output and transport overhead. A separate shared
-budget holds 32 SSE parsers, including POST responses, subscriptions and
-Last-Event-ID resumes. Each parser has the 16 MiB event bound. The budget
-refuses new streams at capacity and releases a slot when its stream ends
-or drops. JSON receives and control traffic use their own budgets.
+the Server, plus parsed output and transport overhead. SSE response bodies
+use two shared pools. Up to 128 POST responses can carry progress and
+results, including the regression batch of 64 held requests. Up to 32 GET
+bodies cover subscriptions and Last-Event-ID resumes. Each parser has the
+16 MiB event bound, for up to 2,560 MiB of encoded event payload across
+the two pools, plus parser and result allocations. Header classification
+precedes body admission, so a GET that declines SSE with 405 always
+reaches the caller.
+Each pool refuses excess bodies before event parsing and returns slots at
+EOF or drop. JSON receives and control traffic use their own budgets.
 
 Three real Linux Server-only fixtures ran against the same HTTP implementation.
 Procfs was sampled every 5 ms, excluding the separate `rustx init` enrollment
@@ -468,7 +473,16 @@ A live HTTP test shares one response slot between independent client
 owners. One POST holds a partial JSON body, a waiting request is cancelled
 before reaching the peer, and a control notification succeeds during the
 hold. Completing the JSON lets the next POST enter. Its SSE handoff
-returns the slot while the response stream stays live.
+returns the slot while the response stream stays live. The peer observes
+the exact Last-Event-ID on GET while the POST stream occupies its own pool.
+A second GET and a second POST each refuse at their own cap. The 405
+receipt, a JSON POST and control work remain available. EOF and drop
+return their respective slots.
+
+The 64-call manual-clock regression retains all real POST streams while
+every progress notification reaches its own request before subscription.
+All 64 calls receive both progress occurrences and settle once at the
+hard deadline. The original assertions and deadline policy are preserved.
 
 The Linux debug Server built at `83fb1b117` also ran separate Sessions in
 one process with its binary staged alone. A loopback peer flushed 12 MiB
@@ -528,19 +542,19 @@ one near-limit event. The final column measures procfs CPU after attachment.
 The measured Server SHA-256 was
 `2f19ea96e128b3458cea90ca2da3a7aa9843cec6ec6d3364fccf5b2004055a4e`.
 
-| Sessions and occupied SSE slots | Complete HTTP event-body bytes | RSS before / held / peak (KiB) | Attach / all prefixes / finish after release (s) | User / system CPU (s) |
+| Sessions and occupied POST SSE slots | Complete HTTP event-body bytes | RSS before / held / peak (KiB) | Attach / all prefixes / finish after release (s) | User / system CPU (s) |
 | ---: | ---: | ---: | ---: | ---: |
 | 1 | 16,773,212 | 58,868 / 106,484 / 147,072 | 1.105 / 0.593 / 0.313 | 0.47 / 0.39 |
 | 32 | 536,742,784 | 160,572 / 1,429,432 / 2,404,476 | 24.479 / 2.040 / 0.957 | 21.58 / 6.77 |
 
-At capacity the peer held 402,653,184 text bytes across 32 SSE events.
+At 32 Sessions the peer held 402,653,184 text bytes across 32 SSE events.
 Each Session issued one MCP invocation, two fake-provider business
 requests and one auxiliary request. Each Journal had one ToolResult of
 17,022–17,023 bytes, one final terminal and 26,770–26,783 event bytes.
 Server scratch stayed empty. RSS includes parser and result decoding
 allocations. Concurrent compilation and the different HTTP framing limit
-comparisons with the JSON runs. Mixed JSON and SSE saturation was not
-sampled.
+comparisons with the JSON runs. The recorded samples isolate JSON and SSE
+in separate runs.
 
 The standalone HTTP process fixture reused the same measure for a 327,680-byte
 result. Its App Server peaked at 188,688 KiB (0.79 s user and 0.03 s system

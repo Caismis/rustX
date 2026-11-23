@@ -862,7 +862,7 @@ os.execv(sys.argv[2], sys.argv[2:])
         let scope = execution.scope();
         let registry = Arc::<McpProbeRegistry>::default();
         let available = registry.capacity.available_permits();
-        let query = tokio::spawn(probe_query(
+        let mut query = tokio::spawn(probe_query(
             owner,
             source,
             move |_| Ok(Some(scope.clone())),
@@ -872,7 +872,10 @@ os.execv(sys.argv[2], sys.argv[2:])
             (),
             registry.clone(),
         ));
-        close.wait_entered().await;
+        tokio::select! {
+            () = close.wait_entered() => (),
+            result = &mut query => panic!("the probe settled before entering the close gate: {result:?}"),
+        }
         execution.shutdown().await.unwrap();
         close.release();
         let result = query.await.unwrap().unwrap();
