@@ -488,7 +488,12 @@ impl LocalConversationCore {
                 session_id: session_id.clone(),
                 diagnostic: error.diagnostic,
             })?
-            .admit(|| paths.credentials.clone())
+            .admit(|| {
+                dependencies.credentials.as_deref().map_or_else(
+                    || paths.credentials.clone(),
+                    CredentialEnvironment::snapshot,
+                )
+            })
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
         let database = catalog.database_path(&session_id, &node.conversation_id);
         let allocation = database
@@ -507,7 +512,6 @@ impl LocalConversationCore {
             manager,
             intent.input(),
             current,
-            dependencies,
             &startup,
         )
         .await?;
@@ -1106,7 +1110,6 @@ async fn prepare_standalone_configuration(
     manager: super::configuration::UserConfigManager,
     input: super::configuration::SessionConfigInput,
     authored: AdmittedSessionConfig,
-    dependencies: &LocalRuntimeDependencies,
     startup: &McpInitialSubmission,
 ) -> Result<(AdmittedSessionConfig, ModelBindingRegistry), LocalRuntimeError> {
     let prepared = execution
@@ -1117,7 +1120,8 @@ async fn prepare_standalone_configuration(
             startup
                 .bind_policy(current.config.mcp_startup_policy)
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-            let registry = load_model_registry(&current, dependencies)?;
+            let registry =
+                ModelBindingRegistry::new(current.models.resolve(&current.credentials)?)?;
             Ok((current, registry))
         });
     if prepared.is_err()
