@@ -47,11 +47,33 @@ impl Staging {
         })
     }
 
-    pub(super) fn descriptor(&self) -> BorrowedFd<'_> {
-        self.listener.as_fd()
+    // Run filesystem work independently of the lease that can signal
+    // the namespace. Settlement still requires both owners to finish.
+    pub(super) fn serve(mut self, client: &OwnedFd) -> io::Result<()> {
+        loop {
+            let mut sources = [
+                PollFd::new(client.as_fd(), PollFlags::POLLIN),
+                PollFd::new(self.listener.as_fd(), PollFlags::POLLIN),
+            ];
+            match poll(&mut sources, PollTimeout::NONE) {
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(error) => return Err(error.into()),
+                Ok(_) => {}
+            }
+            if sources[0].any() == Some(true) {
+                super::verify_exit(client)?;
+                return self.remove_all();
+            }
+            if sources[1].any() == Some(true)
+                && let Err(error) = self.receive(client)
+            {
+                // The owner stays held even if the acknowledgement is lost.
+                eprintln!("Client private staging request failed: {error}");
+            }
+        }
     }
 
-    pub(super) fn receive(&mut self, client: &OwnedFd) -> io::Result<()> {
+    fn receive(&mut self, client: &OwnedFd) -> io::Result<()> {
         let mut channel = match self.listener.accept() {
             Ok((channel, _)) => channel,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
@@ -107,10 +129,6 @@ impl Staging {
         let python = remove_owner(&mut self.python);
         let mutation = remove_owner(&mut self.mutation);
         python.and(mutation)
-    }
-
-    pub(super) fn release(mut self) -> io::Result<()> {
-        self.remove_all()
     }
 }
 

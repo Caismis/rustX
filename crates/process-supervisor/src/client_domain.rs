@@ -291,13 +291,16 @@ fn verify_exit(descriptor: &OwnedFd) -> io::Result<()> {
 pub fn watch_lease(socket: &Path, client_pid: i32) -> io::Result<()> {
     let mut channel = UnixStream::from(io::stdin().as_fd().try_clone_to_owned()?);
     let (descriptor, _) = namespace_init(&channel)?;
-    let mut staging = staging::Staging::listen(socket, client_pid)?;
+    let staging = staging::Staging::listen(socket, client_pid)?;
+    let staging_pid = descriptor.try_clone()?;
+    let stages = std::thread::Builder::new()
+        .name("client-domain-staging".into())
+        .spawn(move || staging.serve(&staging_pid))?;
     channel.write_all(b"W")?;
     loop {
         let mut sources = [
             PollFd::new(descriptor.as_fd(), PollFlags::POLLIN),
             PollFd::new(channel.as_fd(), PollFlags::POLLIN | PollFlags::POLLHUP),
-            PollFd::new(staging.descriptor(), PollFlags::POLLIN),
         ];
         match poll(&mut sources, PollTimeout::NONE) {
             Err(Errno::EINTR) => continue,
@@ -311,15 +314,11 @@ pub fn watch_lease(socket: &Path, client_pid: i32) -> io::Result<()> {
             request_exit(&descriptor)?;
             break;
         }
-        if sources[2].any() == Some(true)
-            && let Err(error) = staging.receive(&descriptor)
-        {
-            // The original owner stays held even if its reply is lost.
-            eprintln!("Client private staging request failed: {error}");
-        }
     }
     verify_exit(&descriptor)?;
-    staging.release()
+    stages
+        .join()
+        .map_err(|_| io::Error::other("Client staging settlement panicked"))?
 }
 
 fn arm_lease(
