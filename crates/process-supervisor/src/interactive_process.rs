@@ -24,9 +24,9 @@
 //! - `AnchorReady` is the commit point of the unit's identity. Before it,
 //!   the outer may already have spawned a pre-anchor inner whose identity
 //!   rustX never received, so once the startup gate has opened, bare
-//!   [`UnitLifecycle::PreOwnership`] plus control EOF/error is **not** a
+//!   `UnitLifecycle::PreOwnership` plus control EOF/error is **not** a
 //!   terminal proof: it settles as
-//!   [`UnitSettlement::TerminalityUnproven`]. Only an explicit
+//!   `UnitSettlement::TerminalityUnproven`. Only an explicit
 //!   proof-carrying `NoOwnership` — which the outer emits only after it
 //!   proved its direct pre-anchor child gone and reaped — settles a
 //!   pre-anchor unit physically;
@@ -37,7 +37,7 @@
 //!   `NoOwnership`, or a unit that provably never passed the startup gate.
 //!   An unavailable emergency anchor, a containment failure, a
 //!   containment-task failure, or an unproven pre-anchor state is reported
-//!   as [`UnitSettlement::TerminalityUnproven`] and is never a successful
+//!   as `UnitSettlement::TerminalityUnproven` and is never a successful
 //!   physical settlement;
 //! - stderr is drained until EOF; only a bounded preview is retained, and
 //!   reading never stops merely because the preview limit was reached;
