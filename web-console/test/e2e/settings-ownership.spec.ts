@@ -2,7 +2,7 @@ import { readSource } from './source-reading';
 import { openEmptySession, settledSetting } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, connectionAction, enableWorkspaceCustomization, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -93,7 +93,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    expect(wire.lost()).toBe(1);
    expect(wire.requests.filter(row => row.method === 'configuration/sourceWrite')).toHaveLength(before + 1);
    expect((await sessions()).sessions).toEqual([]);
- } finally { await remote.shutdown(); const report = await f.stop(false); expect(report.requestCount).toBe(0); }
+ } finally { await remote.shutdown(); const report = await stopDogfoodPage(page, f, false); expect(report.requestCount).toBe(0); }
 });
 
 test('C13 C15 real native automatic commit waits for Session work and preserves the settled history', async ({ page }) => {
@@ -136,5 +136,5 @@ test('C13 C15 real native automatic commit waits for Session work and preserves 
    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
    await expect(page.locator('[data-configuration-change]')).toHaveCount(0);
    expect((await f.control('requests')).requests).toHaveLength(1);
- } finally { await remote.shutdown(); await page.close(); await f.stop(false); }
+ } finally { await remote.shutdown(); await stopDogfoodPage(page, f, false); }
 });

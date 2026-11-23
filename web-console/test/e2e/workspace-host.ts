@@ -55,19 +55,21 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
     }
     const write = route.request().url().endsWith('/configuration') && route.request().postDataJSON()?.operation?.kind === 'write';
     if (write) await writeGate?.before();
-    // The fixture host can still be binding its listener when the first routed
-    // request lands (ECONNREFUSED on a fresh app-server); give it a few seconds.
-    let response: Response | undefined;
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        response = await fetch(`${fixture.workspaceHostUrl}${new URL(route.request().url()).pathname}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
-        });
-        break;
-      } catch (error) {
-        if (attempt >= 30 || (error as NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }).cause?.code !== 'ECONNREFUSED') throw error;
-        await new Promise(resolve => setTimeout(resolve, 200));
+    let response: Response;
+    try {
+      response = await fetch(`${fixture.workspaceHostUrl}${new URL(route.request().url()).pathname}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
+      });
+    } catch (error) {
+      // The fixture's in-process server stops listening only when teardown
+      // closes it, so a refused connection is an in-flight request racing
+      // shutdown — not a test failure. Answer the route quietly instead of
+      // letting a stray 'fetch failed' surface as the test error.
+      if ((error as { cause?: NodeJS.ErrnoException }).cause?.code === 'ECONNREFUSED') {
+        try { await route.fulfill({ status: 503, body: 'Fixture host closed' }); } catch { /* route already gone */ }
+        return;
       }
+      throw error;
     }
     if (write) await writeGate?.observed();
     const buffered = { status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) };

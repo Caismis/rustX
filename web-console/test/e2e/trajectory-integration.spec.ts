@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { returnHome, connectRemote, openSettingsPage } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -163,5 +163,5 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     const failure = error as { method?: string; kind?: string };
     console.error('Native configuration commit Trace diagnostic', JSON.stringify({ method: failure.method, kind: failure.kind, issued_cut_after_failure: cut, native_stderr: f.diagnostics().appErrors.slice(-4096) }));
     throw error;
-  } finally { following?.stop(); await remote.shutdown(); await page.close(); await f.stop(passed); }
+  } finally { following?.stop(); await remote.shutdown(); await stopDogfoodPage(page, f, passed); }
 });
