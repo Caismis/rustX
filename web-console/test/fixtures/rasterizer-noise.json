@@ -59757,5 +59757,43 @@
         ]
       ]
     ]
+  },
+  {
+    "reference": "trajectory-inspector-390-light-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Linux FULL CI run 45187152968, job 137741822345, artifact 14826982621. The stable comparison differs by one level at (28,233). Both of its inspector screenshot checkpoints (23179, 23181) and both checkpoints (147, 149) in a strict passing local replay have byte-identical reconstructed DOM, including the embedded styles, after removing only the tracing target marker. All twelve desktop and mobile light/dark replays passed the strict reference. The region contains only the measured coordinate and channel difference.",
+    "referenceSha256": "4e09ad73875b4f8abdfc3cc7e48c986e1fbb07220410c6f2d487178a885e8888",
+    "captureSha256": "15884a1af71a901a44fed91865694275bcedd1d27a201c2c50dd2d550aeeff7a",
+    "traceSha256": "cefe614ae3bb7d9cbfaa2104544a9abb6350b51111351c39ec480853314c52a4",
+    "replayTraceSha256": "02498bd8325cfd2f21cb778d81921dec3e46814eb471c909f8699b9bb094c6b7",
+    "domSha256": "24823f725119ca33972da57960c2ac5ef45a1e30216525b9ea6cd16e662f52bf",
+    "regions": [
+      {
+        "label": "Mobile inspector raster coverage",
+        "x": 28,
+        "y": 233,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      }
+    ],
+    "pixels": [
+      [
+        28,
+        233,
+        [
+          206,
+          214,
+          228,
+          255
+        ],
+        [
+          205,
+          213,
+          228,
+          255
+        ]
+      ]
+    ]
   }
 ]
