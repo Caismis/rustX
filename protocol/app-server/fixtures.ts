@@ -1762,7 +1762,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1782,6 +1782,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
@@ -2108,7 +2114,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2128,6 +2134,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
@@ -2454,7 +2466,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2474,6 +2486,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
@@ -2800,7 +2818,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2820,6 +2838,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
@@ -3146,7 +3170,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3166,6 +3190,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
@@ -3492,7 +3522,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3512,6 +3542,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
@@ -3838,7 +3874,7 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3858,6 +3894,12 @@ export const fixtures = [
                     "format": "uint64",
                     "minimum": 1,
                     "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+                  },
+                  "byte_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "A zero-based UTF-8 byte offset for a saved output locator. Leave\nboth line options unset when reading by bytes."
                   }
                 },
                 "required": [
