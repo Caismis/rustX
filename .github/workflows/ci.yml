@@ -804,11 +804,14 @@ jobs:
       # test binary drives ~4400 unit tests concurrently, each holding
       # tempdirs, watchers and collection locks; the exhaustion surfaces as
       # transient `Io` failures. `ulimit` must run inside the step's shell, so
-      # append it to $BASH_ENV — GitHub sources that file for every later bash
-      # step in this job, which also keeps the cargo test steps single-line as
-      # the lane checker requires.
+      # export BASH_ENV via GITHUB_ENV: the runner does not set BASH_ENV
+      # itself, but every later bash step sources the file it names, which
+      # also keeps the cargo test steps single-line as the lane checker
+      # requires.
       - name: Raise the file-descriptor ceiling for test steps
-        run: printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' >> "$BASH_ENV"
+        run: |
+          printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' > "$RUNNER_TEMP/raise-fd-limit.sh"
+          echo "BASH_ENV=$RUNNER_TEMP/raise-fd-limit.sh" >> "$GITHUB_ENV"
 
       - name: Run unit tests and the in-crate boundary suites
         env:
