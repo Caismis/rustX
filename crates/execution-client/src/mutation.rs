@@ -306,6 +306,14 @@ impl Writes {
         }
     }
 
+    pub(super) fn ticket_sequence(&self) -> u64 {
+        self.next
+    }
+
+    pub(super) fn continue_ticket_sequence(&mut self, next: u64) {
+        self.next = next;
+    }
+
     /// Retains the named target under `expectation` — the shared first
     /// phase of `PrepareWrite`, `BeginWrite`, and `PrepareEdit`. The
     /// deepest existing ancestor is retained and the still-missing

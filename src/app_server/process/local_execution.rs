@@ -148,8 +148,8 @@ pub(super) async fn launch_remote(
 }
 
 /// The loopback accept loop: keeps accepting after a failed or invalid
-/// handshake until the first successful admission or drain — there is no
-/// replacement after the live connection ends. In-flight upgrades are
+/// handshake until drain. An authenticated same-instance recovery still
+/// enters through this listener. In-flight upgrades are
 /// bounded by the permit budget and each runs off the reactor on the
 /// blocking pool, never under a global lock; a job accepted but not yet
 /// running sees `stop` before it can admit after drain.
@@ -162,14 +162,9 @@ async fn accept_remote(
     // bounds a flood of half-open handshakes.
     const MAX_IN_FLIGHT: u32 = 4;
     let in_flight = Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT as usize));
-    let (admitted, mut admitted_rx) = tokio::sync::watch::channel(());
     loop {
         tokio::select! {
             () = stop.cancelled() => break,
-            changed = admitted_rx.changed() => {
-                debug_assert!(changed.is_ok(), "sender lives in this task");
-                break;
-            }
             accepted = listener.accept() => {
                 // A persistent accept failure must not spin the
                 // reactor: bounded backoff, then accept again.
@@ -185,7 +180,6 @@ async fn accept_remote(
                     continue;
                 };
                 let endpoint = endpoint.clone();
-                let admitted = admitted.clone();
                 let stopping = stop.clone();
                 tokio::task::spawn_blocking(move || {
                     let _permit = permit;
@@ -195,17 +189,7 @@ async fn accept_remote(
                         return;
                     }
                     let Ok(stream) = stream.into_std() else { return };
-                    let committed = endpoint
-                        .admit_websocket_stream_deadline(stream, deadline)
-                        .is_ok_and(|admission| {
-                            matches!(
-                                admission,
-                                crate::local_runtime::session_runtime_manager::EndpointAdmission::Live
-                            )
-                        });
-                    if committed {
-                        let _ = admitted.send(());
-                    }
+                    let _ = endpoint.admit_websocket_stream_deadline(stream, deadline);
                 });
             }
         }

@@ -636,15 +636,31 @@ async fn exchange_until(
     request: ProcessRequest,
     deadline: std::time::Instant,
 ) -> Exchange {
-    let endpoint = endpoint.clone();
-    let result = tokio::task::spawn_blocking(move || match request {
-        ProcessRequest::InputReceipt {
-            abandon_pending: true,
-            ..
-        } => endpoint.finish_input_receipt_by(&request, deadline),
-        _ => endpoint.process_until(&request, deadline),
-    })
-    .await;
+    let request = Arc::new(request);
+    let result = loop {
+        let wire_endpoint = endpoint.clone();
+        let wire_request = request.clone();
+        let outcome = tokio::task::spawn_blocking(move || match wire_request.as_ref() {
+            ProcessRequest::InputReceipt {
+                abandon_pending: true,
+                ..
+            } => wire_endpoint.finish_input_receipt_by(&wire_request, deadline),
+            _ => wire_endpoint.process_until(&wire_request, deadline),
+        })
+        .await;
+        if !matches!(request.as_ref(), ProcessRequest::Start { .. })
+            && outcome.as_ref().is_ok_and(|reply| {
+                reply
+                    .as_ref()
+                    .is_err_and(|error| endpoint.retry_process_after_lane_loss(&request, error))
+            })
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(OPERATION_POLL).await;
+            continue;
+        }
+        break outcome;
+    };
     match result {
         Ok(Ok(reply)) => Exchange::Reply(reply),
         Ok(Err(error)) if ProcessOutcomeUnknown::is(&error) => {

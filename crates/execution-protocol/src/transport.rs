@@ -7,6 +7,21 @@
 //! parse errors never expose payload bytes.
 
 use std::io::{self, Read, Write};
+
+/// Returns whether lane I/O failure can be reconciled by a fresh authenticated
+/// pair. Malformed records and explicit protocol refusals are terminal.
+#[must_use]
+pub fn recoverable_lane_loss(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+    )
+}
 #[cfg(unix)]
 use std::os::fd::AsFd;
 use std::time::{Duration, Instant};

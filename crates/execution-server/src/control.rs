@@ -407,7 +407,14 @@ impl ControlHandle {
     ///
     /// A lost, late, or negative receipt leaves physical cleanup unconfirmed.
     pub fn stop_watch(&self, id: WatchId) -> io::Result<()> {
-        let deadline = Instant::now() + CONTROL_COMMAND_TIMEOUT;
+        self.stop_watch_by(id, Instant::now() + CONTROL_COMMAND_TIMEOUT)
+    }
+
+    /// Stops the watch under the caller's original control deadline.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::stop_watch`].
+    pub fn stop_watch_by(&self, id: WatchId, deadline: Instant) -> io::Result<()> {
         let receipt = self.enqueue_until(&ControlRequest::StopWatch { id }, deadline)?;
         match receipt.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok(ControlReply::WatchStopped {
@@ -459,6 +466,12 @@ impl ControlHandle {
         self.shared.lock().closed.is_none()
     }
 
+    /// Checks that two handles refer to exactly the same paired control lane.
+    #[must_use]
+    pub fn same_pair(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
     /// Orderly stop: waiters resolve closed and the worker's read wakes.
     /// The pair's teardown is the connection's.
     pub(super) fn stop(&self) {
@@ -499,33 +512,38 @@ impl ControlWorker {
             .name("execution-control".to_owned())
             .spawn(move || {
                 let mut next_sequence = 1u64;
-                loop {
+                let recoverable = loop {
                     let deadline = shared
                         .revoke_deadline()
                         .unwrap_or_else(|| Instant::now() + CONTROL_FRAME_TIMEOUT);
-                    let Ok(poll) = channel.receive::<ControlPoll>(Some(deadline)) else {
-                        if shared
-                            .revoke_deadline()
-                            .is_some_and(|limit| Instant::now() >= limit)
-                        {
-                            shared.reject(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                "control command outlived its budget",
-                            ));
+                    let poll = match channel.receive::<ControlPoll>(Some(deadline)) {
+                        Ok(poll) => poll,
+                        Err(error) => {
+                            if shared
+                                .revoke_deadline()
+                                .is_some_and(|limit| Instant::now() >= limit)
+                            {
+                                shared.reject(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "control command outlived its budget",
+                                ));
+                            }
+                            break rustx_execution_protocol::transport::recoverable_lane_loss(
+                                &error,
+                            );
                         }
-                        break;
                     };
                     // The client's own sequence must advance exactly:
                     // a skip or replay is a protocol violation, not a
                     // dropped frame to tolerate.
                     if poll.sequence.get() != next_sequence {
-                        break;
+                        break false;
                     }
                     next_sequence = next_sequence.saturating_add(1);
                     if !shared.resolve(poll.receipt, || {
                         worker_owner.confirm_revocation(&connection);
                     }) {
-                        break;
+                        break false;
                     }
                     let request = shared.next_command();
                     let turn = ControlTurn {
@@ -534,16 +552,17 @@ impl ControlWorker {
                         request,
                     };
                     let Ok(encoded) = encode_record(&turn) else {
-                        break;
+                        break false;
                     };
                     let frame_deadline = Instant::now() + CONTROL_FRAME_TIMEOUT;
                     let send_deadline = shared
                         .revoke_deadline()
                         .map_or(frame_deadline, |limit| frame_deadline.min(limit));
-                    if channel.send(&encoded, Some(send_deadline)).is_err() {
-                        break;
+                    if let Err(error) = channel.send(&encoded, Some(send_deadline)) {
+                        break rustx_execution_protocol::transport::recoverable_lane_loss(&error);
                     }
-                }
+                };
+                let may_recover = recoverable && shared.revoke_deadline().is_none();
                 shared.terminate(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "control lane ended",
@@ -552,7 +571,9 @@ impl ControlWorker {
                     // A lane that ended without an orderly stop detaches
                     // the pair: the seized data handle interrupts any
                     // blocked exchange, and no dispatch starts again.
-                    worker_owner.detach_control(&connection).shutdown();
+                    worker_owner
+                        .detach_control(&connection, may_recover)
+                        .shutdown();
                 }
             })
             .expect("the bounded control worker spawns");

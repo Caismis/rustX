@@ -178,6 +178,11 @@ async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offline_deleted_session_accepts_only_its_original_cleanup_owner() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::an_offline_deleted_session_accepts_only_its_original_cleanup_owner()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queued_capture_discard_hands_off_to_binding_revocation() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::queued_capture_discard_hands_off_to_binding_revocation()).await;
 }

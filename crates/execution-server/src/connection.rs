@@ -147,6 +147,17 @@ impl LocalConnection {
         self.capabilities.contains(&capability)
     }
 
+    /// Whether this data lane still belongs to the current authenticated pair.
+    #[must_use]
+    pub fn is_current(&self) -> bool {
+        self.usable
+            && !self.closed
+            && self
+                .owner
+                .as_ref()
+                .is_none_or(|owner| owner.is_live(&self.connection))
+    }
+
     /// The server-generated identity of this connection.
     #[must_use]
     pub fn connection_id(&self) -> &ConnectionId {
@@ -192,16 +203,26 @@ impl LocalConnection {
     /// connection only disconnects and shuts down.
     pub fn close(&mut self) {
         if self.usable && !self.closed {
+            // Announce intentional shutdown to a Client that otherwise
+            // treats a transport close as a possibly recoverable loss.
+            let cutoff = Instant::now() + ORDERLY_CLOSE_BUDGET;
+            if self.is_current()
+                && self
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| !owner.revocation_confirmed())
+                && let Some(control) = self.control()
+            {
+                let _ = control.request_revoke_by(cutoff - Duration::from_millis(100));
+            }
             self.closed = true;
-            let _ = self
-                .channel
-                .close_graceful(Some(Instant::now() + ORDERLY_CLOSE_BUDGET));
+            let _ = self.channel.close_graceful(Some(cutoff));
         }
         if let Some(control) = self.control.take() {
             control.stop();
         }
         if let Some(owner) = &self.owner {
-            owner.disconnect(&self.connection).shutdown();
+            owner.disconnect(&self.connection, false).shutdown();
         }
         self.channel.shutdown();
     }
@@ -223,7 +244,12 @@ impl LocalConnection {
             control.stop();
         }
         if let Some(owner) = &self.owner {
-            owner.disconnect(&self.connection).shutdown();
+            owner
+                .disconnect(
+                    &self.connection,
+                    rustx_execution_protocol::transport::recoverable_lane_loss(&error),
+                )
+                .shutdown();
         }
         self.channel.shutdown();
         error

@@ -197,7 +197,7 @@ impl Observation {
     ) {
         let relative = self.register().await;
         drop(owner);
-        let relative = match relative {
+        let (relative, lane) = match relative {
             Ok(relative) => relative,
             Err(error) => {
                 self.remove();
@@ -214,7 +214,7 @@ impl Observation {
             }
         };
         let _ = admitted.send(Ok(()));
-        let ended_on_client = self.observe(&relative).await;
+        let ended_on_client = self.observe(&relative, &lane).await;
         if !ended_on_client && self.host.server_draining() {
             // The drain may already be physically retiring this observer
             // through a binding-wide revoke. Use that receipt before
@@ -226,7 +226,7 @@ impl Observation {
         } else {
             let endpoint = self.source.endpoint.clone();
             let id = self.id;
-            match tokio::task::spawn_blocking(move || endpoint.stop_watch(id)).await {
+            match tokio::task::spawn_blocking(move || endpoint.stop_watch(id, &lane)).await {
                 Ok(Ok(())) => Ok(()),
                 _ => Err(ErrorData::OutcomeUnknown),
             }
@@ -242,7 +242,7 @@ impl Observation {
         self.settled.send_replace(Some(physically_settled));
     }
 
-    async fn register(&self) -> Result<PathBuf, RpcError> {
+    async fn register(&self) -> Result<(PathBuf, rustx_execution_server::ControlHandle), RpcError> {
         let endpoint = self.source.endpoint.clone();
         let path = self.source.path.clone();
         let stop = self.publication.stop.clone();
@@ -272,11 +272,12 @@ impl Observation {
         })
     }
 
-    async fn observe(&self, relative: &Path) -> bool {
+    async fn observe(&self, relative: &Path, lane: &rustx_execution_server::ControlHandle) -> bool {
         loop {
             let endpoint = self.source.endpoint.clone();
             let path = relative.to_path_buf();
             let id = self.id;
+            let poll_lane = lane.clone();
             let result = tokio::select! {
                 biased;
                 () = self.publication.stop.cancelled() => return false,
@@ -284,7 +285,7 @@ impl Observation {
                 () = self.source.root_grant.cancelled() => return false,
                 result = async {
                     tokio::time::sleep(POLL_PERIOD).await;
-                    tokio::task::spawn_blocking(move || endpoint.poll_watch(id, &path)).await
+                    tokio::task::spawn_blocking(move || endpoint.poll_watch(id, &path, &poll_lane)).await
                 } => result,
             };
             let change = match result {
@@ -316,7 +317,9 @@ impl Observation {
             ) {
                 continue;
             }
-            self.publication.emit(&self.events, change);
+            self.source
+                .endpoint
+                .with_control_lane(lane, || self.publication.emit(&self.events, change));
         }
     }
 

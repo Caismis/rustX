@@ -3,6 +3,7 @@
 use super::super::{LocalExecutionEndpoint, SessionRuntimeManager};
 use crate::runtime::identity::SessionId;
 use rustx_execution_protocol::watch::{MAX_CONFIGURATION_WATCHES, WatchId};
+use rustx_execution_server::ControlHandle;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
@@ -18,7 +19,7 @@ const COVERAGE_RECHECK: Duration = Duration::from_secs(5);
 type WatchPlan = BTreeMap<PathBuf, Option<BTreeSet<OsString>>>;
 
 struct Observer {
-    endpoint: Arc<LocalExecutionEndpoint>,
+    lane: ControlHandle,
     stop: CancellationToken,
 }
 
@@ -55,34 +56,37 @@ impl SessionRuntimeManager {
                 biased;
                 () = stop.cancelled() => break,
                 done = workers.join_next(), if !workers.is_empty() => {
-                    if let Some(Ok((session, endpoint))) = done
-                        && owners.get(&session).is_some_and(|owner| Arc::ptr_eq(&owner.endpoint, &endpoint))
+                    if let Some(Ok((session, lane))) = done
+                        && owners.get(&session).is_some_and(|owner| owner.lane.same_pair(&lane))
                     {
                         owners.remove(&session);
                     }
                 },
                 _ = ticks.tick() => {
                     let bindings: BTreeMap<_, _> = self.bound_source_bindings()
-                        .into_iter().filter(|(_, endpoint)| endpoint.control().is_some()).collect();
+                        .into_iter().filter_map(|(session, endpoint)| {
+                            let lane = endpoint.control()?;
+                            Some((session, (endpoint, lane)))
+                        }).collect();
                     owners.retain(|session, observer| {
                         let retained = bindings.get(session)
-                            .is_some_and(|endpoint| Arc::ptr_eq(endpoint, &observer.endpoint));
+                            .is_some_and(|(_, lane)| lane.same_pair(&observer.lane));
                         if !retained {
                             observer.stop.cancel();
                         }
                         retained
                     });
-                    for (session, endpoint) in bindings {
+                    for (session, (endpoint, lane)) in bindings {
                         owners.entry(session.clone()).or_insert_with(|| {
                             let token = stop.child_token();
                             let manager = self.clone();
-                            let worker_endpoint = endpoint.clone();
+                            let worker_lane = lane.clone();
                             let worker_stop = token.clone();
                             workers.spawn(async move {
-                                watch_session(manager, session.clone(), worker_endpoint.clone(), worker_stop).await;
-                                (session, worker_endpoint)
+                                watch_session(manager, session.clone(), endpoint, worker_lane.clone(), worker_stop).await;
+                                (session, worker_lane)
                             });
-                            Observer { endpoint, stop: token }
+                            Observer { lane, stop: token }
                         });
                     }
                 }
@@ -135,7 +139,12 @@ struct Watches {
 }
 
 impl Watches {
-    fn register(&mut self, endpoint: &LocalExecutionEndpoint, plan: WatchPlan) -> io::Result<bool> {
+    fn register(
+        &mut self,
+        endpoint: &LocalExecutionEndpoint,
+        lane: &ControlHandle,
+        plan: WatchPlan,
+    ) -> io::Result<bool> {
         let changed = plan != self.plan;
         self.plan = plan;
         self.incomplete = self.plan.len() > MAX_CONFIGURATION_WATCHES;
@@ -147,7 +156,7 @@ impl Watches {
             .collect::<Vec<_>>();
         for path in expired {
             if let Some((_, id)) = self.registered.remove(&path) {
-                endpoint.stop_watch(id)?;
+                endpoint.stop_watch(id, lane)?;
             }
         }
         let mut new_watch = false;
@@ -159,8 +168,12 @@ impl Watches {
                 self.incomplete = true;
                 break;
             };
-            match endpoint.register_watch(id, path, || Ok(())) {
-                Ok(relative) => {
+            match endpoint.register_watch(id, path, || {
+                endpoint
+                    .with_control_lane(lane, || ())
+                    .ok_or_else(|| io::ErrorKind::NotConnected.into())
+            }) {
+                Ok((relative, _)) => {
                     self.registered.insert(path.clone(), (relative, id));
                     new_watch = true;
                 }
@@ -176,11 +189,15 @@ impl Watches {
         Ok(changed || new_watch)
     }
 
-    fn poll(&mut self, endpoint: &LocalExecutionEndpoint) -> io::Result<bool> {
+    fn poll(
+        &mut self,
+        endpoint: &LocalExecutionEndpoint,
+        lane: &ControlHandle,
+    ) -> io::Result<bool> {
         let mut changed = false;
         let mut retired = Vec::new();
         for (path, (relative, id)) in &self.registered {
-            match endpoint.poll_watch(*id, relative) {
+            match endpoint.poll_watch(*id, relative, lane) {
                 Ok(notice) => {
                     if notice.retired {
                         retired.push(path.clone());
@@ -211,9 +228,9 @@ impl Watches {
         Ok(changed)
     }
 
-    fn stop_all(self, endpoint: &LocalExecutionEndpoint) {
+    fn stop_all(self, endpoint: &LocalExecutionEndpoint, lane: &ControlHandle) {
         for (_, id) in self.registered.into_values() {
-            if endpoint.control().is_none() || endpoint.stop_watch(id).is_err() {
+            if endpoint.stop_watch(id, lane).is_err() {
                 // The binding owns unresolved physical settlement.
                 return;
             }
@@ -225,6 +242,7 @@ async fn watch_session(
     manager: SessionRuntimeManager,
     session: SessionId,
     endpoint: Arc<LocalExecutionEndpoint>,
+    lane: ControlHandle,
     stop: CancellationToken,
 ) {
     let mut watches = Watches::default();
@@ -239,21 +257,29 @@ async fn watch_session(
         }
         let worker = manager.clone();
         let binding = endpoint.clone();
+        let turn = lane.clone();
         let id = session.clone();
         let now = Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             let success = (|| {
-                let mut changed = watches.poll(&binding)?;
+                if !binding
+                    .control()
+                    .is_some_and(|current| current.same_pair(&turn))
+                {
+                    return Err(io::ErrorKind::NotConnected.into());
+                }
+                let mut changed = watches.poll(&binding, &turn)?;
                 if changed || now >= check {
                     changed |= watches.register(
                         &binding,
+                        &turn,
                         worker.workspace_watch_plan(&id, binding.workspace()),
                     )?;
                     changed |= watches.incomplete;
                     check = now + COVERAGE_RECHECK;
                 }
                 if changed {
-                    worker.observe_bound_source(&id, &binding);
+                    worker.observe_bound_source(&id, &binding, turn);
                     #[cfg(test)]
                     worker
                         .configuration
@@ -274,5 +300,13 @@ async fn watch_session(
             break;
         }
     }
-    let _ = tokio::task::spawn_blocking(move || watches.stop_all(&endpoint)).await;
+    let _ = tokio::task::spawn_blocking(move || {
+        if endpoint
+            .control()
+            .is_some_and(|current| current.same_pair(&lane))
+        {
+            watches.stop_all(&endpoint, &lane);
+        }
+    })
+    .await;
 }

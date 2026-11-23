@@ -13,6 +13,7 @@ pub(super) struct BoundCapture {
     session: SessionId,
     input: super::super::configuration::SessionConfigInput,
     endpoint: Arc<super::LocalExecutionEndpoint>,
+    watch: Option<rustx_execution_server::ControlHandle>,
     ticket: Arc<()>,
     authored_workspace: Option<super::super::configuration::WorkspaceResourceIdentity>,
 }
@@ -756,6 +757,7 @@ impl SessionRuntimeManager {
                         session,
                         input,
                         endpoint,
+                        watch: None,
                         ticket,
                         authored_workspace,
                     });
@@ -778,6 +780,7 @@ impl SessionRuntimeManager {
         &self,
         session: &SessionId,
         endpoint: &Arc<super::LocalExecutionEndpoint>,
+        watch: rustx_execution_server::ControlHandle,
     ) {
         let mut application = self.applications.lock();
         if !self
@@ -785,7 +788,12 @@ impl SessionRuntimeManager {
             .configuration_endpoint(session)
             .ok()
             .flatten()
-            .is_some_and(|current| Arc::ptr_eq(endpoint, &current) && current.control().is_some())
+            .is_some_and(|current| {
+                Arc::ptr_eq(endpoint, &current)
+                    && current
+                        .control()
+                        .is_some_and(|current| current.same_pair(&watch))
+            })
         {
             return;
         }
@@ -817,6 +825,7 @@ impl SessionRuntimeManager {
             session: session.clone(),
             input,
             endpoint: endpoint.clone(),
+            watch: Some(watch),
             ticket,
             authored_workspace,
         }]);
@@ -827,6 +836,7 @@ impl SessionRuntimeManager {
             session,
             input,
             endpoint,
+            watch,
             ticket,
             authored_workspace,
         } in bound
@@ -842,6 +852,13 @@ impl SessionRuntimeManager {
             );
             let mut application = self.applications.lock();
             if !application.finish_bound_capture(&session, &ticket) {
+                continue;
+            }
+            if let Some(watch) = &watch
+                && !endpoint
+                    .control()
+                    .is_some_and(|current| current.same_pair(watch))
+            {
                 continue;
             }
             let binding = self
@@ -880,7 +897,15 @@ impl SessionRuntimeManager {
                 }
             }
             drop(binding);
-            application.capture_bound_source(session.to_string(), &input.cwd, capture);
+            let publish =
+                || application.capture_bound_source(session.to_string(), &input.cwd, capture);
+            if let Some(watch) = &watch {
+                if endpoint.with_control_lane(watch, publish).is_none() {
+                    continue;
+                }
+            } else {
+                publish();
+            }
             self.applications.notify(&application);
             drop(application);
             self.applications.run(self.clone());

@@ -196,6 +196,10 @@ struct ProxiedClient {
 }
 
 async fn proxied_client(fixture: &Fixture) -> ProxiedClient {
+    proxied_client_with_listener(fixture).await.0
+}
+
+async fn proxied_client_with_listener(fixture: &Fixture) -> (ProxiedClient, UnixListener) {
     use rustx::local_runtime::session_runtime_manager::EndpointAdmission;
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     let endpoint = fixture
@@ -209,9 +213,6 @@ async fn proxied_client(fixture: &Fixture) -> ProxiedClient {
     let proxy = UnixListener::bind(&proxy_path).unwrap();
     let mut bootstrap: Bootstrap =
         read_record(&mut std::fs::File::open(endpoint.bootstrap_path()).unwrap()).unwrap();
-    let BootstrapEndpoint::Unix { socket_path } = bootstrap.endpoint else {
-        panic!("local Session")
-    };
     bootstrap.endpoint = BootstrapEndpoint::Unix {
         socket_path: proxy_path,
     };
@@ -238,35 +239,56 @@ async fn proxied_client(fixture: &Fixture) -> ProxiedClient {
         .spawn()
         .unwrap();
 
-    let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(listener) =
-        endpoint.listener()
-    else {
+    let (data, admit) = forward_execution_lane(&proxy, &endpoint).await;
+    assert!(matches!(
+        admit.await.unwrap().unwrap(),
+        EndpointAdmission::Pending
+    ));
+    let (control, admit) = forward_execution_lane(&proxy, &endpoint).await;
+    assert!(matches!(
+        admit.await.unwrap().unwrap(),
+        EndpointAdmission::Live
+    ));
+    (
+        ProxiedClient {
+            data,
+            control,
+            endpoint,
+            child,
+            _scratch: scratch,
+        },
+        proxy,
+    )
+}
+
+type LaneAdmission = tokio::task::JoinHandle<
+    io::Result<crate::local_runtime::session_runtime_manager::EndpointAdmission>,
+>;
+
+async fn forward_execution_lane(
+    proxy: &UnixListener,
+    endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+) -> ((UnixStream, UnixStream), LaneAdmission) {
+    use crate::local_runtime::session_runtime_manager::ExecutionListener;
+    let bootstrap: Bootstrap =
+        read_record(&mut std::fs::File::open(endpoint.bootstrap_path()).unwrap()).unwrap();
+    let BootstrapEndpoint::Unix { socket_path } = bootstrap.endpoint else {
+        panic!("local Session")
+    };
+    let ExecutionListener::Unix(listener) = endpoint.listener() else {
         panic!("Unix endpoint")
     };
     listener.set_nonblocking(true).unwrap();
     let listener = UnixListener::from_std(listener.try_clone().unwrap()).unwrap();
-    let pair_lane = || async {
-        let (mut peer, _) = bounded(proxy.accept()).await.unwrap();
-        let mut server = UnixStream::connect(&socket_path).await.unwrap();
-        let (stream, _) = bounded(listener.accept()).await.unwrap();
-        let admit = tokio::task::spawn_blocking({
-            let endpoint = endpoint.clone();
-            move || endpoint.admit_local_stream(stream.into_std().unwrap())
-        });
-        forward_hello(&mut peer, &mut server).await;
-        ((peer, server), admit.await.unwrap().unwrap())
-    };
-    let (data, admission) = pair_lane().await;
-    assert!(matches!(admission, EndpointAdmission::Pending));
-    let (control, admission) = pair_lane().await;
-    assert!(matches!(admission, EndpointAdmission::Live));
-    ProxiedClient {
-        data,
-        control,
-        endpoint,
-        child,
-        _scratch: scratch,
-    }
+    let (mut peer, _) = bounded(proxy.accept()).await.unwrap();
+    let mut server = UnixStream::connect(&socket_path).await.unwrap();
+    let (stream, _) = bounded(listener.accept()).await.unwrap();
+    let admit = tokio::task::spawn_blocking({
+        let endpoint = Arc::clone(endpoint);
+        move || endpoint.admit_local_stream(stream.into_std().unwrap())
+    });
+    forward_hello(&mut peer, &mut server).await;
+    ((peer, server), admit)
 }
 
 #[allow(clippy::too_many_lines)] // Keep the barrier ordering together in the scenario.
@@ -444,13 +466,16 @@ pub(crate) async fn detach_during_data_and_control_backpressure() {
 pub(crate) async fn lost_control_is_unconfirmed_in_host_drain() {
     let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
-    let ProxiedClient {
-        data: (mut data_peer, mut data_server),
-        control: (mut control_peer, mut control_server),
-        endpoint,
-        mut child,
-        _scratch,
-    } = proxied_client(&fixture).await;
+    let (
+        ProxiedClient {
+            data: (mut data_peer, mut data_server),
+            control: (mut control_peer, mut control_server),
+            endpoint,
+            mut child,
+            _scratch,
+        },
+        listener,
+    ) = proxied_client_with_listener(&fixture).await;
     let (stop, stopped) = oneshot::channel::<()>();
     let control = tokio::spawn(async move {
         tokio::select! {
@@ -482,11 +507,20 @@ pub(crate) async fn lost_control_is_unconfirmed_in_host_drain() {
     assert_eq!(
         failures,
         [
-            "Client revocation is unconfirmed: admitted Client has no control lane or physical settlement receipt"
+            "Client revocation is unconfirmed: the original instance is detached without physical settlement"
         ]
     );
     bounded(data).await.unwrap();
-    let _client_exit = bounded(child.wait()).await.unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+    endpoint.cut_pair();
+    let (_lanes, reject) = forward_execution_lane(&listener, &endpoint).await;
+    assert!(matches!(
+        reject.await.unwrap().unwrap(),
+        crate::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+            rustx_execution_protocol::Reject::Revoked
+        )
+    ));
+    assert!(bounded(child.wait()).await.unwrap().success());
 }
 
 pub(crate) async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
@@ -651,6 +685,110 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
     );
     let _ = bounded(child.wait()).await.unwrap();
     bounded(data).await.unwrap();
+}
+
+pub(crate) async fn an_offline_deleted_session_accepts_only_its_original_cleanup_owner() {
+    use crate::local_runtime::{
+        session::deletion::SessionDeleteResult, session_runtime_manager::EndpointAdmission,
+    };
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let session = &fixture.sessions[0].id;
+    let workspace_file = fixture.workspaces[0].join("workspace-remains");
+    std::fs::write(&workspace_file, b"keep").unwrap();
+    let (
+        ProxiedClient {
+            data: (mut data_peer, mut data_server),
+            control: (mut control_peer, mut control_server),
+            endpoint,
+            mut child,
+            _scratch,
+        },
+        listener,
+    ) = proxied_client_with_listener(&fixture).await;
+    let data = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut data_peer, &mut data_server).await;
+    });
+    let control = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
+    });
+    let live = endpoint.control().unwrap();
+    bounded(tokio::task::spawn_blocking(move || live.health()))
+        .await
+        .unwrap()
+        .unwrap();
+    control.abort();
+    assert!(bounded(control).await.unwrap_err().is_cancelled());
+    bounded(data).await.unwrap();
+    assert!(endpoint.control().is_none());
+
+    let SessionDeleteResult::Preview { preview } =
+        fixture.manager.sessions.delete_preview(session).await
+    else {
+        panic!("expected an offline deletion preview");
+    };
+    assert!(matches!(
+        fixture
+            .manager
+            .delete_session(session, &preview.target_revision)
+            .await
+            .unwrap(),
+        SessionDeleteResult::CommittedCleanupPending { .. }
+    ));
+    assert!(
+        fixture
+            .manager
+            .reserve_local_execution(session)
+            .await
+            .is_err()
+    );
+
+    let ((mut data_peer, mut data_server), admit) =
+        forward_execution_lane(&listener, &endpoint).await;
+    assert!(matches!(
+        admit.await.unwrap().unwrap(),
+        EndpointAdmission::Pending
+    ));
+    let data = tokio::spawn(async move {
+        // The Server may close this lane after Revoke but sends no work.
+        assert_eq!(data_server.read(&mut [0_u8]).await.unwrap(), 0);
+        let _ = data_peer.shutdown().await;
+    });
+    let ((mut control_peer, mut control_server), admit) =
+        forward_execution_lane(&listener, &endpoint).await;
+    let control = tokio::spawn(async move {
+        let mut revoked = 0;
+        while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
+            send(&mut control_server, &poll).await.unwrap();
+            if poll.receipt == Some(ControlReply::Revoked) {
+                revoked += 1;
+                break;
+            }
+            let turn = receive::<ControlTurn>(&mut control_server).await.unwrap();
+            assert!(turn.request.as_ref().is_none_or(|request| matches!(
+                request,
+                rustx_execution_protocol::ControlRequest::Revoke
+            )));
+            send(&mut control_peer, &turn).await.unwrap();
+        }
+        revoked
+    });
+    assert!(matches!(
+        bounded(admit).await.unwrap().unwrap(),
+        EndpointAdmission::Rejected(rustx_execution_protocol::Reject::Revoked)
+    ));
+    assert_eq!(bounded(control).await.unwrap(), 1);
+    bounded(data).await.unwrap();
+    assert!(bounded(child.wait()).await.unwrap().success());
+    assert!(matches!(
+        fixture
+            .manager
+            .recover_session_deletion(session)
+            .await
+            .unwrap(),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    assert_eq!(std::fs::read(workspace_file).unwrap(), b"keep");
+    assert!(bounded(fixture.host.drain()).await.is_empty());
 }
 
 #[allow(clippy::too_many_lines)] // Keep the capture and Revoke barriers in one scenario.

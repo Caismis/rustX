@@ -28,10 +28,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v2";
+pub const EXECUTION_PATH: &str = "/execution/v3";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -511,7 +511,27 @@ impl BindingCredential {
     pub const fn as_bytes(&self) -> &[u8; Self::LENGTH] {
         &self.0
     }
+
+    /// Derives the live instance's memory-only credential from its original
+    /// authenticated pairing. The launch bundle alone cannot reconnect.
+    #[must_use]
+    pub fn recovery_credential(&self, first_challenge: &PairingNonce) -> Self {
+        use sha2::{Digest as _, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"rustx execution same-instance recovery v1");
+        hash.update(self.as_bytes());
+        hash.update(first_challenge.as_bytes());
+        Self(hash.finalize().into())
+    }
 }
+
+/// Maximum period within which Server may re-admit the same live instance
+/// after recognizing the first lane loss.
+pub const SAME_INSTANCE_RECOVERY_WINDOW: Duration = Duration::from_secs(50);
+
+/// Client starts terminal cleanup when it cannot prove re-admission by
+/// this cutoff. The cleanup itself still requires separate evidence.
+pub const DETACHED_CLIENT_RETENTION: Duration = Duration::from_secs(80);
 
 /// Failure to parse a wire credential. Never carries the submitted value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -773,8 +793,8 @@ pub enum Reject {
     /// A different connection is already live on this binding.
     #[error("binding already has a live connection")]
     AlreadyConnected,
-    /// The binding detached; re-admission requires live-instance recovery
-    /// proof that this layer does not provide (#577).
+    /// The binding detached; same-instance recovery requires its in-memory
+    /// proof within the original recovery window.
     #[error("binding detached; recovery proof required")]
     RecoveryRequired,
     /// The binding was revoked and can never be dispatched again.
@@ -1654,7 +1674,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v2` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v3` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

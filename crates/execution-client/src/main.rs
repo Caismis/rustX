@@ -30,17 +30,20 @@
 use base64::Engine as _;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::transport::{
     LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record, read_record,
+    recoverable_lane_loss,
 };
 use rustx_execution_protocol::{
     Admission, Bootstrap, BootstrapEndpoint, Capability, ClientReply, ClientRequest, ControlHello,
@@ -48,7 +51,7 @@ use rustx_execution_protocol::{
     DecimalU64, EntryKind, EntryStamp, FileStamp, Hello, LineEnd, MAX_DIRECTORY_NAMES,
     MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
     MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, PairingNonce,
-    PeerHello, ReadError, is_normalized_absolute_path, transport::CONTROL_FRAME_TIMEOUT,
+    PeerHello, ReadError, Reject, is_normalized_absolute_path, transport::CONTROL_FRAME_TIMEOUT,
 };
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
@@ -146,7 +149,15 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             }
             let socket_parent = require_private_parent(socket_path)?;
             require_socket(&socket_parent, file_name(socket_path)?)?;
-            Endpoint::Unix(socket_path.clone())
+            let reactor = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .map_err(|error| handshake_error(&error))?;
+            Endpoint::Unix {
+                path: socket_path.clone(),
+                reactor,
+            }
         }
         BootstrapEndpoint::WebSocket {
             url,
@@ -195,14 +206,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     let root = PackageDirectory::open(&bootstrap.workspace)
         .map_err(|_| String::from("untrusted workspace"))?;
 
-    // One absolute budget armed before the transport is established
-    // covers peer proof, the Hello write, the reply read, and the
-    // admission verification — it never re-arms, so a byte-at-a-time peer
-    // cannot stretch it.
-    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    let mut channel = connect_endpoint(&endpoint, deadline, ca_file)?;
-
-    let hello = Hello {
+    let mut hello = Hello {
         version: PROTOCOL_VERSION,
         session: bootstrap.session,
         environment: bootstrap.environment,
@@ -231,53 +235,120 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
         ]),
         credential: bootstrap.credential,
     };
-    // The lane declares itself as the data half of the pair — the same
-    // record space, wrapped in `PeerHello`.
-    let encoded =
-        encode_record(&PeerHello::Data(hello.clone())).map_err(|error| handshake_error(&error))?;
-    channel
-        .send(&encoded, Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let reply: DataHelloReply = channel
-        .receive(Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let success = reply.map_err(|reject| format!("rejected: {reject}"))?;
-    verify_admission(&hello, &success.admission)?;
+    let pair = pair_endpoint(
+        &endpoint,
+        &hello,
+        Instant::now() + LOCAL_HANDSHAKE_TIMEOUT,
+        ca_file,
+    )
+    .map_err(PairFailure::diagnostic)?;
+    hello.credential = hello.credential.recovery_credential(&pair.challenge);
+    let reconnect = |deadline| pair_endpoint(&endpoint, &hello, deadline, ca_file);
+    serve_session(pair, &root, reconnect)
+}
 
-    // The control lane is mandatory: a second connection to the same
-    // endpoint carrying the pairing challenge — no single-channel
-    // fallback exists. Both lanes share the one armed deadline.
-    let control_channel = pair_control(&endpoint, deadline, &hello, success.challenge, ca_file)?;
-    serve_session(channel, control_channel, &root, success.admission)
+struct Pair {
+    data: RecordChannel,
+    control: RecordChannel,
+    challenge: PairingNonce,
+    admission: Admission,
+}
+
+#[derive(Debug)]
+enum PairFailure {
+    Transport(io::Error),
+    Refused(Reject),
+    Authentication(String),
+}
+
+impl PairFailure {
+    fn diagnostic(self) -> String {
+        match self {
+            Self::Transport(error) => handshake_error(&error),
+            Self::Refused(reject) => format!("rejected: {reject}"),
+            Self::Authentication(reason) => reason,
+        }
+    }
+
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Transport(error) => {
+                recoverable_lane_loss(error)
+                    || matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    )
+            }
+            Self::Refused(Reject::AlreadyConnected) => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<io::Error> for PairFailure {
+    fn from(error: io::Error) -> Self {
+        Self::Transport(error)
+    }
+}
+
+fn pair_endpoint(
+    endpoint: &Endpoint,
+    hello: &Hello,
+    deadline: Instant,
+    ca_file: Option<&Path>,
+) -> Result<Pair, PairFailure> {
+    let mut data = connect_endpoint(endpoint, deadline, ca_file)?;
+    let encoded = encode_record(&PeerHello::Data(hello.clone()))?;
+    data.send(&encoded, Some(deadline))?;
+    let reply: DataHelloReply = data.receive(Some(deadline))?;
+    let success = reply.map_err(PairFailure::Refused)?;
+    verify_admission(hello, &success.admission).map_err(PairFailure::Authentication)?;
+    let control = pair_control(endpoint, deadline, hello, &success, ca_file)?;
+    Ok(Pair {
+        data,
+        control,
+        challenge: success.challenge,
+        admission: success.admission,
+    })
+}
+
+fn recover_pair(
+    reconnect: &impl Fn(Instant) -> Result<Pair, PairFailure>,
+    admission: &Admission,
+    cutoff: Instant,
+) -> Result<Option<Pair>, String> {
+    let mut pause = Duration::from_millis(100);
+    loop {
+        let now = Instant::now();
+        if now >= cutoff {
+            return Err(String::from("same-instance recovery expired"));
+        }
+        match reconnect(cutoff.min(now + LOCAL_HANDSHAKE_TIMEOUT)) {
+            Ok(pair) if pair.admission == *admission => return Ok(Some(pair)),
+            Ok(_) => {
+                return Err(String::from(
+                    "same-instance recovery changed binding identity",
+                ));
+            }
+            Err(error) if error.retryable() => {
+                std::thread::sleep(pause.min(cutoff.saturating_duration_since(Instant::now())));
+                pause = (pause * 2).min(Duration::from_secs(1));
+            }
+            Err(PairFailure::Refused(Reject::Revoked)) => return Ok(None),
+            Err(error) => return Err(error.diagnostic()),
+        }
+    }
 }
 
 fn serve_session(
-    mut channel: RecordChannel,
-    control_channel: RecordChannel,
+    mut pair: Pair,
     root: &PackageDirectory,
-    admission: rustx_execution_protocol::Admission,
+    reconnect: impl Fn(Instant) -> Result<Pair, PairFailure>,
 ) -> Result<(), String> {
-    let workspace = admission.workspace.clone();
-    let arbitration = std::sync::Arc::new(mutation::Arbitration::new());
-    let saves = std::sync::Arc::new(std::sync::Mutex::new(saves::Saves::new(admission.clone())));
-    let operations = std::sync::Arc::new(
-        process::Operations::new(admission).map_err(|error| handshake_error(&error))?,
-    );
-    // The control worker holds a shutdown duplicate of the data lane:
-    // its exit — protocol violation, EOF, a peer that stops answering —
-    // fences the local commit arbitration and interrupts the data
-    // channel, so a dead control lane can never leave a live pair.
-    let data_shutdown = channel
-        .shutdown_handle()
-        .map_err(|error| handshake_error(&error))?;
-    let watches = std::sync::Arc::new(watch::Watches::new());
-    let control = client_control_worker(
-        control_channel,
-        arbitration.clone(),
-        data_shutdown,
-        operations.clone(),
-        watches.clone(),
-        saves.clone(),
+    let admission = pair.admission.clone();
+    let saves = Arc::new(Mutex::new(saves::Saves::new(admission.clone())));
+    let operations = Arc::new(
+        process::Operations::new(admission.clone()).map_err(|error| handshake_error(&error))?,
     );
     let result = std::thread::scope(|scope| {
         let (stop, retired) = std::sync::mpsc::channel();
@@ -286,34 +357,67 @@ fn serve_session(
             .name("execution-save-cleanup".to_owned())
             .spawn_scoped(scope, move || saves::Saves::maintain(registry, &retired));
         let result = match maintenance {
-            Ok(_) => serve(
-                &mut channel,
-                root,
-                &arbitration,
-                &operations,
-                &workspace,
-                &watches,
-                &saves,
-            ),
+            Ok(_) => {
+                let mut state = DataState::default();
+                loop {
+                    let arbitration = Arc::new(mutation::Arbitration::new());
+                    let shutdown = pair
+                        .data
+                        .shutdown_handle()
+                        .map_err(|error| handshake_error(&error))?;
+                    let watches = Arc::new(watch::Watches::new());
+                    let control = client_control_worker(
+                        pair.control,
+                        arbitration.clone(),
+                        shutdown,
+                        operations.clone(),
+                        watches.clone(),
+                        saves.clone(),
+                    );
+                    let outcome = serve(
+                        &mut pair.data,
+                        root,
+                        &arbitration,
+                        &operations,
+                        &admission.workspace,
+                        &watches,
+                        &saves,
+                        &mut state,
+                    );
+                    let cutoff =
+                        Instant::now() + rustx_execution_protocol::DETACHED_CLIENT_RETENTION;
+                    let control_end = control.stop();
+                    pair.data.shutdown();
+                    if !watches.shutdown() {
+                        break Err(String::from("unresolved watch cleanup"));
+                    }
+                    if control_end == ControlEnd::Revoked {
+                        break Ok(());
+                    }
+                    if control_end == ControlEnd::Invalid
+                        || !outcome.as_ref().is_err_and(recoverable_lane_loss)
+                    {
+                        break Err(String::from("execution pair violated the protocol"));
+                    }
+                    match recover_pair(&reconnect, &admission, cutoff) {
+                        Ok(Some(recovered)) => pair = recovered,
+                        Ok(None) => break Ok(()),
+                        Err(error) => break Err(error),
+                    }
+                }
+            }
             Err(error) => Err(handshake_error(&error)),
         };
         drop(stop);
         result
     });
-    // Teardown: stop the worker first so its lane ends cleanly, then
-    // shut the data lane — never exit with a lane still live.
-    control.stop();
-    channel.shutdown();
     // An unresolved worker is never reported as a clean exit.
-    let drained = operations.shutdown();
+    let operations_settled = operations.shutdown();
     if !saves.lock().expect("managed output").close() {
         return Err(String::from("unresolved managed output cleanup"));
     }
-    if !watches.shutdown() {
-        return Err(String::from("unresolved watch cleanup"));
-    }
-    let drained =
-        drained.and_then(|()| rustx_execution_client::workspace_python::cleanup_process_scratch());
+    let drained = operations_settled
+        .and_then(|()| rustx_execution_client::workspace_python::cleanup_process_scratch());
     match (result, drained) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), _) => Err(error),
@@ -324,7 +428,10 @@ fn serve_session(
 /// The validated connection target derived from the bootstrap endpoint.
 enum Endpoint {
     /// Owner-only Unix socket for the local sibling composition.
-    Unix(PathBuf),
+    Unix {
+        path: PathBuf,
+        reactor: tokio::runtime::Runtime,
+    },
     /// Strictly validated WebSocket URL for the remote composition.
     WebSocket(ExecutionUrl, Option<Vec<u8>>),
 }
@@ -335,14 +442,38 @@ fn connect_endpoint(
     endpoint: &Endpoint,
     deadline: std::time::Instant,
     ca_file: Option<&Path>,
-) -> Result<RecordChannel, String> {
+) -> Result<RecordChannel, PairFailure> {
     match endpoint {
-        Endpoint::Unix(socket_path) => {
-            let stream =
-                UnixStream::connect(socket_path).map_err(|_| String::from("unreachable"))?;
+        Endpoint::Unix { path, reactor } => {
+            let stream = reactor.block_on(async {
+                tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    tokio::net::UnixStream::connect(path),
+                )
+                .await
+                .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+            });
+            let stream = match stream {
+                Ok(stream) => stream.into_std()?,
+                // A real local listener retains its exclusive socket for
+                // the binding's lifetime. Its disappearance or refusal
+                // means there is no local reattachment rendezvous.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    return Err(PairFailure::Authentication(String::from(
+                        "local execution listener is gone",
+                    )));
+                }
+                Err(error) => return Err(error.into()),
+            };
+            stream.set_nonblocking(false)?;
             // The credential is sent only to a peer owned by this same
             // euid; a socket planted by another user never sees it.
-            require_peer_owner(&stream)?;
+            require_peer_owner(&stream).map_err(PairFailure::Authentication)?;
             Ok(RecordChannel::unix(stream))
         }
         Endpoint::WebSocket(endpoint, certificate) => {
@@ -351,7 +482,7 @@ fn connect_endpoint(
             } else {
                 rustx_execution_transport::connect(endpoint, deadline, ca_file)
             };
-            channel.map_err(|_| String::from("unreachable"))
+            Ok(channel?)
         }
     }
 }
@@ -365,9 +496,9 @@ fn pair_control(
     endpoint: &Endpoint,
     deadline: std::time::Instant,
     data_hello: &Hello,
-    challenge: PairingNonce,
+    data: &rustx_execution_protocol::DataAdmission,
     ca_file: Option<&Path>,
-) -> Result<RecordChannel, String> {
+) -> Result<RecordChannel, PairFailure> {
     let mut channel = connect_endpoint(endpoint, deadline, ca_file)?;
     let hello = ControlHello {
         version: PROTOCOL_VERSION,
@@ -377,18 +508,17 @@ fn pair_control(
         generation: data_hello.generation,
         workspace: data_hello.workspace.clone(),
         credential: data_hello.credential.clone(),
-        connection_nonce: challenge,
+        connection_nonce: data.challenge.clone(),
     };
-    let encoded =
-        encode_record(&PeerHello::Control(hello)).map_err(|error| handshake_error(&error))?;
-    channel
-        .send(&encoded, Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let reply: ControlHelloReply = channel
-        .receive(Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
-    verify_admission(data_hello, &admission)?;
+    let encoded = encode_record(&PeerHello::Control(hello))?;
+    channel.send(&encoded, Some(deadline))?;
+    let reply: ControlHelloReply = channel.receive(Some(deadline))?;
+    let admission = reply.map_err(PairFailure::Refused)?;
+    if admission != data.admission {
+        return Err(PairFailure::Authentication(String::from(
+            "control admission did not match data",
+        )));
+    }
     Ok(channel)
 }
 
@@ -398,13 +528,20 @@ struct ClientControlWorker {
     /// The arbitration the worker shares with `serve` — `stop_worker`
     /// ends its loop.
     arbitration: std::sync::Arc<mutation::Arbitration>,
-    join: std::thread::JoinHandle<()>,
+    join: std::thread::JoinHandle<ControlEnd>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControlEnd {
+    Detached,
+    Revoked,
+    Invalid,
 }
 
 impl ClientControlWorker {
-    fn stop(self) {
+    fn stop(self) -> ControlEnd {
         self.arbitration.stop_worker();
-        let _ = self.join.join();
+        self.join.join().unwrap_or(ControlEnd::Invalid)
     }
 }
 
@@ -417,13 +554,11 @@ impl ClientControlWorker {
 struct LaneFence {
     arbitration: std::sync::Arc<mutation::Arbitration>,
     data_shutdown: rustx_execution_transport::ChannelShutdown,
-    operations: std::sync::Arc<process::Operations>,
 }
 
 impl Drop for LaneFence {
     fn drop(&mut self) {
         self.arbitration.revoke();
-        self.operations.revoke();
         self.data_shutdown.shutdown();
     }
 }
@@ -465,16 +600,15 @@ fn client_control_worker(
             let _fence = LaneFence {
                 arbitration: worker_arbitration.clone(),
                 data_shutdown,
-                operations: operations.clone(),
             };
             let mut sequence = 1_u64;
             let mut receipt: Option<ControlReply> = None;
             loop {
                 if worker_arbitration.worker_stopped() {
-                    return;
+                    return ControlEnd::Detached;
                 }
                 let Some(health) = fresh_nonce() else {
-                    return;
+                    return ControlEnd::Invalid;
                 };
                 let poll = ControlPoll {
                     sequence: DecimalU64::new(sequence),
@@ -482,27 +616,28 @@ fn client_control_worker(
                     health,
                 };
                 let Ok(encoded) = encode_record(&poll) else {
-                    return;
+                    return ControlEnd::Invalid;
                 };
                 let deadline = std::time::Instant::now() + CONTROL_FRAME_TIMEOUT;
-                if channel.send(&encoded, Some(deadline)).is_err() {
-                    return;
+                if let Err(error) = channel.send(&encoded, Some(deadline)) {
+                    return control_io_end(&error);
                 }
                 let turn: ControlTurn = match channel.receive(Some(deadline)) {
                     Ok(turn) => turn,
-                    Err(_) => return,
+                    Err(error) => return control_io_end(&error),
                 };
                 // The turn must answer this exact poll — sequence and
                 // the fresh nonce both echo — before its request counts.
                 if turn.sequence != poll.sequence || turn.health != poll.health {
-                    return;
+                    operations.revoke();
+                    return ControlEnd::Invalid;
                 }
                 sequence = sequence.saturating_add(1);
                 let Some(request) = turn.request else {
                     // Idle lane: pace the next poll — the worker wake
                     // covers the stop flag and keeps the cadence bounded.
                     if worker_arbitration.wait_worker(POLL_PERIOD) {
-                        return;
+                        return ControlEnd::Detached;
                     }
                     continue;
                 };
@@ -526,7 +661,7 @@ fn client_control_worker(
                         let processes_settled = operations.finish_revocation(remaining);
                         let saves_settled = saves::Saves::close_by(&saves, cutoff);
                         if !watches_settled || !saves_settled || processes_settled.is_err() {
-                            return;
+                            return ControlEnd::Revoked;
                         }
                         ControlReply::Revoked
                     }
@@ -544,7 +679,7 @@ fn client_control_worker(
                     // One final poll delivers the `Revoked` receipt —
                     // the Server awaits it before its fence lands.
                     let Some(health) = fresh_nonce() else {
-                        return;
+                        return ControlEnd::Revoked;
                     };
                     let poll = ControlPoll {
                         sequence: DecimalU64::new(sequence),
@@ -562,7 +697,7 @@ fn client_control_worker(
                             deadline.saturating_duration_since(std::time::Instant::now()),
                         );
                     }
-                    return;
+                    return ControlEnd::Revoked;
                 }
                 // A delivered request earns its receipt promptly — the
                 // very next poll, not the idle cadence.
@@ -574,6 +709,14 @@ fn client_control_worker(
 
 /// A fresh health nonce for one poll — OS randomness, never a counter
 /// the peer could predict and replay.
+fn control_io_end(error: &io::Error) -> ControlEnd {
+    if recoverable_lane_loss(error) {
+        ControlEnd::Detached
+    } else {
+        ControlEnd::Invalid
+    }
+}
+
 fn fresh_nonce() -> Option<DecimalU64> {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).ok()?;
@@ -682,29 +825,57 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
         .ok_or_else(|| String::from("untrusted admission"))
 }
 
-#[allow(clippy::too_many_lines)] // The typed one-request/one-reply dispatch loop.
+#[derive(Default)]
+struct DataState {
+    mcp: mcp::Sessions,
+    changes: changes::Changes,
+    next_ticket: Option<u64>,
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One typed data lane.
 fn serve(
     channel: &mut RecordChannel,
     root: &PackageDirectory,
-    arbitration: &std::sync::Arc<mutation::Arbitration>,
-    operations: &std::sync::Arc<process::Operations>,
+    arbitration: &Arc<mutation::Arbitration>,
+    operations: &Arc<process::Operations>,
     workspace: &Path,
     watches: &watch::Watches,
-    saves: &std::sync::Mutex<saves::Saves>,
-) -> Result<(), String> {
-    let mut mcp = mcp::Sessions::default();
-    // One serialized writer state per connection: at most one staged
-    // preparation lives at a time, and it is dropped — cleaning up its own
-    // private stage — when the owner is dropped at EOF or revoke.
-    let changes = changes::Changes::default();
+    saves: &Mutex<saves::Saves>,
+    state: &mut DataState,
+) -> io::Result<()> {
     let mut writes = mutation::Writes::new(arbitration.clone());
+    if let Some(ticket) = state.next_ticket {
+        writes.continue_ticket_sequence(ticket);
+    }
+    let outcome = serve_requests(
+        channel,
+        root,
+        arbitration,
+        operations,
+        workspace,
+        watches,
+        saves,
+        state,
+        &mut writes,
+    );
+    state.next_ticket = Some(writes.ticket_sequence());
+    outcome
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // The typed one-request/one-reply dispatch loop.
+fn serve_requests(
+    channel: &mut RecordChannel,
+    root: &PackageDirectory,
+    arbitration: &mutation::Arbitration,
+    operations: &Arc<process::Operations>,
+    workspace: &Path,
+    watches: &watch::Watches,
+    saves: &Mutex<saves::Saves>,
+    state: &mut DataState,
+    writes: &mut mutation::Writes,
+) -> io::Result<()> {
     loop {
-        let Some(request) = channel
-            .receive_optional::<ClientRequest>(None)
-            .map_err(|_| String::from("request"))?
-        else {
-            return Ok(());
-        };
+        let request = channel.receive::<ClientRequest>(None)?;
         let reply = match request {
             ClientRequest::Ping => ClientReply::Pong,
             ClientRequest::WorkspacePythonStatus => {
@@ -763,7 +934,9 @@ fn serve(
                     }
                 }
             }
-            ClientRequest::Mcp(request) => ClientReply::Mcp(mcp.exchange(request, operations)),
+            ClientRequest::Mcp(request) => {
+                ClientReply::Mcp(state.mcp.exchange(request, operations))
+            }
             ClientRequest::Save(request) => ClientReply::Save(if arbitration.is_revoked() {
                 rustx_execution_protocol::save::SaveReply::Refused {
                     code: rustx_execution_protocol::save::SaveCode::StaleOwner,
@@ -828,7 +1001,9 @@ fn serve(
             ),
             ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
             ClientRequest::WorkspaceChanges(request) => ClientReply::WorkspaceChanges(
-                changes.dispatch(operations, operations.workspace(), request),
+                state
+                    .changes
+                    .dispatch(operations, operations.workspace(), request),
             ),
             ClientRequest::MutateTree(request) => tree::mutate(root, arbitration, &request),
             ClientRequest::Watch(request) => {
@@ -902,10 +1077,8 @@ fn serve(
                 std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
             ),
         };
-        let encoded = encode_record(&reply).map_err(|_| String::from("reply"))?;
-        channel
-            .send(&encoded, None)
-            .map_err(|_| String::from("reply"))?;
+        let encoded = encode_record(&reply)?;
+        channel.send(&encoded, None)?;
     }
 }
 

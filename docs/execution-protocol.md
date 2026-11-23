@@ -111,9 +111,10 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client's first and only binding-opening message is protocol v2. Revision 2 requires
-`physical_settlement_proven` in every terminal process snapshot. A revision 1
-peer is rejected during bootstrap or Hello, before execution admission:
+The Client opens a pair with a revision 3 Hello. Revision 3 retains
+`physical_settlement_proven` in terminal process snapshots and requires the
+same-instance recovery handshake after a transport loss. Older revisions
+are rejected during bootstrap or Hello, before execution admission:
 
 ```rust
 pub struct Hello {
@@ -251,16 +252,26 @@ any phase, and `Live` always means a *committed pair* of lanes.
   stays `Live`.
 - While `Live` — or while a pending attempt is negotiating — a second
   data Hello gets `AlreadyConnected`: at most one data lane per
-  Session binding, ever.
+  Session binding at a time.
 - `disconnect(connection)` moves `Live → Detached` only for the current
   live pair, seizing both lanes' shutdown handles. Losing either lane
   detaches the pair identically — a stale or foreign disconnect is
   ignored.
-- `Detached` rejects every Hello with `RecoveryRequired`. EOF never
-  reopens the reservation, so even the fully valid reserved identity
-  cannot replay its own credential after EOF — the static bootstrap file
-  grants no second admission. Re-admission requires the live-instance
-  recovery proof of #577, which this layer deliberately does not fake.
+- A recoverable transport loss opens a 50-second Server admission window.
+  Re-admission requires the memory-only credential derived from the first
+  authenticated pairing challenge and launch credential. The new pair must
+  match the original reservation and admitted capabilities and gets fresh
+  lane identities. The launch bundle alone cannot reconnect. A revoked
+  owner, protocol violation or expired window cannot re-admit work.
+- The Client retains process records, output cursors, stdin receipts and
+  published output across this exchange. Per-lane mutation arbitration and
+  watcher registrations are retired before reattachment; ticket numbers
+  continue monotonically, and automatic Workspace watches register and
+  rescan on the recovered lane. Old-lane watch hints cannot publish.
+- The Client begins physical cleanup after at most 80 seconds from its
+  detection of the loss, or on earlier authenticated terminal refusal.
+  This timer does not prove cleanup. Existing operation deadlines may
+  finish work or shorten the period in which a caller can observe it.
 - `revoke()` is immediate and terminal; a revoked binding rejects every
   Hello and is never dispatchable again.
 - `status()` is observation only. Nothing may dispatch on a snapshot —
@@ -391,7 +402,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v2` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v3` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -415,14 +426,13 @@ second Client.
 `admit_websocket_stream_deadline` runs the identical Hello/admission
 arbitration on an accepted TCP stream: credential first, then protocol
 version and identity, one absolute deadline from upgrade through
-admission, one live connection at most, `Detached`/`Revoked` terminals
-unchanged. The App Server's remote accept loop is bounded
+admission, and one live connection at most. The App Server's remote accept loop is bounded
 (at most four concurrent upgrades) and keeps accepting after failed or
-malformed upgrades until first admission or drain — each accepted peer
+malformed upgrades until drain. Each accepted peer
 carries the absolute deadline armed at accept time, so a flood of
 queued upgrades cannot outlive it, and the loop settles in-flight
-workers under a bounded wait rather than admitting past drain. After
-EOF there is no replacement without the recovery proof of #577.
+workers under a bounded wait. A reconnect uses the existing binding and
+never creates a replacement Client instance.
 Revocation shuts a duplicated raw `TcpStream` — independent of any
 writer lock — which wakes a blocked WebSocket read exactly the way the
 Unix `shutdown` does. Close semantics mirror the Unix contract:
@@ -446,7 +456,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v2]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v3]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1250,8 +1260,9 @@ envelope.
 - An authenticated connection has no implied configuration, MCP, or
   interpreter readiness. `WorkspacePythonStatus` reports only the Client's
   interpreter readiness under the separate `WorkspacePython` capability.
-- No independent Client instance replacement, generation increment or death-cleanup
-  evidence path exists. A detached binding rejects Hello with `RecoveryRequired`.
+- Independent replacement after Client death or Server restart requires
+  physical-domain evidence beyond same-instance proof. An unresolved old
+  binding continues to exclude replacement admission.
 - The App Server reserves one endpoint from the Session catalog under the
   residency owner. The explicitly local Agent entry and the App Server's
   local execution option launch the trusted sibling over that same paired

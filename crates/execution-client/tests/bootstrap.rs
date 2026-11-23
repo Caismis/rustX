@@ -152,6 +152,14 @@ fn admit_pair_stream(
     }
 }
 
+fn expect_terminal_refusal(rig: &Rig, child: &mut Child) {
+    assert!(matches!(
+        rig.binding.accept_local(accept(rig, child)).unwrap(),
+        rustx_execution_server::ChannelAccept::Rejected(Reject::Revoked)
+    ));
+    expect_success(child);
+}
+
 fn assert_never_connected(rig: &Rig) {
     rig.listener.set_nonblocking(true).unwrap();
     assert_eq!(
@@ -176,6 +184,220 @@ fn handshake_ping_pong_and_clean_shutdown() {
     // closes the socket; the client observes EOF and exits by itself.
     drop(connection);
     assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
+    expect_success(&mut child);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // The same peer proves START, input deduplication and journal continuity.
+fn same_instance_recovery_preserves_the_process_and_output_cursor() {
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
+        ProcessSpec, ProcessStdin, ProcessStream,
+    };
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    let mut old = admit_pair(&rig, &mut child);
+    let admission = old.admission().clone();
+    let key = ProcessOperationKey {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        operation: OperationId::new(),
+    };
+    let spec = ProcessSpec {
+        cwd: PathBuf::new(),
+        program: ProcessProgram::Argv(
+            [
+                "/bin/sh",
+                "-c",
+                "printf start >> started; printf pre; /bin/cat",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        ),
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 15_000,
+        pty: None,
+        stdin: ProcessStdin::Streamed,
+        capture: true,
+        output_cap: 1024,
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    assert_eq!(
+        old.process_until(
+            &ProcessRequest::Register {
+                key: key.clone(),
+                fingerprint: spec.fingerprint(),
+                spec,
+            },
+            deadline,
+        )
+        .unwrap(),
+        ProcessReply::Registered { key: key.clone() }
+    );
+    let start = ProcessRequest::Start { key: key.clone() };
+    assert!(matches!(
+        old.process_until(&start, deadline),
+        Ok(ProcessReply::State { .. })
+    ));
+    let page = |cursor| ProcessRequest::OutputPage {
+        key: key.clone(),
+        cursor,
+        max_bytes: 1024,
+    };
+    let read_page = |connection: &mut rustx_execution_server::LocalConnection, cursor| {
+        loop {
+            match connection.process_until(&page(cursor), deadline).unwrap() {
+                ProcessReply::Output {
+                    sequence,
+                    stream: ProcessStream::Stdout,
+                    delta_base64,
+                    offset,
+                    ..
+                } => break (sequence, offset.get(), delta_base64),
+                ProcessReply::OutputPending { .. } => std::thread::yield_now(),
+                other => panic!("unexpected output: {other:?}"),
+            }
+        }
+    };
+    let (cursor, offset, contents) = read_page(&mut old, 0.into());
+    assert!(cursor.get() > 0);
+    assert_eq!((offset, contents), (0, String::from("cHJl")));
+    let input = ProcessRequest::WriteStdin {
+        key: key.clone(),
+        sequence: 1.into(),
+        delta_base64: "cG9zdA==".to_owned(),
+        close: false,
+    };
+    let accepted = ProcessReply::InputAccepted {
+        key: key.clone(),
+        sequence: 1.into(),
+    };
+    assert_eq!(old.process_until(&input, deadline).unwrap(), accepted);
+    rig.binding.disconnect(old.connection_id());
+    assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
+    let mut new = admit_pair(&rig, &mut child);
+    assert_ne!(old.connection_id(), new.connection_id());
+    assert_eq!(new.admission(), &admission);
+    assert!(old.ping().is_err());
+    drop(old);
+    assert!(matches!(
+        new.process_until(&start, deadline),
+        Ok(ProcessReply::State { .. })
+    ));
+    // The original write may already have taken effect. Matching the retained
+    // sequence attaches to that write without putting more bytes on stdin.
+    assert_eq!(new.process_until(&input, deadline).unwrap(), accepted);
+    assert_eq!(
+        new.process_until(
+            &ProcessRequest::CloseStdin {
+                key: key.clone(),
+                sequence: 2.into()
+            },
+            deadline
+        )
+        .unwrap(),
+        ProcessReply::InputAccepted {
+            key: key.clone(),
+            sequence: 2.into()
+        }
+    );
+    let (next, offset, contents) = read_page(&mut new, cursor);
+    assert!(next > cursor);
+    assert_eq!((offset, contents), (3, String::from("cG9zdA==")));
+    loop {
+        match new.process_until(&page(next), deadline).unwrap() {
+            ProcessReply::OutputPending { .. } => std::thread::yield_now(),
+            ProcessReply::OutputEnd { final_sequence, .. } => {
+                assert_eq!(final_sequence, next);
+                break;
+            }
+            other => panic!("unexpected duplicate or gap after recovery: {other:?}"),
+        }
+    }
+    assert_eq!(
+        std::fs::read(rig.workspace_path.join("started")).unwrap(),
+        b"start"
+    );
+    new.control().unwrap().request_revoke().unwrap();
+    drop(new);
+    expect_success(&mut child);
+}
+
+#[test]
+fn either_one_way_control_failure_recovers_the_same_authenticated_instance() {
+    use rustx_execution_server::ChannelAccept;
+    use std::net::Shutdown;
+
+    for direction in [Shutdown::Read, Shutdown::Write] {
+        let rig = rig();
+        let mut child = spawn_client(&rig);
+        let data = accept(&rig, &mut child);
+        assert!(matches!(
+            rig.binding.accept_local(data).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let control = accept(&rig, &mut child);
+        let cut = control.try_clone().unwrap();
+        let ChannelAccept::Live(first) = rig.binding.accept_local(control).unwrap() else {
+            panic!("expected paired Client");
+        };
+        first.control().unwrap().health().unwrap();
+        cut.shutdown(direction).unwrap();
+        let deadline = Instant::now() + ACCEPT_DEADLINE;
+        while rig.binding.status().phase != BindingPhase::Detached {
+            assert!(
+                Instant::now() < deadline,
+                "half-closed control lane was not retired"
+            );
+            std::thread::yield_now();
+        }
+        let mut second = admit_pair(&rig, &mut child);
+        assert_eq!(first.admission(), second.admission());
+        assert_ne!(first.connection_id(), second.connection_id());
+        assert!(!first.is_current());
+        second.ping().unwrap();
+        second.control().unwrap().health().unwrap();
+        second.control().unwrap().request_revoke().unwrap();
+        drop(second);
+        expect_success(&mut child);
+    }
+}
+
+#[test]
+fn a_silent_control_peer_can_recover_after_the_probe_expires() {
+    use nix::sys::{
+        signal::{Signal, kill},
+        wait::{WaitPidFlag, WaitStatus, waitpid},
+    };
+    use nix::unistd::Pid;
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    let first = admit_pair(&rig, &mut child);
+    let control = first.control().unwrap();
+    control.health().unwrap();
+    let pid = Pid::from_raw(i32::try_from(child.id()).unwrap());
+    kill(pid, Signal::SIGSTOP).unwrap();
+    assert_eq!(
+        waitpid(pid, Some(WaitPidFlag::WUNTRACED)).unwrap(),
+        WaitStatus::Stopped(pid, Signal::SIGSTOP)
+    );
+    let started = Instant::now();
+    assert!(control.health().is_err());
+    while rig.binding.status().phase != BindingPhase::Detached {
+        assert!(Instant::now() < started + ACCEPT_DEADLINE);
+        std::thread::yield_now();
+    }
+    assert!(started.elapsed() < rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW);
+    kill(pid, Signal::SIGCONT).unwrap();
+    let second = admit_pair(&rig, &mut child);
+    assert_eq!(first.admission(), second.admission());
+    assert_ne!(first.connection_id(), second.connection_id());
+    second.control().unwrap().health().unwrap();
+    second.control().unwrap().request_revoke().unwrap();
+    drop(second);
     expect_success(&mut child);
 }
 
@@ -953,7 +1175,7 @@ fn revocation_linearizes_before_any_new_request() {
     assert!(connection.ping().is_err());
 
     drop(connection);
-    expect_success(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
 }
 
 #[test]
@@ -1478,12 +1700,14 @@ fn a_partial_tree_copy_is_reported_unknown_and_retires_the_pair() {
         connection.ping().unwrap_err().kind(),
         io::ErrorKind::BrokenPipe
     );
+    assert!(!rig.binding.may_recover());
+    rig.binding.revoke();
     drop(connection);
-    expect_success(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
 }
 
 #[test]
-fn clean_eof_is_success_and_a_truncated_record_is_not() {
+fn orderly_shutdown_exits_and_a_truncated_record_requires_a_fresh_pair() {
     let rig = rig();
 
     // Clean EOF: the server closes an idle admitted connection.
@@ -1492,7 +1716,7 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     drop(connection);
     expect_success(&mut child);
 
-    // A truncated record mid-stream is a protocol failure, not an idle EOF.
+    // A truncated record cannot be recovered on the old byte stream.
     let fresh = rig_with(BTreeSet::from([Capability::Connection]));
     let mut child = spawn_client(&fresh);
     let stream = accept(&fresh, &mut child);
@@ -1501,9 +1725,14 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     // Promise a record body that never arrives.
     raw.write_all(&10_u32.to_be_bytes()).unwrap();
     raw.write_all(b"{\"pi").unwrap();
-    drop(raw);
+    raw.shutdown(std::net::Shutdown::Write).unwrap();
+    fresh.binding.disconnect(connection.connection_id());
+    let mut recovered = admit_pair(&fresh, &mut child);
+    assert_ne!(recovered.connection_id(), connection.connection_id());
+    recovered.ping().unwrap();
     drop(connection);
-    assert!(!child.wait().unwrap().success());
+    drop(recovered);
+    expect_success(&mut child);
 }
 
 /// A bounded `wait`: the handshake deadline plus slack, then a kill so a
@@ -1768,7 +1997,7 @@ fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     drop(connection);
-    expect_success(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
     let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())

@@ -97,6 +97,23 @@ async fn start_sibling(
             *deadline.get_or_insert_with(|| std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT);
         match admit(endpoint.clone(), stream, deadline).await {
             Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Live) => {
+                let stop = endpoint.accept_stop.clone();
+                let binding = Arc::downgrade(&endpoint);
+                tokio::spawn(async move {
+                    loop {
+                        let accepted = tokio::select! {
+                            biased;
+                            () = stop.cancelled() => break,
+                            accepted = listener.accept() => accepted,
+                        };
+                        let Ok((stream, _)) = accepted else { break };
+                        let Some(endpoint) = binding.upgrade() else {
+                            break;
+                        };
+                        let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+                        let _ = admit(endpoint, stream, deadline).await;
+                    }
+                });
                 return Ok(child);
             }
             // Data half held — the pairing control lane is still to come

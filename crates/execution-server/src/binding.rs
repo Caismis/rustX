@@ -34,18 +34,15 @@ pub struct Reservation {
 
 /// The observable phase of a [`Binding`].
 ///
-/// `Reserved → Live → Detached` on disconnect; `Revoked` from any phase is
-/// terminal. EOF moves `Live` to `Detached` — it never reopens the
-/// reservation.
+/// `Reserved → Live → Detached` on disconnect. The authenticated live
+/// instance can re-admit from `Detached`. `Revoked` is terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingPhase {
     /// Credential issued, no connection yet committed.
     Reserved,
     /// Exactly one authenticated connection is committed.
     Live,
-    /// The live connection ended. Every Hello is rejected with
-    /// [`Reject::RecoveryRequired`] until live-instance recovery proof
-    /// exists (#577).
+    /// The live pair ended. Bootstrap cannot reopen admission.
     Detached,
     /// Terminal: revoked bindings are never dispatchable again.
     Revoked,
@@ -108,19 +105,10 @@ impl ConnectionOwner {
     /// handles of both lanes are returned for the caller to invoke
     /// after locks release — a detached pair's control lane dies with
     /// its data lane, never lingers answering polls.
-    pub(super) fn disconnect(&self, connection: &ConnectionId) -> FencedHandles {
+    pub(super) fn disconnect(&self, connection: &ConnectionId, recoverable: bool) -> FencedHandles {
         let mut inner = self.inner();
         if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(connection) {
-            inner.phase = BindingPhase::Detached;
-            inner.connection = None;
-            FencedHandles(
-                inner
-                    .stream
-                    .take()
-                    .into_iter()
-                    .chain(inner.control.take().map(|control| control.shutdown))
-                    .collect(),
-            )
+            inner.end_pair(recoverable)
         } else {
             FencedHandles::EMPTY
         }
@@ -131,7 +119,11 @@ impl ConnectionOwner {
     /// loss: never a release, never a replacement — and the seized data
     /// handle lets the caller interrupt a data exchange that may be
     /// blocked mid-read.
-    pub(super) fn detach_control(&self, connection: &ConnectionId) -> FencedHandles {
+    pub(super) fn detach_control(
+        &self,
+        connection: &ConnectionId,
+        recoverable: bool,
+    ) -> FencedHandles {
         let mut inner = self.inner();
         if inner.phase == BindingPhase::Live
             && inner
@@ -139,16 +131,7 @@ impl ConnectionOwner {
                 .as_ref()
                 .is_some_and(|control| &control.connection == connection)
         {
-            inner.phase = BindingPhase::Detached;
-            inner.connection = None;
-            FencedHandles(
-                inner
-                    .stream
-                    .take()
-                    .into_iter()
-                    .chain(inner.control.take().map(|control| control.shutdown))
-                    .collect(),
-            )
+            inner.end_pair(recoverable)
         } else {
             FencedHandles::EMPTY
         }
@@ -159,7 +142,16 @@ impl ConnectionOwner {
         if matches!(&inner.settlement, PhysicalSettlement::Unconfirmed { control } if control == connection)
         {
             inner.settlement = PhysicalSettlement::Confirmed;
+            if let Some(proof) = &mut inner.recovery {
+                proof.deadline = None;
+            }
+            inner.pending = None;
+            self.pair_ready.notify_all();
         }
+    }
+
+    pub(super) fn revocation_confirmed(&self) -> bool {
+        self.inner().settlement == PhysicalSettlement::Confirmed
     }
 
     /// The fence half of [`Binding::fence`] on the shared owner:
@@ -246,6 +238,83 @@ struct Inner {
     /// admission so a stale watchdog or a replaced half can never touch
     /// the attempt that superseded it.
     next_attempt: u64,
+    recovery: Option<RecoveryProof>,
+}
+
+struct RecoveryProof {
+    verifier: [u8; 32],
+    capabilities: BTreeSet<Capability>,
+    deadline: Option<Instant>,
+}
+
+#[cfg(test)]
+#[test]
+fn recovery_admission_is_closed_at_the_fixed_deadline() {
+    use rustx_execution_protocol::{DETACHED_CLIENT_RETENTION, SAME_INSTANCE_RECOVERY_WINDOW};
+
+    let reservation = Reservation {
+        session: SessionId::new("session-recovery"),
+        environment: EnvironmentId::new("test"),
+        instance: ClientInstanceId::new("retained"),
+        generation: Generation::new(std::num::NonZeroU64::MIN),
+        workspace: "/workspace".into(),
+        required_capabilities: BTreeSet::new(),
+    };
+    let (binding, _) = Binding::reserve(reservation).unwrap();
+    let mut state = binding.inner();
+    state.recovery = Some(RecoveryProof {
+        verifier: [0; 32],
+        capabilities: BTreeSet::new(),
+        deadline: None,
+    });
+    let loss = Instant::now();
+    state.detach(loss);
+    let cutoff = loss + SAME_INSTANCE_RECOVERY_WINDOW;
+    assert_eq!(
+        Binding::check_phase_at(&state, cutoff - Duration::from_nanos(1)),
+        Ok(())
+    );
+    assert_eq!(
+        Binding::check_phase_at(&state, cutoff),
+        Err(Reject::RecoveryRequired)
+    );
+    assert_eq!(
+        DETACHED_CLIENT_RETENTION - SAME_INSTANCE_RECOVERY_WINDOW,
+        Duration::from_secs(30)
+    );
+    state.recovery = None;
+    assert_eq!(
+        Binding::check_phase_at(&state, loss),
+        Err(Reject::RecoveryRequired)
+    );
+}
+
+impl Inner {
+    fn end_pair(&mut self, recoverable: bool) -> FencedHandles {
+        if recoverable && self.settlement != PhysicalSettlement::Confirmed {
+            self.detach(Instant::now());
+        } else {
+            self.phase = BindingPhase::Detached;
+            if let Some(proof) = &mut self.recovery {
+                proof.deadline = None;
+            }
+        }
+        self.connection = None;
+        FencedHandles(
+            self.stream
+                .take()
+                .into_iter()
+                .chain(self.control.take().map(|control| control.shutdown))
+                .collect(),
+        )
+    }
+
+    fn detach(&mut self, now: Instant) {
+        self.phase = BindingPhase::Detached;
+        if let Some(proof) = &mut self.recovery {
+            proof.deadline = Some(now + rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW);
+        }
+    }
 }
 
 /// The live control lane the pair committed.
@@ -344,6 +413,7 @@ impl Binding {
                     control: None,
                     pending: None,
                     next_attempt: 0,
+                    recovery: None,
                 }),
                 pair_ready: Condvar::new(),
             }),
@@ -364,6 +434,7 @@ impl Binding {
     pub fn connect(&self, hello: &Hello, connection: ConnectionId) -> Result<Admission, Reject> {
         let mut inner = self.inner();
         self.check_identity(
+            &inner,
             &hello.credential,
             hello.version,
             &hello.session,
@@ -416,6 +487,7 @@ impl Binding {
     #[allow(clippy::too_many_arguments)] // one Hello's fixed field set
     fn check_identity(
         &self,
+        inner: &Inner,
         credential: &BindingCredential,
         version: u16,
         session: &SessionId,
@@ -426,7 +498,12 @@ impl Binding {
         capabilities: Option<&BTreeSet<Capability>>,
     ) -> Result<(), Reject> {
         let offered: [u8; 32] = Sha256::digest(credential.as_bytes()).into();
-        if !constant_time_eq_32(&self.verifier, &offered) {
+        let launch = constant_time_eq_32(&self.verifier, &offered);
+        let recovery = inner
+            .recovery
+            .as_ref()
+            .filter(|proof| constant_time_eq_32(&proof.verifier, &offered));
+        if !launch && recovery.is_none() {
             return Err(Reject::InvalidCredential);
         }
         if version != PROTOCOL_VERSION {
@@ -455,18 +532,39 @@ impl Binding {
         {
             return Err(Reject::MissingCapabilities);
         }
+        match inner.phase {
+            BindingPhase::Detached => {
+                let proof = recovery.ok_or(Reject::RecoveryRequired)?;
+                if capabilities.is_some_and(|capabilities| *capabilities != proof.capabilities) {
+                    return Err(Reject::MissingCapabilities);
+                }
+            }
+            BindingPhase::Reserved if !launch => return Err(Reject::InvalidCredential),
+            _ => {}
+        }
         Ok(())
     }
 
     /// The phase check every lane's commit shares — under one mutex
     /// hold with the identity checks, so concurrent Hellos linearize.
-    /// `Reserved` admits the attempt; `Detached` rejects every Hello
-    /// with [`Reject::RecoveryRequired`] — EOF never reopens the
-    /// reservation and re-admission needs live-instance recovery proof
-    /// (#577), which this layer does not provide.
+    /// Once detached, the independent pairing check requires the live
+    /// instance's memory-only proof. The absolute window also bounds each
+    /// wait at the control commit.
     fn check_phase(inner: &Inner) -> Result<(), Reject> {
+        Self::check_phase_at(inner, Instant::now())
+    }
+
+    fn check_phase_at(inner: &Inner, now: Instant) -> Result<(), Reject> {
         match inner.phase {
             BindingPhase::Reserved => Ok(()),
+            BindingPhase::Detached
+                if inner
+                    .recovery
+                    .as_ref()
+                    .is_some_and(|proof| proof.deadline.is_some_and(|deadline| now < deadline)) =>
+            {
+                Ok(())
+            }
             BindingPhase::Detached => Err(Reject::RecoveryRequired),
             BindingPhase::Live => Err(Reject::AlreadyConnected),
             BindingPhase::Revoked => Err(Reject::Revoked),
@@ -494,6 +592,7 @@ impl Binding {
     ) -> io::Result<Result<(PairingNonce, u64, Admission), Reject>> {
         let mut inner = self.inner();
         if let Err(reject) = self.check_identity(
+            &inner,
             &hello.credential,
             hello.version,
             &hello.session,
@@ -508,6 +607,11 @@ impl Binding {
         if let Err(reject) = Self::check_phase(&inner) {
             return Ok(Err(reject));
         }
+        let deadline = inner
+            .recovery
+            .as_ref()
+            .and_then(|proof| proof.deadline)
+            .map_or(deadline, |limit| limit.min(deadline));
         if deadline.saturating_duration_since(Instant::now()).is_zero() {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -587,7 +691,9 @@ impl Binding {
         control_handle: ControlHandle,
         deadline: Instant,
     ) -> Result<PairCommit, Reject> {
+        let mut inner = self.inner();
         self.check_identity(
+            &inner,
             &hello.credential,
             hello.version,
             &hello.session,
@@ -598,7 +704,6 @@ impl Binding {
             None,
         )?;
         let offered: [u8; 32] = Sha256::digest(hello.connection_nonce.as_bytes()).into();
-        let mut inner = self.inner();
         Self::check_phase(&inner)?;
         // Waits for the data lane's channel store under the pairing
         // budget: a correct nonce proves the challenge reply reached
@@ -654,6 +759,18 @@ impl Binding {
         if peer_gone {
             return Err(Reject::InvalidPairing);
         }
+        if let Some(proof) = &mut inner.recovery {
+            proof.deadline = None;
+        } else {
+            let credential = hello
+                .credential
+                .recovery_credential(&hello.connection_nonce);
+            inner.recovery = Some(RecoveryProof {
+                verifier: Sha256::digest(credential.as_bytes()).into(),
+                capabilities: pending.capabilities.clone(),
+                deadline: None,
+            });
+        }
         inner.phase = BindingPhase::Live;
         inner.settlement = PhysicalSettlement::Unconfirmed {
             control: connection.clone(),
@@ -679,7 +796,7 @@ impl Binding {
     /// shut down here: the caller of this terminal path holds no other
     /// endpoint lock.
     pub fn disconnect(&self, connection: &ConnectionId) {
-        self.inner.disconnect(connection).shutdown();
+        self.inner.disconnect(connection, true).shutdown();
     }
 
     /// Fences the binding atomically: marks it `Revoked`, clears the
@@ -720,6 +837,28 @@ impl Binding {
             .control
             .as_ref()
             .map(|control| control.handle.clone())
+    }
+
+    /// Whether the detached live instance still has time to prove recovery.
+    #[must_use]
+    pub fn may_recover(&self) -> bool {
+        let inner = self.inner();
+        inner.phase == BindingPhase::Detached && Self::check_phase(&inner).is_ok()
+    }
+
+    /// Applies a bounded local publication only while this exact lane is
+    /// current. The action must not perform I/O or call back into Binding.
+    pub fn with_control_lane<T>(
+        &self,
+        lane: &ControlHandle,
+        publish: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let state = self.inner();
+        state
+            .control
+            .as_ref()
+            .is_some_and(|control| control.handle.same_pair(lane))
+            .then(publish)
     }
 
     /// Wait for the admitted Client's physical revocation receipt. A
@@ -1084,7 +1223,14 @@ impl Binding {
                         if let Err(error) = sent {
                             // Committed but undelivered: detach the pair
                             // and interrupt both lanes.
-                            self.inner.disconnect(&commit.connection).shutdown();
+                            self.inner
+                                .disconnect(
+                                    &commit.connection,
+                                    rustx_execution_protocol::transport::recoverable_lane_loss(
+                                        &error,
+                                    ),
+                                )
+                                .shutdown();
                             channel.shutdown();
                             return Err(error);
                         }

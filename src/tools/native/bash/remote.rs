@@ -655,13 +655,13 @@ async fn exchange_with_gate(
         if cancellation.is_some_and(ExecutionCancellation::is_cancelled) {
             return Err(io::ErrorKind::Interrupted.into());
         }
-        let endpoint = endpoint.clone();
-        let request = request.clone();
+        let wire_endpoint = endpoint.clone();
+        let wire_request = request.clone();
         let cancellation = cancellation.cloned();
         let start_gate = start_gate.clone();
         let result = tokio::task::spawn_blocking(move || {
             let dispatch = || {
-                endpoint.agent_process(&request, deadline, || {
+                wire_endpoint.agent_process(&wire_request, deadline, || {
                     if start_gate.is_some_and(|gate| !gate()) {
                         return Err(io::ErrorKind::Interrupted.into());
                     }
@@ -678,7 +678,7 @@ async fn exchange_with_gate(
             if expire_capture {
                 // Exhaust just this query's budget with real prewire connection
                 // contention, and release the lock before journal settlement.
-                let result = endpoint.hold_data_exchange_for_test(dispatch)?;
+                let result = wire_endpoint.hold_data_exchange_for_test(dispatch)?;
                 assert_eq!(
                     result.as_ref().unwrap_err().kind(),
                     io::ErrorKind::WouldBlock
@@ -691,7 +691,9 @@ async fn exchange_with_gate(
         .map_err(io::Error::other)?;
         match result {
             Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                if Instant::now() < deadline
+                    && (error.kind() == io::ErrorKind::WouldBlock
+                        || endpoint.retry_process_after_lane_loss(&request, &error)) =>
             {
                 tokio::time::sleep(POLL).await;
             }
