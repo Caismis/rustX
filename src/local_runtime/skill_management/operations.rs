@@ -211,8 +211,12 @@ impl Tree {
         Ok(())
     }
 
-    /// Restore recorded directory modes only after every child has been written.
-    /// Setting a private parent first would block the copy that still needs it.
+    /// Restore recorded subdirectory modes only after every child has been
+    /// written. Setting a private parent first would block the copy that
+    /// still needs it. The stage root stays writable (`0700`): renaming a
+    /// non-writable directory fails with EACCES on XNU (seen on the macOS-15
+    /// runners), so `root_mode` is applied to the published directory only
+    /// after the same-parent publish rename.
     fn restore_directory_modes(&self, destination: &Path) -> io::Result<()> {
         for entry in self.entries.iter().rev().filter(|entry| entry.directory) {
             fs::set_permissions(
@@ -220,7 +224,7 @@ impl Tree {
                 Permissions::from_mode(entry.stamp.3 & 0o777),
             )?;
         }
-        fs::set_permissions(destination, Permissions::from_mode(self.root_mode & 0o777))
+        fs::set_permissions(destination, Permissions::from_mode(0o700))
     }
 
     fn sync_directories(&self, destination: &Path) -> io::Result<()> {
@@ -393,6 +397,12 @@ fn retire(path: &Path, directory: &PackageDirectory) -> Result<(), SettingsError
     let identity = (identity.dev(), identity.ino());
     source.confirm().map_err(SettingsError::Io)?;
     directory.verify().map_err(|_| SettingsError::Invalid)?;
+    // Renaming a non-writable directory fails with EACCES on XNU (seen on the
+    // macOS-15 runners): widen the root before moving it aside. The retired
+    // tree is removed by `remove_owned_tree` either way, so the recorded
+    // mode never has to come back.
+    rustix::fs::fchmod(directory.descriptor(), Mode::from_raw_mode(0o700))
+        .map_err(|error| SettingsError::Io(error.into()))?;
     let stage_name = rename_aside(&source, name)?;
     let stage_path = parent.join(&stage_name);
     let Ok(retired) = PackageDirectory::open(&stage_path) else {
@@ -784,6 +794,11 @@ impl UserConfigManager {
         }
         let installed = destination_collection.join(&destination_name);
         let installed_directory = publish(&mut stage, &destination, &installed)?;
+        // The stage root stayed writable through the publish rename (see
+        // `restore_directory_modes`); the published package now takes the
+        // recorded root mode.
+        fs::set_permissions(&installed, Permissions::from_mode(tree.root_mode & 0o777))
+            .map_err(|_| SettingsError::Committed)?;
         let visible = self
             .discover_skill_scope(&destination_target, &destination_collection)
             .packages
