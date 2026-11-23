@@ -1,14 +1,11 @@
 # Reproducing the diagnostic runs
 
-This is diagnostic source/data only. No experimental glue/WASM, objects or raw CPU profiles are included. The manifest records their identities without distributing them. No production source change is applied.
+Use the [evidence archive extraction and checksum verification](../../issue-556/evidence.md)
+to recover the complete diagnostic directory. Follow the
+[archived reproduction instructions](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/step-parser-experiments/REPRODUCE.md)
+from that directory with its bundled manifests, patches, helpers, fixtures,
+and scripts. The instructions identify the historical O3 baseline and pin
+Emscripten 3.1.69 and the importer and OCCT source commits.
 
-1. Check out the repository revision recorded in the manifest and use its reviewed native rebuild recipe to build the pinned importer c2148e54b456b571238d35cac037d304053d64b2 / OCCT d2abb6d844231cb8f29be6894440874a4700e4a5 with Emscripten 3.1.69, O3 and no LTO. Keep the generated compile_commands.json, build.ninja and effective commands. Confirm the source offer's nine importer overrides and baseline hashes. Each build target must be new.
-2. The captured scripts use `/tmp/pr556-occt-build` for immutable pinned source, `/tmp/pr556-build-O3/build` for the baseline compiled objects and `/tmp/rustx-pr556` for this repository. Recreate those paths or adapt only these base/output paths in private diagnostic copies. Never edit the pinned checkout or frozen build inputs.
-3. Recreate phase copies from `diagnostics/phase-boundaries.patch` or `scripts/instrument-phases.py`; add the self-written phase helpers. `scripts/build-phases.py` takes original compile/link commands and substitutes only copied sources/new object/output paths. It reuses 4,771 original objects.
-4. Recreate tail and lexer copied sources using the corresponding candidate patch. The tail preparation/build scripts and lexer build script compile just the selected unit and reuse 4,774 original objects. The combined/named relink script records both replacements or adds only --profiling-funcs for CPU sampling.
-5. For counters, apply `diagnostics/counter-on-phase.patch` and use the counter helper version. For allocation, keep the phase copies and use the allocation helper/header plus AllocationDiagnostic.cxx and the captured --wrap linker options. Wrappers retain the original allocator and suppress nested wrapper double counting. These diagnostic clocks are not ordinary optimization samples.
-6. Generate the dense input using the repository `generate-large-step.py --output /tmp/pr556-large-bspline.step --poles 1450` and the fixed-row scaling inputs with `scaling/generate-wide-step.py`, using `cadquery-ocp-novtk==7.9.3.1.1`. Every pole is referenced; no filler is added. Verify generated identities against the observed manifests or record new identities and compare all runtimes on exactly the same new bytes.
-7. Run the captured measure scripts with no concurrent compiler/browser/analysis jobs for ordinary latency samples. Each child uses a fresh WASM instance and releases owned source after native copy. The repository benchmark script independently checks canonical JSON, raw numeric bits including signed zero, metadata and source identity. Keep any failed run rather than removing a format/workload or weakening equality.
-8. CPU profiles use the named diagnostic relinks and Node inspector at 1 ms only around the native Read call; allocation entry traffic and semantic hashes run separately. Do not use these probe clocks as ordinary speed claims. See semantic build/case/runner scripts for bounded parse-only failure injection and canonical/order checks.
-
-All exact command arguments, paths, source/object fingerprints and sample observations are retained in provenance/raw JSON. Raw CPU profiles remain outside this source/data archive, with hashes in the manifest. No new production dependencies are required by these diagnostic files.
+For the production bulk lexer package, see the [browser benchmark](../step-browser-benchmark.md)
+and the [source rebuild recipe](../../../web-console/vendor/occt-import-js/rebuild.sh).
