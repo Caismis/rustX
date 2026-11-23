@@ -806,7 +806,14 @@ jobs:
         # The scripted contract suites are `cfg(target_os = "linux")` and are
         # not compiled on macOS, so no `scripted_suites::` skip belongs here:
         # a skip that excludes nothing fails the lane checker.
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::'
+        run: |
+          # macOS runners start with a 256-descriptor soft limit while this
+          # single test binary drives ~4400 unit tests concurrently, each
+          # holding tempdirs, watchers and collection locks; the exhaustion
+          # surfaces as transient `Io` failures. Raise the ceiling before
+          # running the suite.
+          ulimit -n 10240 || ulimit -n 4096
+          /usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::
 
       - name: Run the external boundary targets
         env:
