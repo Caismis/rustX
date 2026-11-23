@@ -107,7 +107,19 @@ verification. The next application reports failed capabilities and keeps
 the previous Agent and Workflow; invalid higher-scope Agent TOML also keeps
 the last valid generation. A second mount fixture gives User, Client and
 Server-side decoy Agents different contents. The bound runtime selects the
-Client version.
+Client version. A reconciliation regression removes and replaces the
+Server path while the Client applies two distinct policy and Agent
+revisions. An atomic swap of the Client's physical Agent directory for a
+file then causes only the capabilities unit to fail. The validated scalar
+policy still advances, and the last admitted Agent remains active until
+the Client's directory is restored.
+
+The existing real Server SIGKILL regression now checks configuration
+authority on restart. A sibling Session remains admitted and can read the
+original Session's cold history and settings. The original Session's
+cold attach and input write are refused while its remote Client claim
+remains outstanding. The settings revision and the Server-local decoy
+document still match the inputs to the refused operations.
 
 ## Bound Workspace source observation
 
@@ -313,7 +325,7 @@ child path independently of the stdio relay fixture.
 | Required tests | Evidence and open coverage |
 | --- | --- |
 | T01, T04, T06 | The real WebSocket Host fixture submits a Root tool call with no Execution endpoint and asserts two model requests and one canonical ToolResult. The standalone process fixture serves HTTP MCP from Server loopback and verifies one tool commit and a last terminal. The child relay tests cover exact physical stdio routing. `shipped_parallel_reverses_completion_without_git_or_parent_orchestration` exercises reverse completion in a real Workflow. `fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call` verifies rooted interaction and one canonical outer result. The isolated Root/Subagent/Workflow composition below checks the shared Session and exact provider sequence. `client_bash_reversed_settlement_keeps_canonical_order` holds the first real Bash behind a socket until the second settles. Both start exactly once, two model requests occur, and the durable results retain the original order before the sole final Attempt terminal. |
-| T13, T14, T15, T17, T18 | The Session input RPC covers definition shadowing, explicit permission, joint CAS, stale and invalid candidates, durable readback, and clearing overrides. Isolated cold load covers Client sources. The complete bootstrap and concurrent-activation composition remain open. |
+| T13, T14, T15, T17, T18 | The Session input RPC covers definition shadowing, explicit permission, joint CAS, stale and invalid candidates, durable readback, and clearing overrides. With a real Client admitted, the fake provider holds an Attempt while a joint config and Workflow replacement commits. The capability unit is ready while the admitted catalog remains frozen. The exact next two provider requests offer the old and new Workflow descriptions in order. Isolated cold load covers Client sources, and the real restart test preserves cold history and rejects attach and input validation against the Server decoy while the former Client claim is outstanding. |
 | T16 | `primary_model_selection_resets_primary_overrides_and_preserves_summary_policy` and `attempt_started_freezes_the_model_across_a_mid_attempt_switch` cover the Runtime Client entry. `r04_manager_selection_and_attempt_admission_have_both_complete_orders` exercises admission races through the App Server. `t05_t09_workflow_only_agent_model_rebuilds_frozen_execution` and `direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_result` exercise frozen Workflow profiles and the direct-model provider. The pinned browser holds the first provider stream across a model change and reload, then verifies the new model's default profile and output budget on the second request. The native Subagent tests run parent and child processes against one provider and assert the inherited invocation and an explicit child-model change, including reasoning, temperature, seed and budget. Each native trace contains three unchanged parent requests and one child request. Each entry uses its own fixture. |
 | T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. The real Client-owned Managed Python Store fixtures below cover foreground Tasks and MRTR. The bound management inventory uses one physical stdio process across both resource pages and waits for its witnessed exit. The independent HTTP probe requires zero business calls. |
 | T22, T40, T47 | Isolated Workspace tests cover Client-owned AGENTS.md, Agent TOML and Workflow YAML on cold load and explicit reconciliation. The verification hook rejects a changed in-flight capture and preserves the last valid generation. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. The Linux watch fixture verifies automatic guidance and Skill metadata updates after physical registration and rejects a retired watch's captured result across authenticated reattachment. Native watch overflow and the reattachment path have separate proofs. |
@@ -467,9 +479,8 @@ Each Session made one MCP business call, two business requests to the fake
 provider and one auxiliary provider request. Each ledger recorded one
 ToolResult of 17,022–17,023 bytes followed by one terminal event. Journal
 event JSON totaled 26,770–26,776 bytes per Session. The Server scratch
-directory stayed empty. These measurements cover process-wide memory with
-up to four simultaneous bodies. Allocator overhead at the 32-slot bound
-remains unmeasured.
+directory stayed empty. These debug measurements cover process-wide memory
+with up to four simultaneous bodies.
 
 The Linux release Server from the same source repeated the workload with
 the same body byte counts, one commit and one terminal per Session.
@@ -479,6 +490,25 @@ the same body byte counts, one commit and one terminal per Session.
 | 1 | 66,200 / 99,664 / 120,776 | 0.171 / 0.115 / 0.096 | 0.24 / 0.08 |
 | 2 | 70,940 / 123,424 / 166,832 | 0.312 / 0.129 / 0.147 | 0.49 / 0.20 |
 | 4 | 76,052 / 156,908 / 241,164 | 0.637 / 0.104 / 0.168 | 0.66 / 0.25 |
+
+The independently staged Linux release Server at `e92dba4c3` also ran
+16 and 32 Sessions. The fixture acknowledged each turn admission, then
+waited for every peer to flush its 12 MiB prefix before releasing the
+remaining bytes. At 32 Sessions, all 32 JSON receive slots held incomplete
+bodies concurrently and the peer had flushed 402,653,184 bytes.
+
+| Sessions | Complete HTTP body bytes | RSS before / held / peak (KiB) | Initialize and attach / all prefixes / finish after release (s) | User / system CPU after attachment (s) |
+| ---: | ---: | ---: | ---: | ---: |
+| 16 | 268,371,088 | 104,060 / 349,096 / 736,200 | 6.136 / 4.907 / 0.304 | 1.87 / 0.83 |
+| 32 | 536,742,176 | 159,572 / 631,784 / 1,354,124 | 18.199 / 3.035 / 0.574 | 4.32 / 3.32 |
+
+The 32-Session run observed one business call and two fake business
+provider requests per Session. Each ledger contained one 17,022–17,023-byte
+ToolResult and one final terminal, with 26,767–26,780 bytes of Journal
+events. The Server scratch stayed empty and no Execution Client ran.
+RSS includes decoded results and allocator overhead for the entire Server.
+Concurrent local compilation and the different turn-admission sequence
+limit latency comparisons with the smaller runs.
 
 The debug and release observations used different build profiles under
 concurrent host load. Compare within each profile's sample.
@@ -504,6 +534,10 @@ reach the provider in the original order. The fake uv subprocess holds a
 Unix socket, whose peer credentials identify the process in the Linux host
 PID namespace. Normal drain closes the socket
 and confirms the subprocess and Client have exited.
+The fixture adds its own mount wrapper around the Client and uses the
+Client's private mutation staging inside that mount. The production
+guardian authorizes access to its staging socket by the supervised
+Client's actual PID.
 
 `a_real_managed_fastmcp_task_completes_through_one_tool_result` and
 `a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction` now
@@ -543,13 +577,18 @@ resource and cancellation combinations remain individually mapped below.
   the held POST and deletion of its HTTP session. Root and child execution
   tests used the real bound Client for stdio. The two resource-authoring
   cases passed their separate rerun after editing the HTTP URL field.
+  The 24-file upload case waits for the distinct native readiness receipts
+  before checking the exact DOM count, destination bytes and zero model
+  requests. The ten Workflow canvas cases also passed in the pinned
+  browser. They observe the canvas finish movement before comparing the
+  exact transform.
 - The real Execution Client saved and read normalized output through the
   wire. The execution boundary crates passed 412 tests with three ignored,
   including a confirmed unlink retry. The pinned rmcp fork passed two
   HTTP response-cap regressions.
 - The generated protocol check and type check passed. Dev type check and
   44 tests passed. TUI type check and 1,365 tests passed with one skip.
-  Web Console type check, build and 5,018 tests passed with four skips.
+  Web Console type check, build and 5,020 tests passed with four skips.
 - `git diff --check` passed.
 
 Final FULL and Merge verification, native macOS and the complete Browser

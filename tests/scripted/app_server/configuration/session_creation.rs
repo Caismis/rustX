@@ -1577,25 +1577,47 @@ async fn bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_l
         let original_root = workspace.with_extension("retained");
         std::fs::rename(workspace, &original_root).unwrap();
         let target = SourceTarget::Workspace { directory: workspace.clone() };
-        for (deadline, replace) in [(34_567, false), (45_678, true)] {
-            if replace {
-                // Still canonical, but independently owned and has no Agent
-                // collection. It must not grant the lower User definition.
+        for (deadline, replacement, label) in [
+            (34_567, false, "Client reviewer with no Server Workspace"),
+            (45_678, true, "Client reviewer with a replacement Server Workspace"),
+        ] {
+            if replacement {
                 std::fs::create_dir(workspace).unwrap();
             }
+            write_role(&workspace_agents, label);
             write_policy(deadline);
             fixture.manager.reconcile_configuration(&target).await.unwrap();
             let application = applied(&fixture, 0).await;
             assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
-            assert!(matches!(&application.units[&ApplyUnit::Capabilities],
-                UnitApplication::Failed { diagnostic } if diagnostic.contains("Workspace authored resources unavailable")
-            ), "{application:?}");
+            assert_eq!(application.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
             assert_eq!(EffectiveConfiguration::adopted(&runtime).unwrap().tool_deadline.hard_deadline_ms, deadline);
-            assert_eq!(instructions(), "Workspace reviewer");
+            assert_eq!(instructions(), label);
         }
 
         std::fs::remove_dir(workspace).unwrap();
         std::fs::rename(original_root, workspace).unwrap();
+        let invalid_collection = physical.join("unavailable-agents");
+        std::fs::write(&invalid_collection, b"not a collection").unwrap();
+        // A confirmed absent layer can reveal lower definitions. Swap the
+        // physical collection atomically so the watcher observes an invalid root.
+        let exchange_collection = || {
+            rustix::fs::renameat_with(
+                rustix::fs::CWD, &workspace_agents, rustix::fs::CWD,
+                &invalid_collection, rustix::fs::RenameFlags::EXCHANGE,
+            ).unwrap();
+        };
+        exchange_collection();
+        write_policy(56_789);
+        fixture.manager.reconcile_configuration(&target).await.unwrap();
+        let application = applied(&fixture, 0).await;
+        assert_eq!(application.units[&ApplyUnit::ExecutionPolicy], UnitApplication::Applied);
+        assert!(matches!(&application.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { diagnostic } if diagnostic.contains("AgentUnavailable") && diagnostic.contains("reviewer")
+        ), "{application:?}");
+        assert_eq!(EffectiveConfiguration::adopted(&runtime).unwrap().tool_deadline.hard_deadline_ms, 56_789);
+        assert_eq!(instructions(), "Client reviewer with a replacement Server Workspace");
+
+        exchange_collection();
         write_role(&workspace_agents, "Restored Workspace reviewer");
         fixture.manager.reconcile_configuration(&target).await.unwrap();
         let application = applied(&fixture, 0).await;
@@ -1635,6 +1657,7 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
 
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
+        let mut client = fixture.start_execution(0).await;
         fixture.load(0).await.unwrap().unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let catalog = || runtime.runtime_resources();
@@ -1744,7 +1767,59 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
         assert_eq!(description(), "Workspace review");
         assert!(catalog().subagents().get(&helper).is_none());
         assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
+
+        let frozen = catalog();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let admitted = runtime.configuration_cut().admitted_attempt.unwrap();
+        let session_config = SessionConfigContent("[agent]\nworkflows=['review']\n".into());
+        let session_resources = SessionResources {
+            workflows: BTreeMap::from([(review.clone(), workflow_document("Replacement review"))]),
+            ..SessionResources::default()
+        };
+        let MethodResult::SessionInputsWritten { revision: joint } = call(
+            &connection,
+            38,
+            request(
+                cleared,
+                Some(SessionInputChange::Replace(session_config.clone())),
+                Some(SessionInputChange::Replace(session_resources.clone())),
+            ),
+        ).await else { panic!("saved the complete authorized candidate"); };
+        assert_eq!(joint, cleared + 1);
+        let (persisted_revision, persisted) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+        assert_eq!(persisted_revision, joint);
+        assert_eq!(persisted.session_config, Some(session_config));
+        assert_eq!(persisted.session_resources, Some(session_resources));
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(staged.units[&ApplyUnit::Capabilities], UnitApplication::Ready);
+        assert_eq!(runtime.configuration_cut().admitted_attempt, Some(admitted));
+        assert_eq!(catalog().revision(), frozen.revision());
+        assert_eq!(description(), "Workspace review");
+
+        fixture.gates[0].release();
+        settlement.wait().await;
+        assert_eq!(applied(&fixture, 0).await.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
+        assert!(ready());
+        assert_eq!(description(), "Replacement review");
+        runtime.submit_inbound(input("request-B")).unwrap();
+        fixture.gates[1].wait_entered().await;
+        fixture.gates[1].release();
+        settlement.wait().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        for (request, expected) in requests.iter().zip(["Workspace review", "Replacement review"]) {
+            let body: serde_json::Value = serde_json::from_str(request).unwrap();
+            let offered = body["tools"].as_array().unwrap().iter()
+                .find(|tool| tool["function"]["name"] == "review").expect("review tool");
+            assert_eq!(
+                offered["function"]["description"],
+                format!("{expected}\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments."),
+            );
+        }
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
     })).await;
 }
 

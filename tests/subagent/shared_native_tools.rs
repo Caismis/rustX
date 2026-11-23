@@ -116,11 +116,12 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
     match results.len() {
         0 => tool_reply("write", &json!({"path":"child.txt", "content":"before\n"})),
         1 => {
+            let written = results[0]["content"]
+                .as_str()
+                .expect("Chat tool content is plain text");
             assert!(
-                results[0]["content"]
-                    .as_str()
-                    .expect("Chat tool content is plain text")
-                    .contains("Successfully wrote")
+                written.contains("Successfully wrote"),
+                "child Write: {written}"
             );
             tool_reply(
                 "edit",
@@ -201,10 +202,12 @@ fn stage_parent_with_client_path(
     let home = quote(home.to_str().unwrap());
     let scratch = quote(scratch.to_str().unwrap());
     let command = mount.map_or_else(
-        || client.clone(),
+        || format!("exec {client}"),
         |(physical, logical)| {
+            // The extra mount wrapper has its own PID. This fixture uses
+            // the Client's private staging inside that mount.
             format!(
-                "bwrap --ro-bind / / --dev /dev --bind {} {} --bind {home} {home} --tmpfs {scratch} -- {client}",
+                "unset RUSTX_CLIENT_DOMAIN_STAGING\nexec bwrap --ro-bind / / --dev /dev --bind {} {} --bind {home} {home} --tmpfs {scratch} -- {client}",
                 quote(physical.to_str().unwrap()),
                 quote(logical.to_str().unwrap()),
             )
@@ -214,7 +217,7 @@ fn stage_parent_with_client_path(
     std::fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nexport PATH={} HOME={home} TMPDIR={scratch}\nexec {command} \"$@\"\n",
+            "#!/bin/sh\nexport PATH={} HOME={home} TMPDIR={scratch}\n{command} \"$@\"\n",
             quote(path),
         ),
     )

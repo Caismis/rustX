@@ -887,7 +887,7 @@ receipt and asserts that the old registration still owns its permit.
   Client behind a launcher that sets only the poisoned trace variable, then
   runs a bound command; the supplied path is never created.
 
-## Optional save contract (EXEC-01 slice)
+## Optional save contract at the EXEC-01 milestone
 
 - Wire: `SaveRequest`/`SaveReply` with stable domain codes, Client-allocated
   `CandidateId`, owner binding, no Server/Host paths, no locator before publish.
@@ -905,5 +905,8 @@ receipt and asserts that the old registration still owns its permit.
 - Client decline proof: `save_is_declined_as_unavailable_without_touching_the_workspace`
   and `a_reservation_requiring_managed_output_is_rejected_by_the_real_client`
   (`crates/execution-client/tests/bootstrap.rs`).
-- Not implemented and not advertised: Client storage, Host integration,
-  readability probing against real optional-save storage.
+- EXEC-02 implements and advertises the Client storage capability and
+  current readability probe. EXEC-03 implements Hosted reception and
+  connects verified winning responses to that storage. The
+  [EXEC-02](exec-02-evidence.md) and [EXEC-03](exec-03-evidence.md)
+  ledgers record their physical fixtures and failure cases.
