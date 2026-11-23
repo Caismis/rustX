@@ -178,13 +178,19 @@ pub(crate) async fn revocation_before_start() {
                     Response::Success(success) => assert!(
                         matches!(success.result, MethodResult::CommandExec { result } if result.status == ExecStatus::Terminated)
                     ),
-                    Response::Failure(failure) => assert!(
-                        matches!(
-                            failure.error.data,
-                            Some(ErrorData::ConnectionClosed | ErrorData::ExecutionUnavailable)
-                        ),
-                        "revocation={revocation}: honest failure, got {failure:?}"
-                    ),
+                    Response::Failure(failure) => {
+                        let binding_loss = if start_first {
+                            ErrorData::OutcomeUnknown
+                        } else {
+                            ErrorData::ExecutionUnavailable
+                        };
+                        assert!(
+                            failure.error.data.as_ref().is_some_and(|reason| {
+                                reason == &ErrorData::ConnectionClosed || reason == &binding_loss
+                            }),
+                            "revocation={revocation}, start_first={start_first}: got {failure:?}"
+                        );
+                    }
                 }
                 assert!(
                     marker.exists() == start_first,

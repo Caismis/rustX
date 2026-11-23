@@ -1344,11 +1344,11 @@ pub(crate) async fn host_drain_scenario() {
     match bounded(command).await.unwrap() {
         Response::Success(success) => assert!(matches!(success.result,
             MethodResult::CommandExec { result } if result.status == ExecStatus::Terminated)),
-        // A fenced endpoint mid-operation reports unavailability; a
-        // closed request context reports ConnectionClosed — both honest.
+        // START already won. Drain can reap the physical process without
+        // retaining the command's final reply on the request's data lane.
         Response::Failure(failure) => assert!(matches!(
             failure.error.data,
-            Some(ErrorData::ConnectionClosed | ErrorData::ExecutionUnavailable)
+            Some(ErrorData::ConnectionClosed | ErrorData::OutcomeUnknown)
         )),
     }
     execution.kill().await.unwrap();
