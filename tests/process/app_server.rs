@@ -585,6 +585,96 @@ dependencies = ["fastmcp==4.0.3"]
 
 #[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
 #[tokio::test]
+async fn doctor_probes_selected_managed_python_in_an_owned_client() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let uv = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("uv"))
+        .find(|candidate| candidate.is_file())
+        .expect("Managed Python acceptance requires uv");
+    let (bin, executable) = isolated_server_pair();
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    let client = bin.path().join("rustx-execution-client");
+    std::fs::rename(&client, bin.path().join("client-real")).unwrap();
+    std::fs::write(
+        &client,
+        b"#!/bin/sh\nexec \"${0%/*}/client-real\" \"$@\" 2> \"${0%/*}/client-stderr\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&client, std::fs::Permissions::from_mode(0o700)).unwrap();
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let workspace = fixture.root.path().join("a");
+        std::fs::write(workspace.join("rustx.toml"), b"# diagnostic Workspace\n").unwrap();
+        let home = fixture.root.path().join("home");
+        let config = home.join("rustx/rustx.toml");
+        let mut authored: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".into(),
+            toml::from_str("'python:diagnostic' = ['ping']").unwrap(),
+        );
+        std::fs::write(&config, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        let source = workspace.join(".agents/tools/diagnostic");
+        std::fs::create_dir_all(&source).unwrap();
+        let business = workspace.join("business-call");
+        std::fs::write(
+            source.join("server.py"),
+            format!(
+                "from pathlib import Path\nfrom fastmcp import FastMCP\nmcp = FastMCP('diagnostic')\n@mcp.tool\ndef ping() -> str:\n    Path({business:?}).touch()\n    return 'pong'\n",
+                business = business.display().to_string(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(source.join("requirements.txt"), b"").unwrap();
+        let runtime = fixture.root.path().join("diagnostic-runtime");
+        let store = bin.path().join("client-home/.local/share");
+        let paths = [uv_path, PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        let path = std::env::join_paths(paths).unwrap();
+        for prepare in [false, true] {
+            let mut probe = Command::new(&executable);
+            probe
+                .current_dir(&workspace)
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", &path)
+                .env("XDG_DATA_HOME", &store)
+                .arg("doctor")
+                .arg("--workspace")
+                .arg(&workspace)
+                .args(["--probe", "--json", "--runtime-root"])
+                .arg(&runtime)
+                .kill_on_drop(true);
+            if prepare {
+                probe.arg("--prepare");
+            }
+            let output = probe.output().await.unwrap();
+            assert_eq!(output.status.code(), Some(3), "{}\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr), std::fs::read_to_string(bin.path().join("client-stderr")).unwrap_or_default());
+            let stdout = std::str::from_utf8(&output.stdout).unwrap();
+            let records = stdout.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).collect::<Vec<_>>();
+            let [plan, results] = records.as_slice() else { panic!("one plan followed by one outcome: {records:?}") };
+            assert_eq!(plan["phase"], "probe_plan");
+            assert_eq!(results["phase"], "probe_results");
+            let target = plan["targets"].as_array().unwrap().iter().find(|value| value["target"] == "python:diagnostic").unwrap();
+            assert_eq!(target["spawn_process"], prepare);
+            let result = results["results"].as_array().unwrap().iter().find(|value| value["target"] == "python:diagnostic").unwrap();
+            assert_eq!(result["state"], if prepare { "verified" } else { "skipped" }, "{result:?}");
+            assert!(!business.exists(), "a metadata probe made zero business calls");
+            if prepare {
+                assert_eq!(result["verified"], "MCP handshake and capability discovery");
+                assert_eq!(std::fs::read_dir(runtime.join("execution-pending")).unwrap().count(), 0);
+            } else {
+                assert!(!runtime.exists());
+            }
+            assert!(!runtime.join("sessions").exists(), "no diagnostic Session entered history");
+        }
+        let packages = store.join("rustx/environments/python-tools/packages");
+        assert_eq!(std::fs::read_dir(packages).unwrap().count(), 1);
+    })
+    .await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
 #[ignore = "requires Linux mount namespace and uv; run test-support/prove_execution_mount_view.sh"]
 async fn managed_python_prepares_and_runs_in_the_bound_client_mount() {
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());

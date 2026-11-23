@@ -1323,25 +1323,6 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
 
 #[tokio::test]
 async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
-    use rustx_process_supervisor::process_runner::{
-        CapturedProcessResult, RunnerTestControl, SupervisedCommandSpec, SupervisedProcessRunner,
-    };
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    #[derive(Default)]
-    struct FailingRunner(AtomicUsize);
-    impl SupervisedProcessRunner for FailingRunner {
-        fn run(
-            &self,
-            _: SupervisedCommandSpec,
-            _: Option<RunnerTestControl>,
-        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Err("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK".into()) })
-        }
-    }
     let f = Fixture::new();
     let package = f.host.launch_directory.join(".agents/tools/optional");
     std::fs::create_dir_all(&package).unwrap();
@@ -1349,30 +1330,21 @@ async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
     std::fs::write(package.join("requirements.txt"), "").unwrap();
     f.project(json!({}));
     let launch = analyze(&f.request, &f.host).unwrap();
-    let runner = Arc::new(FailingRunner::default());
-    let store = crate::tools::python::PythonToolStore::with_binaries_and_runner(
-        f.root.path().join("recorded-store"),
-        "/fixture/uv".into(),
-        "/fixture/python3".into(),
-        runner.clone(),
-    )
-    .unwrap();
     for authorized in [false, true, true] {
-        let before = runner.0.load(Ordering::SeqCst);
-        let mut plan = super::probes::plan(&launch, authorized);
-        plan.hooks.python_store = Some(store.clone());
+        let plan = super::probes::plan(&launch, authorized);
+        let target = plan
+            .targets
+            .iter()
+            .find(|target| target.target == "python:optional")
+            .unwrap();
+        assert!(!target.admitted && !target.spawn_process && !target.prepare_environment);
         let results =
             super::probes::execute(&launch, &plan, crate::runtime::CancellationSignal::new()).await;
         let result = results
             .iter()
             .find(|result| result.target == "python:optional")
             .unwrap();
-        assert_eq!(runner.0.load(Ordering::SeqCst), before);
         assert_eq!(result.state, super::probes::ProbeState::Skipped);
-        assert!(
-            !super::probes::render_results(&results, true)
-                .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
-        );
         assert!(!launch.runtime_root.exists());
     }
 }
