@@ -1448,10 +1448,7 @@ impl UserConfigManager {
         // entry is invalid, as at entry.
         let source = SourceDirectory::create(&path).map_err(|error| {
             super::super::settings::report_io_failure("admit_writer_directory", &error);
-            target
-                .validate()
-                .err()
-                .unwrap_or(SettingsError::Io(error))
+            target.validate().err().unwrap_or(SettingsError::Io(error))
         })?;
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
