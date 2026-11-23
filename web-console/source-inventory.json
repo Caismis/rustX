@@ -8384,7 +8384,7 @@
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/resources/subagents/AgentEditor.tsx",
-      "treatment": "Independent rustX resource editor with Harness-style section headings, setting rows and a shared save footer. Native source actors own revisions, inheritance and writes. Upstream source pin unchanged. Combined App Server v80 imports; upstream pin and licenses retained.",
+      "treatment": "Independent rustX resource editor with Harness-style section headings, setting rows and a shared save footer. Native source actors own revisions, inheritance and writes. The Skill picker uses the selected Session through App Server v81. Upstream pin and licenses retained.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v81",
@@ -8446,7 +8446,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d9bbae99f8c55318461d7d1aaeae17b1d4558553b8fd55f6e3eac37798f1d715"
+      "local_sha256": "bcf5036c1e787695840b16623dca1773e705bc4ac2a49d23713fc67bc6bdf591"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

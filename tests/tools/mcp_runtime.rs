@@ -1896,6 +1896,7 @@ chat_reasoning_replay = "omit"
 }
 
 /// Opt-in external measurement; normal tests use only local fixtures.
+#[cfg(feature = "test-support")]
 #[tokio::test]
 #[ignore = "requires RUSTX_MCP_PROFILE_ENDPOINT and a reachable external MCP server"]
 async fn measure_configured_http_mcp() {
