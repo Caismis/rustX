@@ -37,6 +37,8 @@ pub(crate) use mcp_preparation::{McpPreparation, McpPreparationState};
 pub(crate) use startup::McpStartupDeadline;
 
 #[cfg(all(test, feature = "mcp-fixture"))]
+mod mcp_capacity_tests;
+#[cfg(all(test, feature = "mcp-fixture"))]
 mod mcp_ownership_tests;
 mod readiness;
 #[cfg(all(test, feature = "mcp-fixture"))]
@@ -1248,6 +1250,13 @@ impl CapabilityCoordinator {
             })
             .map(|(id, binding)| (id.clone(), binding.clone()))
             .collect();
+        check_stdio_generation(
+            configured_sources.iter().map(|(_, binding)| binding),
+            python_source_bindings
+                .values()
+                .filter(|source| inputs.source_demand.sources.contains(source))
+                .count(),
+        )?;
         let deadline = startup.as_ref().map(|startup| &startup.deadline);
         // Each package connects as soon as its own build publishes. Its one
         // source slot spans both phases; unrelated sources never form a barrier.
@@ -1850,6 +1859,7 @@ impl CapabilityCoordinator {
             };
             bindings.push((server_id, binding.clone()));
         }
+        check_stdio_generation(bindings.iter().map(|(_, binding)| binding), 0)?;
         let outcomes = self
             .prepare_mcp_bindings(bindings, Some(preparation_cancellation), None, None)
             .await;
@@ -2810,6 +2820,28 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// provenance and typed Skill diagnostics, so a rediscovery that changes
 /// only those is still a real publication. See that method for the two
 /// cases (diagnostics-only and provenance-only) this distinction exists for.
+fn check_stdio_generation<'a>(
+    bindings: impl Iterator<Item = &'a crate::tools::mcp::McpServerBinding>,
+    python_packages: usize,
+) -> Result<(), CapabilityPreparationError> {
+    const LIMIT: usize = rustx_execution_protocol::mcp::MAX_GENERATION_SESSIONS;
+    let configured = bindings
+        .filter(|binding| {
+            matches!(
+                binding.transport,
+                crate::tools::mcp::McpTransportConfig::Stdio { .. }
+                    | crate::tools::mcp::McpTransportConfig::ManagedPython { .. }
+            )
+        })
+        .count();
+    if configured + python_packages > LIMIT {
+        return Err(CapabilityPreparationError::Mcp(format!(
+            "one capability generation can admit at most {LIMIT} Client-owned stdio MCP sources"
+        )));
+    }
+    Ok(())
+}
+
 fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,

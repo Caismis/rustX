@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DecimalU64, process::ProcessOperationKey};
 
-/// Maximum simultaneous stdio sessions on a binding.
-pub const MAX_SESSIONS: usize = 8;
+/// Maximum demanded Client-owned sources in one capability generation.
+pub const MAX_GENERATION_SESSIONS: usize = 8;
+/// Physical occupancy includes a complete candidate and its retained predecessor.
+pub const MAX_SESSIONS: usize = 2 * MAX_GENERATION_SESSIONS;
 /// Maximum negotiated or inbound MCP record before splitting it into pages.
 pub const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 /// A complete outbound record fits in one Execution frame after base64.
