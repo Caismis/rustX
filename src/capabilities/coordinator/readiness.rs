@@ -151,6 +151,7 @@ impl CapabilityCoordinator {
             let authority = RuntimeRefreshAuthority::capture(&state, inputs.clone());
             let skills = state.snapshot.skills();
             let discovered = crate::skills::SkillDiscoveryOutcome {
+                observed_workspace: std::collections::BTreeMap::new(),
                 invalid: Vec::new(),
                 roots: skills.roots().to_vec(),
                 packages: skills

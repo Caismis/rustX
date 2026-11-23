@@ -3,7 +3,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use base64::Engine as _;
@@ -12,7 +12,10 @@ use rustx_execution_protocol::{
     save::{ContentFormat, Locator, SaveExtent, SaveKey, SaveReply, SaveRequest, Sha256Hex},
 };
 use sha2::{Digest, Sha256};
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::{
+    sync::{Semaphore, mpsc, oneshot},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -140,7 +143,7 @@ impl Import {
         let Self::Active(mut writer) = self else {
             return None;
         };
-        tokio::time::timeout_at(tokio::time::Instant::from_std(writer.deadline), async {
+        tokio::time::timeout_at(writer.deadline, async {
             writer.messages.send(Message::Publish).await.ok()?;
             (&mut writer.settled)
                 .await
@@ -162,7 +165,14 @@ impl Writer {
             .clone()
             .try_acquire_owned()
             .ok()?;
-        let deadline = Instant::now() + OPTIONAL_SAVE_DEADLINE;
+        let now = Instant::now();
+        let deadline = now + OPTIONAL_SAVE_DEADLINE;
+        let deadline = cancellation
+            .hard_deadline()
+            .map_or(deadline, |cutoff| deadline.min(cutoff));
+        if deadline <= now {
+            return None;
+        }
         let abort = CancellationToken::new();
         let discarded = abort.clone();
         let signal = cancellation.child_signal();
@@ -265,7 +275,7 @@ async fn receive(
                 owner: binding.owner.clone(),
                 content_format: ContentFormat::NormalizedUtf8V1,
             },
-            deadline,
+            deadline.into_std(),
             &cancellation,
         )
         .await
@@ -277,16 +287,18 @@ async fn receive(
     let mut offset = 0_u64;
     let mut sequence = 1_u64;
     let mut commit = false;
-    let expires = tokio::time::Instant::from_std(deadline);
     'receive: loop {
         let message = tokio::select! {
             biased;
             () = cancellation.cancelled() => break,
-            result = tokio::time::timeout_at(expires, input.recv()) => result.ok().flatten(),
+            result = tokio::time::timeout_at(deadline, input.recv()) => result.ok().flatten(),
         };
         match message {
             Some(Message::Text(data)) => {
                 for chunk in data.chunks(MAX_RAW_CHUNK_BYTES) {
+                    if deadline <= Instant::now() {
+                        break 'receive;
+                    }
                     if !matches!(
                         binding
                             .exchange(
@@ -298,7 +310,7 @@ async fn receive(
                                     data_base64: base64::engine::general_purpose::STANDARD
                                         .encode(chunk),
                                 },
-                                deadline,
+                                deadline.into_std(),
                                 &cancellation
                             )
                             .await,
@@ -319,7 +331,7 @@ async fn receive(
         }
     }
     drop(input);
-    if commit {
+    if commit && Instant::now() < deadline {
         let sha256 = Sha256Hex::from_digest(digest.finalize().into());
         match publish(&binding, &key, offset, sha256, deadline, &cancellation).await {
             // The exact receipt confirms a locator. A transport failure
@@ -336,7 +348,7 @@ async fn receive(
     let _ = binding
         .exchange(
             SaveRequest::Abort { key },
-            Instant::now() + CLEANUP_BUDGET,
+            std::time::Instant::now() + CLEANUP_BUDGET,
             &cleanup,
         )
         .await;
@@ -362,12 +374,13 @@ async fn publish(
                     sha256,
                     extent
                 },
-                deadline,
+                deadline.into_std(),
                 cancellation
             )
             .await,
         Ok(SaveReply::Sealed { .. })
     ) || cancellation.is_cancelled()
+        || Instant::now() >= deadline
     {
         return Ok(None);
     }
@@ -379,7 +392,7 @@ async fn publish(
                 sha256,
                 extent,
             },
-            deadline,
+            deadline.into_std(),
             cancellation,
         )
         .await?

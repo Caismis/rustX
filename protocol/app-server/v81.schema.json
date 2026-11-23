@@ -37561,6 +37561,16 @@
                 "settings": {
                   "$ref": "#/$defs/SessionPersistentState"
                 },
+                "input_references": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInputReferences"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "submission": {
                   "anyOf": [
                     {
@@ -41865,6 +41875,57 @@
         "reviews"
       ]
     },
+    "SessionInputReferences": {
+      "description": "Reference either input independently when creating a Session.",
+      "type": "object",
+      "properties": {
+        "session_config": {
+          "description": "Source of the initial Session config.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInputReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_resources": {
+          "description": "Source of the initial Session resource declarations.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInputReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionInputReference": {
+      "description": "An exact revision of existing Session-owned input for the same Workspace.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "Existing Session supplying the saved input.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "revision": {
+          "description": "Exact revision observed by the caller.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "revision"
+      ]
+    },
     "McpDraftTarget": {
       "description": "An opaque draft identity and monotonically increasing selection generation.\nNative connection identity supplies tab and endpoint isolation.",
       "type": "object",
@@ -43129,6 +43190,23 @@
             "content"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "reference"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionInputReference"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -43157,6 +43235,23 @@
             },
             "content": {
               "$ref": "#/$defs/SessionResources"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "reference"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionInputReference"
             }
           },
           "required": [

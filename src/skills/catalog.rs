@@ -97,6 +97,7 @@ impl SkillSnapshot {
     #[must_use]
     pub fn from_discovery(outcome: SkillDiscoveryOutcome) -> Self {
         let SkillDiscoveryOutcome {
+            observed_workspace: _,
             invalid: _,
             roots,
             packages,
@@ -364,6 +365,7 @@ mod tests {
         diagnostics: Vec<SkillDiagnostic>,
     ) -> SkillSnapshot {
         SkillSnapshot::from_discovery(SkillDiscoveryOutcome {
+            observed_workspace: std::collections::BTreeMap::new(),
             invalid: Vec::new(),
             roots: Vec::new(),
 

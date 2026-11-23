@@ -654,6 +654,8 @@ pub enum Method {
         dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         settings: SessionPersistentState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_references: Option<crate::local_runtime::session_inputs::SessionInputReferences>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         submission: Option<crate::local_runtime::mcp_drafts::McpDraftTarget>,
     },
     /// Start or replace this connection's silent, ephemeral Workspace draft.

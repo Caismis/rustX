@@ -71,7 +71,11 @@ impl SkillTree for Native {
     }
 }
 
+pub(crate) type ObservedSkillDirectories =
+    std::collections::BTreeMap<PathBuf, Option<std::collections::BTreeSet<std::ffi::OsString>>>;
+
 pub(super) struct Client<'a> {
+    observations: std::cell::RefCell<ObservedSkillDirectories>,
     endpoint: &'a LocalExecutionEndpoint,
     deadline: Instant,
     signal: &'a CancellationSignal,
@@ -83,10 +87,17 @@ impl<'a> Client<'a> {
         signal: &'a CancellationSignal,
     ) -> Self {
         Self {
+            observations: std::cell::RefCell::default(),
             endpoint,
             deadline: Instant::now() + Duration::from_secs(5),
             signal,
         }
+    }
+}
+
+impl Client<'_> {
+    pub(super) fn into_observations(self) -> ObservedSkillDirectories {
+        self.observations.into_inner()
     }
 }
 
@@ -114,6 +125,9 @@ impl SkillTree for Client<'_> {
     }
 
     fn children(&self, path: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
+        self.observations
+            .borrow_mut()
+            .insert(path.to_path_buf(), None);
         let mut children = Vec::new();
         let mut offset = 0;
         let mut revision = None;
@@ -175,7 +189,18 @@ impl SkillTree for Client<'_> {
         .map(|(bytes, _)| bytes)
     }
 
-    fn observe(&self, _path: &Path) {}
+    fn observe(&self, path: &Path) {
+        if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+            && parent.starts_with(self.endpoint.workspace())
+            && let Some(names) = self
+                .observations
+                .borrow_mut()
+                .entry(parent.to_path_buf())
+                .or_insert_with(|| Some(std::collections::BTreeSet::new()))
+        {
+            names.insert(name.to_owned());
+        }
+    }
 }
 
 struct ClientFile<'a> {

@@ -276,6 +276,7 @@ impl ForegroundInvocation<'_> {
             .subagent_context()
             .and_then(|context| context.native.as_ref())
             .map(|services| services.descendants.clone());
+        let ingress = tokio::time::Instant::now();
         let started = self.clock.now_millis();
         let policy = self.registration.resolve(self.policy);
         // At equal budgets the handoff owns the boundary. A later hard
@@ -295,7 +296,12 @@ impl ForegroundInvocation<'_> {
             liveness: idle.map(|_| sender),
         };
         let ancestor = context.cancellation.clone();
-        let (trigger, cancellation) = ancestor.child_execution();
+        let (trigger, mut cancellation) = ancestor.child_execution();
+        if let Some(deadline) = hard_deadline {
+            cancellation = cancellation.with_hard_deadline(
+                ingress + std::time::Duration::from_millis(deadline.saturating_sub(started)),
+            );
+        }
         let context = context.reborrow(cancellation, &progress);
         let handle = crate::tools::executor::start_tool_execution(executor, invocation, context);
         let completion = handle.completion;

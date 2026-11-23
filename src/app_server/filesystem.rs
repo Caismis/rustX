@@ -7,15 +7,12 @@ use rustx_execution_protocol::watch::WatchId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, ErrorKind};
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 const POLL_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
-static WATCH_SERIAL: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -139,14 +136,7 @@ impl Watches {
             .file_observers()
             .try_acquire_owned()
             .map_err(|_| domain(ErrorData::EnvironmentCapacityOrConflict))?;
-        let id = WATCH_SERIAL
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                next.checked_add(1)
-            })
-            .ok()
-            .and_then(NonZeroU64::new)
-            .map(WatchId::new)
-            .ok_or_else(|| domain(ErrorData::EnvironmentCapacityOrConflict))?;
+        let id = WatchId::file().ok_or_else(|| domain(ErrorData::EnvironmentCapacityOrConflict))?;
         let publication = Publication::new();
         let (settled, observation) = watch::channel(None);
         {

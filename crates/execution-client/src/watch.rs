@@ -5,8 +5,8 @@ use crate::{read_error, relative_entry};
 use rustx_confined_fs::{FileMetadata, PackageDirectory};
 use rustx_execution_protocol::ReadError;
 use rustx_execution_protocol::watch::{
-    MAX_WATCH_HINT_BYTES, MAX_WATCH_HINT_PATHS, MAX_WATCHES, WatchChange, WatchId, WatchReply,
-    WatchRequest,
+    MAX_CONFIGURATION_WATCHES, MAX_WATCH_HINT_BYTES, MAX_WATCH_HINT_PATHS, MAX_WATCHES,
+    WatchChange, WatchId, WatchReply, WatchRequest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -175,10 +175,18 @@ impl Watches {
         if state.closed {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
-        if state.entries.len() + state.stopping.len() >= MAX_WATCHES
-            || state.entries.contains_key(&id)
-            || state.stopping.contains_key(&id)
-        {
+        let used = state
+            .entries
+            .keys()
+            .chain(state.stopping.keys())
+            .filter(|key| key.is_configuration() == id.is_configuration())
+            .count();
+        let limit = if id.is_configuration() {
+            MAX_CONFIGURATION_WATCHES
+        } else {
+            MAX_WATCHES
+        };
+        if used >= limit || state.entries.contains_key(&id) || state.stopping.contains_key(&id) {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
 

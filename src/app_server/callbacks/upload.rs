@@ -300,6 +300,15 @@ impl Receiving {
         now: Instant,
         permit: OwnedSemaphorePermit,
     ) -> Result<Self, HostUploadRefusal> {
+        let cutoff = match &pending.validity {
+            Some(Validity::Tool(cancellation)) => cancellation.hard_deadline(),
+            _ => None,
+        };
+        let total_deadline = now + TOTAL_BUDGET;
+        let total_deadline = cutoff.map_or(total_deadline, |cutoff| cutoff.min(total_deadline));
+        if total_deadline <= now {
+            return Err(HostUploadRefusal::Expired);
+        }
         let address = &begin.candidate;
         // The caller has matched all broker-side identity fields. Only
         // UploadId is selected at Begin by the authenticated Host.
@@ -341,7 +350,7 @@ impl Receiving {
             preview,
             save,
             utf8: IncrementalUtf8Decoder::default(),
-            total_deadline: now + TOTAL_BUDGET,
+            total_deadline,
             idle_deadline: now + IDLE_BUDGET,
             permit,
         })

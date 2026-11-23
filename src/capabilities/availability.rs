@@ -27,8 +27,9 @@ pub enum CapabilitySourceState {
     /// Bootstrap/prospective source whose first preparation has not completed.
     /// This does not describe an initializer that is already running.
     Unprepared,
-    /// The source initialized; its capabilities are part of the committed
-    /// executable set.
+    /// Validated declarations are part of the committed executable set.
+    /// An MCP connection may still need to establish a live transport and
+    /// verify those declarations before a call.
     Ready,
     /// The source failed to initialize (or failed a later refresh); it
     /// contributes nothing to the committed executable set. `reason` is a

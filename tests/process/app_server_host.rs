@@ -63,7 +63,7 @@ async fn host_effect_is_unknown_after_process_death_and_is_never_automatically_r
         let mut client=Peer::connect(&endpoint).await;
         let definition=HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Read application record".into(),permissions: None,
             input_schema:serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false})};
-        let MethodResult::SessionTransition {thread,session,..}=client.rpc(Method::SessionCreate {settings:SessionPersistentState {session_config: None,session_resources: None,cwd:workspace,model:None},submission:None,dynamic_tools:vec![definition.clone()]}).await else {panic!("Thread")};
+        let MethodResult::SessionTransition {thread,session,..}=client.rpc(Method::SessionCreate {input_references: None,settings:SessionPersistentState {session_config: None,session_resources: None,cwd:workspace,model:None},submission:None,dynamic_tools:vec![definition.clone()]}).await else {panic!("Thread")};
         client.rpc(Method::SessionName {session_id:session.id.clone(),name:"Host crash recovery".into()}).await;
         let target=client.follow(thread.id.clone()).await;
         client.rpc(Method::TurnStart {target,input_id:"crash-input".into(),content:vec![UserInputBlock::Text(TextBlock {text:"crash-host".into()})]}).await;

@@ -3388,6 +3388,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             let MethodResult::SessionTransition { session, .. } = result(
                 &client,
                 Method::SessionCreate {
+                    input_references: None,
                     dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
@@ -3725,7 +3726,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             initialize_client(&client).await;
             // Exercise writable catalog management while execution stays
             // bound to the exact Session reserved before this Client started.
-            let MethodResult::SessionTransition { session: other, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            let MethodResult::SessionTransition { session: other, .. } = result(&client, Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
             }).await else { panic!("created") };
             let session = user.sessions[0].clone();
@@ -3749,7 +3750,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         for (index, count) in [(0, 1), (1, 2)] {
             let mut id = targets[index].session_id.clone();
             for _ in 0..count {
-                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(users[index].1.root.path().join("b")))
                 }).await else { panic!("private Session") };
                 id = session.id;

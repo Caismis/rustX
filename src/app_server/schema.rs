@@ -118,7 +118,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            call: Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     session_config: None,
                     session_resources: None,
@@ -132,7 +132,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            call: Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     session_config: None,
                     session_resources: None,
@@ -175,6 +175,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("submit-workspace-draft".into()),
             call: Method::SessionCreate {
+                input_references: None,
                 dynamic_tools: Vec::new(),
                 settings: crate::local_runtime::session::SessionPersistentState { session_config: None, session_resources: None, cwd: "/workspace".into(), model: None },
                 submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),

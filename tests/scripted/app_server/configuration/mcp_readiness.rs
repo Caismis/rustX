@@ -808,6 +808,13 @@ async fn submission_clock_survives_unload_handoff_and_competing_attach_claims() 
     let session = create(&fixture).await;
     fixture.sessions.push(session.clone());
     fixture.manager.load(&session.id, None).await.unwrap();
+    // This fixture exercises a cold discovery clock after unload.
+    fixture
+        .manager
+        .configuration_runtime(&session.id)
+        .unwrap()
+        .capability()
+        .forget_cached_declarations();
     let id = session.active_conversation_id.clone();
     let probe = fixture.manager.probe(&id);
     probe.before_shutdown.arm();
@@ -2242,6 +2249,12 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
         std::fs::write(config, document).unwrap();
         let session = f.sessions[0].clone();
         f.load(0).await.unwrap().unwrap();
+        // This fixture exercises a cold discovery clock after unload.
+        f.manager
+            .configuration_runtime(&session.id)
+            .unwrap()
+            .capability()
+            .forget_cached_declarations();
         let mutation = if workflow {
             ScheduleMutation::CreateWorkflow {
                 title: "Cold workflow".into(),

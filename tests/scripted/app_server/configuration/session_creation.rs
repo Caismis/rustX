@@ -918,6 +918,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                     &creator,
                     1,
                     Method::SessionCreate {
+                        input_references: None,
                         dynamic_tools: Vec::new(),
                         submission: submitted.then(|| {
                             crate::local_runtime::mcp_drafts::McpDraftTarget {
@@ -1537,7 +1538,8 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
     use crate::app_server::connection::AppServerConnection;
     use crate::app_server::protocol::{ErrorData, Method, MethodResult};
     use crate::local_runtime::session_inputs::{
-        SessionConfigContent, SessionInputChange, SessionResources,
+        SessionConfigContent, SessionInputChange, SessionInputReference, SessionInputReferences,
+        SessionResources,
     };
     use crate::runtime::subagent::SubagentName;
     use crate::runtime::workflow::WorkflowId;
@@ -1634,10 +1636,35 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
             .unwrap().unwrap();
         assert_eq!(catalog_on_disk.settings_revision(&id).unwrap(), second);
         assert_eq!(catalog_on_disk.lineage(&id, None).unwrap().1, settings);
+        let source = SessionInputReference { session_id: id.clone(), revision: second };
+        let MethodResult::SessionTransition { session: reused, .. } = call(
+            &connection, 36, Method::SessionCreate {
+                settings: crate::local_runtime::session::SessionPersistentState {
+                    cwd: workspace.clone(), model: None, session_config: None, session_resources: None,
+                },
+                input_references: Some(SessionInputReferences {
+                    session_config: Some(source.clone()), session_resources: Some(source.clone()),
+                }),
+                submission: None,
+                dynamic_tools: Vec::new(),
+            },
+        ).await else { panic!("created from exact saved Session inputs"); };
+        let (reused_revision, snapshot) = fixture.manager.sessions.read_settings(&reused.id).await.unwrap();
+        assert_eq!(snapshot.session_config, settings.session_config);
+        assert_eq!(snapshot.session_resources, settings.session_resources);
         let MethodResult::SessionInputsWritten { revision: cleared } = call(
             &connection, 35, request(second, Some(SessionInputChange::Clear), Some(SessionInputChange::Clear)),
         ).await else { panic!("cleared both fields"); };
         assert_eq!(cleared, second + 1);
+        let stale_ref = rejected(37, Method::SessionInputsWrite {
+            session_id: reused.id.clone(), expected_revision: reused_revision,
+            session_config: Some(SessionInputChange::Reference(source)),
+            session_resources: Some(SessionInputChange::Clear),
+        }).await;
+        assert_eq!(stale_ref, ErrorData::SessionInputSourceChanged);
+        let (unchanged_revision, unchanged_snapshot) = fixture.manager.sessions.read_settings(&reused.id).await.unwrap();
+        assert_eq!(unchanged_revision, reused_revision);
+        assert_eq!(unchanged_snapshot, snapshot);
         let _ = applied(&fixture, 0).await;
         assert!(ready());
         assert_eq!(description(), "Workspace review");
@@ -1645,4 +1672,81 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
         assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
     })).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registration() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::rename(workspace, &physical).unwrap();
+        let instructions = physical.join("AGENTS.md");
+        std::fs::write(&instructions, "before watch").unwrap();
+        let package = physical.join(".agents/skills/watched");
+        std::fs::create_dir_all(&package).unwrap();
+        let marker = package.join("SKILL.md");
+        let write_marker = |description| {
+            std::fs::write(
+                &marker,
+                format!(
+                    "---\nname: watched\ndescription: {description}\n---\nBody remains on demand\n"
+                ),
+            )
+            .unwrap();
+        };
+        write_marker("Before watch");
+        let launcher = workspace_overlay_launcher(mount.path());
+        assert!(!workspace.exists());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = fixture.sessions[0].id.clone();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        assert_eq!(
+            runtime.runtime_resources().capability().skills().packages()[0].description(),
+            "Before watch"
+        );
+        let (registered, observed) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                registered.send(()).unwrap();
+            },
+        );
+        let manager = fixture.manager.clone();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let worker_stop = stop.clone();
+        let watcher = tokio::spawn(async move { manager.run_source_watch(worker_stop).await });
+        observed.await.unwrap();
+        let mut changed = fixture.manager.configuration_changes();
+        std::fs::write(&instructions, "after watch").unwrap();
+        write_marker("After watch");
+        loop {
+            let resources = runtime.runtime_resources();
+            if resources
+                .capability()
+                .skills()
+                .packages()
+                .iter()
+                .any(|skill| skill.description() == "After watch")
+                && resources
+                    .project_context_files()
+                    .iter()
+                    .any(|file| file.content == "after watch")
+            {
+                break;
+            }
+            changed.changed().await.unwrap();
+        }
+        assert!(!workspace.exists());
+        stop.cancel();
+        watcher.await.unwrap().unwrap();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
 }

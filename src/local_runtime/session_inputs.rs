@@ -58,6 +58,27 @@ impl SessionResources {
     }
 }
 
+/// An exact revision of existing Session-owned input for the same Workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct SessionInputReference {
+    /// Existing Session supplying the saved input.
+    pub session_id: crate::runtime::identity::SessionId,
+    /// Exact revision observed by the caller.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub revision: u64,
+}
+
+/// Reference either input independently when creating a Session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct SessionInputReferences {
+    /// Source of the initial Session config.
+    pub session_config: Option<SessionInputReference>,
+    /// Source of the initial Session resource declarations.
+    pub session_resources: Option<SessionInputReference>,
+}
+
 /// An omitted field makes no edit. Clearing reveals the current lower layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(
@@ -69,15 +90,7 @@ impl SessionResources {
 pub enum SessionInputChange<T> {
     Clear,
     Replace(T),
-}
-
-impl<T> SessionInputChange<T> {
-    pub(super) fn apply(self, target: &mut Option<T>) {
-        *target = match self {
-            Self::Clear => None,
-            Self::Replace(content) => Some(content),
-        };
-    }
+    Reference(SessionInputReference),
 }
 
 pub(super) fn check_config_bounds(content: &str) -> Result<(), String> {

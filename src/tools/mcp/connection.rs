@@ -194,6 +194,7 @@ struct ConnectionState {
 /// The stable connection owner of one configured MCP server.
 pub(crate) struct McpConnection {
     catalog: catalog::ConnectionCatalog,
+    declaration_key: std::sync::OnceLock<super::declaration_cache::DeclarationKey>,
     #[cfg(test)]
     admission_pause: Mutex<Option<(bool, Arc<super::test_sync::ConnectOwnershipPause>)>>,
     #[cfg(test)]
@@ -225,8 +226,7 @@ impl std::fmt::Debug for McpConnection {
 }
 
 impl McpConnection {
-    /// Test construction seam for a connection before its first transport.
-    #[cfg(all(test, feature = "mcp-fixture"))]
+    /// A new owner whose first use will establish and validate its transport.
     pub(crate) fn lazy(
         server_id: McpServerId,
         binding: McpServerBinding,
@@ -244,6 +244,27 @@ impl McpConnection {
             }),
         )
     }
+    pub(crate) fn configure_declaration_cache(
+        &self,
+        key: super::declaration_cache::DeclarationKey,
+    ) {
+        let Some(authority) = &self.reconnect else {
+            return;
+        };
+        authority
+            .invalidation
+            .lock()
+            .set_declaration_domain(&self.server_id, key.domain);
+        let _ = self.declaration_key.set(key);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn forget_cached_declarations(&self) {
+        if let Some(key) = self.declaration_key.get() {
+            super::declaration_cache::invalidate(key.domain);
+        }
+    }
+
     /// A connection that owns exactly one transport and never reconnects.
     ///
     /// This is the shape of the public adapter entry point: the caller
@@ -280,6 +301,7 @@ impl McpConnection {
     fn empty(server_id: McpServerId, reconnect: Option<McpReconnectAuthority>) -> Arc<Self> {
         Arc::new(Self {
             catalog: catalog::ConnectionCatalog::default(),
+            declaration_key: std::sync::OnceLock::new(),
             #[cfg(test)]
             admission_pause: Mutex::new(None),
             #[cfg(test)]

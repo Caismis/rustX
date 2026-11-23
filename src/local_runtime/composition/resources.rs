@@ -207,8 +207,27 @@ pub(in crate::local_runtime) fn admitted_source_demand(
                 .filter_map(|selector| selector.source().cloned()),
         );
     }
-    sources.extend(workflow_source_demand(config, agents, workflows));
-    crate::capabilities::source::ToolSourceDemand::new(sources, python)
+    let mut live_mcp = workflow_source_demand(config, agents, workflows);
+    // An explicit name is a required selection. Startup must validate it
+    // against the actual peer, including on explicit initialization retry.
+    live_mcp.extend(
+        config
+            .agent
+            .tools
+            .sources
+            .iter()
+            .filter_map(|(source, selection)| {
+                matches!(
+                    selection,
+                    crate::capabilities::selection::SourceToolSelection::Exact(_)
+                )
+                .then_some(source.clone())
+            }),
+    );
+    sources.extend(live_mcp.iter().cloned());
+    let mut demand = crate::capabilities::source::ToolSourceDemand::new(sources, python);
+    demand.live_mcp = live_mcp;
+    demand
 }
 
 /// Only admitted profiles contribute to the selected Skill comparison closure.

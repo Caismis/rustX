@@ -722,6 +722,7 @@ export type Request1 =
       params: {
         dynamicTools?: HostToolDefinition[];
         settings: SessionPersistentState;
+        input_references?: SessionInputReferences | null;
         submission?: McpDraftTarget | null;
       };
     }
@@ -2741,6 +2742,10 @@ export type SessionInputChange =
   | {
       operation: 'replace';
       content: SessionConfigContent;
+    }
+  | {
+      operation: 'reference';
+      content: SessionInputReference;
     };
 /**
  * An omitted field makes no edit. Clearing reveals the current lower layer.
@@ -2755,6 +2760,10 @@ export type SessionInputChange2 =
   | {
       operation: 'replace';
       content: SessionResources;
+    }
+  | {
+      operation: 'reference';
+      content: SessionInputReference;
     };
 /**
  * The complete upload envelope: JSON-RPC version, correlation identifier, and
@@ -10123,6 +10132,38 @@ export interface SessionResources {
   mcp?: {
     [k: string]: string;
   };
+}
+/**
+ * Reference either input independently when creating a Session.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputReferences".
+ */
+export interface SessionInputReferences {
+  /**
+   * Source of the initial Session config.
+   */
+  session_config?: SessionInputReference | null;
+  /**
+   * Source of the initial Session resource declarations.
+   */
+  session_resources?: SessionInputReference | null;
+}
+/**
+ * An exact revision of existing Session-owned input for the same Workspace.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputReference".
+ */
+export interface SessionInputReference {
+  /**
+   * Existing Session supplying the saved input.
+   */
+  session_id: string;
+  /**
+   * Exact revision observed by the caller.
+   */
+  revision: number;
 }
 /**
  * An opaque draft identity and monotonically increasing selection generation.

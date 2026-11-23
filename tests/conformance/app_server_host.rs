@@ -522,7 +522,7 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let ServerFixture { root,workspace,sessions,manager,host,endpoint,shutdown,server }=ServerFixture::start(&provider).await;
             let mut first=Peer::connect(&endpoint).await; let mut second=Peer::connect(&endpoint).await; let mut generic=Peer::connect(&endpoint).await;
             let definitions=vec![definition("business"),definition("inventory")];
-            let MethodResult::SessionTransition {thread,session,..}=first.rpc(Method::SessionCreate {dynamic_tools:definitions.clone(),submission:None,settings:SessionPersistentState {session_config: None,session_resources: None,cwd:workspace.clone(),model:None}}).await else {panic!("Thread start")};
+            let MethodResult::SessionTransition {thread,session,..}=first.rpc(Method::SessionCreate {input_references: None,dynamic_tools:definitions.clone(),submission:None,settings:SessionPersistentState {session_config: None,session_resources: None,cwd:workspace.clone(),model:None}}).await else {panic!("Thread start")};
             sessions.rename_session(&session.id,"Host conformance").await.unwrap();
             assert!(manager.execution_endpoint(&session.id).is_err());
             let scratch = root.path().join("client-scratch");
@@ -640,6 +640,7 @@ async fn shared_start_steer_sparse_queue_stale_controls_and_disconnect_use_one_n
             thread, session, ..
         } = first
             .rpc(Method::SessionCreate {
+                input_references: None,
                 dynamic_tools: Vec::new(),
                 submission: None,
                 settings: SessionPersistentState {

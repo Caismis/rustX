@@ -1054,8 +1054,9 @@ The broker allows 32 live receive or handoff buffers, four active candidates
 per Host connection and eight per conversation and per Session. Each pending callback has
 up to eight recipient slots, including retired candidates. A new UploadId
 cannot reopen a slot under the same subscription. Admission stops at the
-first capacity limit. The fixed budget is 60 seconds from Begin and the idle
-budget is 10 seconds from the last accepted new chunk. A frame for an expired
+first capacity limit. The receiver deadline is the earlier of 60 seconds
+from Begin and the invocation's fixed hard deadline. The idle budget is
+10 seconds from the last accepted new chunk. A frame for an expired
 candidate retires it. New Begin admission reaps expired candidates before
 checking active capacity. Detach, cancellation and callback resolution
 release their receiver state. The native invocation continues to own its own
@@ -1067,8 +1068,10 @@ the unchanged wire items.
 
 Above the preview threshold the Server selects the Session's live
 `ManagedOutput` binding once. Four queued fragments per writer and a
-process-wide limit of sixteen writers bound the save transport. The five-second
-deadline covers the prefix, continuation chunks, seal and publish. A full
+process-wide limit of sixteen writers bound the save transport. The save
+deadline is the earlier of five seconds from binding selection and the
+invocation hard deadline. It covers the prefix, continuation chunks, seal and
+publish. A full
 writer window abandons saving while the Host continues to send and verify
 its result. The native cancellation signal can cut both timelines earlier.
 Only the winner requests publication, and a confirmed reply allows Read and
@@ -1276,7 +1279,11 @@ envelope.
   Clearing a field reveals its lower sources. Activation follows the safe
   configuration application boundary. Session-authored Workflows require
   an explicit Session grant even when a lower definition had permission.
-  The settings read projection discloses presence only.
+  The settings read projection discloses presence only. Each field can
+  reference the saved input of an existing Session at its exact settings
+  revision in the same Workspace. Creation and editing resolve those
+  references as part of candidate capture, then validate the copied input
+  against the target Session.
 
 - Fresh App Server configuration capture for a reserved Session reads
   `rustx.toml` and Workspace `AGENTS.md` through the authenticated
@@ -1298,9 +1305,12 @@ envelope.
   definition changes during capture. Cold loading and explicit Workspace
   reconciliation can succeed with no corresponding directory on the Server.
   The Server still owns its User sources and the path-keyed Session-creation
-  catalog. Automatic Workspace source watching and native Managed Python
-  source discovery remain separate open work in [#578](https://github.com/Caismis/rustX/issues/578)
-  and [#577](https://github.com/Caismis/rustX/issues/577).
+  catalog. Bound Workspace observation uses Client descriptor watches
+  with a separate 128-slot budget. The observed paths come from the
+  configuration layout and Skill discovery. Coalesced hints and coverage
+  loss cause a fresh capture fenced by the endpoint and application ticket.
+  Native Managed Python source discovery and retained reconnection still
+  require migration under [#577](https://github.com/Caismis/rustX/issues/577).
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
   search and document work and returns the verified projection. Artifact

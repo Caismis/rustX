@@ -291,6 +291,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
             &connection,
             100,
             Method::SessionCreate {
+                input_references: None,
                 dynamic_tools: Vec::new(),
                 submission: None,
                 settings,

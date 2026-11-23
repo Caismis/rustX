@@ -249,6 +249,8 @@ impl SkillDiscoveryConfig {
 /// or shadowed on the way there.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkillDiscoveryOutcome {
+    /// Workspace directories and named facts read by the admitted Client.
+    pub(crate) observed_workspace: super::tree::ObservedSkillDirectories,
     /// Winning malformed identities, retained for source inventory and shadowing.
     pub invalid: Vec<SkillProvenance>,
     /// Resolved collection roots, including roots with no packages.
@@ -359,7 +361,9 @@ impl SkillDiscovery {
         endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
     ) -> io::Result<SkillDiscoveryOutcome> {
         let client = Client::new(endpoint, &self.cancellation);
-        self.discover_with(Some(&client))
+        let mut outcome = self.discover_with(Some(&client))?;
+        outcome.observed_workspace = client.into_observations();
+        Ok(outcome)
     }
 
     fn discover_with(&self, client: Option<&Client<'_>>) -> io::Result<SkillDiscoveryOutcome> {
@@ -469,6 +473,7 @@ fn merge_candidates(
     diagnostics.sort();
     diagnostics.dedup();
     SkillDiscoveryOutcome {
+        observed_workspace: std::collections::BTreeMap::new(),
         invalid,
         roots: Vec::new(),
         packages,

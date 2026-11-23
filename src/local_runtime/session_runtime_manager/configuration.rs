@@ -772,6 +772,56 @@ impl SessionRuntimeManager {
         bound
     }
 
+    /// A watch hint belongs to the exact endpoint that observed it. A
+    /// replacement cannot be captured or published through a retired owner.
+    pub(super) fn observe_bound_source(
+        &self,
+        session: &SessionId,
+        endpoint: &Arc<super::LocalExecutionEndpoint>,
+    ) {
+        let mut application = self.applications.lock();
+        if !self
+            .execution
+            .configuration_endpoint(session)
+            .ok()
+            .flatten()
+            .is_some_and(|current| Arc::ptr_eq(endpoint, &current) && current.control().is_some())
+        {
+            return;
+        }
+        let Some((mut input, authored_workspace)) = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)
+            .map(|binding| {
+                (
+                    binding.input.clone(),
+                    binding.workspace_resources.identity(),
+                )
+            })
+        else {
+            return;
+        };
+        {
+            let catalog = self.sessions.catalog.blocking_lock();
+            let Ok((_, settings)) = catalog.lineage(session, None) else {
+                return;
+            };
+            input.authoring = settings.input().authoring;
+        }
+        let ticket = application.begin_bound_capture(session.clone());
+        drop(application);
+        self.capture_bound_consumers(vec![BoundCapture {
+            session: session.clone(),
+            input,
+            endpoint: endpoint.clone(),
+            ticket,
+            authored_workspace,
+        }]);
+    }
+
     fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) {
         for BoundCapture {
             session,
@@ -810,6 +860,11 @@ impl SessionRuntimeManager {
                 .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
             {
                 continue;
+            }
+            if capture.is_ok() && endpoint.control().is_none() {
+                capture = Err(
+                    "Workspace configuration unavailable: the Execution Client disconnected".into(),
+                );
             }
             if let Ok(capture) = &mut capture
                 && let Ok(context) = &mut capture.context

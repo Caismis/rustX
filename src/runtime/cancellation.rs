@@ -170,6 +170,8 @@ pub struct ExecutionCancellation {
     signal: CancellationSignal,
     cause: Arc<dyn CancellationCause>,
     native_cause: Option<Arc<NativeCancellationAuthority>>,
+    /// Fixed hard deadline captured at the native execution frontier.
+    deadline: Option<tokio::time::Instant>,
     /// A process-local failure marker for semantic control paths that can no
     /// longer safely release the owning execution. It is deliberately
     /// separate from cancellation: a broken interaction route must not be
@@ -220,6 +222,7 @@ impl ExecutionCancellation {
             signal,
             cause,
             native_cause: None,
+            deadline: None,
             interaction_failure: InteractionFailureSignal::default(),
         }
     }
@@ -243,6 +246,7 @@ impl ExecutionCancellation {
             signal,
             cause: Arc::new(DetachedCause(reason)),
             native_cause: None,
+            deadline: None,
             interaction_failure: InteractionFailureSignal::default(),
         }
     }
@@ -321,6 +325,18 @@ impl ExecutionCancellation {
         self.signal.child()
     }
 
+    pub(crate) fn hard_deadline(&self) -> Option<tokio::time::Instant> {
+        self.deadline
+    }
+
+    pub(crate) fn with_hard_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        self.deadline = Some(
+            self.deadline
+                .map_or(deadline, |parent| parent.min(deadline)),
+        );
+        self
+    }
+
     /// Derives one per-execution child view together with its owner-side
     /// trigger (Issue #204).
     ///
@@ -340,6 +356,7 @@ impl ExecutionCancellation {
             signal: signal.clone(),
             cause: Arc::clone(&self.cause),
             native_cause: Some(authority.clone()),
+            deadline: self.deadline,
             interaction_failure: self.interaction_failure.clone(),
         };
         (ExecutionCancellationTrigger { signal, authority }, view)

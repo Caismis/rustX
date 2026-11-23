@@ -1005,6 +1005,57 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn upload_begin_cannot_renew_the_original_invocation_deadline() {
+        use crate::app_server::host_upload::{
+            HostUploadBeginParams, HostUploadItem, HostUploadMethod, HostUploadRefusal,
+        };
+        use crate::runtime::{
+            CancellationSignal, ExecutionCancellation, types::CancellationReason,
+        };
+        let callbacks = Arc::new(Callbacks::default());
+        let conversation = ConversationId::generate();
+        let host = callbacks.connect();
+        callbacks.subscribe_test(&host.id, &conversation);
+        let cutoff = tokio::time::Instant::now() + Duration::from_secs(4);
+        let cancellation = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        )
+        .with_hard_deadline(cutoff);
+        let mut ticket = callbacks
+            .request_scoped(
+                conversation.clone(),
+                method(conversation),
+                Some(Validity::Tool(cancellation.clone())),
+                None,
+            )
+            .unwrap();
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let begin = HostUploadMethod::Begin(HostUploadBeginParams {
+            candidate: upload_candidate(&callbacks, &host.id, &ticket.id),
+            success: true,
+            items: vec![HostUploadItem {
+                type_tag: 1,
+                length: "1".to_owned().try_into().unwrap(),
+            }],
+        });
+        assert_eq!(callbacks.upload(&host.id, begin.clone()), Ok(false));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(tokio::time::Instant::now(), cutoff);
+        // Expiry must be checked even before the execution owner has woken
+        // to request cancellation.
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(
+            callbacks.upload(&host.id, begin),
+            Err(HostUploadRefusal::Expired)
+        );
+        assert!(matches!(
+            ticket.reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
     #[tokio::test]
     async fn saturated_host_can_abort_one_candidate_and_another_host_can_still_claim() {
         use crate::app_server::host_upload::{

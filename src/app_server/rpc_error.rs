@@ -97,6 +97,19 @@ pub(super) fn model_selection_error(
     }
 }
 
+pub(super) fn session_input_error(
+    error: crate::local_runtime::session_runtime_manager::SessionInputError,
+) -> RpcError {
+    use crate::local_runtime::session_runtime_manager::SessionInputError;
+    match error {
+        SessionInputError::Invalid => domain(ErrorData::SessionInputInvalid),
+        SessionInputError::SourceChanged => domain(ErrorData::SessionInputSourceChanged),
+        SessionInputError::ExecutionUnavailable => domain(ErrorData::ExecutionUnavailable),
+        SessionInputError::Unconfirmed => domain(ErrorData::OutcomeUnknown),
+        SessionInputError::Persistence(error) => session_error(error),
+    }
+}
+
 pub(super) fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError {
     use crate::local_runtime::session::SessionError;
     domain(match error {

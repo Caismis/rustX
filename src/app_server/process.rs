@@ -462,8 +462,8 @@ async fn run(options: Request) -> Result<(), String> {
     let reaper_stop = CancellationToken::new();
     let stop = reaper_stop.clone();
     let reaper = tokio::spawn(async move { reaper_host.manager().run_idle_reaper(stop).await });
-    // External edits of supported sources enter native application without a
-    // client; the watcher stops with the reaper at drain.
+    // User and admitted Workspace source hints enter native application.
+    // Both observation owners stop with the reaper at drain.
     let watch_manager = host.manager().clone();
     let watch_stop = reaper_stop.clone();
     let source_watch = tokio::spawn(async move {

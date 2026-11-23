@@ -515,6 +515,7 @@ async fn session_creation_uses_bounded_metadata_while_cold_attachments_remain_ow
             })
             .collect::<Vec<_>>();
         let create = || Method::SessionCreate {
+            input_references: None,
             dynamic_tools: Vec::new(),
             submission: None,
             settings: crate::local_runtime::session::SessionPersistentState {

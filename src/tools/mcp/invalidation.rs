@@ -116,6 +116,7 @@ pub struct McpInvalidationState {
 #[derive(Default)]
 struct InvalidationEntries {
     epochs: BTreeMap<McpServerId, u64>,
+    declaration_domains: BTreeMap<McpServerId, super::declaration_cache::DeclarationDomain>,
 }
 
 impl McpInvalidationState {
@@ -186,12 +187,25 @@ impl McpInvalidationGuard<'_> {
         self.guard.epochs.get(server_id).copied().unwrap_or(0)
     }
 
+    pub(super) fn set_declaration_domain(
+        &mut self,
+        server: &McpServerId,
+        domain: super::declaration_cache::DeclarationDomain,
+    ) {
+        self.guard
+            .declaration_domains
+            .insert(server.clone(), domain);
+    }
+
     /// Advances one server's invalidation epoch — the exact mutation the
     /// `tools/list_changed` notification performs.
     #[doc(hidden)]
     pub fn advance(&mut self, server_id: &McpServerId) {
         let current = self.epoch(server_id);
         self.guard.epochs.insert(server_id.clone(), current + 1);
+        if let Some(domain) = self.guard.declaration_domains.get(server_id) {
+            super::declaration_cache::invalidate(*domain);
+        }
     }
 }
 

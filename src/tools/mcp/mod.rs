@@ -135,6 +135,7 @@ pub mod fixture;
 pub mod catalog;
 mod connect;
 mod connection;
+pub(crate) mod declaration_cache;
 mod diagnostics;
 mod dispatch;
 mod executor;

@@ -91,3 +91,6 @@ cargo test -p rustx --all-features --locked --lib \
 cargo test -p rustx --all-features --locked --lib \
     bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_lost \
     -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    client_source_watch_reloads_guidance_and_skill_metadata_after_registration \
+    -- --ignored --nocapture

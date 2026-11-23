@@ -1452,3 +1452,33 @@ async fn committed_creation_durability_warning_keeps_the_same_preparation_and_se
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn first_model_request_can_use_cached_declaration_without_live_mcp_readiness() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture
+            .manager
+            .unload(&session.active_conversation_id)
+            .await
+            .unwrap();
+
+        mcp.control.gate.arm();
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+        mcp.control.gate.release();
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}

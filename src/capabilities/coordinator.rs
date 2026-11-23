@@ -507,9 +507,27 @@ impl PreparedCapabilityCandidate {
         if workflows.is_empty() {
             return Ok(());
         }
+        let mut workflow_availability = self.availability.clone();
+        for (id, connection) in self
+            .mcp_runtimes
+            .iter()
+            .map(|generation| (generation.server_id(), generation.connection()))
+            .chain(
+                self.retained_mcp
+                    .iter()
+                    .map(|(id, binding)| (id, binding.connection())),
+            )
+        {
+            if connection.catalog_snapshot().is_none() {
+                workflow_availability.insert(
+                    ToolSourceId::Mcp(id.clone()),
+                    CapabilitySourceState::Unprepared,
+                );
+            }
+        }
         workflows.admit(
             &self.available_tools,
-            &self.availability,
+            &workflow_availability,
             &self.skills,
             agents,
             &self.effective_mcp_servers,
@@ -614,6 +632,14 @@ impl CapabilityCoordinator {
     #[must_use]
     pub(crate) fn extension_tool_plane_shape(&self) -> crate::extensions::ExtensionToolPlaneShape {
         self.inner.extension_tools.shape()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn forget_cached_declarations(&self) {
+        let state = self.inner.state.lock().expect("capability state");
+        for generation in &state.mcp_runtimes {
+            generation.connection().forget_cached_declarations();
+        }
     }
 
     /// Creates the coordinator with an initial empty capability set at
@@ -1023,6 +1049,7 @@ impl CapabilityCoordinator {
             .expect("published Tool environment was validated"),
         };
         let discovered = crate::skills::SkillDiscoveryOutcome {
+            observed_workspace: std::collections::BTreeMap::new(),
             invalid: Vec::new(),
             roots: skills.roots().to_vec(),
             packages: skills
@@ -1258,7 +1285,12 @@ impl CapabilityCoordinator {
                     (binding, outcome)
                 },
             ),
-            self.prepare_mcp_bindings(configured_sources, cancellation, deadline),
+            self.prepare_mcp_bindings(
+                configured_sources,
+                cancellation,
+                deadline,
+                startup.as_ref().map(|_| &inputs.source_demand.live_mcp),
+            ),
         );
         let mut prepared_mcp: BTreeMap<_, _> = configured_outcomes.into_iter().collect();
         let mut effective_mcp_servers = inputs.mcp_servers.clone();
@@ -1566,6 +1598,7 @@ impl CapabilityCoordinator {
         bindings: Vec<(McpServerId, crate::tools::mcp::McpServerBinding)>,
         cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
         deadline: Option<&startup::McpStartupDeadline>,
+        startup_live_mcp: Option<&std::collections::BTreeSet<ToolSourceId>>,
     ) -> Vec<(McpServerId, McpPreparationOutcome)> {
         let initial = self.inner.initial_mcp.lock().expect("initial MCP").take();
         if let Some(initial) = initial {
@@ -1579,11 +1612,34 @@ impl CapabilityCoordinator {
             |(server_id, binding)| {
                 let cancellation = &cancellation;
                 async move {
-                    let outcome = self
-                        .inner
-                        .mcp_owner
-                        .prepare_mcp_server(&server_id, &binding, Some(cancellation))
-                        .await;
+                    let owner = &self.inner.mcp_owner;
+                    let key = startup_live_mcp.and_then(|required| {
+                        let key = crate::tools::mcp::declaration_cache::DeclarationKey::for_source(
+                            &self.inner.python_store_root,
+                            &server_id,
+                            &binding,
+                            &owner.workspace,
+                        )?;
+                        Some((
+                            key,
+                            required.contains(&ToolSourceId::Mcp(server_id.clone())),
+                        ))
+                    });
+                    let outcome = if let Some((key, require_live)) = key {
+                        owner
+                            .prepare_startup_mcp_server(
+                                &server_id,
+                                &binding,
+                                cancellation,
+                                key,
+                                require_live,
+                            )
+                            .await
+                    } else {
+                        owner
+                            .prepare_mcp_server(&server_id, &binding, Some(cancellation))
+                            .await
+                    };
                     let outcome = match deadline {
                         Some(deadline) => {
                             startup::finish_source_before_deadline(outcome, deadline).await
@@ -1801,7 +1857,7 @@ impl CapabilityCoordinator {
             bindings.push((server_id, binding.clone()));
         }
         let outcomes = self
-            .prepare_mcp_bindings(bindings, Some(preparation_cancellation), None)
+            .prepare_mcp_bindings(bindings, Some(preparation_cancellation), None, None)
             .await;
         let mut failure = None;
         for (source_id, (server_id, outcome)) in required.iter().zip(outcomes) {
