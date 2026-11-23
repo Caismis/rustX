@@ -138,10 +138,17 @@ struct Harness {
     owner: crate::agent::cancellation::AgentCancellation,
 }
 
+#[derive(Default)]
+enum ExecutionOwner {
+    #[default]
+    Fixture,
+    Client,
+}
+
 /// The environment overlay one fixture launch runs with.
 #[derive(Default)]
 struct FixtureOptions {
-    client_owned: bool,
+    execution_owner: ExecutionOwner,
     /// Publish the Tasks guard tools **without** advertising the extension.
     unadvertised: bool,
     /// Narrow the fixture to one legacy MCP revision.
@@ -208,7 +215,7 @@ impl Harness {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let execution = if options.client_owned {
+        let execution = if matches!(options.execution_owner, ExecutionOwner::Client) {
             let execution_root = directory.path().join("execution");
             std::fs::create_dir(&execution_root).expect("private execution root");
             Some(
@@ -724,7 +731,7 @@ async fn a_continuation_round_may_materialize_the_task() {
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::a_continuation_round_may_materialize_the_task",
         FixtureOptions {
-            client_owned: true,
+            execution_owner: ExecutionOwner::Client,
             ..FixtureOptions::default()
         },
     )
@@ -774,7 +781,7 @@ async fn task_input_uses_the_existing_questionnaire_owner() {
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::task_input_uses_the_existing_questionnaire_owner",
         FixtureOptions {
-            client_owned: true,
+            execution_owner: ExecutionOwner::Client,
             ..FixtureOptions::default()
         },
     )
@@ -1115,7 +1122,7 @@ async fn cancellation_before_the_next_poll_dispatches_no_further_get() {
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::cancellation_before_the_next_poll_dispatches_no_further_get",
         FixtureOptions {
-            client_owned: true,
+            execution_owner: ExecutionOwner::Client,
             ..FixtureOptions::default()
         },
     )
