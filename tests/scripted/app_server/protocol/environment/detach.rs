@@ -788,7 +788,7 @@ pub(crate) async fn an_offline_deleted_session_accepts_only_its_original_cleanup
         SessionDeleteResult::Deleted { .. }
     ));
     assert_eq!(std::fs::read(workspace_file).unwrap(), b"keep");
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
 }
 
 #[allow(clippy::too_many_lines)] // Keep the capture and Revoke barriers in one scenario.

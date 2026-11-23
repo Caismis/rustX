@@ -271,7 +271,7 @@ fn recovery_admission_is_closed_at_the_fixed_deadline() {
     state.detach(loss);
     let cutoff = loss + SAME_INSTANCE_RECOVERY_WINDOW;
     assert_eq!(
-        Binding::check_phase_at(&state, cutoff - Duration::from_nanos(1)),
+        Binding::check_phase_at(&state, cutoff.checked_sub(Duration::from_nanos(1)).unwrap()),
         Ok(())
     );
     assert_eq!(
@@ -279,14 +279,40 @@ fn recovery_admission_is_closed_at_the_fixed_deadline() {
         Err(Reject::RecoveryRequired)
     );
     assert_eq!(
-        DETACHED_CLIENT_RETENTION - SAME_INSTANCE_RECOVERY_WINDOW,
-        Duration::from_secs(30)
+        DETACHED_CLIENT_RETENTION,
+        SAME_INSTANCE_RECOVERY_WINDOW + Duration::from_secs(30)
     );
     state.recovery = None;
     assert_eq!(
         Binding::check_phase_at(&state, loss),
         Err(Reject::RecoveryRequired)
     );
+}
+
+#[cfg(test)]
+#[test]
+fn detached_retention_covers_either_detection_order() {
+    use rustx_execution_protocol::{
+        DETACHED_CLIENT_RETENTION, SAME_INSTANCE_RECOVERY_WINDOW,
+        transport::{CONTROL_FRAME_TIMEOUT, CONTROL_POLL_INTERVAL},
+    };
+
+    // A turn already in flight can consume a full frame deadline. The
+    // following idle poll and its deadline detect the missing direction.
+    // This model assumes scheduling advances within each frame budget.
+    let detection_skew = CONTROL_FRAME_TIMEOUT * 2 + CONTROL_POLL_INTERVAL;
+    assert!(detection_skew <= Duration::from_secs(20));
+    let first = Instant::now();
+    for client_detects_first in [false, true] {
+        let (client, server) = if client_detects_first {
+            (first, first + detection_skew)
+        } else {
+            (first + detection_skew, first)
+        };
+        let last_admission = server + SAME_INSTANCE_RECOVERY_WINDOW;
+        let cleanup_begins = client + DETACHED_CLIENT_RETENTION;
+        assert!(cleanup_begins >= last_admission + Duration::from_secs(10));
+    }
 }
 
 impl Inner {

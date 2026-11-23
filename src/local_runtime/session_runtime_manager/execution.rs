@@ -1416,18 +1416,28 @@ impl LocalExecutionEndpoint {
         if reconciled() {
             return;
         }
-        let delivered = match self.await_cancellation_lane(deadline) {
-            Some(control) => control.cancel_process_by(key, deadline),
-            None => Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "no control lane is admitted",
-            )),
-        };
-        let proven = matches!(
-            delivered,
-            Ok(disposition) if !matches!(disposition, rustx_execution_protocol::ProcessCancelDisposition::Unknown)
-        );
-        if !proven && !reconciled() {
+        while let Some(control) = self.await_cancellation_lane(deadline) {
+            match control.cancel_process_by(key, deadline) {
+                Ok(rustx_execution_protocol::ProcessCancelDisposition::Unknown) => break,
+                Ok(_) => return,
+                // Losing a cancellation receipt may leave the requested
+                // operation cancelled already. A new lane can ask about the
+                // exact same key, with the original deadline still in force.
+                Err(error)
+                    if Instant::now() < deadline
+                        && rustx_execution_protocol::transport::recoverable_lane_loss(&error)
+                        && self
+                            .control()
+                            .is_none_or(|current| !current.same_pair(&control)) =>
+                {
+                    if reconciled() {
+                        return;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        if !reconciled() {
             self.cut_pair_if_open();
         }
     }

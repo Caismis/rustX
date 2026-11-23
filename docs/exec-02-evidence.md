@@ -63,16 +63,30 @@ lost. The storage regression injects one unlink failure, verifies retained
 capacity, then proves retry releases exactly one slot and the published
 file remains readable.
 
+## Same-instance reattachment
+
+| ID | Evidence | Scope |
+| --- | --- | --- |
+| T07, T08 | `same_instance_recovery_preserves_the_process_and_output_cursor` | Two real paired channels are replaced. The existing process starts once, a retained stdin sequence is acknowledged without a second write, and pages continue at the exact prior byte offset. The eventual Revoke returns a physical receipt. |
+| T10, T57 | `credential_replay_after_eof_never_reconnects`, `websocket_recovery_reauthenticates_both_lanes_for_the_same_instance` | The launch bundle cannot reattach a detached binding. Both TLS lanes authenticate again with fresh lane identities and the original binding identity. In-flight mutation tickets from the old lane cannot be recycled. |
+| T43, T65 | `either_one_way_control_failure_recovers_the_same_authenticated_instance`, `a_silent_control_peer_can_recover_after_the_probe_expires`, `recovery_admission_is_closed_at_the_fixed_deadline`, `detached_retention_covers_either_detection_order` | Real Unix Client recovers after either half close and after its control exchange times out. Logical time tests step the exact Server cutoff and the two detection orders under the control frame scheduling assumption. Client death and native macOS failure remain separate gates. |
+| Offline deletion | `an_offline_deleted_session_accepts_only_its_original_cleanup_owner` | After durable logical deletion, admission remains closed and the original Client reattaches solely to return one Revoke receipt. Cleanup recovery then completes deletion and preserves the Workspace file. |
+
+The live protocol uses a 100 ms idle control poll and a 2 s normal frame
+deadline in both directions. The recovery model allows one in-flight frame
+and the next idle poll and frame budget (4.1 s) to observe a one-way loss.
+It assumes that both workers can run within the frame deadlines. A stalled
+process or scheduler beyond those assumptions can shorten recoverability.
+The Server admits until 50 s after its observation, and the detached Client
+starts cleanup by 80 s after its own observation. Expiry records no receipt.
+
 ## Open gates
 
-- Bounded same-instance reconnection and the two detection orders still
-  require transport changes and virtual-clock tests. The current code
-  fences the pair on disconnect.
 - Replacement admission and post-restart environment recovery still require
   independent attestation tied to the original physical domain. The durable
-  admission fence retains the unresolved identity. The Linux SIGKILL case observes one business socket
-  and exercises isolation between Sessions.
+  admission fence retains the unresolved identity. The Linux SIGKILL case
+  observes one business socket and exercises isolation between Sessions.
 - The physical candidate Spill writer, Root stdio and delegated stdio relay
-  run through the bound Client in EXEC-03. Cleanup-only reconnection, complete child
-  integration and the Client-owned Managed Python Store remain open. Native
-  macOS fault injection and final exact-head verification remain open.
+  run through the bound Client in EXEC-03. The Client-owned Managed Python
+  Store, full restart cleanup and complete child integration remain open.
+  Native macOS fault injection and final exact-head verification remain open.

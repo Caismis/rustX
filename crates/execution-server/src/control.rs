@@ -512,6 +512,7 @@ impl ControlWorker {
             .name("execution-control".to_owned())
             .spawn(move || {
                 let mut next_sequence = 1u64;
+                let mut revoking = false;
                 let recoverable = loop {
                     let deadline = shared
                         .revoke_deadline()
@@ -546,6 +547,7 @@ impl ControlWorker {
                         break false;
                     }
                     let request = shared.next_command();
+                    revoking |= matches!(&request, Some(ControlRequest::Revoke));
                     let turn = ControlTurn {
                         sequence: poll.sequence,
                         health: poll.health,
@@ -562,19 +564,18 @@ impl ControlWorker {
                         break rustx_execution_protocol::transport::recoverable_lane_loss(&error);
                     }
                 };
-                let may_recover = recoverable && shared.revoke_deadline().is_none();
-                shared.terminate(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "control lane ended",
-                ));
                 if !shared.stop_requested() {
                     // A lane that ended without an orderly stop detaches
                     // the pair: the seized data handle interrupts any
                     // blocked exchange, and no dispatch starts again.
                     worker_owner
-                        .detach_control(&connection, may_recover)
+                        .detach_control(&connection, recoverable && !revoking)
                         .shutdown();
                 }
+                shared.terminate(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "control lane ended",
+                ));
             })
             .expect("the bounded control worker spawns");
         Self {

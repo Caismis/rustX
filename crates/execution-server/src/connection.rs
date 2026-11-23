@@ -205,7 +205,8 @@ impl LocalConnection {
         if self.usable && !self.closed {
             // Announce intentional shutdown to a Client that otherwise
             // treats a transport close as a possibly recoverable loss.
-            let cutoff = Instant::now() + ORDERLY_CLOSE_BUDGET;
+            let started = Instant::now();
+            let cutoff = started + ORDERLY_CLOSE_BUDGET;
             if self.is_current()
                 && self
                     .owner
@@ -213,7 +214,9 @@ impl LocalConnection {
                     .is_some_and(|owner| !owner.revocation_confirmed())
                 && let Some(control) = self.control()
             {
-                let _ = control.request_revoke_by(cutoff - Duration::from_millis(100));
+                let revoke_budget = ORDERLY_CLOSE_BUDGET
+                    .saturating_sub(rustx_execution_protocol::transport::CONTROL_POLL_INTERVAL);
+                let _ = control.request_revoke_by(started + revoke_budget);
             }
             self.closed = true;
             let _ = self.channel.close_graceful(Some(cutoff));

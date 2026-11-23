@@ -272,6 +272,16 @@ any phase, and `Live` always means a *committed pair* of lanes.
   detection of the loss, or on earlier authenticated terminal refusal.
   This timer does not prove cleanup. Existing operation deadlines may
   finish work or shorten the period in which a caller can observe it.
+- An idle control poll runs every 100 ms and an ordinary control frame
+  expires after 2 seconds. Under bounded worker scheduling, one frame in
+  flight and the next poll with its frame deadline give a 4.1-second
+  detection-skew budget. Revoke continues to use its absolute command
+  deadline. Neither delayed polling nor a failed handshake renews recovery.
+- Logical Session deletion closes the execution route immediately and can
+  retain a durable cleanup-pending record while the original Client is
+  detached. A same-instance pair admitted to this closed route receives
+  Revoke only. A validated receipt permits the durable cleanup retry, and
+  no replacement can bypass the retained execution fence.
 - `revoke()` is immediate and terminal; a revoked binding rejects every
   Hello and is never dispatchable again.
 - `status()` is observation only. Nothing may dispatch on a snapshot —

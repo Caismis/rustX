@@ -373,6 +373,12 @@ fn a_silent_control_peer_can_recover_after_the_probe_expires() {
         wait::{WaitPidFlag, WaitStatus, waitpid},
     };
     use nix::unistd::Pid;
+    struct ResumeOnDrop(Pid);
+    impl Drop for ResumeOnDrop {
+        fn drop(&mut self) {
+            let _ = kill(self.0, Signal::SIGCONT);
+        }
+    }
     let rig = rig();
     let mut child = spawn_client(&rig);
     let first = admit_pair(&rig, &mut child);
@@ -380,6 +386,7 @@ fn a_silent_control_peer_can_recover_after_the_probe_expires() {
     control.health().unwrap();
     let pid = Pid::from_raw(i32::try_from(child.id()).unwrap());
     kill(pid, Signal::SIGSTOP).unwrap();
+    let resume = ResumeOnDrop(pid);
     assert_eq!(
         waitpid(pid, Some(WaitPidFlag::WUNTRACED)).unwrap(),
         WaitStatus::Stopped(pid, Signal::SIGSTOP)
@@ -391,7 +398,7 @@ fn a_silent_control_peer_can_recover_after_the_probe_expires() {
         std::thread::yield_now();
     }
     assert!(started.elapsed() < rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW);
-    kill(pid, Signal::SIGCONT).unwrap();
+    drop(resume);
     let second = admit_pair(&rig, &mut child);
     assert_eq!(first.admission(), second.admission());
     assert_ne!(first.connection_id(), second.connection_id());

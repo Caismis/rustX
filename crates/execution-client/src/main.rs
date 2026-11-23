@@ -51,7 +51,8 @@ use rustx_execution_protocol::{
     DecimalU64, EntryKind, EntryStamp, FileStamp, Hello, LineEnd, MAX_DIRECTORY_NAMES,
     MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
     MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, PairingNonce,
-    PeerHello, ReadError, Reject, is_normalized_absolute_path, transport::CONTROL_FRAME_TIMEOUT,
+    PeerHello, ReadError, Reject, is_normalized_absolute_path,
+    transport::{CONTROL_FRAME_TIMEOUT, CONTROL_POLL_INTERVAL},
 };
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
@@ -581,9 +582,6 @@ fn client_control_worker(
     watches: std::sync::Arc<watch::Watches>,
     saves: std::sync::Arc<std::sync::Mutex<saves::Saves>>,
 ) -> ClientControlWorker {
-    /// The idle poll period: commands wait at most this for the next
-    /// turn, far inside the Server's command receipt budget.
-    const POLL_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
     /// Physical process containment the worker awaits before `Revoked`
     /// is delivered — inside the Server's 5-second command budget so
     /// the receipt is the honest settlement, not a hope.
@@ -636,7 +634,7 @@ fn client_control_worker(
                 let Some(request) = turn.request else {
                     // Idle lane: pace the next poll — the worker wake
                     // covers the stop flag and keeps the cadence bounded.
-                    if worker_arbitration.wait_worker(POLL_PERIOD) {
+                    if worker_arbitration.wait_worker(CONTROL_POLL_INTERVAL) {
                         return ControlEnd::Detached;
                     }
                     continue;
