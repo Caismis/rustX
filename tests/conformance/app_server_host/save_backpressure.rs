@@ -454,3 +454,100 @@ async fn proxy_data(
     }
     assert!(gate.is_none() && cleanup.is_none());
 }
+
+pub(super) struct PendingSeal {
+    sealed: oneshot::Receiver<()>,
+    resume: oneshot::Sender<()>,
+    cleaned: oneshot::Receiver<()>,
+}
+
+impl PendingSeal {
+    pub(super) async fn wait_for_seal(&mut self) {
+        (&mut self.sealed).await.expect("actual Client seal");
+    }
+
+    pub(super) async fn release_and_confirm_removal(self) {
+        self.resume.send(()).unwrap();
+        self.cleaned
+            .await
+            .expect("actual Client removed the sealed candidate");
+    }
+}
+
+pub(super) async fn hold_seal_receipt(
+    manager: &SessionRuntimeManager,
+    session: &SessionId,
+    scratch: &Path,
+) -> (tokio::process::Child, PendingSeal) {
+    let (child, relay) = prepare(manager, session, scratch, None).await;
+    let ((mut client, mut server), (mut control_peer, mut control_server)) = relay.pair().await;
+    tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
+    });
+    let (announce, sealed) = oneshot::channel();
+    let (resume, released) = oneshot::channel();
+    let (confirm, cleaned) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut gate = Some((announce, released));
+        let mut confirm = Some(confirm);
+        let mut winner = None;
+        let mut allocations = Vec::new();
+        let mut removals = Vec::new();
+        while let Ok(request) = receive::<ClientRequest>(&mut server).await {
+            assert!(
+                !matches!(request, ClientRequest::Save(SaveRequest::Publish { .. })),
+                "cancellation at the seal gate forbids publication"
+            );
+            send(&mut client, &request).await;
+            let reply = receive::<ClientReply>(&mut client).await.unwrap();
+            match (&request, &reply) {
+                (
+                    ClientRequest::Save(SaveRequest::Begin { .. }),
+                    ClientReply::Save(SaveReply::Begun { key }),
+                ) => {
+                    assert!(!allocations.contains(key) && allocations.len() < 2);
+                    allocations.push(key.clone());
+                }
+                (
+                    ClientRequest::Save(SaveRequest::Seal { key, .. }),
+                    ClientReply::Save(SaveReply::Sealed { .. }),
+                ) => {
+                    let (announce, released) = gate.take().expect("exactly one physical seal");
+                    winner = Some(key.clone());
+                    announce.send(()).unwrap();
+                    released.await.unwrap();
+                }
+                (
+                    ClientRequest::Save(SaveRequest::Abort { key }),
+                    ClientReply::Save(SaveReply::Aborted {
+                        cleanup: Cleanup::Removed,
+                        ..
+                    }),
+                ) => {
+                    assert!(allocations.contains(key) && !removals.contains(key));
+                    removals.push(key.clone());
+                    if removals.len() == 2 {
+                        assert_eq!(allocations.len(), 2);
+                        assert!(winner.as_ref().is_some_and(|key| removals.contains(key)));
+                        confirm
+                            .take()
+                            .expect("one winner cleanup")
+                            .send(())
+                            .unwrap();
+                    }
+                }
+                _ => {}
+            }
+            send(&mut server, &reply).await;
+        }
+        assert!(gate.is_none() && confirm.is_none());
+    });
+    (
+        child,
+        PendingSeal {
+            sealed,
+            resume,
+            cleaned,
+        },
+    )
+}

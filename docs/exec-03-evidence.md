@@ -117,8 +117,16 @@ settlement.
 Each binding budgets 128 slots for configuration watches separately from the
 32 public file-observer slots. The watcher uses the existing coalesced
 16-path notices. It rechecks registrations at most every five seconds when
-coverage is incomplete. A detached binding preserves last-good state.
-Transport recovery itself remains open.
+coverage is incomplete. A detached binding preserves last-good state. The
+same-instance recovery test retires the previous watch before registering a replacement and
+rescanning. Until the reserved binding retires, explicit reconciliation and
+automatic source tracking select the Client view. The real mount fixture
+also puts a repairable decoy at the same Server pathname and verifies its
+original bytes survive reconciliation. The same fixture calls the public
+Skills catalog and reads two revision-matched instruction pages while the
+Server directory is absent. An unbound Session is refused. The Web Console
+test changes the Session at the same path and releases the old reply after
+the new catalog has arrived.
 
 `client_source_watch_reloads_guidance_and_skill_metadata_after_registration`
 uses a real Linux Client in a mount namespace with no Server workspace
@@ -228,10 +236,10 @@ child path independently of the stdio relay fixture.
 | T16 | `primary_model_selection_resets_primary_overrides_and_preserves_summary_policy` and `attempt_started_freezes_the_model_across_a_mid_attempt_switch` cover the Runtime Client entry. `r04_manager_selection_and_attempt_admission_have_both_complete_orders` exercises admission races through the App Server. `t05_t09_workflow_only_agent_model_rebuilds_frozen_execution` and `direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_result` exercise frozen Workflow profiles and the direct-model provider. A common acceptance trace across UI and delegated entry points remains open. |
 | T19, T20, T21, T30, T38 | The Root mount-view stdio fixture serves a tool using declarations and a program visible only to the Client. It exercises protocol negotiation, ordered tool discovery and a foreground call whose output needs multiple execution frames and a published continuation. The child relay has physical cleanup and authorization proofs. Cache tests exercise four boundedness and identity conditions, plus a real held HTTP catalog, and verify that required live discovery bypasses reuse. Full delegated composition and composed stdio Tasks and interactions remain open. |
 | T22, T40, T47 | Isolated Workspace tests cover Client-owned AGENTS.md, Agent TOML and Workflow YAML on cold load and explicit reconciliation. The verification hook rejects a changed in-flight capture and preserves the last valid generation. The independent mount fixture covers Skill metadata discovery and actual Native Read through the same Client without enumerating package assets. The Linux watch fixture verifies automatic guidance and Skill metadata updates after physical registration. Overflow and retired-watch races across reconnect still require composed proof. |
-| T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. The Hosted refusal fixture covers interruption during writes; generation change and cancellation still need composed evidence. |
+| T31, T32, T33, T45 | Hosted and HTTP fixtures cover absent Client, bounded model output, no locator and no Client startup. The wire-level Save fixture reads and searches the complete published text through an authenticated Client and checks cross-Conversation refusal. The Hosted fixture observes both physical candidates before End and the winning file after loser removal. Native Read retrieves the winning prefix, Native Grep finds the middle marker on a bounded line, and a different Conversation on the same binding is refused. The multichunk image fixture reads the independently delivered artifact after reaping the Client. Real Client refusal, cancellation after Seal, and late publication across replacement each preserve the already validated result. |
 | T36, T50 | An earlier Begin leaves room for a second Host to win. Broker tests run verified End and ordinary replies/errors in both orders, and reject a stale subscription. Existing domain-invalid response handling consumes the claim. |
 | T37, T46, T52, T55 | The WebSocket fixture submits a result above 1 MiB with and without a Client. The encoded framing regression measures the complete record inclusive of escaping. The HTTP adapter caps response bytes before decoding, and the process fixture checks oversized responses do not replay the effectful call. Per-process occupancy remains open. |
-| T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. Native disk exhaustion and cancellation at the save cut remain open. |
+| T51, T53 | Incomplete and digest-invalid End attempts leave the callback open for another eligible response. The real Client checks the retained file length on each append. A fixture changes that length after a confirmed prefix, then verifies the winning business result stays successful with no locator and the private file is removed. The real Client confirms both native disk exhaustion and cancellation after a physical Seal, with no publication or business replay in either case. |
 | T54, T56, T57 | Duplicate, stale and foreign steps, Abort and replacement are checked. Virtual time proves fixed total and idle expiry. Saturation checks another Host can claim and Abort returns capacity. The Client unlink-failure regression checks quota remains occupied until a confirmed removal. In `stream_save_saturated`, the Client creates an empty physical candidate, the proxy holds its Begin reply, and five fragments exceed the four-slot Save queue. All Host receive acknowledgements and real Client Health still complete. Releasing the gate delivers exactly one correlated Abort with confirmed removal and no Chunk, Seal or Publish. The validated End produces one successful business result with unavailable storage. The lost-receipt case below composes a real Host publication, late receipt loss and same-instance recovery. A separate paired-Client test refuses the retired generation’s Save key on a replacement. The standalone Linux case below tests a real local Client generation change and a late publication receipt. |
 | T71, T72, T73 | A real HTTP fixture holds an old lease across activation with identical tool schemas. New and old leases send their respective credentials. A failed candidate preserves the previous version and the old connection closes after its last lease. Concurrent activation and cancellation across the full Session stack remain open. |
 
@@ -293,6 +301,17 @@ reattach. The proxy checks the exact prior Workspace observation identity
 receives Accepted on Release and observes zero Save requests on the recovered
 lane. The original 1,200,056-byte publication remains private until the real
 Client acknowledges Revoke and exits.
+
+The disk-exhaustion variant mounts an independent 8 KiB tmpfs in the real
+Client. A kernel probe reaches ENOSPC before starting the Client. The wire
+proxy confirms one candidate allocation, a real first write refusal, one
+confirmed Abort, and zero Seal or Publish requests. Host validation still
+commits one successful bounded result with unavailable storage and no retry.
+The cancellation variant waits for validated End and the Client's physical
+Seal, withholds the receipt, and cancels the originating Attempt. The Client
+acknowledges removal of both the losing and winning candidates. No Publish
+is sent. Exactly one successful business ToolResult commits with an
+unavailable continuation, and the fake provider sees exactly one request.
 
 `a_published_host_output_cannot_cross_a_local_client_generation` starts the
 standalone App Server with its local Client supervisor. A proxy holds the
