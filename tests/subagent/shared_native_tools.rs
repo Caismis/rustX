@@ -249,7 +249,12 @@ exec /bin/cat .python-probe-stop
         std::env::var("PATH").unwrap_or_default()
     );
     let models = models_json(&server.url("/v1"));
-    write_parent_fixture(root.path(), &workspace, &models, &session);
+    // The control-plane configuration remains at root. Authored Agent files
+    // belong to the same Client mount as the commands that use them.
+    write_parent_fixture(root.path(), physical, &models, &session);
+    if private.is_some() {
+        assert!(!workspace.join(".agents/agents/explore.toml").exists());
+    }
     let mut bindings = ParentBindings::under(root.path(), &workspace);
     bindings.execution = true;
     bindings.program = stage_parent_with_client_path(

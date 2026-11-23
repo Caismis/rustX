@@ -213,6 +213,13 @@ independent physical identity, immutable launch and tool authorization, and
 that an unconfirmed Close keeps ownership. The complete Agent Loop and
 Workflow ordering tests remain separate acceptance requirements.
 
+In the isolated mount run, the real App Server's child fixture discovers
+its Agent definition only in the Client view. The child model receives
+Write, Edit, Read and Bash results in tool order. The logical Server path
+has neither the definition nor the file created by the child. Shutdown
+waits for its Workspace Python probe to stop. This covers the real native
+child path independently of the stdio relay fixture.
+
 ## Deterministic coverage
 
 | Required tests | Evidence and open coverage |
