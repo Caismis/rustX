@@ -25,6 +25,8 @@ use tokio_util::sync::CancellationToken;
 
 #[path = "../support/app_server_peer.rs"]
 mod peer;
+#[path = "app_server_host/save_backpressure.rs"]
+mod save_backpressure;
 use peer::Peer;
 
 fn definition(namespace: &str) -> HostToolDefinition {
@@ -159,6 +161,7 @@ async fn stream_large_result(
     copy: &ServerRequest,
     scratch: Option<&std::path::Path>,
     refuse_save: bool,
+    mut backpressure: Option<save_backpressure::SaveBackpressure>,
 ) {
     let a = candidate(call);
     let b = candidate(copy);
@@ -179,7 +182,9 @@ async fn stream_large_result(
     );
     assert_accepted(upload_request(second, "begin", begin(&b)).await, false);
     assert_accepted(upload_request(second, "begin", begin(&b)).await, true);
-    let mut observations = scratch.map(SaveObservation::new);
+    let mut observations = scratch
+        .filter(|_| backpressure.is_none())
+        .map(SaveObservation::new);
     let mut loser_bytes = None;
     let chunk_params =
         |candidate: &Value, item_index, sequence: u64, offset: usize, chunk: &[u8]| {
@@ -220,6 +225,22 @@ async fn stream_large_result(
             if sequence == 1 {
                 assert_accepted(upload_request(second, "chunk", params).await, true);
             }
+            if sequence == 2
+                && let Some(blocked) = backpressure.as_mut()
+            {
+                blocked.wait_for_begin().await;
+                let [file] = saved_files(scratch.unwrap()).try_into().unwrap();
+                assert_eq!(file.metadata().unwrap().len(), 0);
+            }
+            if sequence == 6
+                && let Some(blocked) = backpressure.take()
+            {
+                // The first over-preview fragment and the next three fill
+                // the writer's four slots. The fifth leaves storage
+                // unavailable while the Host receive loop still progresses.
+                blocked.check_health_and_release().await;
+                assert_eq!(saved_files(scratch.unwrap()), [] as [std::path::PathBuf; 0]);
+            }
             let staged = prior + item_index + offset + chunk.len();
             if let Some(observer) = observations.as_mut()
                 && staged > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
@@ -258,6 +279,10 @@ async fn stream_large_result(
         "total": total.to_string(), "digest": digest,
     });
     let mut incomplete_end = end.clone();
+    assert!(
+        backpressure.is_none(),
+        "the stalled save must reach its bound"
+    );
     incomplete_end["candidate"] = a.clone();
     assert_refused(
         upload_request(first, "end", incomplete_end).await,
@@ -517,7 +542,7 @@ async fn admit_execution_client(
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit_once() {
     tokio::time::timeout(std::time::Duration::from_secs(180),async {
-        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused"] {
+        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused","stream_save_saturated"] {
             let Some(provider)=ProviderEmulator::start("app_server_host_broadcast").await else {return;};
             let ServerFixture { root,workspace,sessions,manager,host,endpoint,shutdown,server }=ServerFixture::start(&provider).await;
             let mut first=Peer::connect(&endpoint).await; let mut second=Peer::connect(&endpoint).await; let mut generic=Peer::connect(&endpoint).await;
@@ -527,7 +552,12 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             assert!(manager.execution_endpoint(&session.id).is_err());
             let scratch = root.path().join("client-scratch");
             std::fs::create_dir(&scratch).unwrap();
-            let mut client = if matches!(winner, "stream_saved" | "stream_save_refused") {
+            let mut backpressure = None;
+            let mut client = if winner == "stream_save_saturated" {
+                let (child, blocked) = save_backpressure::spawn(&manager, &session.id, &scratch).await;
+                backpressure = Some(blocked);
+                Some(child)
+            } else if matches!(winner, "stream_saved" | "stream_save_refused") {
                 Some(admit_execution_client(&manager, &session.id, &workspace, &scratch).await)
             } else { None };
             assert_eq!(thread.dynamic_tools,definitions);
@@ -565,8 +595,8 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 "error"=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"error":{"code":-32000,"message":"remote result unknown"}}),
                 _=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":"invalid domain payload"}),
             };
-            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused") {
-                stream_large_result(&mut first, &mut second, &call, &copy, client.as_ref().map(|_| scratch.as_path()), winner == "stream_save_refused").await;
+            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated") {
+                stream_large_result(&mut first, &mut second, &call, &copy, client.as_ref().map(|_| scratch.as_path()), winner == "stream_save_refused", backpressure).await;
             } else {
                 first.reply(selected).await;
             }
@@ -579,12 +609,12 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let store=SqliteConversationStore::open_existing(thread.id.clone(),&access.database_path).unwrap();
             let canonical=store.load_canonical().unwrap(); let results:Vec<_>=canonical.iter().filter_map(|message|if let MessageBlock::Tool(tool)=message {Some(&tool.result)}else{None}).collect();
             assert_eq!(results.len(),1,"one canonical ToolResult");
-            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream" | "stream_saved" | "stream_save_refused"));
+            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated"));
             if matches!(winner, "error" | "invalid") {assert!(matches!(results[0].status,ToolExecutionStatus::OutcomeUnknown {..}));}
             assert_eq!(manager.execution_endpoint(&session.id).is_ok(), client.is_some());
             let requests = provider.requests().await;
             assert_eq!(requests.len(),2,"one model continuation");
-            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused") {
+            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated") {
                 let result = results[0];
                 if winner == "stream_saved" {
                     let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output.as_deref() else {
