@@ -382,7 +382,9 @@ impl UserConfigManager {
         };
         let _first = first.0.lock(first.1).map_err(SettingsError::Io)?;
         let _second = second.0.lock(second.1).map_err(SettingsError::Io)?;
-        let original = source.read(source_name).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
+        let original = source
+            .read(source_name)
+            .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
         let actual = revision(original.as_deref());
         if actual != expected {
             return Err(SettingsError::Conflict {
@@ -440,7 +442,9 @@ impl UserConfigManager {
                 .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let workflows =
                 workflow_resources::load(workspace.workspace(), &self.resource_root(user))
-                    .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
+                    .map_err(|error| {
+                        SettingsError::Io(std::io::Error::other(format!("{error:?}")))
+                    })?;
             let user_programs =
                 enabled_programs(&user_workflows, &user_selected, &workspace_selected);
             let workspace_programs =

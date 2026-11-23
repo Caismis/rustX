@@ -394,15 +394,17 @@ pub enum SettingsError {
     Committed,
 }
 fn read(path: &Path) -> Result<Option<Vec<u8>>, SettingsError> {
-    super::super::settings::read_document(path).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))
+    super::super::settings::read_document(path)
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))
 }
 
 /// A source pathname that cannot be admitted is `Invalid` when the target is
 /// redirected, exactly as at entry; otherwise `Io`.
 fn refused(target: &SourceTarget) -> SettingsError {
-    target.validate().err().unwrap_or_else(|| {
-        SettingsError::Io(std::io::Error::other("source directory refused"))
-    })
+    target
+        .validate()
+        .err()
+        .unwrap_or_else(|| SettingsError::Io(std::io::Error::other("source directory refused")))
 }
 
 /// Admit one `rustx.toml` of a capture round ([`AdmittedSource`]).
@@ -435,7 +437,10 @@ fn raw_workflow_selection(
     document: &super::super::settings::AdmittedSource,
     workspace: bool,
 ) -> Result<Vec<crate::runtime::workflow::WorkflowId>, SettingsError> {
-    let Some(bytes) = document.read().map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))? else {
+    let Some(bytes) = document
+        .read()
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
+    else {
         return Ok(Vec::new());
     };
     let layer = super::capture::parse_layer(document.path(), &bytes, workspace)
@@ -1108,7 +1113,9 @@ impl UserConfigManager {
         expected: Option<&crate::local_runtime::model_probe::ModelProbeSource>,
     ) -> Result<(Option<RuntimeLayer>, String), SettingsError> {
         self.with_source_documents(target, |user, workspace| {
-            let user_bytes = user.read().map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
+            let user_bytes = user
+                .read()
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let workspace_bytes = workspace
                 .map(AdmittedSource::read)
                 .transpose()
@@ -1223,7 +1230,11 @@ impl UserConfigManager {
     ) -> Result<(SourceSettings, String), SettingsError> {
         let user = user_document.path().to_path_buf();
         let workspace = workspace_document.map(|document| document.path().to_path_buf());
-        let read = |document: &AdmittedSource| document.read().map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))));
+        let read = |document: &AdmittedSource| {
+            document
+                .read()
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))
+        };
         let user_bytes = read(user_document)?;
         let workspace_bytes = workspace_document.map(read).transpose()?.flatten();
         let roots: Vec<_> =
@@ -1473,7 +1484,9 @@ impl UserConfigManager {
                 super::super::settings::report_io_failure("acquire_writer_lock", &error);
                 SettingsError::Io(error)
             })?;
-            let original = source.read(name).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
+            let original = source
+                .read(name)
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let actual = revision(original.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
@@ -1641,7 +1654,14 @@ impl UserConfigManager {
                     SettingsError::Invalid
                 }
             })?;
-            let actual = revision(source.read(name).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?.as_deref());
+            let actual = revision(
+                source
+                    .read(name)
+                    .map_err(|error| {
+                        SettingsError::Io(std::io::Error::other(format!("{error:?}")))
+                    })?
+                    .as_deref(),
+            );
             if actual == expected {
                 Ok(())
             } else {
@@ -1680,9 +1700,7 @@ impl UserConfigManager {
             }
             #[cfg(test)]
             if self.test_hooks.fault("replace") {
-                source
-                    .replace(staged, name)
-                    .map_err(SettingsError::Io)?;
+                source.replace(staged, name).map_err(SettingsError::Io)?;
                 return Err(Self::classify_failed_replacement(source, name, expected));
             }
             source

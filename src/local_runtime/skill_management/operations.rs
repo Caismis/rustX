@@ -875,7 +875,8 @@ impl UserConfigManager {
             Ok(_) => SettingsError::Io(std::io::Error::other(
                 "post-operation tree still equals its snapshot",
             )),
-            Err(error) => match self.skill_for_operation(source_target, collection, name, expected) {
+            Err(error) => match self.skill_for_operation(source_target, collection, name, expected)
+            {
                 Err(error @ SettingsError::Conflict { .. }) => error,
                 _ => SettingsError::Io(error),
             },

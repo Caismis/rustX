@@ -173,7 +173,9 @@ fn publish_asset(root: &Path, name: &str, bytes: &[u8]) -> Result<SourceDirector
     directory.confirm().map_err(SettingsError::Io)?;
     // Publish an immutable asset before the sidecar can point to it. Identical
     // uploads reuse the same file, and a failed sidecar write leaves its old icon usable.
-    let existing = directory.read(name).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
+    let existing = directory
+        .read(name)
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
     if existing.is_none() {
         let staged = directory.stage(bytes).map_err(SettingsError::Io)?;
         match directory.link(&staged, name) {
@@ -368,7 +370,9 @@ impl UserConfigManager {
             .map_err(SettingsError::Io)?
             .with_byte_limit(MAX_METADATA_BYTES);
         let _lock = directory.lock(file).map_err(SettingsError::Io)?;
-        let original = directory.read(file).map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
+        let original = directory
+            .read(file)
+            .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
         let actual = display_revision(package, original.as_deref())?;
         if actual != expected {
             return Err(SettingsError::Conflict {
