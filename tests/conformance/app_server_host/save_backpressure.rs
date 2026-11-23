@@ -116,6 +116,7 @@ async fn prepare(
     manager: &SessionRuntimeManager,
     session: &SessionId,
     scratch: &Path,
+    disk_limit: Option<&Path>,
 ) -> (tokio::process::Child, Relay) {
     let endpoint = manager.reserve_local_execution(session).await.unwrap();
     std::fs::set_permissions(scratch, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -140,19 +141,35 @@ async fn prepare(
         .unwrap();
     write_record(&mut file, &bootstrap).unwrap();
     drop(file);
-    let child = tokio::process::Command::new(
-        std::env::current_exe()
-            .unwrap()
-            .with_file_name("rustx-execution-client"),
-    )
-    .arg("--binding-file")
-    .arg(bundle.canonicalize().unwrap())
-    .arg("--workspace")
-    .arg(endpoint.workspace())
-    .env("TMPDIR", scratch)
-    .kill_on_drop(true)
-    .spawn()
-    .unwrap();
+    let binary = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    let mut command = if let Some(volume) = disk_limit {
+        let mut command = tokio::process::Command::new("/usr/bin/bwrap");
+        command
+            .args(["--unshare-user", "--uid"])
+            .arg(nix::unistd::geteuid().as_raw().to_string())
+            .args(["--dev-bind", "/", "/", "--size", "8192", "--tmpfs"])
+            .arg(volume)
+            .args(["--chmod", "0700"])
+            .arg(volume)
+            .args(["--", "/usr/bin/python3", "-c", VERIFY_DISK_LIMIT])
+            .arg(binary)
+            .env("TMPDIR", volume);
+        command
+    } else {
+        let mut command = tokio::process::Command::new(binary);
+        command.env("TMPDIR", scratch);
+        command
+    };
+    let child = command
+        .arg("--binding-file")
+        .arg(bundle.canonicalize().unwrap())
+        .arg("--workspace")
+        .arg(endpoint.workspace())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
 
     let ExecutionListener::Unix(listener) = endpoint.listener() else {
         panic!("expected a Unix listener");
@@ -176,7 +193,7 @@ pub(super) async fn spawn(
     session: &SessionId,
     scratch: &Path,
 ) -> (tokio::process::Child, SaveBackpressure) {
-    let (child, relay) = prepare(manager, session, scratch).await;
+    let (child, relay) = prepare(manager, session, scratch, None).await;
     let ((data_peer, data_server), (mut control_peer, mut control_server)) = relay.pair().await;
     tokio::spawn(async move {
         let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
@@ -224,7 +241,7 @@ pub(super) async fn lose_publication_receipt(
     session: &SessionId,
     scratch: &Path,
 ) -> (tokio::process::Child, LostPublish) {
-    let (child, relay) = prepare(manager, session, scratch).await;
+    let (child, relay) = prepare(manager, session, scratch, None).await;
     let ((mut data_peer, mut data_server), (mut control_peer, mut control_server)) =
         relay.pair().await;
     let (observed, publication) = oneshot::channel();
@@ -307,6 +324,90 @@ async fn confirm_recovered_release(
         }
     }
     assert!(released.is_none());
+}
+
+// The subprocess checks the mounted volume through the same kernel view
+// the unmodified Client uses. No production storage operation is mocked.
+const VERIFY_DISK_LIMIT: &str = r"
+import errno, os, sys
+volume = os.environ['TMPDIR']
+capacity = os.statvfs(volume)
+assert capacity.f_blocks * capacity.f_frsize == 8192
+probe = os.path.join(volume, 'capacity-probe')
+with open(probe, 'xb', buffering=0) as stream:
+    assert stream.write(b'P' * 8192) == 8192
+    try:
+        stream.write(b'X')
+        raise RuntimeError('temporary volume did not fill')
+    except OSError as error:
+        assert error.errno == errno.ENOSPC
+os.unlink(probe)
+os.execv(sys.argv[1], sys.argv[1:])
+";
+
+pub(super) async fn spawn_disk_limited(
+    manager: &SessionRuntimeManager,
+    session: &SessionId,
+    scratch: &Path,
+) -> (tokio::process::Child, oneshot::Receiver<()>) {
+    let volume = scratch.join("disk");
+    std::fs::create_dir(&volume).unwrap();
+    let (child, relay) = prepare(manager, session, scratch, Some(&volume)).await;
+    let ((data, server_data), (mut control, mut server_control)) = relay.pair().await;
+    tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut control, &mut server_control).await;
+    });
+    let (settled, receipt) = oneshot::channel();
+    tokio::spawn(confirm_storage_failure(data, server_data, settled));
+    (child, receipt)
+}
+
+async fn confirm_storage_failure(
+    mut client: UnixStream,
+    mut server: UnixStream,
+    settled: oneshot::Sender<()>,
+) {
+    use rustx_execution_protocol::save::SaveCode;
+
+    let mut settled = Some(settled);
+    let mut owner = None;
+    let mut append_failed = false;
+    while let Ok(request) = receive::<ClientRequest>(&mut server).await {
+        send(&mut client, &request).await;
+        let reply = receive::<ClientReply>(&mut client).await.unwrap();
+        match (&request, &reply) {
+            (
+                ClientRequest::Save(SaveRequest::Begin { .. }),
+                ClientReply::Save(SaveReply::Begun { key }),
+            ) => assert!(owner.replace(key.clone()).is_none()),
+            (
+                ClientRequest::Save(SaveRequest::Chunk { key, .. }),
+                ClientReply::Save(SaveReply::Refused {
+                    code: SaveCode::StorageUnavailable,
+                }),
+            ) => {
+                assert_eq!(owner.as_ref(), Some(key));
+                assert!(!std::mem::replace(&mut append_failed, true));
+            }
+            (
+                ClientRequest::Save(SaveRequest::Abort { key }),
+                ClientReply::Save(SaveReply::Aborted {
+                    cleanup: Cleanup::Removed,
+                    ..
+                }),
+            ) => {
+                assert_eq!(owner.as_ref(), Some(key));
+                assert!(append_failed);
+                settled.take().unwrap().send(()).unwrap();
+            }
+            (ClientRequest::Save(request), _) => {
+                panic!("unexpected disk-limited Save: {request:?} {reply:?}")
+            }
+            _ => {}
+        }
+        send(&mut server, &reply).await;
+    }
+    assert!(settled.is_none());
 }
 
 async fn proxy_data(
