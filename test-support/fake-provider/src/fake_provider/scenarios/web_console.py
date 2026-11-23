@@ -753,6 +753,9 @@ def web_bash_promotion() -> Scenario:
     # Append on every launch so a foreground-to-background restart is observable.
     # The browser releases the second line only after it sees the first in the panel.
     command = (
+        "IFS= read -r promotion_port < promotion.listener && "
+        "exec 9<>\"/dev/tcp/127.0.0.1/$promotion_port\" || exit 1; "
+        "printf '%s\\n' \"$$\" >&9; "
         "printf '%s\\n' \"$$\" >> promotion.pids; "
         "printf 'before pid=%s\\n' \"$$\"; "
         "while [ ! -f promotion.release ] && [ \"$SECONDS\" -lt 180 ]; do sleep 1; done; "
