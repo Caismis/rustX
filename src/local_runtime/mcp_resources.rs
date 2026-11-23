@@ -179,6 +179,57 @@ pub(super) fn load_with_workspace(
     catalog
 }
 
+impl McpCatalog {
+    pub(super) fn apply_session(
+        &mut self,
+        authored: &super::session_inputs::SessionResources,
+        workspace: &Path,
+    ) -> Result<(), RuntimeResourceLoadError> {
+        use crate::runtime::resources::{ResourceLocation, SourceScope};
+        let document = PathBuf::from(super::session_inputs::RESOURCES_DOCUMENT);
+        for (id, contents) in &authored.mcp {
+            let field = format!("mcp_servers.{id}");
+            let fail = |detail: String| {
+                RuntimeResourceLoadError::new(detail)
+                    .at(&document, &field)
+                    .because("invalid Session MCP definition")
+            };
+            let mut definition: McpAuthoring =
+                crate::toml_authoring::parse(contents.as_bytes()).map_err(fail)?;
+            super::config::resolve_mcp_entry(id, &definition.clone().resolve())
+                .map_err(|error| fail(error.to_string()))?;
+            if let Some(cwd) = &mut definition.cwd {
+                *cwd = super::configuration::capture::absolute(workspace, cwd);
+            }
+            if let Some(command) = &mut definition.command
+                && command.contains('/')
+            {
+                *command = super::configuration::capture::absolute(workspace, Path::new(command))
+                    .to_string_lossy()
+                    .into_owned();
+            }
+            let shadowed = self.locations.remove(id).map(|lower| lower.path);
+            self.locations.insert(
+                id.clone(),
+                ResourceLocation {
+                    scope: SourceScope::Session,
+                    path: document.clone(),
+                    shadowed,
+                },
+            );
+            self.origins.insert(
+                id.clone(),
+                Origin::Session {
+                    document: document.clone(),
+                    base: workspace.to_path_buf(),
+                },
+            );
+            self.definitions.insert(id.clone(), Ok(definition));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

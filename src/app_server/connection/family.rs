@@ -196,6 +196,7 @@ impl Family<'_> {
             | Method::WorkflowCheck { .. }
             | Method::WorkflowAnalyze { .. }
             | Method::SettingsRead { .. }
+            | Method::SessionInputsWrite { .. }
             | Method::SettingsValueRead { .. }
             | Method::ConfigurationReconcile { .. }
             | Method::SessionApplicationValueRead { .. }

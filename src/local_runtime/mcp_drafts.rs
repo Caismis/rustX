@@ -612,7 +612,7 @@ impl Scope {
         let cwd = slot.cwd.clone();
         let paths = tokio::task::spawn_blocking(move || {
             configuration
-                .resolve_session(&super::configuration::SessionConfigInput { cwd, model: None })
+                .resolve_session(&super::configuration::SessionConfigInput::new(cwd))
                 .map_err(|error| error.to_string())?
                 .admit(|| credentials)
         })

@@ -116,6 +116,30 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "edit-session-inputs",
+    "method": "session/inputsWrite",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "expected_revision": 2,
+      "session_config": {
+        "operation": "replace",
+        "content": "[agent]\nworkflows = []\n"
+      },
+      "session_resources": {
+        "operation": "clear"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "edit-session-inputs",
+    "result": {
+      "type": "session_inputs_written",
+      "revision": 3
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "prepare-workspace-draft",
     "method": "mcp/draftPrepare",
     "params": {

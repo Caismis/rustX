@@ -32,6 +32,8 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
         probe.before_configuration_prepare.entered().await;
         let create = || {
             fixture.manager.create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -154,6 +156,8 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
             fixture
                 .manager
                 .create_session(SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 })
@@ -217,6 +221,8 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
     let subsequent = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })
@@ -304,6 +310,8 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
         probe.before_configuration_prepare.entered().await;
         let create = || {
             fixture.manager.create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -425,6 +433,8 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })
@@ -627,6 +637,8 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })
@@ -775,6 +787,8 @@ async fn t06_t09_t16_process_restart_alone_does_not_defer_new_session() {
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })

@@ -120,6 +120,8 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::String("create-with-initial-model".into()),
             call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
                         crate::model::catalog::ModelRef::parse("provider/selected").unwrap(),
@@ -132,11 +134,30 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::String("create-with-native-default".into()),
             call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: "/workspace".into(),
                     model: None,
                 },
             },
         })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("edit-session-inputs".into()),
+            call: Method::SessionInputsWrite {
+                session_id: target.session_id.clone(),
+                expected_revision: 2,
+                session_config: Some(crate::local_runtime::session_inputs::SessionInputChange::Replace(
+                    crate::local_runtime::session_inputs::SessionConfigContent("[agent]\nworkflows = []\n".into()),
+                )),
+                session_resources: Some(crate::local_runtime::session_inputs::SessionInputChange::Clear),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("edit-session-inputs".into()),
+            result: MethodResult::SessionInputsWritten { revision: 3 },
+        }))),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("prepare-workspace-draft".into()),
@@ -155,7 +176,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             id: RequestId::String("submit-workspace-draft".into()),
             call: Method::SessionCreate {
                 dynamic_tools: Vec::new(),
-                settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
+                settings: crate::local_runtime::session::SessionPersistentState { session_config: None, session_resources: None, cwd: "/workspace".into(), model: None },
                 submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
             },
         })),

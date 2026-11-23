@@ -103,6 +103,24 @@ the last valid generation. A second mount fixture gives User, Client and
 Server-side decoy Agents different contents. The bound runtime selects the
 Client version.
 
+## Session-authored configuration
+
+`thread/start` accepts optional `session_config` and `session_resources`.
+`session/inputsWrite` can replace or clear either field, or validate and
+commit both under one settings revision. Unknown or invalid candidates
+preserve the last valid state. Settings reads expose only the presence of
+the authored fields. Session config is limited to 128 KiB and Session
+resources to 512 KiB and 128 definitions. Existing trusted-reference
+ingestion remains open.
+
+The scripted App Server test
+`session_inputs_commit_together_and_require_permission_for_a_replaced_workflow`
+verifies that a Session definition replaces the Workspace definition and
+requires an explicit Session Workflow grant. It then applies the grant and
+a named Agent, rejects stale and invalid writes, reopens the catalog to
+verify durable inputs, and confirms that clearing the two overrides
+reveals the Workspace Workflow. The fake provider receives no requests.
+
 ## Client stdio MCP
 
 For a bound Session the Client reads `.agents/mcp.toml` and the Server

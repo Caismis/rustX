@@ -60,6 +60,7 @@ function dependency(tx: ReturnType<typeof useTranslation>, failure: WorkflowDepe
     }
   };
   switch (failure.kind) {
+    case 'session_grant_required': return tx('workflows:checklist.dependency-session-grant');
     case 'not_admitted': return tx('workflows:checklist.dependency-not-admitted');
     case 'model': return tx('workflows:checklist.dependency-model', { p0: failure.detail.reason });
     case 'materialization': return tx('workflows:checklist.dependency-materialization');

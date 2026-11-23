@@ -42,7 +42,9 @@ pub use execution::{
     EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,
 };
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
+mod session_inputs;
 mod sessions;
+pub(crate) use session_inputs::SessionInputError;
 mod source_watch;
 
 pub(crate) use client::ConfigurationObservationSource;

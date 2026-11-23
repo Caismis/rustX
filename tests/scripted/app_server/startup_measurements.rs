@@ -10,6 +10,8 @@ async fn issue419_measure_native_cold_load() {
         let created = f
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: f.workspaces[0].clone(),
                 model: None,
             })

@@ -16,6 +16,8 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
         let first = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -134,6 +136,8 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
         let second = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -222,6 +226,8 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
         let first = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -266,6 +272,8 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
         let second = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -337,6 +345,8 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
         let third = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -388,6 +398,8 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
         let first = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -529,6 +541,8 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
         let second = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -625,6 +639,8 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
         let third = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -674,6 +690,8 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
         let first = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -712,6 +730,8 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
         let second = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -787,6 +807,8 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
         let third = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })
@@ -834,6 +856,8 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
         let fourth = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })

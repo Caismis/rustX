@@ -32,6 +32,7 @@ const MAX_RESOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 pub enum SourceScope {
     User,
     Workspace,
+    Session,
 }
 
 /// Frozen authored ownership of a complete resource identity. Discovery records

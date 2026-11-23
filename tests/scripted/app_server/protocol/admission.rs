@@ -518,6 +518,8 @@ async fn session_creation_uses_bounded_metadata_while_cold_attachments_remain_ow
             dynamic_tools: Vec::new(),
             submission: None,
             settings: crate::local_runtime::session::SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: f.workspaces[0].clone(),
                 model: None,
             },

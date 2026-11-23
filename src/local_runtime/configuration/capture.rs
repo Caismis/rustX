@@ -178,20 +178,6 @@ impl UserConfigManager {
         self.capture_application_with_workspace(request, credentials, None, || {})
     }
 
-    pub(crate) fn capture_bound_application(
-        &self,
-        request: &SessionConfigInput,
-        credentials: &crate::credentials::CredentialSnapshot,
-        workspace: &LocalExecutionEndpoint,
-    ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(
-            request,
-            Some(credentials),
-            Some((workspace, None)),
-            || {},
-        )
-    }
-
     /// A Session scope's capture: its source generation, resolved and
     /// validated with the source default, carrying the Session's own
     /// selection unvalidated. Whether the new catalog still admits that
@@ -203,12 +189,10 @@ impl UserConfigManager {
         credentials: &crate::credentials::CredentialSnapshot,
         workspace: Option<(&LocalExecutionEndpoint, Option<WorkspaceResourceIdentity>)>,
     ) -> Result<application::CapturedApplication, String> {
-        let mut captured = self.capture_application_with_workspace(
-            &SessionConfigInput::new(input.cwd.clone()),
-            Some(credentials),
-            workspace,
-            || {},
-        )?;
+        let mut default = input.clone();
+        default.model = None;
+        let mut captured =
+            self.capture_application_with_workspace(&default, Some(credentials), workspace, || {})?;
         if let Ok(context) = &mut captured.context {
             context.input.model.clone_from(&input.model);
         }
@@ -257,6 +241,7 @@ impl UserConfigManager {
                 true,
                 credentials,
                 workspace.map(|(endpoint, _)| endpoint),
+                request.authoring.session_resources.as_ref(),
             )
             .and_then(|capture| {
                 capture
@@ -319,7 +304,13 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.resolve_captured_layers(layers, false, None, None)?;
+        let capture = self.resolve_captured_layers(
+            layers,
+            false,
+            None,
+            None,
+            request.authoring.session_resources.as_ref(),
+        )?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -365,6 +356,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         endpoint: Option<&'a LocalExecutionEndpoint>,
     ) -> Result<(LayerCapture, ConfigurationDocuments<'a>), LaunchFailure> {
+        request.authoring.validate_bounds()?;
         let host = &self.sources;
         let (locations, identity) = if let Some(endpoint) = endpoint {
             if request.cwd.as_os_str() != endpoint.workspace().as_os_str() {
@@ -418,7 +410,7 @@ impl UserConfigManager {
         };
         let project = layer_of(&project_path, project_bytes, true)?;
         let workspace_revision = super::super::settings::revision(project_bytes);
-        let revisions = BTreeMap::from([
+        let mut revisions = BTreeMap::from([
             (user_path.clone(), user_revision),
             (project_path.clone(), workspace_revision),
         ]);
@@ -454,6 +446,20 @@ impl UserConfigManager {
                 },
             ),
         ] {
+            merged.overlay(layer, &origin, &mut provenance);
+        }
+        if let Some(config) = &request.authoring.session_config {
+            let bytes = config.0.as_bytes();
+            let document = PathBuf::from(super::super::session_inputs::CONFIG_DOCUMENT);
+            let layer = parse_layer(&document, bytes, true)?;
+            revisions.insert(
+                document.clone(),
+                super::super::settings::revision(Some(bytes)),
+            );
+            let origin = Origin::Session {
+                document,
+                base: locations.workspace.clone(),
+            };
             merged.overlay(layer, &origin, &mut provenance);
         }
         Ok((
@@ -522,6 +528,7 @@ impl UserConfigManager {
         allow_unselected: bool,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         workspace_endpoint: Option<&LocalExecutionEndpoint>,
+        session_resources: Option<&super::super::session_inputs::SessionResources>,
     ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
@@ -667,7 +674,7 @@ impl UserConfigManager {
                 })
                 .transpose()?;
         }
-        let mcp = super::super::mcp_resources::load_with_workspace(
+        let mut mcp = super::super::mcp_resources::load_with_workspace(
             &self.sources.home_directory.join("rustx/.agents"),
             Some(&locations.workspace),
             |path| match workspace_endpoint {
@@ -679,6 +686,10 @@ impl UserConfigManager {
                 None => super::super::settings::read_document(path),
             },
         );
+        if let Some(resources) = session_resources {
+            mcp.apply_session(resources, &locations.workspace)
+                .map_err(LaunchFailure::resource)?;
+        }
         let mut diagnostics: Vec<_> = mcp
             .invalid_scopes
             .iter()
@@ -827,12 +838,18 @@ impl UserConfigManager {
         let bound_instructions = workspace_endpoint
             .map(|endpoint| BoundInstructions::read(endpoint, &locations.workspace))
             .transpose()?;
-        let (subagents, role_sources) = super::super::agent_resources::load(
+        let agents = super::super::agent_resources::load(
             definitions_workspace,
             &agent_root,
             bound_definitions.as_ref(),
         )
         .map_err(LaunchFailure::resource)?;
+        let session_resources = request.authoring.session_resources.as_ref();
+        let (subagents, role_sources) = match session_resources {
+            Some(resources) => super::super::agent_resources::apply_session(agents, resources)
+                .map_err(LaunchFailure::resource)?,
+            None => agents,
+        };
         revisions.extend(
             role_sources
                 .values()
@@ -856,8 +873,30 @@ impl UserConfigManager {
         };
         // A scope enables only the files it owns: a Global entry never
         // enables the Workspace file that shadows it, nor the reverse.
+        if let Some(resources) = session_resources {
+            workflows = super::super::workflow_resources::apply_session(workflows, resources)
+                .map_err(LaunchFailure::resource)?;
+            let bytes = serde_json::to_vec(resources).map_err(|error| error.to_string())?;
+            revisions.insert(
+                super::super::session_inputs::RESOURCES_DOCUMENT.into(),
+                super::super::settings::revision(Some(&bytes)),
+            );
+        }
+        let session_workflows = matches!(
+            provenance.get("agent.workflows"),
+            Some(Origin::Session { .. })
+        )
+        .then(|| config.agent.workflows.clone());
+        if let Some(selection) = &session_workflows {
+            workflows.authorize_session_definitions(selection);
+        }
         config.agent.workflows.retain(|id| {
-            workflows.enabled_by_owning_scope(id, &scoped_workflows[0], &scoped_workflows[1])
+            workflows.enabled_by_owning_scope(
+                id,
+                &scoped_workflows[0],
+                &scoped_workflows[1],
+                session_workflows.as_deref(),
+            )
         });
         let skill_workspace =
             workspace_endpoint.map_or(authored_workspace, |_| Some(locations.workspace.as_path()));
@@ -1009,10 +1048,10 @@ impl UserConfigManager {
                     family: ResourceFamily::Agent,
                     name: name.to_string(),
                     location: crate::runtime::resources::ResourceLocation {
-                        scope: if source.layer == "workspace" {
-                            SourceScope::Workspace
-                        } else {
-                            SourceScope::User
+                        scope: match source.layer {
+                            "workspace" => SourceScope::Workspace,
+                            "session" => SourceScope::Session,
+                            _ => SourceScope::User,
                         },
                         path: source.selected.clone(),
                         shadowed: source.overridden.clone(),
@@ -1128,6 +1167,8 @@ impl UserConfigManager {
                 || path == &locations.workspace.join(".agents")
                 || path == &host.config_path
                 || path == &locations.workspace.join("rustx.toml")
+                || path == Path::new(super::super::session_inputs::CONFIG_DOCUMENT)
+                || path.starts_with(super::super::session_inputs::RESOURCES_DOCUMENT)
                 || bound_definitions
                     .as_ref()
                     .is_some_and(|definitions| definitions.owns_revision(path))

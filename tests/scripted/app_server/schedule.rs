@@ -189,6 +189,8 @@ async fn pending_creation_reserves_runtime_capacity_independently_of_cold_storag
         );
         let manager = f.manager.clone();
         let settings = SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: f.workspaces[1].clone(),
             model: None,
         };

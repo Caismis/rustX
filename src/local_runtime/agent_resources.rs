@@ -173,6 +173,58 @@ pub(super) fn load(
     Ok((catalog, sources))
 }
 
+/// Apply complete inline definitions using the same strict Agent parser.
+pub(super) fn apply_session(
+    (catalog, mut sources): (AgentCatalog, BTreeMap<SubagentName, AgentSource>),
+    authored: &super::session_inputs::SessionResources,
+) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
+    let mut definitions: Vec<_> = catalog
+        .definitions()
+        .filter(|definition| !authored.agents.contains_key(definition.name()))
+        .map(|definition| (**definition).clone())
+        .collect();
+    for (name, contents) in &authored.agents {
+        let source = Path::new(super::session_inputs::RESOURCES_DOCUMENT)
+            .join("agents")
+            .join(format!("{name}.toml"));
+        let failure = |error: String| {
+            RuntimeResourceLoadError::new(error)
+                .at(&source, format!("agents.{name}"))
+                .because("invalid Session Agent TOML")
+        };
+        let document = parse(contents).map_err(failure)?;
+        let profile = document.lower().map_err(failure)?;
+        definitions.push(
+            NamedAgentDefinition::new(name.clone(), profile, source.clone())
+                .map_err(|error| failure(error.to_string()))?,
+        );
+        let lower = sources.remove(name);
+        sources.insert(
+            name.clone(),
+            AgentSource {
+                revision: super::settings::revision(Some(contents.as_bytes())),
+                identity: name.clone(),
+                selected: source,
+                layer: "session",
+                overridden: lower.as_ref().map(|lower| lower.selected.clone()),
+                overridden_revision: lower.map(|lower| lower.revision),
+            },
+        );
+    }
+    let mut effective = AgentCatalog::new(definitions)
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+    effective.set_invalid(
+        catalog
+            .invalid()
+            .iter()
+            .filter(|(name, _)| !authored.agents.contains_key(*name))
+            .map(|(name, error)| (name.clone(), error.clone()))
+            .collect(),
+    );
+    effective.discovery_diagnostics = catalog.discovery_diagnostics;
+    Ok((effective, sources))
+}
+
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::{Path, PathBuf};

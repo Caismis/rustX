@@ -182,6 +182,12 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
         }
         ErrorData::SteerUnavailable => "The expected Turn is no longer active or steerable",
         ErrorData::HostUploadRejected { .. } => "Hosted result upload refused",
+        ErrorData::SessionInputInvalid => {
+            "Validate the Session config and complete resource definitions"
+        }
+        ErrorData::SessionInputSourceChanged => {
+            "Session sources changed; reread settings before saving"
+        }
         _ => "Operation rejected",
     };
     rpc_error(-32000, message, Some(data))

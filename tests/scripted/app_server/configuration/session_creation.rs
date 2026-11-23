@@ -215,9 +215,12 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
         assert_eq!(user.session_models, None);
 
         let create = |cwd: std::path::PathBuf| {
-            fixture
-                .manager
-                .create_session(SessionPersistentState { cwd, model: None })
+            fixture.manager.create_session(SessionPersistentState {
+                cwd,
+                model: None,
+                session_config: None,
+                session_resources: None,
+            })
         };
         // The first creation publishes this Workspace's binding. A model then
         // authored in its document but never published is configuration, not
@@ -375,6 +378,8 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
 
         let create = || {
             fixture.manager.create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: directory.clone(),
                 model: None,
             })
@@ -542,6 +547,8 @@ async fn hidden_default_models_and_providers_recover_creation_without_reselectin
             std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
             let create = || {
                 fixture.manager.create_session(SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: directory.clone(),
                     model: None,
                 })
@@ -690,6 +697,8 @@ async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
             let created = f
                 .manager
                 .create_session(SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: f.workspaces[0].clone(),
                     model: explicit.then(|| selection.clone()),
                 })
@@ -792,6 +801,8 @@ async fn issue419_omitted_intent_uses_native_default_at_creation_not_draft_proje
         let created = f
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: f.workspaces[0].clone(),
                 model: None,
             })
@@ -849,6 +860,8 @@ async fn issue419_rejected_explicit_model_does_not_publish_or_substitute() {
     let result = f
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: f.workspaces[0].clone(),
             model: Some(crate::model::session::SessionModelConfig::of(
                 crate::model::catalog::ModelRef::parse("local/missing").unwrap(),
@@ -913,7 +926,12 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                                 host_authority: "fixture-host".into(),
                             }
                         }),
-                        settings: SessionPersistentState { cwd, model: None },
+                        settings: SessionPersistentState {
+                            cwd,
+                            model: None,
+                            session_config: None,
+                            session_resources: None,
+                        },
                     },
                 )
                 .await
@@ -976,6 +994,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 .initial_binding(
                     &f.manager.configuration,
                     &SessionConfigInput {
+                        authoring:
+                            crate::local_runtime::session_inputs::SessionAuthoredInputs::default(),
                         cwd: f.workspaces[0].clone(),
                         model: None,
                     },
@@ -1128,6 +1148,8 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
     assert!(
         f.manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: f.workspaces[0].clone(),
                 model: None
             })
@@ -1176,6 +1198,8 @@ async fn disabled_workflow_missing_agent_does_not_block_session_creation() {
     let session = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: directory.clone(),
             model: None,
         })
@@ -1250,6 +1274,8 @@ async fn disabled_workflow_external_sources_do_not_block_session_creation_or_rel
         let created = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: directory.clone(),
                 model: None,
             })
@@ -1502,5 +1528,121 @@ async fn bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_l
         assert_eq!(instructions(), "Restored Workspace reviewer");
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         assert!(client.wait().await.unwrap().success());
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_inputs_commit_together_and_require_permission_for_a_replaced_workflow() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::{ErrorData, Method, MethodResult};
+    use crate::local_runtime::session_inputs::{
+        SessionConfigContent, SessionInputChange, SessionResources,
+    };
+    use crate::runtime::subagent::SubagentName;
+    use crate::runtime::workflow::WorkflowId;
+    use std::collections::BTreeMap;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = &fixture.workspaces[0];
+        let review = WorkflowId::parse("review").unwrap();
+        let helper = SubagentName::parse("reviewer").unwrap();
+        let workflow_document = |description| format!(
+            "description: {description}\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  edges: [{{from: workflow_start, to: done}}]\n  nodes:\n    workflow_start: {{type: start}}\n    done: {{type: return, outputs: []}}\n"
+        );
+        let workflows = workspace.join(".agents/workflows");
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::fs::write(workflows.join("review.yaml"), workflow_document("Workspace review")).unwrap();
+        std::fs::write(workspace.join("rustx.toml"), "[agent]\nworkflows=['review']\n").unwrap();
+
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let catalog = || runtime.runtime_resources();
+        let ready = || catalog().workflows().enabled_ids().contains(&review);
+        let description = || catalog().workflows().get(&review).unwrap().description().to_owned();
+        assert!(ready());
+        assert_eq!(description(), "Workspace review");
+
+        let (revision, _) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+        let inputs = SessionResources {
+            agents: BTreeMap::from([(helper.clone(), "description='Review'\ninstructions='session-only sentinel'\nskills=[]\n".into())]),
+            workflows: BTreeMap::from([(review.clone(), workflow_document("Session review"))]),
+            ..SessionResources::default()
+        };
+        let request = |expected_revision, session_config, session_resources| Method::SessionInputsWrite {
+            session_id: id.clone(),
+            expected_revision,
+            session_config,
+            session_resources,
+        };
+        let MethodResult::SessionInputsWritten { revision: first } = call(
+            &connection, 30, request(revision, None, Some(SessionInputChange::Replace(inputs.clone()))),
+        ).await else { panic!("saved Session resources"); };
+        assert_eq!(first, revision + 1);
+        let _ = applied(&fixture, 0).await;
+        assert_eq!(description(), "Session review");
+        assert!(!ready(), "the Session Workflow cannot inherit its lower definition's grant");
+
+        let config = SessionConfigContent("[agent]\nagents=['reviewer']\nworkflows=['review']\n[tool_deadline_policy]\nhard_deadline_ms=23456\n".into());
+        let MethodResult::SessionInputsWritten { revision: second } = call(
+            &connection, 31, request(first, Some(SessionInputChange::Replace(config.clone())), None),
+        ).await else { panic!("saved Session config"); };
+        assert_eq!(second, first + 1);
+        let _ = applied(&fixture, 0).await;
+        assert!(ready(), "the Session now grants the selected Workflow definition");
+        assert_eq!(catalog().subagents().get(&helper).unwrap().instructions(), "session-only sentinel");
+        let result = call(&connection, 32, Method::SettingsRead { session_id: id.clone() }).await;
+        let MethodResult::Settings { projection } = &result else { panic!("Session settings"); };
+        assert_eq!(projection.revision, second);
+        let flags = projection.authored.as_ref().unwrap();
+        assert!(flags.session_config && flags.session_resources);
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(!encoded.contains("session-only sentinel"));
+        assert!(!encoded.contains("23456"));
+
+        let rejected = |request_id, call| {
+            let connection = &connection;
+            async move {
+                use crate::app_server::protocol::{JsonRpcVersion, Request, RequestId, Response};
+                let response = connection.handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(request_id),
+                    call,
+                }).await;
+                let Response::Failure(failure) = response else { panic!("rejected Session inputs"); };
+                failure.error.data.unwrap()
+            }
+        };
+        let stale = rejected(33, request(first, Some(SessionInputChange::Clear), None)).await;
+        assert_eq!(stale, ErrorData::StaleSettings { expected: first, actual: second });
+        let invalid = rejected(34, request(
+            second, Some(SessionInputChange::Replace(SessionConfigContent("[app_server]\n".into()))),
+            Some(SessionInputChange::Clear),
+        )).await;
+        assert_eq!(invalid, ErrorData::SessionInputInvalid);
+        let (unchanged, settings) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+        assert_eq!(unchanged, second);
+        assert_eq!(settings.session_config, Some(config));
+        assert_eq!(settings.session_resources, Some(inputs));
+
+        let scoped = fixture.manager.configuration.source_bindings().clone();
+        let catalog_on_disk = crate::local_runtime::session::SessionCatalog::open_existing(&scoped.runtime_root)
+            .unwrap().unwrap();
+        assert_eq!(catalog_on_disk.settings_revision(&id).unwrap(), second);
+        assert_eq!(catalog_on_disk.lineage(&id, None).unwrap().1, settings);
+        let MethodResult::SessionInputsWritten { revision: cleared } = call(
+            &connection, 35, request(second, Some(SessionInputChange::Clear), Some(SessionInputChange::Clear)),
+        ).await else { panic!("cleared both fields"); };
+        assert_eq!(cleared, second + 1);
+        let _ = applied(&fixture, 0).await;
+        assert!(ready());
+        assert_eq!(description(), "Workspace review");
+        assert!(catalog().subagents().get(&helper).is_none());
+        assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
     })).await;
 }

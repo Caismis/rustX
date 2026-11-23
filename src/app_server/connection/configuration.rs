@@ -485,6 +485,37 @@ impl AppServerConnection {
                     configuration_revision: receipt.configuration_revision,
                 })
             }
+            Method::SessionInputsWrite {
+                session_id,
+                expected_revision,
+                session_config,
+                session_resources,
+            } => {
+                use crate::local_runtime::session_runtime_manager::SessionInputError;
+                let revision = self
+                    .host
+                    .manager()
+                    .write_session_inputs(
+                        session_id,
+                        expected_revision,
+                        session_config,
+                        session_resources,
+                        request_owner,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        SessionInputError::Invalid => domain(ErrorData::SessionInputInvalid),
+                        SessionInputError::SourceChanged => {
+                            domain(ErrorData::SessionInputSourceChanged)
+                        }
+                        SessionInputError::ExecutionUnavailable => {
+                            domain(ErrorData::ExecutionUnavailable)
+                        }
+                        SessionInputError::Unconfirmed => domain(ErrorData::OutcomeUnknown),
+                        SessionInputError::Persistence(error) => session_error(error),
+                    })?;
+                Ok(MethodResult::SessionInputsWritten { revision })
+            }
             Method::SettingsRead { session_id } => {
                 let (revision, settings) = self
                     .sessions

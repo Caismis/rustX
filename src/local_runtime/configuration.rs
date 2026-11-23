@@ -122,11 +122,16 @@ impl ConfigurationHooks {
 pub struct SessionConfigInput {
     pub cwd: PathBuf,
     pub model: Option<crate::model::session::SessionModelConfig>,
+    pub authoring: super::session_inputs::SessionAuthoredInputs,
 }
 impl SessionConfigInput {
     #[must_use]
     pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd, model: None }
+        Self {
+            cwd,
+            model: None,
+            authoring: super::session_inputs::SessionAuthoredInputs::default(),
+        }
     }
 }
 
@@ -137,6 +142,7 @@ pub enum Origin {
     Builtin,
     User { document: PathBuf, base: PathBuf },
     Workspace { document: PathBuf, base: PathBuf },
+    Session { document: PathBuf, base: PathBuf },
     Process { base: PathBuf },
 }
 

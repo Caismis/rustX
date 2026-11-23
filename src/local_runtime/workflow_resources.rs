@@ -138,6 +138,55 @@ pub(super) fn load_sources(
     Ok(catalog)
 }
 
+pub(super) fn apply_session(
+    catalog: WorkflowCatalog,
+    authored: &super::session_inputs::SessionResources,
+) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
+    use crate::runtime::resources::ResourceLocation;
+    let mut programs = catalog
+        .entries()
+        .iter()
+        .filter(|(id, _)| !authored.workflows.contains_key(*id))
+        .map(|(_, entry)| (*entry.source).clone())
+        .collect::<Vec<_>>();
+    let mut locations = catalog.locations.clone();
+    for (id, contents) in &authored.workflows {
+        let path = Path::new(super::session_inputs::RESOURCES_DOCUMENT)
+            .join("workflows")
+            .join(format!("{id}.yaml"));
+        let revision = super::settings::revision(Some(contents.as_bytes()));
+        let parsed = parse_source(id, &path, contents.as_bytes())?;
+        programs.push(compile_document(id, &path, revision, parsed)?);
+        let shadowed = locations.remove(id).map(|lower| lower.path);
+        locations.insert(
+            id.clone(),
+            ResourceLocation {
+                scope: SourceScope::Session,
+                path,
+                shadowed,
+            },
+        );
+    }
+    let mut effective = WorkflowCatalog::new(programs)
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+    effective.set_invalid(
+        catalog
+            .invalid()
+            .iter()
+            .filter(|(id, _)| !authored.workflows.contains_key(*id))
+            .map(|(id, error)| (id.clone(), error.clone()))
+            .collect(),
+    );
+    effective.locations = locations;
+    effective.discovery_diagnostics = catalog.discovery_diagnostics;
+    effective.presentation_diagnostics = catalog
+        .presentation_diagnostics
+        .into_iter()
+        .filter(|(id, _)| !authored.workflows.contains_key(id))
+        .collect();
+    Ok(effective)
+}
+
 /// Parse one Workflow file's bytes with the native authoring type. The
 /// diagnostic carries only native structural coordinates and static reasons.
 pub(super) fn parse_source(

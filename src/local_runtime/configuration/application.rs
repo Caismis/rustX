@@ -395,6 +395,15 @@ impl ApplicationState {
         persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let key = super::capture::canonical_directory(&input.cwd)?;
+        if !input.authoring.is_empty() {
+            let mut canonical_input = input.clone();
+            canonical_input.cwd = key;
+            let capture = configuration
+                .capture_session_application(&canonical_input, credentials, None)?
+                .context?;
+            Self::validate_default(&capture, credentials)?;
+            return Self::admit_initial(capture, &canonical_input, credentials, persisted);
+        }
         let capture = match self.creation_capture(configuration, &key, credentials)? {
             std::borrow::Cow::Borrowed(capture) => capture.clone(),
             std::borrow::Cow::Owned(capture) => {
@@ -415,11 +424,7 @@ impl ApplicationState {
         endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let capture = configuration
-            .capture_bound_application(
-                &super::SessionConfigInput::new(input.cwd.clone()),
-                credentials,
-                endpoint,
-            )?
+            .capture_session_application(input, credentials, Some((endpoint, None)))?
             .context?;
         Self::validate_default(&capture, credentials)?;
         Self::admit_initial(capture, input, credentials, true)
@@ -524,8 +529,11 @@ impl ApplicationState {
         adopted: &super::AdmittedSessionConfig,
     ) {
         let source = adopted.input.cwd.clone();
-        self.scope_sources.insert(scope.clone(), source.clone());
         self.own_scope(&scope, &source);
+        if !adopted.input.authoring.is_empty() {
+            return;
+        }
+        self.scope_sources.insert(scope.clone(), source.clone());
         if let Some(mut input) = self.desired_sources.get(&source).cloned() {
             if let Ok(captured) = &mut input
                 && let Ok(context) = &mut captured.context
@@ -562,7 +570,7 @@ impl ApplicationState {
         }
     }
 
-    fn validate_selection(
+    pub(in crate::local_runtime) fn validate_selection(
         capture: &super::ProspectiveSessionConfig,
         credentials: &crate::credentials::CredentialSnapshot,
         persisted: bool,

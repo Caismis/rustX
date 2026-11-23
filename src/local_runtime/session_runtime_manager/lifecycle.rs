@@ -491,8 +491,14 @@ impl SessionRuntimeManager {
         {
             return Ok(paths);
         }
-        let input = access.settings.input();
         for _ in 0..3 {
+            let (input, expected_settings) = {
+                let catalog = self.sessions.catalog.blocking_lock();
+                (
+                    catalog.lineage(session, None).map_err(error)?.1.input(),
+                    catalog.settings_revision(session).map_err(error)?,
+                )
+            };
             let endpoint = self.execution.configuration_endpoint(session)?;
             if endpoint.is_none() {
                 self.repair_session_sources(&input);
@@ -533,7 +539,12 @@ impl SessionRuntimeManager {
                     .initial_binding(&self.configuration, &input, &self.credentials, true)
                     .map_err(error)?
             };
-            // Source ingestion takes the same lock before looking at retained Sessions.
+            // Session authoring can commit while a Client is reading the
+            // Workspace. Publication shares its fence with source ingestion.
+            let catalog = self.sessions.catalog.blocking_lock();
+            if catalog.settings_revision(session).map_err(error)? != expected_settings {
+                continue;
+            }
             let paths = bindings
                 .lock()
                 .expect("Session configuration bindings")

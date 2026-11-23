@@ -707,6 +707,8 @@ fn malformed_workspace_agent_shadows_user_without_poisoning_unused_startup() {
 fn session_persistence_refuses_obsolete_effective_configuration_fields() {
     use rustx::local_runtime::session::SessionPersistentState;
     let state = SessionPersistentState {
+        session_config: None,
+        session_resources: None,
         cwd: "/workspace".into(),
         model: None,
     };

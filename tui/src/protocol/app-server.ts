@@ -515,6 +515,10 @@ export function describeRpcError(error: RpcError): string {
       return `${data.scope} source changed (expected ${data.expected}, found ${data.actual})`;
     case "resource_transfer_rejected":
       return `resource transfer rejected: ${data.reason}`;
+    case "session_input_invalid":
+      return "the Session configuration or resources are invalid";
+    case "session_input_source_changed":
+      return "a configuration source changed during this edit; reload its revision";
     case "stale_settings":
       return `settings changed underneath this edit (expected revision ${data.expected}, found ${data.actual})`;
     case "workflow_invalid":

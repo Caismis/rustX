@@ -1419,6 +1419,15 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/inputsWrite';
+      params: {
+        session_id: SessionId;
+        expected_revision: number;
+        session_config?: SessionInputChange | null;
+        session_resources?: SessionInputChange2 | null;
+      };
+    }
+  | {
       method: 'session/settingsValueRead';
       params: {
         session_id: SessionId;
@@ -1905,6 +1914,13 @@ export type SubagentId = string;
  */
 export type RuntimeClientCursor = string;
 /**
+ * Strict TOML source for one Session, with diagnostics that omit its value.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionConfigContent".
+ */
+export type SessionConfigContent = string;
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ContentSource".
  */
@@ -2168,7 +2184,7 @@ export type WorkflowModelChoicesQuery =
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceScope".
  */
-export type SourceScope = 'user' | 'workspace';
+export type SourceScope = 'user' | 'workspace' | 'session';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowConsumerField".
@@ -2711,6 +2727,34 @@ export type WorkflowEdit =
     }
   | {
       operation: 'delete';
+    };
+/**
+ * An omitted field makes no edit. Clearing reveals the current lower layer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputChange".
+ */
+export type SessionInputChange =
+  | {
+      operation: 'clear';
+    }
+  | {
+      operation: 'replace';
+      content: SessionConfigContent;
+    };
+/**
+ * An omitted field makes no edit. Clearing reveals the current lower layer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputChange2".
+ */
+export type SessionInputChange2 =
+  | {
+      operation: 'clear';
+    }
+  | {
+      operation: 'replace';
+      content: SessionResources;
     };
 /**
  * The complete upload envelope: JSON-RPC version, correlation identifier, and
@@ -3278,6 +3322,10 @@ export type MethodResult =
   | {
       projection: BoundedSessionSettings;
       type: 'settings';
+    }
+  | {
+      revision: number;
+      type: 'session_inputs_written';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -5388,6 +5436,9 @@ export type WorkflowDependencyFailure =
       kind: 'not_admitted';
     }
   | {
+      kind: 'session_grant_required';
+    }
+  | {
       kind: 'model';
       detail: {
         reason: string;
@@ -6656,6 +6707,11 @@ export type Origin =
       kind: 'workspace';
     }
   | {
+      document: string;
+      base: string;
+      kind: 'session';
+    }
+  | {
       base: string;
       kind: 'process';
     };
@@ -6820,6 +6876,12 @@ export type ErrorData =
     }
   | {
       kind: 'environment_capacity_or_conflict';
+    }
+  | {
+      kind: 'session_input_invalid';
+    }
+  | {
+      kind: 'session_input_source_changed';
     }
   | {
       kind: 'execution_unavailable';
@@ -10032,10 +10094,35 @@ export interface ResourcePermissionSet {
 export interface SessionPersistentState {
   cwd: string;
   /**
+   * Session-authored configuration above the Workspace and User layers.
+   */
+  session_config?: SessionConfigContent | null;
+  /**
+   * Complete definitions owned by this Session.
+   */
+  session_resources?: SessionResources | null;
+  /**
    * Explicit initial selection. Omission delegates to the native configuration
    * owner at creation; clients must not copy a projected default into this field.
    */
   model?: SessionModelConfig | null;
+}
+/**
+ * Complete Session-authored definitions keyed by their resource identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionResources".
+ */
+export interface SessionResources {
+  agents?: {
+    [k: string]: string;
+  };
+  workflows?: {
+    [k: string]: string;
+  };
+  mcp?: {
+    [k: string]: string;
+  };
 }
 /**
  * An opaque draft identity and monotonically increasing selection generation.
@@ -21273,8 +21360,19 @@ export interface SessionSettingsChunk {
 export interface BoundedSessionSettings {
   revision: string;
   cwd: string;
+  authored?: SessionSettingsAuthored | null;
   inline?: SessionPersistentState | null;
   reference?: SessionSettingsRef | null;
+}
+/**
+ * Presence of the persisted Session-owned source fields at the shared revision.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionSettingsAuthored".
+ */
+export interface SessionSettingsAuthored {
+  session_config: boolean;
+  session_resources: boolean;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

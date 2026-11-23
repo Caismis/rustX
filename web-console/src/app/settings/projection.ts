@@ -15,7 +15,7 @@ export const userSettingsTarget: UserSettingsTarget = { kind: 'user' };
 export function workspaceSettingsTarget(id: string, displayName: string = id): WorkspaceSettingsTarget {
   return { kind: 'workspace', id, displayName };
 }
-export function settingsTargetScope(target: SettingsTarget): SourceScope { return target.kind; }
+export function settingsTargetScope(target: SettingsTarget): SettingsTarget['kind'] { return target.kind; }
 export function settingsTargetKey(target: SettingsTarget): string {
   return target.kind === 'user' ? 'user' : `workspace:${target.id}`;
 }

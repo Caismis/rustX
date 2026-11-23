@@ -1229,6 +1229,25 @@ pub enum Method {
     },
     #[serde(rename = "session/settings")]
     SettingsRead { session_id: SessionId },
+    /// Save a validated Session candidate at the current settings revision.
+    #[serde(rename = "session/inputsWrite")]
+    SessionInputsWrite {
+        session_id: SessionId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        expected_revision: u64,
+        #[serde(default)]
+        session_config: Option<
+            crate::local_runtime::session_inputs::SessionInputChange<
+                crate::local_runtime::session_inputs::SessionConfigContent,
+            >,
+        >,
+        #[serde(default)]
+        session_resources: Option<
+            crate::local_runtime::session_inputs::SessionInputChange<
+                crate::local_runtime::session_inputs::SessionResources,
+            >,
+        >,
+    },
     #[serde(rename = "session/settingsValueRead")]
     SettingsValueRead {
         session_id: SessionId,
@@ -1428,6 +1447,7 @@ impl Method {
             | Self::InboundSteer { .. }
             | Self::TurnCancel { .. }
             | Self::SourcesWrite { .. }
+            | Self::SessionInputsWrite { .. }
             | Self::ConfigurationReconcile { .. } => true,
         }
     }
@@ -1440,6 +1460,8 @@ pub enum ErrorData {
     EnvironmentUnauthorized,
     EnvironmentResourceNotFound,
     EnvironmentCapacityOrConflict,
+    SessionInputInvalid,
+    SessionInputSourceChanged,
     /// The Session's local execution endpoint does not exist or its
     /// admitted Client is gone; there is no fallback reader.
     ExecutionUnavailable,
@@ -2021,6 +2043,10 @@ pub enum MethodResult {
     },
     Settings {
         projection: crate::local_runtime::configuration::observation::BoundedSessionSettings,
+    },
+    SessionInputsWritten {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        revision: u64,
     },
 }
 

@@ -1338,9 +1338,9 @@ impl UserConfigManager {
         );
         format!(
             "{}-{}-{}.toml",
-            match target.scope() {
-                SourceScope::User => "user",
-                SourceScope::Workspace => "workspace",
+            match target {
+                SourceTarget::User => "user",
+                SourceTarget::Workspace { .. } => "workspace",
             },
             &source[..16],
             before.trim_start_matches("sha256:")

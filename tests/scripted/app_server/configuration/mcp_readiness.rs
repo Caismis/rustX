@@ -232,6 +232,8 @@ async fn create(fixture: &Fixture) -> SessionSnapshot {
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })

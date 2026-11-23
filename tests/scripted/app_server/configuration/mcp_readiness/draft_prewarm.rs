@@ -28,6 +28,8 @@ async fn submit(
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[workspace].clone(),
                 model: None,
             },
@@ -170,6 +172,8 @@ async fn create_ack_precedes_validated_transfer_without_releasing_the_reserved_g
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
@@ -244,6 +248,8 @@ async fn sixty_seconds_preparation_then_submission_has_the_full_budget_on_the_sa
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
@@ -287,6 +293,8 @@ async fn submission_timeout_survives_handoff_and_cannot_resurrect_late_ready() {
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
@@ -468,6 +476,8 @@ async fn failed_session_creation_settles_reserved_preparation_without_a_durable_
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: Some(crate::model::session::SessionModelConfig::of(
                         crate::model::catalog::ModelRef::parse("missing/model").unwrap(),
@@ -522,6 +532,8 @@ async fn cancellation_before_validated_transfer_uses_normal_startup_under_the_or
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
@@ -574,6 +586,8 @@ async fn capacity_queueing_uses_the_same_submission_deadline_without_starting_a_
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
@@ -1368,7 +1382,7 @@ async fn credential_rotation_retires_preparation_while_model_only_changes_reuse_
                 fixture.manager.credentials = credentials("draft-secret-after");
             }
             let created = fixture.manager.create_session_submitted(
-                SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) }, Vec::new(),
+                SessionPersistentState { session_config: None, session_resources: None, cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) }, Vec::new(),
                 scope.claim(&target(1), SubmissionIntent::now()),
             ).await.unwrap();
             let session = fixture.manager.sessions.rename_session(&created.session.id, "Model and credential boundaries").await.unwrap();
@@ -1409,6 +1423,8 @@ async fn committed_creation_durability_warning_keeps_the_same_preparation_and_se
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },

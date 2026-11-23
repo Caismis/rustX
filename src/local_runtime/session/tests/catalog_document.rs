@@ -65,6 +65,8 @@ fn resume_keeps_explicit_session_model_but_new_catalog_uses_current_default() {
     let mut catalog = SessionCatalog::create(
         directory.path(),
         &SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             model: Some(first.clone()),
             ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
                 std::path::PathBuf::from("/"),
@@ -86,6 +88,8 @@ fn resume_keeps_explicit_session_model_but_new_catalog_uses_current_default() {
     let fresh = SessionCatalog::create(
         new_directory.path(),
         &SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             model: Some(current.clone()),
             ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
                 std::path::PathBuf::from("/"),

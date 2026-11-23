@@ -33,6 +33,7 @@ pub struct WorkflowAdmissionDiagnostic {
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowDependencyFailure {
     NotAdmitted,
+    SessionGrantRequired,
     /// Bounded static model error classification, without provider details.
     Model {
         reason: String,
@@ -68,6 +69,7 @@ pub struct WorkflowCatalog {
     pub(crate) presentation_diagnostics:
         BTreeMap<WorkflowId, Vec<crate::runtime::resources::RuntimeResourceLoadError>>,
     pub(super) entries: BTreeMap<WorkflowId, WorkflowEntry>,
+    pub(super) session_grants: BTreeSet<WorkflowId>,
     invalid: BTreeMap<WorkflowId, crate::runtime::resources::RuntimeResourceLoadError>,
 }
 
@@ -115,6 +117,7 @@ impl WorkflowCatalog {
         }
         Ok(Self {
             entries,
+            session_grants: BTreeSet::new(),
             locations: BTreeMap::new(),
             invalid: BTreeMap::new(),
             discovery_diagnostics: Vec::new(),
@@ -142,15 +145,29 @@ impl WorkflowCatalog {
         id: &WorkflowId,
         user_selected: &[WorkflowId],
         workspace_selected: &[WorkflowId],
+        session_selected: Option<&[WorkflowId]>,
     ) -> bool {
+        use crate::runtime::resources::SourceScope;
         self.locations.get(id).is_some_and(|location| {
-            let selected = if location.scope == crate::runtime::resources::SourceScope::Workspace {
-                workspace_selected
-            } else {
-                user_selected
+            let selected = match location.scope {
+                SourceScope::User => user_selected,
+                SourceScope::Workspace => workspace_selected,
+                SourceScope::Session => session_selected.unwrap_or_default(),
             };
             selected.contains(id)
         })
+    }
+
+    pub(crate) fn authorize_session_definitions(&mut self, selected: &[WorkflowId]) {
+        self.session_grants = selected
+            .iter()
+            .filter(|id| {
+                self.locations.get(*id).is_some_and(|location| {
+                    location.scope == crate::runtime::resources::SourceScope::Session
+                })
+            })
+            .cloned()
+            .collect();
     }
 
     #[must_use]

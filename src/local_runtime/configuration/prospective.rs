@@ -572,6 +572,9 @@ impl ProspectiveSessionConfig {
             .values()
             .filter(|role| agents.contains(&role.identity))
         {
+            if role.layer == "session" {
+                continue;
+            }
             if role.layer == "workspace"
                 && matches!(
                     self.workspace_resources,

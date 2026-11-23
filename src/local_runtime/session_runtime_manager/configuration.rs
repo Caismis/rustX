@@ -700,7 +700,7 @@ impl SessionRuntimeManager {
         target: &super::super::configuration::settings::SourceTarget,
         authored: bool,
     ) -> Vec<BoundCapture> {
-        let inputs: Vec<_> = self
+        let retained: Vec<_> = self
             .sessions
             .configuration_bindings
             .lock()
@@ -711,28 +711,36 @@ impl SessionRuntimeManager {
                     .workspace()
                     .is_none_or(|directory| directory.as_os_str() == binding.input.cwd.as_os_str())
             })
-            .map(|(session, binding)| {
-                (
-                    session.clone(),
-                    binding.input.clone(),
-                    binding.workspace_resources.identity(),
-                )
-            })
+            .map(|(session, binding)| (session.clone(), binding.workspace_resources.identity()))
             .collect();
+        if retained.is_empty() {
+            return Vec::new();
+        }
+        let inputs: Vec<_> = {
+            let catalog = self.sessions.catalog.blocking_lock();
+            retained
+                .into_iter()
+                .filter_map(|(session, identity)| {
+                    let (_, settings) = catalog.lineage(&session, None).ok()?;
+                    Some((session, settings.input(), identity))
+                })
+                .collect()
+        };
         let mut bound = Vec::new();
         for (session, input, authored_workspace) in inputs {
             application.cancel_bound_capture(&session);
             match self.execution.configuration_endpoint(&session) {
                 Ok(None) if authored => {
-                    application.capture(
-                        session.to_string(),
-                        &input.cwd,
-                        self.configuration.capture_session_application(
-                            &input,
-                            &self.credentials,
-                            None,
-                        ),
+                    let capture = self.configuration.capture_session_application(
+                        &input,
+                        &self.credentials,
+                        None,
                     );
+                    if input.authoring.is_empty() {
+                        application.capture(session.to_string(), &input.cwd, capture);
+                    } else {
+                        application.capture_bound_source(session.to_string(), &input.cwd, capture);
+                    }
                 }
                 Ok(None) => {}
                 Ok(Some(endpoint)) => {

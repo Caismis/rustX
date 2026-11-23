@@ -10458,6 +10458,26 @@
             "type",
             "projection"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "session_inputs_written"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "revision"
+          ]
         }
       ]
     },
@@ -20954,7 +20974,8 @@
       "type": "string",
       "enum": [
         "user",
-        "workspace"
+        "workspace",
+        "session"
       ]
     },
     "ResourceDiagnostic": {
@@ -21611,6 +21632,18 @@
             "kind": {
               "type": "string",
               "const": "not_admitted"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_grant_required"
             }
           },
           "required": [
@@ -29644,6 +29677,26 @@
         {
           "type": "object",
           "properties": {
+            "document": {
+              "type": "string"
+            },
+            "base": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "required": [
+            "kind",
+            "document",
+            "base"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "base": {
               "type": "string"
             },
@@ -32691,6 +32744,16 @@
         "cwd": {
           "type": "string"
         },
+        "authored": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionSettingsAuthored"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "inline": {
           "anyOf": [
             {
@@ -32718,12 +32781,51 @@
         "cwd"
       ]
     },
+    "SessionSettingsAuthored": {
+      "description": "Presence of the persisted Session-owned source fields at the shared revision.",
+      "type": "object",
+      "properties": {
+        "session_config": {
+          "type": "boolean"
+        },
+        "session_resources": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_config",
+        "session_resources"
+      ]
+    },
     "SessionPersistentState": {
       "description": "Deliberate Session-owned intent. Effective configuration is never persisted.",
       "type": "object",
       "properties": {
         "cwd": {
           "type": "string"
+        },
+        "session_config": {
+          "description": "Session-authored configuration above the Workspace and User layers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionConfigContent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_resources": {
+          "description": "Complete definitions owned by this Session.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionResources"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "description": "Explicit initial selection. Omission delegates to the native configuration\nowner at creation; clients must not copy a projected default into this field.",
@@ -32741,6 +32843,35 @@
       "required": [
         "cwd"
       ]
+    },
+    "SessionConfigContent": {
+      "description": "Strict TOML source for one Session, with diagnostics that omit its value.",
+      "type": "string"
+    },
+    "SessionResources": {
+      "description": "Complete Session-authored definitions keyed by their resource identity.",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workflows": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Failure": {
       "type": "object",
@@ -32844,6 +32975,32 @@
             "kind": {
               "type": "string",
               "const": "environment_capacity_or_conflict"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_input_invalid"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_input_source_changed"
             }
           },
           "required": [
@@ -40502,6 +40659,61 @@
           ]
         },
         {
+          "description": "Save a validated Session candidate at the current settings revision.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/inputsWrite"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "expected_revision": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "session_config": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInputChange"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "session_resources": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInputChange2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "expected_revision"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -42880,6 +43092,76 @@
           },
           "required": [
             "operation"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SessionInputChange": {
+      "description": "An omitted field makes no edit. Clearing reveals the current lower layer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "clear"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "replace"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionConfigContent"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SessionInputChange2": {
+      "description": "An omitted field makes no edit. Clearing reveals the current lower layer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "clear"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "replace"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionResources"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
           ],
           "additionalProperties": false
         }

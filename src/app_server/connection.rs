@@ -1045,6 +1045,7 @@ impl AppServerConnection {
                 | Method::WorkflowCheckReportRead { .. }
                 | Method::WorkflowCheckReportRelease { .. }
                 | Method::SettingsRead { .. }
+                | Method::SessionInputsWrite { .. }
                 | Method::SettingsValueRead { .. }
                 | Method::SessionApplicationValueRead { .. }
                 | Method::SessionConfiguration { .. }

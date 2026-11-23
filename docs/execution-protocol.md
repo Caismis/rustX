@@ -1269,6 +1269,15 @@ envelope.
   allocating a binding. Authorized browsing works after Client admission
   even when Workspace configuration is invalid and Agent runtime attach
   fails. A missing current binding reports `ExecutionUnavailable`.
+- Session-authored inputs are optional `session_config` and
+  `session_resources` fields on `thread/start`. `session/inputsWrite`
+  uses the current Session settings revision to validate and persist either
+  or both fields as one candidate. Omitted fields retain their values.
+  Clearing a field reveals its lower sources. Activation follows the safe
+  configuration application boundary. Session-authored Workflows require
+  an explicit Session grant even when a lower definition had permission.
+  The settings read projection discloses presence only.
+
 - Fresh App Server configuration capture for a reserved Session reads
   `rustx.toml` and Workspace `AGENTS.md` through the authenticated
   Client. The Server uses the proven
