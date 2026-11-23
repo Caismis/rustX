@@ -219,7 +219,8 @@ pub(in crate::local_runtime) fn admitted_source_demand(
             .filter_map(|(source, selection)| {
                 matches!(
                     selection,
-                    crate::capabilities::selection::SourceToolSelection::Exact(_)
+                    crate::capabilities::selection::SourceToolSelection::Exact(names)
+                        if !names.is_empty()
                 )
                 .then_some(source.clone())
             }),

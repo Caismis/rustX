@@ -249,6 +249,11 @@ ordinary requests could therefore buffer up to 256 MiB of JSON bodies per
 transport in addition to decode and transport overhead. These bounds cover
 retained body bytes.
 
+An empty exact source selection carries no live-discovery demand. The
+process-level startup tests keep explicitly disabled Python sources
+Unprepared, including an unusable Store and a malformed package, while native
+tools remain available.
+
 For a valid HTTP business result, text blocks are scrubbed using the
 credential snapshot of the connection that performed the call, then added in
 order to the bounded preview and, after the spill threshold, to the same
