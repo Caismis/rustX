@@ -641,5 +641,46 @@ resource and cancellation combinations remain individually mapped below.
   Web Console type check, build and 5,020 tests passed with four skips.
 - `git diff --check` passed.
 
+At `2f307cb83d39a5e093e09504cb79284c468ec0b4`, the prepared Linux
+workspace passed 7,539 Rust unit and integration tests with 48 existing
+ignores. The workspace run and the explicit doctest run each passed the
+same 15 doctests. Workspace all-target/all-feature check, strict Clippy,
+strict rustdoc and the workspace release binary build passed. Dev passed
+44 tests and TUI passed 1,366 tests with one skip. The cold pinned browser
+fixture passed all seven MCP editor and development launcher cases after
+separating the fixture optimizer cache and scanning the lazy editor at
+startup. The full browser run uses the staged native executables.
+The 12 opt-in Linux mount proofs passed with the prepared binaries. The
+App Server mount composition hit its original 60-second liveness guard
+while three builds were active. It passed on an unchanged rerun, along
+with the five in-crate cases and the real child fixture.
+
+The independently built debug Server (`cargo build -p rustx --bin rustx
+--locked`) ran with only that executable in its staging directory. One
+real HTTP MCP response carried 16,773,193 JSON body bytes. Server peak RSS
+was 175,320 KiB at baseline, 216,404 KiB with a 12 MiB prefix held, and
+240,116 KiB after completion. The peer counted one call and two
+fake-provider requests. Durable history had one 17,022-byte model tool
+message and one Attempt terminal. Server scratch stayed empty.
+
+The independent release Client build
+(`cargo build -p rustx-execution-client --bin rustx-execution-client
+--release --locked`) ran from a directory containing only the Client.
+The revision-six UDS probe used three fresh Clients per operation. The
+normal Client dependency graph excludes the Server and reqwest. The
+normal Server graph omits the Client executable crate.
+
+| Operation | Application data RPCs | Data bytes to/from Client | Median elapsed | Highest Client RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Lines from a 67,108,877-byte source | 1 | 99 / 265 | 56.07 ms | 12,248 KiB |
+| Grep over the same source | 1 | 149 / 132 | 19.27 ms | 13,472 KiB |
+| Publish 2 MiB with create-only expectation | 34 | 2,798,628 / 2,212 | 1,308.87 ms | 13,988 KiB |
+
+Median Client startup ranged from 2.52 to 2.85 ms. Median shutdown,
+including confirmed Revoke, ranged from 45.23 to 95.00 ms. These warm-cache
+probe measurements include competing local builds, especially disk
+contention during publication. The debug Server and release Client
+used different workloads and build profiles.
+
 Final FULL and Merge verification, native macOS and the complete Browser
 acceptance matrix remain open.
