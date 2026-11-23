@@ -242,7 +242,7 @@ impl FixtureServer {
             mrtr_tools: std::env::var_os(MRTR_TOOLS_ENV).is_some(),
             mrtr_rounds: std::env::var(MRTR_ROUNDS_ENV)
                 .ok()
-                .and_then(|value| value.parse::<usize>().ok()),
+                .and_then(|value| value.strip_prefix("fixture-rounds:")?.parse::<usize>().ok()),
             mrtr_observation_file: std::env::var_os(MRTR_OBSERVATION_FILE_ENV).map(PathBuf::from),
             task_tools: std::env::var_os(tasks::TASK_TOOLS_ENV).is_some()
                 || std::env::var_os(tasks::TASK_UNADVERTISED_ENV).is_some(),

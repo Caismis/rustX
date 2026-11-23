@@ -1302,16 +1302,15 @@ async fn connection_loss_after_task_creation_never_replays_the_tool_call() {
 // Foreground / background orthogonality
 // ---------------------------------------------------------------------------
 
-/// A task admitted for rustX background execution is driven by the **existing**
-/// background owner: one detached identity, one settlement, no second
-/// background record, and no interaction authority.
+/// An attempted background task cannot establish a remote task or an
+/// interaction. The originating Job gets exactly one classified refusal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_background_execution_drives_the_task_through_its_existing_owner() {
+async fn a_background_invocation_cannot_start_a_remote_task() {
     if serve_if_fixture_mode(FixtureServer::from_env()).await {
         return;
     }
     let harness = Harness::connect(
-        "boundary_suites::mcp_tasks::a_background_execution_drives_the_task_through_its_existing_owner",
+        "boundary_suites::mcp_tasks::a_background_invocation_cannot_start_a_remote_task",
         FixtureOptions::default(),
     )
     .await;
@@ -1376,29 +1375,15 @@ async fn a_background_execution_drives_the_task_through_its_existing_owner() {
     // The same detached identity throughout, and exactly one settlement.
     assert_eq!(snapshot.execution_id, execution_id);
     let result = snapshot.result.expect("one terminal result");
+    assert!(matches!(
+        result.status,
+        ToolExecutionStatus::Failed { ref error }
+            if error == "MCP tools require foreground execution"
+    ));
     assert!(
-        matches!(result.status, ToolExecutionStatus::Success),
-        "the background owner drove the whole task lifecycle: {:?}",
-        result.status
+        harness.observed().is_empty(),
+        "the real MCP peer receives no task request"
     );
-    // The remote task id never became a rustX identity of any kind.
-    let task_id = harness.task_id(TASK_SIMPLE_TOOL);
-    assert_ne!(execution_id.to_string(), task_id);
-    let published = format!("{:?}{:?}", result.status, result.content);
-    assert!(
-        !published.contains(&task_id),
-        "the remote task id never reaches a published fact: {published}"
-    );
-    for observation in &harness.observed() {
-        assert!(
-            observation.tasks_advertised,
-            "a detached execution still drives tasks: {observation:?}"
-        );
-        assert!(
-            !observation.elicitation_advertised,
-            "a detached execution never advertises interaction authority: {observation:?}"
-        );
-    }
     assert_eq!(harness.coordinator.pending_count(), 0);
     assert_eq!(
         harness.audit.events(),

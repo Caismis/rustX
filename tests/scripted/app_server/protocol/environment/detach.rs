@@ -624,10 +624,15 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
     assert!(!deleted.is_finished());
     fail.send(()).unwrap();
     bounded(control).await.unwrap();
-    let failure = bounded(deleted).await.unwrap().unwrap_err().to_string();
-    assert!(
-        failure.contains("Client revocation is unconfirmed"),
-        "{failure}"
+    let SessionDeleteResult::CommittedCleanupPending { record, detail } =
+        bounded(deleted).await.unwrap().unwrap()
+    else {
+        panic!("an unconfirmed revoke must preserve the cleanup workset");
+    };
+    assert_eq!(record.session_id, session);
+    assert_eq!(
+        detail.as_deref(),
+        Some("previous Session execution domain requires physical settlement")
     );
     assert!(
         fixture
@@ -635,7 +640,7 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
             .sessions
             .read_session(&session)
             .await
-            .is_ok()
+            .is_err()
     );
 
     let failures = bounded(fixture.host.drain()).await;

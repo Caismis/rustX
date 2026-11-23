@@ -266,8 +266,11 @@ impl Harness {
         let observations = directory.path().join("mrtr-observations.jsonl");
         let prefix = tool_prefix(test_name);
         let mut environment = std::collections::BTreeMap::from([
-            (FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
-            (MRTR_TOOLS_ENV.to_owned(), "1".to_owned()),
+            (
+                FIXTURE_MODE_ENV.to_owned(),
+                "fixture-mrtr-process".to_owned(),
+            ),
+            (MRTR_TOOLS_ENV.to_owned(), "fixture-mrtr-tools".to_owned()),
             (TOOL_PREFIX_ENV.to_owned(), prefix.clone()),
             (
                 MRTR_OBSERVATION_FILE_ENV.to_owned(),
@@ -275,7 +278,10 @@ impl Harness {
             ),
         ]);
         if let Some(rounds) = options.rounds {
-            environment.insert(MRTR_ROUNDS_ENV.to_owned(), rounds.to_string());
+            environment.insert(
+                MRTR_ROUNDS_ENV.to_owned(),
+                format!("fixture-rounds:{rounds}"),
+            );
         }
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
@@ -1756,23 +1762,15 @@ async fn a_routed_child_coordinator_still_owns_the_mrtr_questionnaire() {
     harness.shutdown().await;
 }
 
-/// A **detached background** MCP execution never advertises elicitation and
-/// refuses an `input_required` answer deterministically, under its own
-/// `ToolExecutionId` and with exactly one settlement.
-///
-/// This is the honest resolution of Issue #242 §4 for background work: rustX
-/// has no background human-interaction domain — `ask_user` is foreground-only
-/// and an interaction is owned by a live attempt — so instead of inventing one
-/// (or attributing an interaction to an already-terminal attempt) the adapter
-/// simply tells the server the truth *per request*, and refuses what it cannot
-/// serve.
+/// An attempted background MCP invocation settles once without dispatching
+/// to the real peer or publishing an interaction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_background_mcp_execution_advertises_nothing_and_settles_once() {
+async fn a_background_mcp_invocation_has_no_remote_round_and_settles_once() {
     if serve_if_fixture_mode(FixtureServer::from_env()).await {
         return;
     }
     let harness = Harness::connect(
-        "boundary_suites::mcp_mrtr::a_background_mcp_execution_advertises_nothing_and_settles_once",
+        "boundary_suites::mcp_mrtr::a_background_mcp_invocation_has_no_remote_round_and_settles_once",
         FixtureOptions::default(),
     )
     .await;
@@ -1838,16 +1836,8 @@ async fn a_background_mcp_execution_advertises_nothing_and_settles_once() {
     assert_eq!(snapshot.execution_id, execution_id);
     let result = snapshot.result.expect("one terminal result");
     let error = failure(&result);
-    assert!(
-        error.contains("no runtime-owned interaction authority"),
-        "the refusal is explicit about ownership: {error}"
-    );
-    let rounds = harness.rounds();
-    assert_eq!(rounds.len(), 1, "no continuation round is dispatched");
-    assert!(
-        !rounds[0].elicitation_advertised,
-        "a detached execution never advertises a capability it cannot settle"
-    );
+    assert_eq!(error, "MCP tools require foreground execution");
+    assert!(harness.rounds().is_empty(), "no MCP round is dispatched");
     // No interaction of any kind was created for the detached work.
     assert_eq!(harness.coordinator.pending_count(), 0);
     assert_eq!(
