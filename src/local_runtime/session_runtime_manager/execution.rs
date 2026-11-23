@@ -2650,7 +2650,7 @@ pub(super) struct SessionExecutionRegistry(Mutex<HashMap<SessionId, Arc<Slot>>>)
 pub(crate) struct StandaloneExecution {
     session: SessionId,
     registry: Arc<SessionExecutionRegistry>,
-    child: tokio::sync::Mutex<tokio::process::Child>,
+    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 
 impl StandaloneExecution {
@@ -2660,6 +2660,31 @@ impl StandaloneExecution {
         product_root: PathBuf,
     ) -> Result<Self, String> {
         let registry = Arc::new(SessionExecutionRegistry::default());
+        let admission = {
+            let product_root = product_root.clone();
+            let session = rustx_execution_protocol::SessionId::new(session.as_str());
+            tokio::task::spawn_blocking(move || {
+                rustx_execution_server::RecoveryFence::require_session_settled(
+                    &product_root,
+                    &session,
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())?
+        };
+        if let Err(error) = admission {
+            if error.kind() != io::ErrorKind::WouldBlock {
+                return Err(error.to_string());
+            }
+            tracing::warn!(%session, "previous Client execution is unconfirmed");
+            // Keep the native scope bound to an empty registry. Reopening
+            // canonical facts grants no filesystem or process authority.
+            return Ok(Self {
+                session,
+                registry,
+                child: tokio::sync::Mutex::new(None),
+            });
+        }
         let Claim::Create(slot) = registry
             .claim(&session, workspace, ExecutionTransport::Unix)
             .map_err(|error| error.to_string())?
@@ -2678,7 +2703,7 @@ impl StandaloneExecution {
         Ok(Self {
             session,
             registry,
-            child: tokio::sync::Mutex::new(child),
+            child: tokio::sync::Mutex::new(Some(child)),
         })
     }
 
@@ -2696,7 +2721,12 @@ impl StandaloneExecution {
         } else {
             Ok(())
         };
-        let mut child = self.child.lock().await;
+        let mut owned = self.child.lock().await;
+        let Some(child) = owned.as_mut() else {
+            return Err(
+                "previous Session execution domain requires physical settlement".to_owned(),
+            );
+        };
         let status = tokio::time::timeout(
             rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT,
             child.wait(),

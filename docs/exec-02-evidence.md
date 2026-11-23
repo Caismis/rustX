@@ -46,7 +46,12 @@ binding. An independent Session admits its own Client and the original
 Session's history remains accessible. The same process test then commits
 deletion of the offline Session and checks that both the initial cleanup
 and retry report cleanup pending. The private database and the Client's
-Workspace file remain intact. Independent attestation and cleanup-only
+Workspace file remain intact. Standalone history composition retains an
+unavailable execution scope while the fence is present. The conformance
+test `a_crash_after_the_request_start_commit_never_resends_the_request`
+reconstructs the frozen request after restart, observes its indeterminate
+settlement and asserts exactly one provider request.
+Independent attestation and cleanup-only
 reconnection remain open.
 
 Client save expiry is owned by a maintenance thread outside the data and
