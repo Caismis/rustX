@@ -1415,6 +1415,10 @@ envelope.
   collection before publication and retains the adopted generation when a
   definition changes during capture. Cold loading and explicit Workspace
   reconciliation can succeed with no corresponding directory on the Server.
+  After Server restart, the durable physical claim still controls Workspace
+  authority. While it awaits settlement, cold attach and Session input
+  validation report the source unavailable. Cold history and settings
+  reads continue to use Server-owned records.
   The Server still owns its User sources and the path-keyed Session-creation
   catalog. Bound Workspace observation uses Client descriptor watches
   with a separate 128-slot budget. The observed paths come from the

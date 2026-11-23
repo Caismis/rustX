@@ -499,7 +499,7 @@ impl SessionRuntimeManager {
                     catalog.settings_revision(session).map_err(error)?,
                 )
             };
-            let endpoint = self.execution.configuration_endpoint(session)?;
+            let endpoint = self.configuration_endpoint(session)?;
             if endpoint.is_none() {
                 self.repair_session_sources(&input);
             }
@@ -532,7 +532,7 @@ impl SessionRuntimeManager {
                 }
                 capture.map_err(error)?
             } else {
-                if self.execution.configuration_endpoint(session)?.is_some() {
+                if self.configuration_endpoint(session)?.is_some() {
                     continue;
                 }
                 application

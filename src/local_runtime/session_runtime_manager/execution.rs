@@ -3498,6 +3498,33 @@ impl SessionRuntimeManager {
         }
     }
 
+    /// A restart loses its in-memory slots. Only a Session without a
+    /// durable physical claim may use authored Workspace configuration.
+    pub(super) fn configuration_endpoint(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<Arc<LocalExecutionEndpoint>>, RuntimeManagerError> {
+        let endpoint = self.execution.configuration_endpoint(session)?;
+        if endpoint.is_none() {
+            self.require_unclaimed_workspace(session)?;
+        }
+        Ok(endpoint)
+    }
+
+    fn require_unclaimed_workspace(&self, session: &SessionId) -> Result<(), RuntimeManagerError> {
+        if rustx_execution_server::RecoveryFence::session_pending(
+            self.configuration.runtime_root(),
+            &rustx_execution_protocol::SessionId::new(session.as_str()),
+        )
+        .map_err(error)?
+        {
+            return Err(error(
+                "the selected Workspace has an unsettled execution binding",
+            ));
+        }
+        Ok(())
+    }
+
     /// Selects the authority for a read-only configuration catalog.
     /// An unclaimed Workspace can describe authored sources. Once reserved,
     /// its catalog requires the exact Session and pins that generation.
@@ -3527,16 +3554,8 @@ impl SessionRuntimeManager {
             return Err(error("the reserved Workspace requires its exact Session"));
         }
         drop(slots);
-        if let (Some(session), Some(_)) = (session, workspace)
-            && rustx_execution_server::RecoveryFence::session_pending(
-                self.configuration.runtime_root(),
-                &rustx_execution_protocol::SessionId::new(session.as_str()),
-            )
-            .map_err(error)?
-        {
-            return Err(error(
-                "the selected Workspace has an unsettled execution binding",
-            ));
+        if let (Some(session), Some(_)) = (session, workspace) {
+            self.require_unclaimed_workspace(session)?;
         }
         Ok(None)
     }

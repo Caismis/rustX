@@ -720,7 +720,7 @@ impl SessionRuntimeManager {
         let mut bound = Vec::new();
         for (session, input) in inputs {
             application.cancel_bound_capture(&session);
-            match self.execution.configuration_endpoint(&session) {
+            match self.configuration_endpoint(&session) {
                 Ok(None) if authored => {
                     let capture = self.configuration.capture_session_application(
                         &input,

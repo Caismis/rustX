@@ -5951,6 +5951,8 @@ os.execv({client:?}, [{client:?}, *sys.argv[1:]])
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
+    use rustx::app_server::protocol::{ErrorData, Method, MethodResult, Response};
+    use rustx::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
     use std::os::unix::fs::DirBuilderExt as _;
     bounded(async {
         let fixture = Fixture::new().await;
@@ -6015,6 +6017,7 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         let other = &fixture.sessions[1];
         let mut replacement =
             local_exec_command(&executable, &fixture, other.as_str(), &other_workspace)
+                .env("TEST_KEY", "fixture")
                 .spawn()
                 .unwrap();
         let driver = driver::jsonl(
@@ -6023,9 +6026,9 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         );
         initialize_client(&driver).await;
         await_admission(&driver, other, &other_probe).await;
-        let result = result(
+        let history = result(
             &driver,
-            rustx::app_server::protocol::Method::SessionHistory {
+            Method::SessionHistory {
                 session_id: session.clone(),
                 node_id: None,
                 at: rustx::durable::reading::ConversationWindowAt::Latest,
@@ -6033,10 +6036,49 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             },
         )
         .await;
-        assert!(matches!(
-            result,
-            rustx::app_server::protocol::MethodResult::SessionHistory { .. }
-        ));
+        assert!(matches!(history, MethodResult::SessionHistory { .. }));
+
+        let decoy = workspace.join("rustx.toml");
+        let decoy_bytes = b"[tool_deadline_policy]\nhard_deadline_ms = 23456\n";
+        std::fs::write(&decoy, decoy_bytes).unwrap();
+        let thread_id = app_server_conformance::thread_id(&driver, session.clone()).await;
+        let Response::Failure(attach) = rpc(&driver, 81, Method::SessionAttach { thread_id }).await
+        else {
+            panic!("the prior Client still owns Workspace configuration");
+        };
+        assert!(
+            attach.error.message.contains("unsettled execution binding"),
+            "{attach:?}"
+        );
+
+        let settings = || Method::SettingsRead {
+            session_id: session.clone(),
+        };
+        let MethodResult::Settings { projection } = result(&driver, settings()).await else {
+            panic!("cold Session settings");
+        };
+        let Response::Failure(write) = rpc(
+            &driver,
+            82,
+            Method::SessionInputsWrite {
+                session_id: session.clone(),
+                expected_revision: projection.revision,
+                session_config: Some(SessionInputChange::Replace(SessionConfigContent(
+                    "[tool_deadline_policy]\nhard_deadline_ms = 34567\n".into(),
+                ))),
+                session_resources: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session inputs cannot validate against the Server decoy");
+        };
+        assert_eq!(write.error.data, Some(ErrorData::ExecutionUnavailable));
+        let MethodResult::Settings { projection: after } = result(&driver, settings()).await else {
+            panic!("cold Session settings after refusal");
+        };
+        assert_eq!(after.revision, projection.revision);
+        assert_eq!(std::fs::read(decoy).unwrap(), decoy_bytes);
         assert_offline_session_deletion(&driver, session).await;
         assert!(private_database.is_file());
         assert_eq!(std::fs::read(&first_probe).unwrap(), b"a");

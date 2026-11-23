@@ -44,7 +44,10 @@ retirement. The Linux process regression
 admits the Client and reads a fixture file, sends SIGKILL to the real
 Server, then verifies that a fresh Server refuses the original Session
 binding. An independent Session admits its own Client and the original
-Session's history remains accessible. The same process test then commits
+Session's history and persisted settings remain accessible. The pending
+physical claim also blocks cold configuration admission and validation
+of Session input updates against a Server-side Workspace decoy. The same
+process test then commits
 deletion of the offline Session and checks that both the initial cleanup
 and retry report cleanup pending. The private database and the Client's
 Workspace file remain intact. Standalone history composition retains an

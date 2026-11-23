@@ -144,7 +144,6 @@ impl SessionRuntimeManager {
             }
             let source_cut = application.source_cut(&settings.cwd);
             let endpoint = self
-                .execution
                 .configuration_endpoint(session)
                 .map_err(|_| SessionInputError::ExecutionUnavailable)?;
             let bindings = self
@@ -187,7 +186,6 @@ impl SessionRuntimeManager {
 
         let mut application = self.applications.lock();
         let current_endpoint = self
-            .execution
             .configuration_endpoint(session)
             .map_err(|_| SessionInputError::ExecutionUnavailable)?;
         let same_endpoint = match (&endpoint, &current_endpoint) {
