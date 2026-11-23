@@ -1766,15 +1766,18 @@ pub async fn run_supervised_command(
 pub async fn run_supervised_program(
     spec: SupervisedCommandSpec,
     program: ProgramInvocation,
+    control: Option<RunnerTestControl>,
+    observe_settlement: impl FnOnce(bool),
 ) -> Result<CapturedProcessResult, String> {
     #[cfg(any(test, feature = "test-support"))]
     crate::effects::observe_process();
     let (mut runner, stdout_pipe, stderr_pipe) =
-        SupervisedCommandRunner::spawn_program(&spec, None, Some(&program))
+        SupervisedCommandRunner::spawn_program(&spec, control, Some(&program))
             .map_err(|error| error.to_string())?;
     let stdout_task = stdout_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
     let stderr_task = stderr_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
     let termination = runner.settle().await;
+    observe_settlement(termination.physical_settlement_proven);
     let stdout = await_capture(stdout_task).await?;
     let stderr = await_capture(stderr_task).await?;
     let exit_code = match (&termination.intent, termination.exit_status) {

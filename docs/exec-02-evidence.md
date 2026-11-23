@@ -27,6 +27,7 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
 | T61 | `revision_one_cannot_admit_either_lane_in_revision_two`, `websocket_session_version_and_generation_mismatches_stay_reserved` | The revised snapshot is mandatory in wire revision 2. Revision 1 is refused during Client bootstrap or on either Server Hello before a business lane exists. |
 | T63 (stdio START cut) | `cancellation_at_the_retained_anchor_prevents_interactive_start` | A shared supervisor waits for the anchor acknowledgement, then observes cancellation before writing START. The fixture proves an absent business marker and settlement of the exact retained anchor. The same driver runs Client-owned stdio. |
 | T21, T63 (delegated stdio) | `child_relay_reaps_its_running_stdio_session_on_the_original_client` | The child queues an Open behind the writer and cancels before dispatch. No business process starts and the original relay remains available. A second Open starts one real stdio process on that relay. Parent cleanup observes physical EOF, and its binding still reads Workspace bytes. |
+| T63 (Python preparation) | `workspace_python_probe_wait_failure_keeps_revoke_unconfirmed` | A real interpreter probe writes its start marker before an injected final supervisor wait failure. Python stays unavailable, changed interpreter inputs do not start another preparation on that binding, and Revoke and shutdown retain the unresolved physical fact. |
 
 ## Restart admission fence
 
@@ -50,8 +51,10 @@ of Session input updates against a Server-side Workspace decoy. The same
 process test then commits
 deletion of the offline Session and checks that both the initial cleanup
 and retry report cleanup pending. The private database and the Client's
-Workspace file remain intact. Standalone history composition retains an
-unavailable execution scope while the fence is present. The conformance
+Workspace file remain intact. The standalone submission entry refuses
+the unresolved claim before composing a live runtime. The real restart
+fixture checks zero provider requests and zero new Attempts, with the
+same history available through the cold App Server. The conformance
 test `a_crash_after_the_request_start_commit_never_resends_the_request`
 reconstructs the frozen request after restart, observes its indeterminate
 settlement and asserts exactly one provider request.

@@ -540,9 +540,10 @@ impl Operations {
             return true;
         };
         let python = self.python.clone();
-        self.start_auxiliary(async move {
+        self.start_auxiliary_owned(move |mut worker| async move {
             let _permit = permit;
-            python.prepare().await;
+            worker.physical_settlement(false);
+            worker.physical_settlement(python.prepare().await);
         })
     }
 
@@ -2678,6 +2679,52 @@ mod tests {
         ops.revoke();
         assert_eq!(ops.settle(Duration::ZERO), 1);
         drop(worker);
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn workspace_python_probe_wait_failure_keeps_revoke_unconfirmed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join(".venv/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("python");
+        std::fs::write(
+            &script,
+            b"#!/bin/sh\nprintf 'started\\n' >> probe-started\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::hard_link(&script, bin.join("python3")).unwrap();
+        let ops = Operations::new(admission(directory.path())).unwrap();
+        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
+        control.fail_direct_wait_after_exit = true;
+        ops.python.probe_control_for_test(control);
+        assert!(ops.schedule_workspace_python());
+        assert_eq!(ops.settle(Duration::from_secs(5)), 1);
+        assert_eq!(ops.workers.state.lock().unwrap().live, 0);
+        assert_eq!(
+            std::fs::read(directory.path().join("probe-started")).unwrap(),
+            b"started\n"
+        );
+        assert_eq!(
+            ops.workspace_python_status(),
+            rustx_execution_protocol::WorkspacePythonStatus::Unavailable
+        );
+        std::fs::rename(
+            directory.path().join(".venv"),
+            directory.path().join("old-venv"),
+        )
+        .unwrap();
+        assert!(ops.python.prepare_permit().is_none());
+        ops.revoke();
         assert_eq!(ops.settle(Duration::ZERO), 1);
         assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
