@@ -129,9 +129,15 @@ impl SkillTree for Client<'_> {
             .read_workspace_source(path, self.deadline, |channel, relative| {
                 channel.resolve_resource_entry_until(relative, self.deadline)
             }) {
-            Ok((relative, metadata, link)) => {
+            Ok(resolution) => {
+                let link = !resolution.dependencies.is_empty();
+                for dependency in resolution.dependencies {
+                    self.observe(&self.endpoint.workspace().join(dependency));
+                }
+                let Some((relative, metadata)) = resolution.entry else {
+                    return Ok(None);
+                };
                 if link {
-                    self.observe(path);
                     self.resolved_links
                         .borrow_mut()
                         .insert(path.to_path_buf(), self.endpoint.workspace().join(relative));

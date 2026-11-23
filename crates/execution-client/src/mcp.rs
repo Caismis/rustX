@@ -414,7 +414,7 @@ fn client_program(
             _ => None,
         })
         .collect::<std::path::PathBuf>();
-    let resolved = root.resolve_resource(workspace, &normalized).ok()?;
+    let resolved = root.resolve_resource(workspace, &normalized).ok()?.entry?;
     resolved
         .metadata
         .is_file

@@ -120,6 +120,7 @@ impl Scanner<'_> {
         file: &Path,
         target: &Path,
     ) -> std::io::Result<()> {
+        self.tree.observe(target);
         let limit = self.remaining_ignore_bytes.min(MAX_IGNORE_FILE_BYTES);
         let bytes = self.tree.read_file(target, limit)?;
         self.remaining_ignore_bytes -= bytes.len() as u64;

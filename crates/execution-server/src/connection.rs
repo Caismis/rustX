@@ -41,6 +41,14 @@ pub struct RangeRead {
     pub metadata: FileStamp,
 }
 
+/// A bounded resource resolution and the paths that can invalidate it.
+pub struct ResourceResolution {
+    /// Verified physical target, if the Client found one.
+    pub entry: Option<(PathBuf, EntryStamp)>,
+    /// Workspace-relative watch dependencies.
+    pub dependencies: Vec<PathBuf>,
+}
+
 /// A verified directory page reply from the Client.
 ///
 /// Names, order, cursor, and every entry stamp were checked against the
@@ -1279,13 +1287,28 @@ impl LocalConnection {
         &mut self,
         relative_path: &Path,
         deadline: Instant,
-    ) -> io::Result<(PathBuf, EntryStamp, bool)> {
+    ) -> io::Result<ResourceResolution> {
         if !self.capabilities.contains(&Capability::DirectoryMetadata) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "peer admitted no directory metadata capability",
             ));
         }
+        let valid_path = |path: &Path| {
+            path.as_os_str().len() <= rustx_execution_protocol::MAX_RESOURCE_PATH_BYTES
+                && path.components().all(|component| {
+                    matches!(component, std::path::Component::Normal(name)
+                            if !name.as_encoded_bytes().contains(&0))
+                })
+        };
+        let valid_dependency = |path: &Path| !path.as_os_str().is_empty() && valid_path(path);
+        let valid_links = |paths: &[PathBuf]| {
+            paths.len() <= rustx_execution_protocol::MAX_RESOURCE_LINK_HOPS
+                && paths.iter().all(|path| valid_dependency(path))
+                && paths
+                    .first()
+                    .is_none_or(|first| relative_path.starts_with(first))
+        };
         match self.exchange_admitted(
             &ClientRequest::ResolveResourceEntry {
                 relative_path: relative_path.to_path_buf(),
@@ -1298,19 +1321,35 @@ impl LocalConnection {
             ClientReply::ResourceEntry {
                 relative_path: resolved,
                 metadata,
-                through_link,
-            } if resolved.as_os_str().len() <= 4096
-                && resolved.components().all(|component| {
-                    matches!(component, std::path::Component::Normal(name)
-                            if !name.as_encoded_bytes().contains(&0))
-                })
+                link_paths,
+            } if valid_path(&resolved)
                 && metadata.kind != rustx_execution_protocol::EntryKind::Symlink
-                && (through_link || resolved == relative_path) =>
+                && valid_links(&link_paths)
+                && (!link_paths.is_empty() || resolved == relative_path) =>
             {
                 if let Some(reason) = stamp_violation(&metadata.stamp) {
                     return Err(self.retire(io::Error::new(io::ErrorKind::InvalidData, reason)));
                 }
-                Ok((resolved, metadata, through_link))
+                Ok(ResourceResolution {
+                    entry: Some((resolved, metadata)),
+                    dependencies: link_paths,
+                })
+            }
+            ClientReply::ResourceUnavailable {
+                mut link_paths,
+                unresolved_path,
+            } if valid_links(&link_paths)
+                && unresolved_path.as_deref().is_none_or(|path| {
+                    valid_dependency(path)
+                        && (!link_paths.is_empty() || relative_path.starts_with(path))
+                })
+                && (!link_paths.is_empty() || unresolved_path.is_some()) =>
+            {
+                link_paths.extend(unresolved_path);
+                Ok(ResourceResolution {
+                    entry: None,
+                    dependencies: link_paths,
+                })
             }
             _ => Err(self.retire(io::Error::new(
                 io::ErrorKind::InvalidData,

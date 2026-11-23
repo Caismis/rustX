@@ -156,7 +156,12 @@ transfer.
 uses a real Linux Client in a mount namespace with no Server workspace
 directory. It waits for watch registration and the initial rescan, edits
 AGENTS.md and the Skill marker, then waits for both values to appear in the
-runtime. It next parks the old watch after physical capture, severs the old
+runtime. It retargets only an intermediate link in a separate directory,
+then modifies only the resolved target of a linked ignore file. The live
+catalog follows the retarget and removes and restores the ignored Skill.
+The test also retargets to a missing path and creates the target under a
+separate directory. The Skill returns without an edit to either link.
+It next parks the old watch after physical capture, severs the old
 pair, and changes both sources while detached. The same Client supplies a
 new pair and the runtime applies the new values. Releasing the old capture
 leaves the new values intact, without any model request. Drain reaps the
@@ -168,8 +173,8 @@ with a four-byte UTF-8 character split by the first range boundary. The
 first result provides the next valid offset, the second returns the whole
 character and remaining bytes, and a caller pointing inside the character
 receives a typed failure. The paired wire fixture rejects a second
-Conversation and matches Grep by the published filename. Revision 4 is
-refused on both handshake lanes before any business request can run.
+Conversation and matches Grep by the published filename. The execution
+handshake refuses revision 5 on both lanes before business dispatch.
 
 The Workflow editor can list an authored HTTP source for an unclaimed
 Workspace, including when an unbound Session is selected. The authoring
@@ -348,8 +353,11 @@ at 64 KiB. A declared excess is rejected before reading. A chunked excess is
 rejected before extending the bounded accumulation. The decoder may hold the
 response bytes alongside the parsed result and its allocations. At
 most 512 MiB of JSON body bytes can be in these ordinary decoders across
-the Server, plus parsed output and transport overhead. SSE streams and
-control exchanges have their independent per-stream limits.
+the Server, plus parsed output and transport overhead. A separate shared
+budget holds 32 SSE parsers, including POST responses, subscriptions and
+Last-Event-ID resumes. Each parser has the 16 MiB event bound. The budget
+refuses new streams at capacity and releases a slot when its stream ends
+or drops. JSON receives and control traffic use their own budgets.
 
 Three real Linux Server-only fixtures ran against the same HTTP implementation.
 Procfs was sampled every 5 ms, excluding the separate `rustx init` enrollment
@@ -513,6 +521,27 @@ limit latency comparisons with the smaller runs.
 The debug and release observations used different build profiles under
 concurrent host load. Compare within each profile's sample.
 
+The revision-six SSE receiver was measured separately with one incomplete
+event per Session and a Server binary staged by itself. Each peer flushed
+12 MiB of event text before a shared release gate, then sent the rest of
+one near-limit event. The final column measures procfs CPU after attachment.
+The measured Server SHA-256 was
+`2f19ea96e128b3458cea90ca2da3a7aa9843cec6ec6d3364fccf5b2004055a4e`.
+
+| Sessions and occupied SSE slots | Complete HTTP event-body bytes | RSS before / held / peak (KiB) | Attach / all prefixes / finish after release (s) | User / system CPU (s) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 16,773,212 | 58,868 / 106,484 / 147,072 | 1.105 / 0.593 / 0.313 | 0.47 / 0.39 |
+| 32 | 536,742,784 | 160,572 / 1,429,432 / 2,404,476 | 24.479 / 2.040 / 0.957 | 21.58 / 6.77 |
+
+At capacity the peer held 402,653,184 text bytes across 32 SSE events.
+Each Session issued one MCP invocation, two fake-provider business
+requests and one auxiliary request. Each Journal had one ToolResult of
+17,022–17,023 bytes, one final terminal and 26,770–26,783 event bytes.
+Server scratch stayed empty. RSS includes parser and result decoding
+allocations. Concurrent compilation and the different HTTP framing limit
+comparisons with the JSON runs. Mixed JSON and SSE saturation was not
+sampled.
+
 The standalone HTTP process fixture reused the same measure for a 327,680-byte
 result. Its App Server peaked at 188,688 KiB (0.79 s user and 0.03 s system
 CPU), its Client at 22,868 KiB, and whole-fixture time was 1.982 s. The
@@ -564,8 +593,8 @@ resource and cancellation combinations remain individually mapped below.
   retirement, credential changes invalidating draft preparation and refusal
   of obsolete MCP background policy. The bound Session rotation test adds
   four real requests to the fake provider, two MCP calls and successful
-  close receipts from the HTTP peer. The common cross-entry model trace
-  remains open.
+  close receipts from the HTTP peer. The model-selection entry points have
+  individual request traces as recorded under T16.
 - The MCP adapter suite passed 162 tests. A non-foreground binding is
   rejected before the real stdio program can write a start marker. The
   adapter's legacy Server-local MCP output sink has been removed. An

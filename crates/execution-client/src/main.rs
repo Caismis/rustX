@@ -1529,17 +1529,36 @@ fn resolve_resource_entry(
     workspace: &Path,
     relative_path: &Path,
 ) -> ClientReply {
-    match root.resolve_resource(workspace, relative_path) {
-        Ok(entry) if entry.relative_path.to_str().is_some() => ClientReply::ResourceEntry {
+    let resolution = match root.resolve_resource(workspace, relative_path) {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            return ClientReply::Error {
+                kind: read_error(&error),
+            };
+        }
+    };
+    if resolution
+        .link_paths
+        .iter()
+        .chain(resolution.unresolved_path.iter())
+        .any(|path| path.to_str().is_none())
+    {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    }
+    match resolution.entry {
+        Some(entry) if entry.relative_path.to_str().is_some() => ClientReply::ResourceEntry {
             relative_path: entry.relative_path,
             metadata: stamp(&entry.metadata),
-            through_link: entry.through_link,
+            link_paths: resolution.link_paths,
         },
-        Ok(_) => ClientReply::Error {
+        Some(_) => ClientReply::Error {
             kind: ReadError::Invalid,
         },
-        Err(error) => ClientReply::Error {
-            kind: read_error(&error),
+        None => ClientReply::ResourceUnavailable {
+            link_paths: resolution.link_paths,
+            unresolved_path: resolution.unresolved_path,
         },
     }
 }

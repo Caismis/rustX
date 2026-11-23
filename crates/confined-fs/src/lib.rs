@@ -30,7 +30,7 @@ mod links;
 mod mutation;
 mod text;
 
-pub use links::ResolvedEntry;
+pub use links::{ResolvedEntry, ResourceResolution};
 pub use mutation::{CommitUnknown, Expectation, PublishedWrite, StagedWrite, WriteTarget};
 pub use text::{PageEnd, PageLimits, TextPage, validate_utf8};
 

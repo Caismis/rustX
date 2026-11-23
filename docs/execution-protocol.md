@@ -111,7 +111,7 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client opens a pair with a revision 5 Hello. It retains
+The Client opens a pair with a revision 6 Hello. It retains
 `physical_settlement_proven` in terminal process snapshots and requires the
 same-instance recovery handshake after a transport loss. Managed Python
 source capture and generic stdio launch carry exact binding identity in
@@ -489,7 +489,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v5` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v6` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -543,7 +543,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v5]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v6]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1417,15 +1417,16 @@ envelope.
   reconciliation can succeed with no corresponding directory on the Server.
   After Server restart, the durable physical claim still controls Workspace
   authority. While it awaits settlement, cold attach and Session input
-  validation report the source unavailable. Cold history and settings
-  reads continue to use Server-owned records.
+  validation report the source unavailable. Standalone submission applies
+  the same physical fence before composing a live runtime. Cold history
+  and settings reads continue to use Server-owned records.
   The Server still owns its User sources and the path-keyed Session-creation
   catalog. Bound Workspace observation uses Client descriptor watches
   with a separate 128-slot budget. The observed paths come from the
   configuration layout and Skill discovery. Coalesced hints and coverage
   loss cause a fresh capture fenced by the endpoint and application ticket.
-  Native Managed Python source discovery and retained reconnection still
-  require migration under [#577](https://github.com/Caismis/rustX/issues/577).
+  [EXEC-02](exec-02-evidence.md) records Client-owned Managed Python source
+  discovery and same-instance reconnection.
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
   search and document work and returns the verified projection. Artifact
@@ -1450,6 +1451,13 @@ Conversation and published locator as the line and Grep requests. Reusing
 the verified range reply caps each fetch at 50 KiB. Native Read exposes
 `byte_offset` for saved outputs and resumes at a complete UTF-8 boundary.
 Revision 4 peers are refused before either lane admits business work.
+
+Execution revision 6 returns the contained symlink paths verified during
+resource resolution. Each reply carries at most 32 hops of up to 4,096
+UTF-8 bytes each. An unresolved resource can also name the first absent or
+obstructed component beneath a verified Workspace directory. Configuration
+watches cover these paths, the intermediate links, and the resolved ignore-file
+target. Both lanes reject revision 5 at handshake.
 
 Each capture key includes the original Session binding identity. The Client
 allows at most 128 names per authored scope, 256 retained capture identities,

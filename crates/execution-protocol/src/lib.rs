@@ -28,10 +28,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v5";
+pub const EXECUTION_PATH: &str = "/execution/v6";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -48,6 +48,12 @@ pub const MAX_DIRECTORY_NAMES: usize = 4096;
 
 /// Maximum entries one `Directory` page reply may carry.
 pub const MAX_DIRECTORY_PAGE_ENTRIES: usize = 128;
+
+/// Maximum contained link hops in one resource observation.
+pub const MAX_RESOURCE_LINK_HOPS: usize = 32;
+
+/// Maximum raw UTF-8 length of a resolved resource or link path.
+pub const MAX_RESOURCE_PATH_BYTES: usize = 4096;
 
 /// Maximum joined bytes of one `Lines` page — the wire policy equal to the
 /// physical scanner's 50KB complete-line budget.
@@ -1429,8 +1435,15 @@ pub enum ClientReply {
         relative_path: PathBuf,
         /// The target's kind and stamp.
         metadata: EntryStamp,
-        /// The input traversed a link.
-        through_link: bool,
+        /// Workspace-relative links verified during resolution, in traversal order.
+        link_paths: Vec<PathBuf>,
+    },
+    /// An unresolved Workspace resource with retained watch dependencies.
+    ResourceUnavailable {
+        /// Workspace-relative links verified before resolution stopped.
+        link_paths: Vec<PathBuf>,
+        /// First absent or obstructed component under an existing directory.
+        unresolved_path: Option<PathBuf>,
     },
     /// One page of a directory listing.
     Directory {
@@ -1707,7 +1720,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v5` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v6` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

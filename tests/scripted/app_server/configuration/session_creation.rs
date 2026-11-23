@@ -1843,8 +1843,24 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
         std::fs::create_dir(&original_package).unwrap();
         let replacement_package = physical.join("skills-b");
         std::fs::create_dir(&replacement_package).unwrap();
-        let authored_link = collection.join("watched");
-        std::os::unix::fs::symlink("../../skills-a", &authored_link).unwrap();
+        let aliases = physical.join("aliases");
+        std::fs::create_dir(&aliases).unwrap();
+        let targets = physical.join("targets");
+        std::fs::create_dir(&targets).unwrap();
+        let selected = aliases.join("selected");
+        std::os::unix::fs::symlink("../skills-a", &selected).unwrap();
+        std::os::unix::fs::symlink("../../aliases/selected", collection.join("watched")).unwrap();
+        let select = |target| {
+            let next = aliases.join(".new");
+            std::os::unix::fs::symlink(target, &next).unwrap();
+            std::fs::rename(next, &selected).unwrap();
+        };
+        let rules = physical.join("rules");
+        std::fs::create_dir(&rules).unwrap();
+        let ignore = rules.join("skill-ignore");
+        std::fs::write(&ignore, []).unwrap();
+        std::os::unix::fs::symlink("../../rules/skill-ignore", collection.join(".gitignore"))
+            .unwrap();
         let marker = original_package.join("SKILL.md");
         let write_marker = |marker: &std::path::Path, description| {
             std::fs::write(
@@ -1856,6 +1872,10 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
             .unwrap();
         };
         write_marker(&marker, "Before watch");
+        write_marker(
+            &replacement_package.join("SKILL.md"),
+            "Intermediate retarget",
+        );
         let launcher = workspace_overlay_launcher(mount.path());
         assert!(!workspace.exists());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
@@ -1898,6 +1918,65 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
             }
             changed.changed().await.unwrap();
         }
+        // Neither the public alias nor either marker changes at this cut.
+        select("../skills-b");
+        while runtime.runtime_resources().capability().skills().packages()[0].description()
+            != "Intermediate retarget"
+        {
+            changed.changed().await.unwrap();
+        }
+        // Only the linked ignore file's physical target changes.
+        std::fs::write(&ignore, "watched\n").unwrap();
+        while !runtime
+            .runtime_resources()
+            .capability()
+            .skills()
+            .packages()
+            .is_empty()
+        {
+            changed.changed().await.unwrap();
+        }
+        std::fs::write(&ignore, []).unwrap();
+        while runtime
+            .runtime_resources()
+            .capability()
+            .skills()
+            .packages()
+            .is_empty()
+        {
+            changed.changed().await.unwrap();
+        }
+        assert_eq!(
+            runtime.runtime_resources().capability().skills().packages()[0].description(),
+            "Intermediate retarget"
+        );
+
+        select("../targets/pending");
+        while !runtime
+            .runtime_resources()
+            .capability()
+            .skills()
+            .packages()
+            .is_empty()
+        {
+            changed.changed().await.unwrap();
+        }
+        let restored = targets.join("pending");
+        let staged = mount.path().join("staging");
+        std::fs::create_dir(&staged).unwrap();
+        write_marker(&staged.join("SKILL.md"), "Missing target recovered");
+        // The next change creates only the physical target, with both aliases untouched.
+        std::fs::rename(staged, restored).unwrap();
+        while runtime
+            .runtime_resources()
+            .capability()
+            .skills()
+            .packages()
+            .first()
+            .is_none_or(|skill| skill.description() != "Missing target recovered")
+        {
+            changed.changed().await.unwrap();
+        }
 
         let endpoint = fixture.manager.execution_endpoint(&id).unwrap();
         let admission = endpoint.admission().unwrap().clone();
@@ -1925,13 +2004,8 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
             },
         );
         std::fs::write(&instructions, "current after detach").unwrap();
-        write_marker(
-            &replacement_package.join("SKILL.md"),
-            "Current after detach",
-        );
-        let next_link = collection.join(".new");
-        std::os::unix::fs::symlink("../../skills-b", &next_link).unwrap();
-        std::fs::rename(next_link, authored_link).unwrap();
+        write_marker(&marker, "Current after detach");
+        select("../skills-a");
         Fixture::admit_execution_pair(&endpoint).await;
         assert_eq!(endpoint.admission(), Some(&admission));
         assert!(!endpoint.control().unwrap().same_pair(&retired_lane));
