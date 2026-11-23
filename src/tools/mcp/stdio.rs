@@ -255,6 +255,10 @@ impl Session {
         if self.closed.load(Ordering::Acquire) {
             return Ok(());
         }
+        if self.binding.seal_unused() {
+            self.closed.store(true, Ordering::Release);
+            return Ok(());
+        }
         let signal = CancellationSignal::new();
         let cancellation = cancellation(signal.clone());
         let deadline = Instant::now() + SHUTDOWN;
@@ -283,7 +287,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if !self.closed.load(Ordering::Acquire) {
+        if !self.closed.load(Ordering::Acquire) && !self.binding.seal_unused() {
             self.binding.abandon();
         }
     }

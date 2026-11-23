@@ -1120,7 +1120,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // Keep the cancelled Open and the subsequent real Open on one relay.
     async fn child_relay_reaps_its_running_stdio_session_on_the_original_client() {
+        use crate::tools::mcp::{
+            McpError, McpInvalidationState, McpServerBinding, McpServerRuntime, McpTransportConfig,
+            OwnedConnect,
+        };
         use tokio::io::AsyncReadExt;
 
         let workspace = tempfile::tempdir().unwrap();
@@ -1136,23 +1141,30 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
     for line in sys.stdin:
         pass
 ";
-        let launch = McpLaunch {
-            program: "/usr/bin/env".into(),
-            args: vec![
-                "python3".into(),
-                "-c".into(),
-                server_code.into(),
-                observer_socket.to_string_lossy().into_owned(),
-            ],
-            cwd: std::path::PathBuf::new(),
-            environment: BTreeMap::from([(
-                "PATH".into(),
-                "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin".into(),
-            )]),
-            versions: vec!["2025-11-25".into()],
-            legacy_version: None,
-            python_source: None,
+        let source = crate::runtime::identity::McpServerId::new("delegated-stdio");
+        let authored = McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            transport: McpTransportConfig::Stdio {
+                program: "/usr/bin/env".into(),
+                args: vec![
+                    "python3".into(),
+                    "-c".into(),
+                    server_code.into(),
+                    observer_socket.to_string_lossy().into_owned(),
+                ],
+                cwd: None,
+                environment: BTreeMap::from([(
+                    "PATH".into(),
+                    "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin".into(),
+                )]),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: BTreeMap::new(),
         };
+        let launch = crate::tools::mcp::stdio_launch_spec(&authored, &source, &root)
+            .unwrap()
+            .unwrap();
         let conversation = crate::runtime::identity::ConversationId::new(
             "conv_0410af39-84e2-7896-a1f1-06c4c338553d",
         );
@@ -1174,6 +1186,35 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
             .await
             .unwrap();
         let cleanup = relay.start().unwrap();
+        let child_workspace =
+            crate::tools::workspace::Workspace::for_session(&root, child.clone()).unwrap();
+        let writer = child
+            .endpoint()
+            .unwrap()
+            .agent_writer
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        let opening_signal = crate::runtime::CancellationSignal::new();
+        let mut opening = Box::pin(McpServerRuntime::connect_owned(OwnedConnect::new(
+            &source,
+            &authored,
+            &child_workspace,
+            Arc::new(McpInvalidationState::new()),
+            opening_signal.clone(),
+        )));
+        assert!(futures_util::poll!(&mut opening).is_pending());
+        opening_signal.cancel();
+        drop(writer);
+        assert!(matches!(opening.await, Err(McpError::Discovery(_))));
+        let mut observed = Box::pin(observer.accept());
+        assert!(
+            futures_util::poll!(&mut observed).is_pending(),
+            "queued Open started no process"
+        );
+        drop(observed);
+
         let binding = child.bind_stdio_mcp(&root).unwrap();
         let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
             crate::runtime::CancellationSignal::new(),

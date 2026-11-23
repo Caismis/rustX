@@ -26,6 +26,7 @@ acceptance matrix are in the [execution protocol ADR](execution-protocol.md).
 | T63 | `lost_delegated_resource_receipts_keep_physical_cleanup_unconfirmed` | A real Client prepares a Bash capture or mutation, or publishes a write. The proxy drops the original receipt, substitutes an invalid ticket, or returns `CommitUnknown` and gates Client-side teardown. The parent keeps the child root and records no quiescence proof while the binding's physical settlement remains unconfirmed. |
 | T61 | `revision_one_cannot_admit_either_lane_in_revision_two`, `websocket_session_version_and_generation_mismatches_stay_reserved` | The revised snapshot is mandatory in wire revision 2. Revision 1 is refused during Client bootstrap or on either Server Hello before a business lane exists. |
 | T63 (stdio START cut) | `cancellation_at_the_retained_anchor_prevents_interactive_start` | A shared supervisor waits for the anchor acknowledgement, then observes cancellation before writing START. The fixture proves an absent business marker and settlement of the exact retained anchor. The same driver runs Client-owned stdio. |
+| T21, T63 (delegated stdio) | `child_relay_reaps_its_running_stdio_session_on_the_original_client` | The child queues an Open behind the writer and cancels before dispatch. No business process starts and the original relay remains available. A second Open starts one real stdio process on that relay. Parent cleanup observes physical EOF, and its binding still reads Workspace bytes. |
 
 ## Restart admission fence
 

@@ -4,6 +4,7 @@ use rustx_execution_protocol::{
     mcp::{Reply, Request},
     process::{OperationId, ProcessOperationKey},
 };
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use super::{
     Arc, DataCapacity, ExecutionCancellation, Instant, LocalExecutionEndpoint,
@@ -13,6 +14,40 @@ use super::{
 pub(crate) struct StdioMcpBinding {
     endpoint: Arc<LocalExecutionEndpoint>,
     pub(crate) key: ProcessOperationKey,
+    dispatch: Arc<OpenDispatch>,
+}
+
+#[derive(Default)]
+struct OpenDispatch(AtomicU8);
+
+impl OpenDispatch {
+    const WAITING: u8 = 0;
+    const MAY_HAVE_SENT: u8 = 1;
+    const SEALED_UNUSED: u8 = 2;
+
+    fn admit_open(&self) -> bool {
+        matches!(
+            self.0.compare_exchange(
+                Self::WAITING,
+                Self::MAY_HAVE_SENT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ),
+            Ok(_) | Err(Self::MAY_HAVE_SENT)
+        )
+    }
+
+    fn seal_unused(&self) -> bool {
+        matches!(
+            self.0.compare_exchange(
+                Self::WAITING,
+                Self::SEALED_UNUSED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ),
+            Ok(_) | Err(Self::SEALED_UNUSED)
+        )
+    }
 }
 
 impl SessionExecutionScope {
@@ -43,7 +78,11 @@ impl SessionExecutionScope {
             generation: admission.generation,
             operation: OperationId::new(),
         };
-        Ok(StdioMcpBinding { endpoint, key })
+        Ok(StdioMcpBinding {
+            endpoint,
+            key,
+            dispatch: Arc::default(),
+        })
     }
 }
 
@@ -54,6 +93,8 @@ impl StdioMcpBinding {
         deadline: Instant,
         cancellation: &ExecutionCancellation,
     ) -> io::Result<Reply> {
+        let opens_session = matches!(request, Request::Open { .. });
+        let dispatch = self.dispatch.clone();
         SessionExecutionScope::dispatch_data_on(
             self.endpoint.clone(),
             cancellation,
@@ -64,13 +105,23 @@ impl StdioMcpBinding {
                 endpoint.with_connection(Some(data), true, |connection| {
                     connection.mcp_by(request, deadline, || {
                         cancellation
-                            .with_active(|| ())
-                            .ok_or_else(cancelled_before_dispatch)
+                            .with_active(|| {
+                                if opens_session && !dispatch.admit_open() {
+                                    return Err(cancelled_before_dispatch());
+                                }
+                                Ok(())
+                            })
+                            .ok_or_else(cancelled_before_dispatch)?
                     })
                 })
             },
         )
         .await
+    }
+
+    /// Close may claim an unused identity before an Open reaches the wire.
+    pub(crate) fn seal_unused(&self) -> bool {
+        self.dispatch.seal_unused()
     }
 
     pub(crate) async fn settle_binding(&self) -> io::Result<()> {
@@ -88,5 +139,26 @@ impl StdioMcpBinding {
 
     pub(crate) fn abandon(&self) {
         self.endpoint.cut_pair_if_open();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpenDispatch;
+
+    #[test]
+    fn cleanup_seals_an_unsent_open_but_retains_a_possible_send() {
+        let unsent = OpenDispatch::default();
+        assert!(unsent.seal_unused());
+        assert!(unsent.seal_unused());
+        assert!(!unsent.admit_open());
+
+        let dispatched = OpenDispatch::default();
+        assert!(dispatched.admit_open());
+        assert!(!dispatched.seal_unused());
+        assert!(
+            dispatched.admit_open(),
+            "the same Open can recover its receipt"
+        );
     }
 }
