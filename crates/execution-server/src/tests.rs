@@ -3847,3 +3847,58 @@ fn lost_live_binding_does_not_release_its_durable_recovery_marker() {
         io::ErrorKind::AlreadyExists
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn independent_domain_receipt_retires_only_the_original_session_incarnation() {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    fn place_receipt(path: &Path, token: &[u8; 32]) {
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+            .write_all(token)
+            .unwrap();
+    }
+
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().canonicalize().unwrap();
+    let original = reservation();
+    let session = original.session.clone();
+    let (owner, _) = Binding::reserve(original).unwrap();
+    let retained = owner.retain_recovery_fence(&root).unwrap();
+    let grant = retained.arm_local_domain().unwrap();
+    let mut replacement = reservation();
+    replacement.instance = ClientInstanceId::new("replacement");
+    replacement.generation = Generation::new(NonZeroU64::new(2).unwrap());
+    let (next, _) = Binding::reserve(replacement).unwrap();
+    assert_erred_on_unconfirmed(&next, &root);
+
+    place_receipt(grant.receipt(), &[0; 32]);
+    assert_erred_on_unconfirmed(&next, &root);
+    std::fs::remove_file(grant.receipt()).unwrap();
+    place_receipt(grant.receipt(), grant.token());
+    RecoveryFence::require_session_settled(&root, &session).unwrap();
+    assert!(!grant.receipt().exists());
+    let next_fence = next.retain_recovery_fence(&root).unwrap();
+    let next_grant = next_fence.arm_local_domain().unwrap();
+    place_receipt(next_grant.receipt(), grant.token());
+    assert_eq!(
+        RecoveryFence::require_session_settled(&root, &session)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn assert_erred_on_unconfirmed(next: &Binding, root: &Path) {
+    match next.retain_recovery_fence(root) {
+        Ok(_) => panic!("an unconfirmed binding admitted a replacement"),
+        Err(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
+    }
+}

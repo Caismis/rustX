@@ -15,6 +15,26 @@ fn main() {
             let arguments: Vec<String> = std::env::args().skip(2).collect();
             rustx_process_supervisor::interactive_supervisor::run_inner(&arguments)
         }
+        #[cfg(target_os = "linux")]
+        Some("client-domain") => {
+            let mut arguments = std::env::args_os().skip(2);
+            match (arguments.next(), arguments.next()) {
+                (Some(receipt), Some(program)) => {
+                    match rustx_process_supervisor::client_domain::supervise(
+                        std::path::Path::new(&receipt),
+                        std::path::Path::new(&program),
+                        arguments,
+                    ) {
+                        Ok(()) => 0,
+                        Err(error) => {
+                            eprintln!("Client execution domain: {error}");
+                            1
+                        }
+                    }
+                }
+                _ => 1,
+            }
+        }
         _ => {
             eprintln!("interactive supervisor role is missing");
             1

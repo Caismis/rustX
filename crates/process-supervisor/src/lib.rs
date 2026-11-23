@@ -56,6 +56,8 @@ pub mod interactive_supervisor {
         1
     }
 }
+#[cfg(target_os = "linux")]
+pub mod client_domain;
 pub mod effects;
 pub mod identity;
 pub mod invocation;

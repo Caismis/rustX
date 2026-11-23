@@ -4884,6 +4884,7 @@ dependencies = [
  "futures-util",
  "libc",
  "nix",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

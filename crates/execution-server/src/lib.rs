@@ -53,6 +53,8 @@ pub use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 mod binding;
 mod bootstrap;
 mod recovery;
+#[cfg(target_os = "linux")]
+pub use recovery::LocalDomainGrant;
 pub use recovery::RecoveryFence;
 mod connection;
 mod control;
