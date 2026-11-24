@@ -1245,6 +1245,7 @@ async fn scheduled_settled(
     .expect("scheduled settlement")
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_scheduled_owner_defers_catalog_and_staged_config_but_not_policy() {
     // Scheduled Publication Matrix (Issue #606): a running Scheduled owner
