@@ -49,6 +49,7 @@ struct HostInner {
     #[cfg(test)]
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
+    workspace_picker: std::sync::OnceLock<tokio::sync::Semaphore>,
     revocations: Arc<super::delivery_access::Revocations>,
     authority_id: String,
     manager: SessionRuntimeManager,
@@ -185,6 +186,16 @@ impl AppServerHost {
         self.0.file_read_probe.authenticating.enter();
         authority.as_ref()?.authenticate(offered)
     }
+
+    pub(crate) fn enable_workspace_picker(&self) {
+        self.0
+            .workspace_picker
+            .get_or_init(|| tokio::sync::Semaphore::new(1));
+    }
+
+    pub(crate) fn workspace_picker(&self) -> Option<&tokio::sync::Semaphore> {
+        self.0.workspace_picker.get()
+    }
     /// One authority transition of a credential slot, linearized in the
     /// exclusive side of [`Self::revocations`] and the slot's own mutex.
     ///
@@ -298,6 +309,7 @@ impl AppServerHost {
             )),
             file_routes: Mutex::default(),
             file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
+            workspace_picker: std::sync::OnceLock::new(),
             unconfirmed_file_observer: AtomicBool::new(false),
         }))
     }

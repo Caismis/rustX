@@ -40,10 +40,12 @@ PROCESS_CASES = (
     "near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client",
     "http_mcp_imports_complete_output_through_the_bound_client",
     "execution_enrollment_precedes_client_and_workspace_configuration_readiness",
+    "installed_workspace_picker_uses_a_private_client_and_reaps_before_registration",
     "local_execution_fails_exactly_when_the_sibling_client_is_absent",
     "remote_execution_serves_session_reads_over_websocket",
     "explicit_composition_launches_and_reaps_the_sibling_client",
     "websocket_and_unix_transports_serve_identical_seeded_operations",
+    "server_sigkill_keeps_prior_client_binding_unavailable_after_restart",
 )
 HOST_CASES = (
     "standalone_server_validates_large_host_stream_without_a_client",
@@ -59,7 +61,6 @@ LINUX_HOST_CASES = (
 LINUX_CASES = (
     "local_restart_requires_namespace_settlement_after_server_sigkill",
     "client_sigkill_advances_only_the_original_session_generation",
-    "server_sigkill_keeps_prior_client_binding_unavailable_after_restart",
     "trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session",
 )
 MOUNT_CASES = (
@@ -224,13 +225,32 @@ def web(binary: Path, cwd: Path, environment: dict) -> None:
                 require(asset is not None, "Installed Web index has no JS entry")
                 require(bool(get(asset[1].decode(), 200)), "Installed Web JS entry is empty")
                 get("/assets/no-such-artifact.js", 404)
-                connection.request("POST", "/product-host/list", body="{}", headers={
-                    **bearer, "Content-Type": "application/json",
-                })
-                response = connection.getresponse()
-                catalog = json.loads(response.read())
-                require(response.status == 200 and catalog["picker"]["kind"] == "configured",
-                        "Installed Host must offer only explicitly configured locations")
+                def post(method: str, body: dict, status: int = 200):
+                    connection.request("POST", f"/product-host/{method}", body=json.dumps(body), headers={
+                        **bearer, "Content-Type": "application/json",
+                    })
+                    response = connection.getresponse()
+                    payload = response.read()
+                    require(response.status == status, f"Unexpected Web status for {method}: {payload!r}")
+                    return json.loads(payload)
+
+                catalog = post("list", {})
+                require(catalog["picker"]["kind"] == "browser", "Installed Host must expose the bound Workspace picker")
+                [location] = catalog["picker"]["locations"]
+                scope = {key: catalog[key] for key in ("authorityId", "endpoint")}
+                coordinates = {"scope": scope, "location": location["id"]}
+                (workspace / "project").mkdir()
+                post("browse-workspace", {**coordinates, "path": "../"}, 400)
+                root = post("browse-workspace", {**coordinates, "path": ""})
+                require(root["folders"] == ["project"], "Installed picker lost the directory")
+                selected = post("browse-workspace", {**coordinates, "path": "project"})
+                require(selected["folders"] == [], "Empty selection returned extra entries")
+                identifier = post("register-workspace-folder", {**coordinates, "selection": {
+                    "path": "project", "revision": selected["revision"],
+                }})
+                registered = post("list", {})
+                require(any(row["id"] == identifier and Path(row["displayPath"]) == workspace / "project"
+                            for row in registered["workspaces"]), "Installed picker did not register the confirmed directory")
             finally:
                 connection.close()
             print(f"Web bootstrap and static assets ready in {(time.monotonic() - started) * 1000:.1f} ms", flush=True)
@@ -241,8 +261,14 @@ def web(binary: Path, cwd: Path, environment: dict) -> None:
             require(launcher.wait(timeout=30) == 143, "Unexpected Web owner shutdown status")
         finally:
             if launcher.poll() is None:
-                os.killpg(launcher.pid, signal.SIGKILL)
-                launcher.wait()
+                # The launcher owns detached Server and carrier groups. Let it
+                # drain them even if a smoke assertion fails before shutdown.
+                launcher.terminate()
+                try:
+                    launcher.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    os.killpg(launcher.pid, signal.SIGKILL)
+                    launcher.wait()
 
 
 def process_proof(harness: Path, products: Path, mount: bool) -> None:

@@ -4,7 +4,7 @@ import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts'
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
-import { WorkspaceTerminals, workspaceDescriptors, workspaceFile, withWorkspacePath } from './workbench.ts';
+import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
@@ -26,6 +26,7 @@ import { observeFile } from './file-observation.ts';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
 import { readWorkspacePreview } from './workspace-preview.ts';
 import { observeNativeDelivery } from './native-file-observation.ts';
+import { browseNativeWorkspace } from './workspace-picker.ts';
 
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
@@ -38,8 +39,6 @@ export interface LocalHostConfig {
   endpoint: string;
   roots: { id: string; cwd: string; displayName: string }[];
   picker: boolean;
-  /** Operator enables explicit folder selection on a shared local desktop. */
-  nativePicker?: boolean;
   /** Permit listing and explicitly registering descendants of configured roots. */
   browsePicker?: boolean;
   /** Operator-owned file outside the browser and rustX runtime root. */
@@ -47,9 +46,6 @@ export interface LocalHostConfig {
 }
 type PickedFolder = { path: string; device: string; inode: string; root?: string };
 type Registration = { id: string; location: string; displayName: string; selected?: true; folder?: PickedFolder };
-const folderRevision = (folder: PickedFolder) => `${folder.device}:${folder.inode}`;
-const directoryIdentity = (path: string, stat: { dev: bigint; ino: bigint }): PickedFolder =>
-  ({ path, device: String(stat.dev), inode: String(stat.ino) });
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
@@ -73,7 +69,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly desktop: DesktopAdapter;
   private readonly readSession: typeof readDesktopSession;
   private readonly observeTerminals: typeof observeTerminalOwnership;
-  private folderPick?: { abort: AbortController; selection: Promise<string | null> };
+  private readonly pickerLifetime = new AbortController();
   constructor(config: LocalHostConfig, desktop = new DesktopAdapter(), readSession = readDesktopSession, observeTerminals = observeTerminalOwnership) {
     this.observeTerminals = observeTerminals;
     this.terminals = new WorkspaceTerminals(config.terminalSupervisor);
@@ -134,7 +130,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
       workspaces: this.registrations.map(({ id, location, displayName, folder }) => ({ id, location, displayName, displayPath: folder?.path ?? this.roots.find(root => root.id === location)!.cwd })),
       ...(preferredWorkspace ? { preferredWorkspace } : {}),
-      picker: this.folderPicker() ? { kind: 'native' } : this.config.picker ? { kind: this.canBrowse() ? 'browser' : 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
+      picker: this.config.picker ? { kind: this.canBrowse() ? 'browser' : 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
   private mutationScope(scope: WorkspaceAuthorityScope) {
@@ -144,10 +140,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   close(): Promise<void> {
     this.closed = true;
-    this.folderPick?.abort.abort();
+    this.pickerLifetime.abort();
     for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), this.folderPick?.selection.catch(() => {}), ...this.fileObservationTasks]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -446,62 +442,32 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.cwd(location);
     this.register(location, root.displayName);
   }
-  private folderPicker() {
-    if (this.config.nativePicker && this.config.nativeFilesystem === 'shared' && this.config.transportToken)
-      return this.desktop.prepareFolderPicker();
-  }
-  async pickWorkspace(scope: WorkspaceAuthorityScope, signal?: AbortSignal): Promise<string | null> {
-    this.mutationScope(scope);
-    if (this.folderPick) throw new Error('A system folder chooser is already open');
-    const pick = this.folderPicker();
-    if (!pick) throw new Error('The system folder chooser is unavailable');
-    const abort = new AbortController();
-    const lifetime = AbortSignal.any([abort.signal, AbortSignal.timeout(5 * 60_000), ...(signal ? [signal] : [])]);
-    lifetime.throwIfAborted();
-    const selection = pick(lifetime);
-    this.folderPick = { abort, selection };
-    try {
-      const selected = await selection;
-      lifetime.throwIfAborted();
-      this.mutationScope(scope);
-      if (selected === null) return null;
-      if (!isAbsolute(selected)) throw new Error('The system chooser did not return an absolute folder');
-      const path = realpathSync(selected);
-      const stat = statSync(path, { bigint: true });
-      if (!stat.isDirectory()) throw new Error('The selected location is not a directory');
-      return this.registerFolder(directoryIdentity(path, stat));
-    } finally { this.folderPick = undefined; }
-  }
   private canBrowse() {
-    return this.config.picker && this.config.browsePicker && this.config.nativeFilesystem === 'shared' && !!this.config.transportToken;
+    return this.config.picker && this.config.browsePicker && this.config.nativeFilesystem === 'shared' && !!this.config.productHostToken;
   }
-  private withPickerFolder<T>(scope: WorkspaceAuthorityScope, location: string, path: string, action: (fd: number, folder: PickedFolder) => T) {
+  private async browseFolder(scope: WorkspaceAuthorityScope, location: string, path: string, expected?: string, signal?: AbortSignal) {
     this.mutationScope(scope);
     if (!this.canBrowse()) throw new Error('Host directory browsing is unavailable');
     const root = this.roots.find(root => root.id === location);
     if (!root) throw new Error('Unknown directory browser root');
-    if (typeof path !== 'string' || path !== '' && path.split('/').some(part => !part)) throw new Error('Invalid directory browser path');
-    return withWorkspacePath(this.cwd(root.id), path, true, fd => {
-      const directory = join(root.cwd, path);
-      return action(fd, { ...directoryIdentity(directory, fstatSync(fd, { bigint: true })), root: root.id });
-    });
+    if (typeof path !== 'string' || Buffer.byteLength(path) > 4096
+      || path !== '' && path.split('/').some(part => !part || part === '.' || part === '..' || part.includes('\0'))) throw new Error('Invalid directory browser path');
+    const directory = join(root.cwd, path);
+    const lifetime = AbortSignal.any([this.pickerLifetime.signal, AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
+    const listing = await browseNativeWorkspace(this.config.endpoint, this.config.productHostToken!, root.cwd, directory, expected, lifetime);
+    lifetime.throwIfAborted();
+    this.mutationScope(scope);
+    return { root, directory, listing };
   }
-  async browseWorkspace(scope: WorkspaceAuthorityScope, location: string, path: string) {
-    return this.withPickerFolder(scope, location, path, (fd, folder) => {
-      const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-      const folders = workspaceDescriptors.entries(fd).filter(entry => entry.directory && !entry.link)
-        .map(entry => decoder.decode(entry.name)).sort((a, b) => a.localeCompare(b));
-      return { displayPath: folder.path, folders, revision: folderRevision(folder) };
-    });
+  async browseWorkspace(scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal) {
+    const { directory, listing } = await this.browseFolder(scope, location, path, undefined, signal);
+    return { displayPath: directory, folders: listing.folders, revision: listing.revision };
   }
   async registerWorkspaceFolder(scope: WorkspaceAuthorityScope, location: string, selection: WorkspaceFolderSelection) {
-    return this.withPickerFolder(scope, location, selection.path, (_fd, folder) => {
-      if (selection.revision !== folderRevision(folder) || realpathSync(folder.path) !== folder.path
-        || folderRevision(directoryIdentity(folder.path, statSync(folder.path, { bigint: true }))) !== folderRevision(folder)) {
-        throw new Error('The folder changed. Browse to it again before adding it.');
-      }
-      return this.registerFolder(folder);
-    });
+    if (!/^[a-f0-9]{64}$/.test(selection.revision)) throw new Error('Invalid directory revision');
+    const { root, directory, listing } = await this.browseFolder(scope, location, selection.path, selection.revision);
+    const [device, inode] = listing.identity.split(':') as [string, string];
+    return this.registerFolder({ path: directory, device, inode, root: root.id });
   }
   private registerFolder(folder: PickedFolder) {
     const root = this.roots.find(root => root.cwd === folder.path);

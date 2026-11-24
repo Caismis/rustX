@@ -427,10 +427,17 @@ class Workflow(unittest.TestCase):
                 self.assertIn(f"fromJSON(needs.plan.outputs.run)['{job}']", condition.group(1))
                 self.assertIsNotNone(re.search(r"^    needs: \[?plan\b", jobs[job], re.M), f"{job} must need plan")
 
-    def test_every_other_job_is_the_plan_the_gate_or_always_on(self):
+    def test_jobs_outside_the_plan_have_explicit_verification_ownership(self):
         jobs = self.jobs()
         planned = v.plan("push", [], [])
-        self.assertEqual(set(jobs) - set(planned["run"]), {"plan", "notifications", "verification"})
+        self.assertEqual(
+            set(jobs) - set(planned["run"]),
+            {"plan", "notifications", "verification", "installed-macos"},
+        )
+        self.assertIn(
+            "if: github.event_name == 'workflow_dispatch' && inputs.installed_macos",
+            jobs["installed-macos"],
+        )
         gate = jobs["verification"]
         for job in planned["run"]:
             self.assertIn(job, gate, f"the gate must need {job}")

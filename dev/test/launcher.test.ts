@@ -88,7 +88,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   const scratch = dirname(tokenFile);
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   assert.equal(app.spec.component, 'app-server');
-  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile]);
+  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--local-workspace-picker', '--product-host-token-file', productHostTokenFile]);
   assert.match(readFileSync(tokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
   assert.equal(statSync(productHostTokenFile).mode & 0o777, 0o600);
@@ -100,7 +100,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, nativePicker: true, browsePicker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
+  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, browsePicker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
   assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
   const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
   const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));
@@ -136,7 +136,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.equal(await launcher.settle(1), 130);
 });
 
-test('installed Web uses built assets and offers only configured Workspace locations', async t => {
+test('installed Web uses built assets and enables the private Workspace picker', async t => {
   const f = fixture(); t.after(f.remove);
   const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'), true);
   const starting = launcher.start(f.args);
@@ -147,9 +147,8 @@ test('installed Web uses built assets and offers only configured Workspace locat
   assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/installed-carrier.ts')]);
   const host = new LocalWorkspaceHost(config);
   const catalog = await host.listWorkspaces();
-  assert.equal(catalog.picker.kind, 'configured');
-  await assert.rejects(host.pickWorkspace(catalog), /chooser is unavailable/);
-  await assert.rejects(host.browseWorkspace(catalog, config.roots[0].id, ''), /browsing is unavailable/);
+  assert.ok(h.calls[0].spec.args.includes('--local-workspace-picker'));
+  assert.equal(catalog.picker.kind, 'browser');
   await host.close();
   web.ready.resolve('http://127.0.0.1:4243/'); await starting;
   const stopping = launcher.settle(0);

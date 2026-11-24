@@ -104,10 +104,8 @@ export class Launcher {
       do { productHostToken = randomBytes(32).toString('base64url'); } while (productHostToken === transportToken);
       const productHostTokenFile = this.#write('product-host-token', productHostToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
-        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
-      // The installed catalog exposes operator-enrolled paths. Do not offer a
-      // directory picker that can enumerate files before a Client is bound.
-      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(binaryDirectory, 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, nativePicker: !this.#installed, browsePicker: !this.#installed,
+        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--local-workspace-picker', '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
+      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(binaryDirectory, 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, browsePicker: true,
         ...workspaceRegistry(args.workspaces, args.forwarded, this.#stateDirectory) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;

@@ -3391,6 +3391,20 @@ impl SessionExecutionRegistry {
 }
 
 impl SessionRuntimeManager {
+    /// A private Session binding for the trusted local folder chooser. The
+    /// caller owns it through shutdown. It has no catalog or Agent identity.
+    pub(crate) async fn start_workspace_picker(
+        &self,
+        root: PathBuf,
+    ) -> Result<StandaloneExecution, String> {
+        StandaloneExecution::start(
+            SessionId::generate(),
+            root,
+            self.configuration.runtime_root().to_path_buf(),
+        )
+        .await
+    }
+
     /// Reserves the Session's process-owned local execution endpoint for the
     /// trusted native composer.
     ///

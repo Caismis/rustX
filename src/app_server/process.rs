@@ -46,9 +46,12 @@ pub(crate) struct AppServerArgs {
     audience: Option<String>,
     #[arg(long, requires = "shared_secret_file")]
     max_clock_skew_seconds: Option<u64>,
-    /// Separate Product Host-only file-read credential; never the browser token.
+    /// Separate Product Host credential; never the browser token.
     #[arg(long)]
     product_host_token_file: Option<PathBuf>,
+    /// Permit the trusted local Product Host to browse configured environment roots through a sibling Client.
+    #[arg(long, requires = "product_host_token_file")]
+    local_workspace_picker: bool,
     /// Launch the sibling Execution Client bound to this exact existing
     /// Session. Requires --local-execution-workspace; bare mode launches none.
     #[arg(long, requires = "local_execution_workspace")]
@@ -105,6 +108,7 @@ impl AppServerArgs {
             audience: self.audience,
             max_clock_skew_seconds: self.max_clock_skew_seconds,
             product_host_token: self.product_host_token_file,
+            local_workspace_picker: self.local_workspace_picker,
             local_execution_session: self.local_execution_session,
             local_execution_workspace: self.local_execution_workspace,
             execution_session: self.execution_session,
@@ -130,6 +134,7 @@ pub struct Request {
     audience: Option<String>,
     max_clock_skew_seconds: Option<u64>,
     product_host_token: Option<PathBuf>,
+    local_workspace_picker: bool,
     local_execution_session: Option<String>,
     local_execution_workspace: Option<PathBuf>,
     execution_session: Option<String>,
@@ -314,6 +319,9 @@ async fn serve_transport(
             }
             host.bind_product_host(Some(product_host));
         }
+        if options.local_workspace_picker {
+            host.enable_workspace_picker();
+        }
         let listener = tokio::net::TcpListener::bind(address).await?;
         eprintln!(
             "rustx app-server protocol v{} (runtime-client v{})",
@@ -389,12 +397,15 @@ async fn run(options: Request) -> Result<(), String> {
             return Err("stdio does not accept network authentication flags".into());
         }
     } else {
-        options
+        let address = options
             .listen
             .strip_prefix("ws://")
             .ok_or("listen must be stdio or ws://IP:PORT")?
             .parse::<std::net::SocketAddr>()
             .map_err(|error| error.to_string())?;
+        if options.local_workspace_picker && !address.ip().is_loopback() {
+            return Err("local Workspace selection requires a loopback App Server listener".into());
+        }
         // Validate before composition/listening; including loopback, there is
         // no unauthenticated network configuration.
         connection_credential(&options).map_err(|error| error.to_string())?;

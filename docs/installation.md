@@ -74,9 +74,15 @@ when recovering an enrolled Session.
 The explicit local Workspace option enrolls and launches a trusted sibling
 Client through the paired Unix protocol. It creates a durable minimal
 Session before dependent configuration is loaded. Configure the environment
-root first. The installed Web catalog lists explicitly configured locations.
+root first. The Web picker browses descendants of those configured roots over
+a private Product Host connection. A temporary Session binds the bundled
+Client before the first page and uses ordinary execution revocation and reaping
+on completion or cancellation. Choosing a folder revalidates the Client's
+directory revision before the Host registers it. The picker has no Agent or
+Conversation to initialize.
+
 The TUI example attaches to the specified enrolled Session. The Web launcher
-serves the built assets together with the existing local Workspace Host. Web
+serves the built assets together with the local Workspace Host. Web
 and TUI need `node` on `PATH`. Run
 `rustx app-server --help` for direct, headless startup with these same
 installed binaries. On Linux, local recovery checks also require `bwrap`.

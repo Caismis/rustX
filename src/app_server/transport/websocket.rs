@@ -1,5 +1,6 @@
 //! WebSocket admission and framing. Each admitted socket gets its own endpoint.
 use super::{MAX_MESSAGE_BYTES, Outbound, WRITE_TIMEOUT, failure};
+use crate::app_server::product_host::workspace_picker;
 use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
 use std::io::Write as _;
@@ -259,8 +260,21 @@ enum Admission {
     /// The private one-read Product Host lane and its native authority.
     ProductHost(CancellationToken),
     ProductHostObserver(CancellationToken),
+    WorkspacePicker(CancellationToken),
     /// The ordinary trusted-client lane.
     Ordinary,
+}
+
+impl Admission {
+    fn subprotocol(&self) -> &'static str {
+        use crate::app_server::product_host;
+        match self {
+            Self::ProductHost(_) => product_host::SUBPROTOCOL,
+            Self::ProductHostObserver(_) => product_host::OBSERVE_SUBPROTOCOL,
+            Self::WorkspacePicker(_) => workspace_picker::SUBPROTOCOL,
+            Self::Ordinary => SUBPROTOCOL,
+        }
+    }
 }
 
 fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Option<Admission> {
@@ -276,6 +290,15 @@ fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Op
         .collect();
     if request.uri().query().is_some() {
         return None;
+    }
+    if request.uri().path() == workspace_picker::PATH {
+        host.workspace_picker()?;
+        if !offered.contains(&workspace_picker::SUBPROTOCOL) {
+            return None;
+        }
+        return host
+            .authenticate_product_host(&offered)
+            .map(Admission::WorkspacePicker);
     }
     if request.uri().path() == crate::app_server::product_host::PATH {
         if !offered.contains(&crate::app_server::product_host::SUBPROTOCOL) {
@@ -331,13 +354,7 @@ where
                 .body(Some("Unauthorized".into()))
                 .expect("constant response"));
         };
-        let selected = match admission {
-            Admission::ProductHost(_) => crate::app_server::product_host::SUBPROTOCOL,
-            Admission::ProductHostObserver(_) => {
-                crate::app_server::product_host::OBSERVE_SUBPROTOCOL
-            }
-            Admission::Ordinary => SUBPROTOCOL,
-        };
+        let selected = admission.subprotocol();
         *admitted.lock().expect("handshake admission") = Some(admission);
         if request.headers().get("sec-websocket-protocol").is_some() {
             response.headers_mut().insert(
@@ -367,6 +384,9 @@ where
                 socket, host, authority, shutdown,
             )
             .await;
+        }
+        Some(Admission::WorkspacePicker(authority)) => {
+            return workspace_picker::serve(socket, host, authority, shutdown).await;
         }
         Some(Admission::Ordinary) => {}
         None => return Err(failure("WebSocket admission missing")),

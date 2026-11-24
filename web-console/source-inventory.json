@@ -3306,7 +3306,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6482b355a216e797496677c0c3595d61ce164c7fe3842e76cc1ad0089892f900"
+      "local_sha256": "1f18ce435f99d1d7fc8fb3185e4e7b876b4dd3d633b996169883a269480765ba"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3565,7 +3565,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "80318e06cd264a3325b13be62e674979c8fbb29ceb456c838682435249623288",
+      "local_sha256": "ea7a52f85fd740044c46e485e113c2804e3773a156086cef2b3da49290d177f2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",

@@ -124,19 +124,16 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           break;
         }
         case 'list': value = await host.listWorkspaces(); break;
-        case 'pick-workspace': {
-          if (!host.pickWorkspace || Object.keys(body).some(key => key !== 'scope')) throw new Error('Invalid system folder chooser request');
+        case 'browse-workspace': {
+          if (!host.browseWorkspace || Object.keys(body).some(key => !['scope', 'location', 'path'].includes(key))) throw new Error('Invalid directory browser request');
           const abort = new AbortController();
           const closed = () => { if (!response.writableFinished) abort.abort(); };
           response.on('close', closed);
           if (response.destroyed) abort.abort();
-          try { value = await host.pickWorkspace(scope(), abort.signal); }
+          try { value = await host.browseWorkspace(scope(), string('location'), string('path'), abort.signal); }
           finally { response.off('close', closed); }
           break;
         }
-        case 'browse-workspace':
-          if (!host.browseWorkspace || Object.keys(body).some(key => !['scope', 'location', 'path'].includes(key))) throw new Error('Invalid directory browser request');
-          value = await host.browseWorkspace(scope(), string('location'), string('path')); break;
         case 'register-workspace-folder': {
           const selection = body.selection;
           if (!host.registerWorkspaceFolder || Object.keys(body).some(key => !['scope', 'location', 'selection'].includes(key))

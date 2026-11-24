@@ -125,7 +125,6 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     }
   };
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
-  pickWorkspace = (scope: WorkspaceAuthorityScope, signal?: AbortSignal) => this.call<string | null>('pick-workspace', { scope }, signal);
   browseWorkspace = (scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal) =>
     this.call<import('./host.ts').WorkspaceFolderListing>('browse-workspace', { scope, location, path }, signal);
   registerWorkspaceFolder = (scope: WorkspaceAuthorityScope, location: string, selection: import('./host.ts').WorkspaceFolderSelection) =>

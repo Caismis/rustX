@@ -57,8 +57,6 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
   const [notice, setError] = useToastNotice();
   const error = notice?.text ?? '';
   const [busy, setBusy] = useState(false);
-  const [pickingFolder, setPickingFolder] = useState(false);
-  const folderPick = useRef<AbortController | undefined>(undefined);
   const [renaming, setRenaming] = useState<{ id: string; title: string }>();
   const [toast, setToast] = useState<{ sequence: number; copied: boolean }>();
   const pinned = useSyncExternalStore(pins.subscribe, pins.getSnapshot);
@@ -68,7 +66,6 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
   const connected = state.connection === 'connected';
   const route = state.endpoint ?? endpoint;
   const bound = sameEndpoint(catalog?.endpoint, route);
-  useEffect(() => () => folderPick.current?.abort(), [route, catalog?.authorityId]);
   const searchRequest = useRef<object | undefined>(undefined);
   const directory = useRef({ workspace, selected }); directory.current = { workspace, selected };
   const capture = () => {
@@ -100,24 +97,6 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
     catch (cause) { setError(actionError(cause)); }
     finally { setBusy(false); }
   };
-  const addWorkspace = async () => {
-    if (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser') { edit('add', '', ''); return; }
-    if (!host.pickWorkspace || folderPick.current) return;
-    const mutation = associations.captureMutation(catalog);
-    if (!mutation) { setError(String(new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced'))); return; }
-    const controller = new AbortController();
-    folderPick.current = controller;
-    setPickingFolder(true); setError('');
-    try {
-      const id = await host.pickWorkspace(mutation.scope, controller.signal);
-      if (id && !controller.signal.aborted && mutation.commit()) metadataChanged();
-    } catch (cause) {
-      if (!controller.signal.aborted && mutation.current()) { associations.refresh(); setError(actionError(cause)); }
-    } finally {
-      folderPick.current = undefined;
-      setPickingFolder(false);
-    }
-  };
   const rank = new Map(pinned.map((id, index) => [id, index]));
   const sessions = [...state.sessions].sort((a, b) => (rank.get(a.id) ?? pinned.length) - (rank.get(b.id) ?? pinned.length));
   const rows = sessions.map(session => {
@@ -139,9 +118,8 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
     <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.generated_title?.text ?? state.sessions.find(session => session.id === id)?.preview ?? '')} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
-      addWorkspace={bound && (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser' && host.browseWorkspace && host.registerWorkspaceFolder
-        || catalog?.picker.kind === 'native' && host.pickWorkspace) ? () => void addWorkspace() : undefined}
-      addingWorkspace={pickingFolder}
+      addWorkspace={bound && (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser' && host.browseWorkspace && host.registerWorkspaceFolder)
+        ? () => edit('add', '', '') : undefined}
       refresh={() => { associations.refresh(); search(query, offset); }} previous={connected && offset > 0 ? () => search(query, Math.max(0, offset - 32)) : undefined}
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}
       notices={<>{status === 'unavailable' && <p role="status">{tx('workspace:association.unavailable')}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />

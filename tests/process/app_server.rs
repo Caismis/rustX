@@ -3292,6 +3292,110 @@ async fn json_response(socket: &mut Socket) -> serde_json::Value {
     }
 }
 
+async fn picker_request(
+    endpoint: &str,
+    token: &str,
+    record: serde_json::Value,
+) -> serde_json::Value {
+    let (mut socket, _) = tokio_tungstenite::connect_async(picker_upgrade(endpoint, token))
+        .await
+        .expect("authenticated Product Host picker");
+    socket
+        .send(Message::Text(record.to_string().into()))
+        .await
+        .unwrap();
+    let Message::Text(response) = socket.next().await.unwrap().unwrap() else {
+        panic!("picker response must be JSON");
+    };
+    serde_json::from_str(response.as_str()).unwrap()
+}
+
+fn picker_upgrade(
+    endpoint: &str,
+    token: &str,
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    let mut request = format!(
+        "{}/product-host/workspace-picker",
+        endpoint.trim_end_matches('/')
+    )
+    .into_client_request()
+    .unwrap();
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!("rustx.product-host.workspace-picker.v1, rustx-product-host.{token}")
+            .parse()
+            .unwrap(),
+    );
+    request
+}
+
+#[tokio::test]
+async fn installed_workspace_picker_uses_a_private_client_and_reaps_before_registration() {
+    bounded(async {
+        use rustx_execution_server::RecoveryFence;
+        use serde_json::json;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        const SECRET: &str = "workspace-picker-private-authority-0123456789abcdef";
+        let fixture = Fixture::new().await;
+        let workspace = fixture.root.path().join("a");
+        let outside = fixture.root.path().join("b");
+        let child_dir = workspace.join("project");
+        std::fs::create_dir(&child_dir).unwrap();
+        std::fs::write(workspace.join("rustx.toml"), b"invalid [").unwrap();
+        std::fs::write(child_dir.join("original"), b"keep").unwrap();
+        symlink(&outside, workspace.join("alias")).unwrap();
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+
+        let (_bin, executable) = isolated_server_pair();
+        let token_file = fixture.root.path().join("picker-token");
+        std::fs::write(&token_file, SECRET).unwrap();
+        std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut server = fixture.command_with_program(executable, "ws://127.0.0.1:0")
+            .arg("--token-file").arg(fixture.root.path().join("token"))
+            .arg("--product-host-token-file").arg(token_file)
+            .arg("--local-workspace-picker")
+            .spawn().unwrap();
+        let (endpoint, _stderr) = websocket_startup(&mut server).await;
+        let error = tokio_tungstenite::connect_async(picker_upgrade(&endpoint, driver::TOKEN))
+            .await.unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+            panic!("ordinary App Server credentials cannot use the picker");
+        };
+        assert_eq!(response.status(), 401);
+
+        let probe = |directory: &std::path::Path| json!({"root": workspace, "directory": directory});
+        let result = picker_request(&endpoint, SECRET, probe(&workspace)).await;
+        assert_eq!(result["Ok"]["folders"], json!(["project"]), "{result}");
+        for path in [&outside, &workspace.join("alias")] {
+            assert!(picker_request(&endpoint, SECRET, probe(path)).await["Err"].is_string());
+        }
+        let runtime = fixture.root.path().join("runtime");
+        assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
+        let first = picker_request(&endpoint, SECRET, probe(&child_dir)).await;
+        let previous = first["Ok"]["revision"].as_str().expect("directory revision");
+        let original = workspace.join("old");
+        std::fs::rename(&child_dir, &original).unwrap();
+        std::fs::create_dir(&child_dir).unwrap();
+        let verify = |expected: &str| json!({"root": workspace, "directory": child_dir, "expected": expected});
+        let stale = picker_request(&endpoint, SECRET, verify(previous)).await;
+        assert_eq!(stale["Err"], "The folder changed. Browse to it again before adding it.");
+        let updated = picker_request(&endpoint, SECRET, probe(&child_dir)).await;
+        let current = updated["Ok"]["revision"].as_str().unwrap();
+        assert_ne!(current, previous);
+        let confirmation = picker_request(&endpoint, SECRET, verify(current)).await;
+        assert_eq!(confirmation["Ok"]["revision"], current);
+        assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
+        assert_eq!(std::fs::read(original.join("original")).unwrap(), b"keep");
+        terminate(&server);
+        assert!(server.wait().await.unwrap().success());
+        let catalog = SessionController::open(&runtime).unwrap();
+        assert_eq!(
+            catalog.list_sessions(None, 0, 16).await.unwrap().sessions.len(),
+            fixture.sessions.len()
+        );
+    }).await;
+}
+
 #[tokio::test]
 async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {
@@ -6533,7 +6637,6 @@ os.execv({client:?}, [{client:?}, *sys.argv[1:]])
     .await;
 }
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
     use rustx::app_server::protocol::{ErrorData, Method, MethodResult, Response};
@@ -6675,6 +6778,24 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         assert!(
             diagnostic.contains("previous Session execution domain requires physical settlement"),
             "{diagnostic}"
+        );
+
+        // Physical Client death without a settlement grant is still insufficient.
+        execution.0.kill().unwrap();
+        let death = execution.0.wait().unwrap();
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&death),
+            Some(libc::SIGKILL)
+        );
+        let rejected_after_death =
+            local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+                .output()
+                .await
+                .unwrap();
+        assert!(!rejected_after_death.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected_after_death.stderr)
+                .contains("previous Session execution domain requires physical settlement")
         );
 
         let other = &fixture.sessions[1];
@@ -6922,7 +7043,6 @@ async fn trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session() 
     }).await;
 }
 
-#[cfg(target_os = "linux")]
 async fn assert_offline_session_deletion(driver: &driver::Driver, session: &SessionId) {
     use rustx::app_server::{
         protocol::{Method, MethodResult},
