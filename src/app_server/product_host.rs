@@ -298,8 +298,14 @@ where
     let Some(Ok(Message::Text(text))) = request else {
         return Err(io::Error::other("expected Product Host read"));
     };
-    let request: FileRead =
+    let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| io::Error::other("invalid Product Host read"))?;
+    if value.get("operation").and_then(serde_json::Value::as_str) == Some("open") {
+        let open: PreviewOpen = serde_json::from_value(value).map_err(io::Error::other)?;
+        return serve_preview(socket, host, authorization, shutdown, open.request).await;
+    }
+    let request: FileRead =
+        serde_json::from_value(value).map_err(|_| io::Error::other("invalid Product Host read"))?;
     let read = read(host.clone(), request, authorization.clone());
     tokio::pin!(read);
     let result = tokio::select! {
@@ -537,4 +543,194 @@ async fn artifact(
     receiver
         .await
         .map_err(|_| domain(ErrorData::OperationFailed))?
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewOpen {
+    #[serde(rename = "operation")]
+    _operation: PreviewOpenKind,
+    request: FileRead,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PreviewOpenKind {
+    Open,
+}
+#[derive(Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum PreviewCommand {
+    Read {
+        identity: String,
+        id: u32,
+        range: crate::tools::session_files::preview::ByteRange,
+    },
+    Close {
+        identity: String,
+    },
+}
+
+/// A bounded idle source owner multiplexes two physical page requests. Each
+/// request still owns the existing descriptor-authorized read/publication fence.
+#[allow(clippy::too_many_lines)]
+async fn serve_preview<S>(
+    socket: super::transport::websocket::Socket<S>,
+    host: AppServerHost,
+    authorization: CancellationToken,
+    shutdown: CancellationToken,
+    mut request: FileRead,
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    use tokio_tungstenite::tungstenite::Message;
+    let Ok(_owner) = host.file_previews().try_acquire_owned() else {
+        let metadata = super::transport::serialize_record(&serde_json::json!({
+            "jsonrpc":"2.0", "id":0, "error":domain(ErrorData::SessionFileRead { reason: FileFailure::Capacity })
+        }))?;
+        tokio::time::timeout(
+            super::transport::WRITE_TIMEOUT,
+            socket.send_file(Message::Text(metadata.into()), None, false),
+        )
+        .await
+        .map_err(io::Error::other)??;
+        return tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
+            .await
+            .map_err(io::Error::other)?;
+    };
+    if !matches!(request.source, ReadSource::SessionFile { .. }) {
+        return Err(io::Error::other(
+            "only committed files have preview operations",
+        ));
+    }
+    request.read = ReadOptions::Bytes {
+        max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+        range: Some(crate::tools::session_files::preview::ByteRange {
+            offset: 0,
+            length: 1,
+        }),
+    };
+    let expires = tokio::time::Instant::now() + FILE_WRITE_TIMEOUT;
+    let deadline = tokio::time::sleep_until(expires);
+    tokio::pin!(deadline);
+    let identity = uuid::Uuid::new_v4().to_string();
+    let mut bound: Option<(
+        Option<crate::tools::session_files::SessionFileReference>,
+        String,
+        u64,
+    )> = None;
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut closing = false;
+    let mut final_probe = false;
+    let spawn = |tasks: &mut tokio::task::JoinSet<_>, id, request: FileRead| {
+        let host = host.clone();
+        let authorization = authorization.clone();
+        tasks.spawn(async move { (id, read(host, request, authorization).await) });
+    };
+    spawn(&mut tasks, 0, request.clone());
+    let result = async {
+        loop {
+            if closing && tasks.is_empty() && !final_probe {
+                final_probe = true;
+                spawn(&mut tasks, 0, request.clone());
+            }
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => break,
+                () = &mut deadline => break,
+                () = authorization.cancelled() => break,
+                incoming = socket.next() => {
+                    if closing { break; }
+                    let Some(Ok(Message::Text(text))) = incoming else { break; };
+                    let command: PreviewCommand = serde_json::from_str(&text).map_err(io::Error::other)?;
+                    match command {
+                        PreviewCommand::Read { identity: selected, id, range } => {
+                            if bound.is_none() || selected != identity || id == 0 || tasks.len() >= 2 || !ids.insert(id) {
+                                return Err(io::Error::other("invalid preview request"));
+                            }
+                            let mut page = request.clone();
+                            page.read = ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: Some(range) };
+                            spawn(&mut tasks, id, page);
+                        }
+                        PreviewCommand::Close { identity: selected } => {
+                            if bound.is_none() || selected != identity { return Err(io::Error::other("invalid preview identity")); }
+                            closing = true;
+                        }
+                    }
+                }
+                completed = tasks.join_next(), if !tasks.is_empty() => {
+                    let (id, (result, publication)) = completed.ok_or_else(|| io::Error::other("missing preview task"))?.map_err(io::Error::other)?;
+                    ids.remove(&id);
+                    let result = result.and_then(|result| {
+                        if let Some((file, version, bytes)) = &bound
+                            && (file != &result.file || version != &result.content.version || *bytes != result.content.bytes) {
+                            return Err(domain(ErrorData::SessionFileRead { reason: FileFailure::Replaced }));
+                        }
+                        Ok(result)
+                    });
+                    let response = match result {
+                        Err(error) => {
+                            let metadata = super::transport::serialize_record(&serde_json::json!({"jsonrpc":"2.0","id":id,"error":error}))?;
+                            send_preview_frame(&socket, Message::Text(metadata.into()), publication.as_ref(), false, expires, &authorization, &shutdown).await?;
+                            break;
+                        }
+                        Ok(mut value) => {
+                            if bound.is_none() {
+                                bound = Some((value.file.clone(), value.content.version.clone(), value.content.bytes));
+                                serde_json::json!({"jsonrpc":"2.0","id":0,"result":{"identity":identity,"version":value.content.version,"bytes":value.content.bytes,"file":value.file}})
+                            } else if final_probe {
+                                serde_json::json!({"jsonrpc":"2.0","id":0,"result":{"closed":true}})
+                            } else {
+                                let bytes = std::mem::take(&mut value.content.data);
+                                let mut value = serde_json::to_value(value).map_err(io::Error::other)?;
+                                value["length"] = serde_json::json!(bytes.len());
+                                let metadata = super::transport::serialize_record(&serde_json::json!({"jsonrpc":"2.0","id":id,"result":value}))?;
+                                if !send_preview_frame(&socket, Message::Text(metadata.into()), publication.as_ref(), true, expires, &authorization, &shutdown).await? {
+                                    break;
+                                }
+                                if !send_preview_frame(&socket, Message::Binary(bytes.into()), publication.as_ref(), true, expires, &authorization, &shutdown).await? {
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    };
+                    let metadata = super::transport::serialize_record(&response)?;
+                    if !send_preview_frame(&socket, Message::Text(metadata.into()), publication.as_ref(), true, expires, &authorization, &shutdown).await? {
+                        break;
+                    }
+                    if final_probe { break; }
+                }
+            }
+        }
+        Ok(())
+    }.await;
+    host.revocations().revoke(|| authorization.cancel());
+    // Never acknowledge cancellation while a detached descriptor read survives.
+    while tasks.join_next().await.is_some() {}
+    tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.close())
+        .await
+        .map_err(io::Error::other)??;
+    result
+}
+
+async fn send_preview_frame<S>(
+    socket: &super::transport::websocket::Socket<S>,
+    message: tokio_tungstenite::tungstenite::Message,
+    publication: Option<&delivery_access::Publication>,
+    success: bool,
+    expires: tokio::time::Instant,
+    authorization: &CancellationToken,
+    shutdown: &CancellationToken,
+) -> io::Result<bool>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    tokio::select! {
+        biased;
+        () = shutdown.cancelled() => Ok(false),
+        () = authorization.cancelled() => Ok(false),
+        result = tokio::time::timeout_at(expires, socket.send_file(message, publication, success)) => result.map_err(io::Error::other)?,
+    }
 }

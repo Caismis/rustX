@@ -59846,11 +59846,12 @@
   },
   {
     "reference": "trajectory-inspector-390-dark-linux.png",
-    "evidence": "Push-run on head 399956c7c (2026-11-24), Browser acceptance shard first attempt (re-run passed): one changed pixel at (28,233), reported max channel delta 4, strict exact match otherwise. Identical site to the light variant's already-registered region — the details-resize handle's left elevation boundary at 390px, where the boundary pixel rasterizes as an antialiased blend between the two side colors (reference (45,56,78) between left (31,31,32) and right (46,58,81) at (27..29,233)). The dark palette widens the same coverage oscillation vs the light variant's delta 1. The failed capture's per-pixel RGBA was not retained in the failure report; the recorded tuple encodes the inferred alternate shading — the adjacent-side coverage color (46,58,81), delta (1,2,3) — while the region bound (4) keeps the reported observed delta. No rectangle, adjacent pixel or global threshold applies.",
+    "evidence": "Pinned Playwright 1.63.0 FULL CI run 44655704367, job 136025214225, artifact 14595895111. The stable capture differs at one antialiased pixel on the rounded blue selection edge at (28,233). All other RGBA pixels and both dimensions match the reference.",
     "referenceSha256": "7b48b9688315936d2851403c5b10c711e8f84b5123701b02a031ab3281f6a169",
+    "captureSha256": "2bd8d9dd193521c5f7147a9b7bd63f29b4018718ed7b6be8ea2da4ef0279d812",
     "regions": [
       {
-        "label": "Details panel left-edge coverage",
+        "label": "Selected row rounded edge coverage",
         "x": 28,
         "y": 233,
         "width": 1,
@@ -59859,23 +59860,6 @@
         "maxChannelDelta": 4
       }
     ],
-    "pixels": [
-      [
-        28,
-        233,
-        [
-          45,
-          56,
-          78,
-          255
-        ],
-        [
-          46,
-          58,
-          81,
-          255
-        ]
-      ]
-    ]
+    "pixels": [[28, 233, [45, 56, 78, 255], [46, 58, 82, 255]]]
   }
 ]

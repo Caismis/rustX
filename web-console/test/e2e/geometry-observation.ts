@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 
-export async function instrument(page: Page) {
-  await page.addInitScript(() => {
+export async function instrument(page: Page, profile: true | 'native' = true) {
+  await page.addInitScript(profile => {
     const counts = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
     const drawing = { calls: 0, modelCalls: 0, scheduled: false, frameTriangles: 0, lastModelTriangles: 0 };
     const imports: { name: string; vertices: number; triangles: number }[][] = [];
@@ -9,7 +9,7 @@ export async function instrument(page: Page) {
     const importTimings: { startedAt: number; completedAt: number; elapsedMs: number; profile: unknown }[] = [];
     const previews: {elapsedMs:number;meshes:{triangles:number;error:number;bytes:number}[]}[]=[];
     const lods:{level:number;meshNames:string[];root:unknown;triangles:number;ms:number;at:number}[]=[];
-    const modelFrames:{ms:number;triangles:number;width:number;height:number;completeness:string|undefined;lod:string|undefined}[]=[];
+    const modelFrames:{ms:number;triangles:number;width:number;height:number;completeness:string|undefined;lod:string|undefined;quality:string|undefined}[]=[];
     for (const method of ['drawArrays', 'drawElements'] as const) {
       const original = WebGL2RenderingContext.prototype[method];
       Object.defineProperty(WebGL2RenderingContext.prototype, method, { value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
@@ -17,7 +17,7 @@ export async function instrument(page: Page) {
         if (args[0] === this.TRIANGLES) {
           drawing.modelCalls++;
           drawing.frameTriangles += Number(args[method === 'drawArrays' ? 2 : 1]) / 3;
-          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height,completeness:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryCompleteness:undefined,lod:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryLod:undefined}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
+          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height,completeness:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryCompleteness:undefined,lod:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryLod:undefined,quality:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryQuality:undefined}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
         }
         return result;
       } });
@@ -40,7 +40,7 @@ export async function instrument(page: Page) {
         this.addEventListener('message',event=>{if(event.data?.kind==='preview'&&Array.isArray(event.data.previews))previews.push({elapsedMs:performance.now()-start,meshes:event.data.previews.map((value:any)=>({triangles:value.data.positions.length/9,error:value.data.error,bytes:value.data.positions.byteLength+value.data.normals.byteLength+value.data.sourceVertices.byteLength+value.data.normalVertices.byteLength}))});});
       }
       postMessage(message: any, options?: Transferable[] | StructuredSerializeOptions) {
-        const profiled = message?.bytes ? { ...message, profile: true } : message;
+        const profiled = message?.bytes ? { ...message, profile } : message;
         if (Array.isArray(options)) super.postMessage(profiled, options); else super.postMessage(profiled, options);
       }
       terminate() { if (this.live) { this.live = false; counts.workers--; } super.terminate(); }
@@ -66,14 +66,14 @@ export async function instrument(page: Page) {
     URL.createObjectURL = value => { const url = createUrl(value); urls.add(url); counts.urls++; return url; };
     URL.revokeObjectURL = url => { if (urls.delete(url)) counts.urls--; revokeUrl(url); };
     Object.assign(window, { geometryResources: counts, geometryDrawCalls: drawing, geometryImports: imports, geometryImportRoots: importRoots, geometryImportTimings: importTimings, geometryPreviewTimings:previews, geometryModelFrames:modelFrames,geometryLods:lods });
-  });
+  }, profile);
 }
 export const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
 
 /** One capture per page; first-frame proxy and trusted input diagnostics. */
-export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]') {
-  await page.evaluate(startSelector => {
-    const state = { start: 0, first: 0, firstGpuReady: 0, lodFirst:0, lodGpuReady:0, lodSamples:[] as number[], lodStages:{} as Record<string,{submission:number;gpu:number;opportunity:number}>, firstModel:0, firstModelGpuReady:0, pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
+export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]', startEvent: 'pointerdown' | 'click' = 'pointerdown') {
+  await page.evaluate(({ startSelector, startEvent }) => {
+    const state = { start: 0, first: 0, firstSubmission: 0, firstModelSubmission: 0, firstGpuReady: 0, lodFirst:0, lodGpuReady:0, lodSamples:[] as number[], lodStages:{} as Record<string,{submission:number;gpu:number;opportunity:number}>, firstModel:0, firstModelGpuReady:0, pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
     const waiting: { start: number; received: number; lod: boolean }[] = [];
     let firstSubmitted = false, lodSubmitted = false, firstModelSubmitted = false; const observedLods=new Set<string>();
     // This test-only event runs at the microtask checkpoint AFTER the actual
@@ -85,8 +85,8 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       const submitted = performance.now(), inputs = waiting.splice(0), firstModel=!firstModelSubmitted&&state.start>0, provisional=canvas.dataset.geometryCompleteness==='preview',first = !provisional && !firstSubmitted && state.start > 0, firstLod=provisional&&!lodSubmitted&&state.start>0,lod=canvas.dataset.geometryLod??'',firstTier=provisional&&!observedLods.has(lod)&&state.start>0;
       if (!firstModel && !first && !firstTier && !inputs.length) return;
       if(firstTier){observedLods.add(lod);state.lodStages[lod]={submission:submitted-state.start,gpu:0,opportunity:0};}
-      if (firstModel) firstModelSubmitted = true;
-      if (first) firstSubmitted = true;
+      if (firstModel) { firstModelSubmitted = true; state.firstModelSubmission = submitted - state.start; }
+      if (first) { firstSubmitted = true; state.firstSubmission = submitted - state.start; }
       if (firstLod) lodSubmitted=true;
       const gl = canvas.getContext('webgl2')!;
       const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!; gl.flush();
@@ -125,8 +125,8 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       };
       settled();
     });
-    document.addEventListener('pointerdown', event => {
-      if (event.target instanceof Element && event.target.closest(startSelector)) state.start = event.timeStamp;
+    document.addEventListener(startEvent, event => {
+      if (event.isTrusted && event.target instanceof Element && event.target.closest(startSelector)) state.start = event.timeStamp;
     }, { capture: true });
     document.addEventListener('pointermove', event => {
       if (!event.isTrusted || !event.buttons || !(event.target instanceof HTMLCanvasElement)) return;
@@ -134,5 +134,5 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       waiting.push({ start: event.timeStamp, received: performance.now(),lod:event.target.dataset.geometryCompleteness==='preview' });
     }, { capture: true });
     Object.assign(window, { geometryLatency: state });
-  }, startSelector);
+  }, { startSelector, startEvent });
 }

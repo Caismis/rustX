@@ -38,3 +38,23 @@ export function validateFileRead(read: FileReadOptions): void {
       || range.length < 1 || range.length > FILE_PREVIEW_LIMITS.pageBytes || !Number.isSafeInteger(range.offset + range.length))) throw new Error('Invalid byte range');
   } else throw new Error('Invalid file read kind');
 }
+
+/** An aborted preview cannot validate a copy. Close rejects with this error
+ * only after its physical work settles. */
+export class PreviewCancelled extends Error {
+  constructor() {
+    super('Preview operation cancelled');
+    this.name = 'AbortError';
+  }
+}
+
+/** A bounded source owner. Idle owners hold no physical read permit. */
+export interface FilePreviewOperation {
+  readonly version: string;
+  readonly bytes: number;
+  readonly file?: import('../../protocol/app-server/v80.ts').SessionFileReference;
+  /** Pages remain provisional until close validates the complete source. */
+  read(range: { offset: number; length: number }, signal?: AbortSignal): Promise<FileBytes>;
+  /** Secure final validation and physical retirement precede success. */
+  close(): Promise<void>;
+}
