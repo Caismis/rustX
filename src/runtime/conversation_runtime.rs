@@ -351,7 +351,6 @@ use crate::tools::types::ModelToolDefinition;
 mod activity;
 mod admission;
 mod attempt;
-pub mod auxiliary;
 mod bootstrap;
 mod child;
 #[cfg(test)]
@@ -707,9 +706,57 @@ pub struct RuntimeConversationConfig {
     /// composed without one, so recursive delegation is absent by
     /// construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
-    /// The reserved Workflow Agent terminal protocol for a headless child,
-    /// when this runtime executes one Workflow-owned `AgentRun`.
-    pub workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
+    /// The explicit conversation role (Issue #606): root session, subagent
+    /// child, or Workflow `AgentRun` execution. The role is decided at
+    /// composition and never inferred from incidental state.
+    pub role: ConversationRole,
+}
+
+/// The one declared role of a conversation runtime, fixed at composition
+/// (Issue #606).
+///
+/// The role replaces the old `workflow_output.is_some()` /
+/// `parent_turn_permits.is_none()` inference: a runtime is exactly one of
+/// root, subagent child, or Workflow `AgentRun`, and role-gated machinery
+/// (parent guidance seal, turn permits, workspace-change recording,
+/// workflow output settlement) follows from this declaration alone.
+pub enum ConversationRole {
+    /// A user-facing root conversation runtime.
+    Root,
+    /// A child runtime driven by a parent through parent guidance, turn
+    /// permits, terminal seal and physical rollback.
+    SubagentChild,
+    /// A headless child runtime executing one Workflow-owned `AgentRun`:
+    /// it carries the reserved output terminal plus turn
+    /// permits/settlement/rollback, but never parent guidance or the
+    /// terminal seal.
+    WorkflowAgentRun {
+        /// The reserved Workflow Agent terminal protocol.
+        output: Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>,
+    },
+}
+
+impl ConversationRole {
+    /// Whether this is a root conversation runtime.
+    pub(crate) const fn is_root(&self) -> bool {
+        matches!(self, Self::Root)
+    }
+
+    /// Whether this is any child runtime (`SubagentChild` or
+    /// `WorkflowAgentRun`).
+    pub(crate) const fn is_child(&self) -> bool {
+        !self.is_root()
+    }
+
+    /// The Workflow output terminal owned by a `WorkflowAgentRun` role.
+    pub(crate) fn workflow_output(
+        &self,
+    ) -> Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>> {
+        match self {
+            Self::WorkflowAgentRun { output } => Some(output.clone()),
+            Self::Root | Self::SubagentChild => None,
+        }
+    }
 }
 
 /// What the coordinator admitted an attempt *for*.
@@ -741,14 +788,14 @@ pub(crate) enum AttemptProvenance {
 
 /// The successful observation cut captured before this candidate was prepared.
 /// A later observation remains unconsumed if this older candidate is rejected.
-struct PendingRuntimeCatalog {
+pub(crate) struct PendingRuntimeCatalog {
     catalog_revision: u64,
     authority: crate::capabilities::RuntimeRefreshAuthority,
     refresh_sequence: Option<u64>,
     candidate: crate::capabilities::PreparedCapabilityCandidate,
 }
 
-struct RuntimeCatalogFailure {
+pub(crate) struct RuntimeCatalogFailure {
     authority: crate::capabilities::RuntimeRefreshAuthority,
     /// Explicit whole-batch failure survives pure catalog publication.
     refresh_sequence: Option<u64>,
@@ -761,7 +808,7 @@ struct RuntimeCatalogFailure {
 /// state stays under the one coordinator lock: regrouping narrows the
 /// ownership surface, it does not add a second linearization domain.
 #[allow(clippy::struct_excessive_bools)]
-struct ForegroundState {
+pub(crate) struct ForegroundState {
     /// The one foreground execution slot: `Attempt`, `ManualCompaction`,
     /// `Scheduled`, `Idle`, or `Poisoned`, mutually exclusive by type
     /// (Issue #606).
@@ -802,6 +849,23 @@ struct ForegroundState {
     /// observation) consults. This field only tracks the finite-cycle retry
     /// allowances and the latest pending re-kick of the admission worker.
     admission_durability_cycle: AdmissionDurabilityCycle,
+    /// How many attempts this coordinator has admitted, counted at the one
+    /// admission publication point (Issue #193).
+    ///
+    /// This is the child driver's completeness proof, not a lifecycle fact:
+    /// every admitted attempt produces exactly one terminal observation, so
+    /// a driver that has consumed `n` terminals knows an attempt it has not
+    /// observed exists precisely when this counter exceeds `n`.
+    pub(crate) admitted_attempts: u64,
+    /// Latest settlement handoff; child turn permits prevent admission past
+    /// an unconsumed receipt.
+    pub(crate) latest_settlement: Option<NativeAttemptSettlement>,
+    /// The committed one-shot cancellation intent (Issue #60 child side):
+    /// armed before any attempt exists, consumed by the next admission so
+    /// the admitted attempt starts already-cancelled and its first
+    /// model-turn arbitration resolves `CancelledBeforeStart`. At most one
+    /// admission ever consumes it.
+    pub(crate) one_shot_cancel: Option<CancellationReason>,
 }
 
 /// Configuration, model, and resource publication state (Issue #606).
@@ -811,40 +875,40 @@ struct ForegroundState {
 /// frontier future work freezes — all linearized together with foreground
 /// admission under the one coordinator lock.
 #[allow(clippy::struct_excessive_bools)]
-struct ConfigurationState {
-    binding_revision: u64,
-    catalog_revision: u64,
-    pending_runtime_catalog: Option<PendingRuntimeCatalog>,
-    catalog_commit_blocked: bool,
-    catalog_admission_deferred: bool,
+pub(crate) struct ConfigurationState {
+    pub(crate) binding_revision: u64,
+    pub(crate) catalog_revision: u64,
+    pub(crate) pending_runtime_catalog: Option<PendingRuntimeCatalog>,
+    pub(crate) catalog_commit_blocked: bool,
+    pub(crate) catalog_admission_deferred: bool,
     /// The one fully prepared configuration candidate waiting for this
     /// runtime's safe boundary. Committed before the next independent
     /// Attempt is admitted; a newer candidate supersedes it.
-    staged_configuration: Option<StagedConfiguration>,
+    pub(crate) staged_configuration: Option<StagedConfiguration>,
     /// The staged commit found a capability lifecycle admission in flight.
-    configuration_commit_waiting: bool,
+    pub(crate) configuration_commit_waiting: bool,
     /// An admission pass that reached a waiting staged commit; the worker
     /// resumes exactly that pass once the commit boundary is released.
-    configuration_admission_deferred: bool,
-    runtime_refresh_sequence: u64,
-    runtime_catalog_failure: Option<RuntimeCatalogFailure>,
-    explicit_model: bool,
+    pub(crate) configuration_admission_deferred: bool,
+    pub(crate) runtime_refresh_sequence: u64,
+    pub(crate) runtime_catalog_failure: Option<RuntimeCatalogFailure>,
+    pub(crate) explicit_model: bool,
     /// The session's authoritative mutable model state.
     ///
     /// It lives under the *same* lock that owns attempt admission, so a
     /// model update and an attempt admission can never interleave
     /// ambiguously: whichever acquires the lock first linearizes first.
-    model: SessionModelState,
+    pub(crate) model: SessionModelState,
     /// The complete resource/capability generation future attempts acquire.
-    resources: Arc<RuntimeResourceSnapshot>,
+    pub(crate) resources: Arc<RuntimeResourceSnapshot>,
     /// The effective mode frozen for the currently admitted attempt boundary.
-    effective_approval_mode: ApprovalMode,
+    pub(crate) effective_approval_mode: ApprovalMode,
     /// Mode last successfully injected as a permission reminder on this
     /// conversation. Cleared only when the next admission must re-emit
     /// (mode change, first admission, or post-compaction).
-    last_permission_reminder_mode: Option<ApprovalMode>,
+    pub(crate) last_permission_reminder_mode: Option<ApprovalMode>,
     /// Exact canonical task input committed by the latest primary request start.
-    permission_task_message: Option<crate::runtime::identity::MessageId>,
+    pub(crate) permission_task_message: Option<crate::runtime::identity::MessageId>,
 }
 
 /// Child-control admission facts of one child-scoped runtime (Issue #606).
@@ -853,20 +917,13 @@ struct ConfigurationState {
 /// terminal guidance seal, the one-shot cancellation intent, and the
 /// settlement ledger the child driver consumes. The facts stay under the
 /// same coordinator lock as every other admission fact.
-struct ChildControlState {
-    /// How many attempts this coordinator has admitted, counted at the one
-    /// admission publication point (Issue #193).
-    ///
-    /// This is the child driver's completeness proof, not a lifecycle fact:
-    /// every admitted attempt produces exactly one terminal observation, so
-    /// a driver that has consumed `n` terminals knows an attempt it has not
-    /// observed exists precisely when this counter exceeds `n`. It is read
-    /// only under the coordinator lock, together with the foreground slot
-    /// and the durable pending inbox, by
-    /// [`ConversationRuntime::seal_parent_guidance`].
-    admitted_attempts: u64,
-    /// Latest handoff; child turn permits prevent admission past an unconsumed receipt.
-    latest_settlement: Option<NativeAttemptSettlement>,
+/// The child-only control facts (Issue #606). A `Root` runtime never holds
+/// this state: the `Option` is `Some` exactly when the declared
+/// [`ConversationRole`] is a child role. Generic admission bookkeeping
+/// (admitted attempts, latest settlement, one-shot cancellation intent)
+/// lives on `ForegroundState` instead.
+#[derive(Default)]
+pub(crate) struct ChildControlState {
     /// Native child turn permits are released only after parent lifecycle admission.
     parent_turn_permits: Option<u64>,
     /// Whether this conversation's parent-authored guidance admission is
@@ -883,18 +940,10 @@ struct ChildControlState {
     /// subagent child driver ever sets it: an ordinary interactive
     /// conversation never seals.
     parent_guidance_sealed: bool,
-    /// The committed one-shot child-cancellation intent (Issue #60 child
-    /// side): armed by the subagent child control plane on
-    /// `ParentFrame::Cancel` before any attempt exists, consumed by the
-    /// next admission so the admitted attempt starts already-cancelled and
-    /// its first model-turn arbitration resolves `CancelledBeforeStart`.
-    /// The child is one-shot, so at most one admission ever consumes it;
-    /// a parent conversation never arms it.
-    one_shot_cancel: Option<CancellationReason>,
 }
 
 /// The coordinator's persistent health fences (Issue #606).
-struct HealthState {
+pub(crate) struct HealthState {
     /// The runtime-owned persistent fence for an MCP physical settlement that
     /// is not proven. The retirement registry remains the complete diagnostic
     /// authority; this latch is the coordinator's admission authority and is
@@ -903,17 +952,17 @@ struct HealthState {
 }
 
 /// The one synchronized coordinator state (the admission linearization owner).
-struct CoordinatorState {
+pub(crate) struct CoordinatorState {
     /// Foreground execution slot, manual-compaction tail reclamation, and
     /// admission bookkeeping.
-    foreground: ForegroundState,
+    pub(crate) foreground: ForegroundState,
     /// Configuration, model, and resource publication state.
-    config: ConfigurationState,
+    pub(crate) config: ConfigurationState,
     /// Child-control facts; `Some` exactly for a child-scoped runtime
     /// (installed when child control attaches).
-    child: Option<ChildControlState>,
+    pub(crate) child: Option<ChildControlState>,
     /// Persistent health fences consulted at every admission boundary.
-    health: HealthState,
+    pub(crate) health: HealthState,
 }
 
 impl CoordinatorState {
@@ -922,17 +971,12 @@ impl CoordinatorState {
         self.child.as_ref()
     }
 
-    /// The mutable child-control facts, installing an empty set when an
-    /// owner first commits one. Used by the control-plane write paths; the
-    /// read paths keep the `Option` so an untouched runtime stays `None`.
+    /// The mutable child-control facts. Present only on a child-scoped
+    /// runtime; generic bookkeeping uses `ForegroundState` fields instead.
     fn child_mut(&mut self) -> &mut ChildControlState {
-        self.child.get_or_insert_with(|| ChildControlState {
-            admitted_attempts: 0,
-            latest_settlement: None,
-            parent_turn_permits: None,
-            parent_guidance_sealed: false,
-            one_shot_cancel: None,
-        })
+        self.child
+            .as_mut()
+            .expect("child control state requires a child conversation role")
     }
 }
 
@@ -972,9 +1016,8 @@ pub(crate) struct RuntimeInner {
     /// The conversation-owned subagent registry (Issue #60), when this
     /// runtime may delegate to child runtimes.
     subagents: Option<crate::runtime::subagent::SubagentRegistry>,
-    /// The frozen Workflow Agent output authority, if this is a Workflow
-    /// child runtime.
-    workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
+    /// The explicit conversation role declared at composition (Issue #606).
+    role: ConversationRole,
     /// It owns pending identity/state and terminal response coordination, but
     /// never owns Agent Loop execution or canonical history.
     interaction: Arc<InteractionCoordinator>,
@@ -1002,8 +1045,11 @@ pub(crate) struct RuntimeInner {
     /// linearize against it. The coordinator requests failure without waiting
     /// for SQL; the gate publishes after any earlier ownership writer exits.
     durability_gate: Arc<DurabilityGate>,
-    auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
-    external_auxiliary: Arc<auxiliary::ExternalAuxiliary>,
+    /// The extracted external-auxiliary service (Issue #606): the runtime
+    /// keeps only this handle for drain sequencing and for handing the
+    /// service to composed consumers — no auxiliary business logic remains
+    /// on `ConversationRuntime` itself.
+    external_auxiliary: Arc<crate::runtime::auxiliary::external::ExternalAuxiliary>,
     /// The runtime-owned host-task slot: optional host-installed work (the
     /// automatic session-title task) supervised by drain, installable once
     /// and only while the runtime is `Inactive` (Issue #606).
@@ -1024,7 +1070,7 @@ pub(crate) struct RuntimeInner {
     /// dependency at the activation call site.
     executor: tokio::runtime::Handle,
     /// The one admission synchronization boundary.
-    state: Mutex<CoordinatorState>,
+    state: Arc<Mutex<CoordinatorState>>,
     /// The runtime admission worker's wake boundary.
     wake: Arc<WakeGate>,
     /// Whether the admission worker task was spawned.
@@ -1319,5 +1365,102 @@ impl ConversationRuntime {
     #[must_use]
     pub fn settlement_signal(&self) -> &tokio::sync::Notify {
         &self.inner.settlement
+    }
+
+    /// The extracted external-auxiliary service (Issue #606). Composed
+    /// consumers (Runtime Client Host, session title) use it directly; the
+    /// runtime keeps this handle only for drain sequencing.
+    #[must_use]
+    pub fn external_auxiliary(
+        &self,
+    ) -> Arc<crate::runtime::auxiliary::external::ExternalAuxiliary> {
+        self.inner.external_auxiliary.clone()
+    }
+
+    /// The conversation-level durable authority (Issue #606): exposed for
+    /// extracted consumers whose business logic lives outside the runtime.
+    pub(crate) fn store(&self) -> Arc<dyn ConversationStore> {
+        self.inner.store.clone()
+    }
+
+    /// The runtime's stamping clock.
+    pub(crate) fn clock(&self) -> Arc<dyn RuntimeClock> {
+        self.inner.clock.clone()
+    }
+
+    /// The generic optional host-task hook (Issue #606): exactly one
+    /// host-installed background task (the automatic session-title owner)
+    /// may be installed, and only while the runtime is `Inactive`.
+    pub(crate) fn install_host_task(
+        &self,
+        task: tokio::task::JoinHandle<()>,
+    ) -> Result<(), crate::context::ContextError> {
+        if self.inner.lifecycle.state() != ConversationLifecycleState::Inactive {
+            return Err(crate::context::ContextError::new(
+                crate::context::ContextErrorKind::Cancelled,
+                "host task installation requires an inactive runtime",
+            ));
+        }
+        let mut slot = self.inner.host_task.lock().expect("host task slot");
+        if slot.is_some() {
+            return Err(crate::context::ContextError::new(
+                crate::context::ContextErrorKind::AuxiliaryBusy,
+                "a host task is already installed",
+            ));
+        }
+        *slot = Some(task);
+        Ok(())
+    }
+
+    /// Waits for the latest admitted attempt's settlement receipt to
+    /// advance past `after` — generic foreground bookkeeping, shared by the
+    /// child driver's `ChildControl::child_attempt_settlement`.
+    pub(crate) async fn attempt_settlement(&self, after: u64) -> NativeAttemptSettlement {
+        loop {
+            let notified = self.inner.settlement.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(receipt) = self
+                .inner
+                .lock_state()
+                .foreground
+                .latest_settlement
+                .clone()
+                .filter(|receipt| receipt.ordinal > after)
+            {
+                return receipt;
+            }
+            notified.await;
+        }
+    }
+
+    /// Test capture of the existing retained execution receipt ordinal.
+    #[cfg(test)]
+    pub(crate) fn settlement_ordinal_for_test(&self) -> u64 {
+        self.inner
+            .lock_state()
+            .foreground
+            .latest_settlement
+            .as_ref()
+            .map_or(0, |receipt| receipt.ordinal)
+    }
+
+    /// The child's control handle (Issue #606): `Some` exactly when the
+    /// declared [`ConversationRole`] is a child role (`SubagentChild` or
+    /// `WorkflowAgentRun`), `None` for `Root`. Available from composition
+    /// while `Inactive`; it does not wait for activation.
+    #[must_use]
+    pub fn child_control(&self) -> Option<child::ChildControl> {
+        self.inner
+            .role
+            .is_child()
+            .then(|| child::ChildControl::new(self.clone()))
+    }
+
+    /// The test-only coordinator probe slot, for extracted consumers whose
+    /// test hooks live outside the runtime (Issue #606).
+    #[cfg(test)]
+    pub(crate) fn coordinator_probe(&self) -> &Mutex<Option<CoordinatorProbe>> {
+        &self.inner.probe
     }
 }

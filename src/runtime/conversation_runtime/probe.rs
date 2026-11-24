@@ -259,7 +259,9 @@ impl ConversationRuntime {
         tokio::sync::oneshot::Receiver<()>,
         std::sync::mpsc::Sender<()>,
     ) {
-        self.inner.auxiliary.hold_resource_release_for_test()
+        self.inner
+            .external_auxiliary
+            .hold_resource_release_for_test()
     }
 
     pub(crate) fn hold_auxiliary_retirement_for_test(
@@ -268,17 +270,17 @@ impl ConversationRuntime {
         tokio::sync::oneshot::Receiver<()>,
         std::sync::mpsc::Sender<()>,
     ) {
-        self.inner.auxiliary.hold_retirement_for_test()
+        self.inner.external_auxiliary.hold_retirement_for_test()
     }
 
     pub(crate) fn hold_auxiliary_settlement_for_test(
         &self,
     ) -> crate::runtime::auxiliary::executor::AuxiliaryWriteTestGates {
-        self.inner.auxiliary.hold_settlement_for_test()
+        self.inner.external_auxiliary.hold_settlement_for_test()
     }
 
     pub(crate) async fn join_auxiliary_for_test(&self) {
-        self.inner.auxiliary.drain().await;
+        self.inner.external_auxiliary.drain().await;
     }
 
     pub(crate) fn install_durability_mutation_probe(

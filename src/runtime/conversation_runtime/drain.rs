@@ -237,7 +237,7 @@ impl RuntimeInner {
                         transitioned,
                         "the coordinator lock owns the runtime drain transition"
                     );
-                    self.auxiliary.begin_drain();
+                    self.external_auxiliary.begin_drain();
                     first = true;
                     self.observe(ConversationObservation::Shutdown);
                     #[cfg(test)]
@@ -439,7 +439,7 @@ impl RuntimeInner {
                     // A panicking business future has dropped its parent
                     // scopes. The native Call registry still owns and joins
                     // every live child.
-                    self.auxiliary.drain().await;
+                    self.external_auxiliary.drain().await;
                     {
                         let mut state = self
                             .state
@@ -531,7 +531,7 @@ impl RuntimeInner {
                 .background()
                 .cancel_with_reason(&execution.execution_id, CancellationReason::RuntimeShutdown);
         }
-        self.auxiliary.drain().await;
+        self.external_auxiliary.drain().await;
         let title_task = self.host_task.lock().expect("Session title owner").take();
         if let Some(task) = title_task
             && task.await.is_err()

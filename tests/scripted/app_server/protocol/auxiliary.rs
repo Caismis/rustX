@@ -1,7 +1,7 @@
 //! Native handoff and exact negative evidence through actual App Server admission.
 use super::*;
+use crate::runtime::auxiliary::external::AuxiliarySubmissionLookup;
 use crate::runtime::auxiliary::submission::{BtwSubmission, CorrelationId};
-use crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup;
 fn submission(correlation: &str) -> BtwSubmission {
     BtwSubmission {
         correlation: CorrelationId::new(correlation.into()).unwrap(),
@@ -38,21 +38,26 @@ async fn auxiliary_original_scope_closes_while_manager_handoff_is_parked() {
                 .await
         });
         probe.before_operation.entered().await;
-        let AuxiliarySubmissionLookup::Pending { scope, .. } =
-            runtime.auxiliary_lookup(&correlation, None)
+        let AuxiliarySubmissionLookup::Pending { scope, .. } = runtime
+            .external_auxiliary()
+            .auxiliary_lookup(&correlation, None)
         else {
             panic!("original scope exists before native handoff")
         };
         connection.close();
         assert!(matches!(
-            runtime.auxiliary_lookup(&correlation, Some(&scope)),
+            runtime
+                .external_auxiliary()
+                .auxiliary_lookup(&correlation, Some(&scope)),
             AuxiliarySubmissionLookup::ConfirmedNotAdmitted { .. }
         ));
         probe.before_operation.release();
         assert!(matches!(task.await.unwrap(), Response::Failure(_)));
         assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(matches!(
-            runtime.auxiliary_lookup(&correlation, Some(&scope)),
+            runtime
+                .external_auxiliary()
+                .auxiliary_lookup(&correlation, Some(&scope)),
             AuxiliarySubmissionLookup::ConfirmedNotAdmitted { .. }
         ));
         drop(managed);

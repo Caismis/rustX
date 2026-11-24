@@ -62,9 +62,9 @@ pub(super) use crate::runtime::ApprovalMode;
 #[cfg(unix)]
 pub(super) use crate::runtime::cancellation::CancellationSignal;
 pub(super) use crate::runtime::conversation_runtime::{
-    CancelAttemptError, ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
-    CoordinatorProbe, Gate, InboundAdmissionError, ManualCompactionError, ModelUpdateError,
-    PendingObservations, RuntimeConversationConfig,
+    CancelAttemptError, ConversationContextConfig, ConversationRole, ConversationRuntime,
+    ConversationRuntimeError, CoordinatorProbe, Gate, InboundAdmissionError, ManualCompactionError,
+    ModelUpdateError, PendingObservations, RuntimeConversationConfig,
 };
 pub(super) use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId, TurnId,
@@ -406,7 +406,7 @@ pub(super) async fn headless_runtime_with_options(
         clock: None,
         initial_messages: options.initial_messages,
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match probe {
         Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -520,7 +520,7 @@ pub(super) async fn headless_runtime_over_store_with_policy(
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match probe {
         Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -629,7 +629,7 @@ pub(super) async fn headless_runtime_over_store_with_subagents(
         clock: None,
         initial_messages: Vec::new(),
         subagents: Some(subagents.clone()),
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match admission_gate {
         Some(admission_gate) => ConversationRuntime::with_probe(
@@ -745,7 +745,7 @@ pub(super) async fn subagent_runtime_config_with_registry(
         clock: None,
         initial_messages: Vec::new(),
         subagents: Some(subagents.clone()),
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     (subagents, config)
 }
@@ -937,7 +937,7 @@ pub(super) async fn await_settled_ledger(
     // Original terminal Journal commitment can precede this physical
     // coordinator handoff. Its retained native receipt prevents a lost
     // Notify edge when the execution settles before the assertion waits.
-    runtime.child_attempt_settlement(after).await;
+    runtime.attempt_settlement(after).await;
     runtime
         .coordinator_ledger()
         .expect("the settlement handoff restored the conversation state")
@@ -1788,7 +1788,7 @@ pub(super) async fn runtime_with_model_probe_at(
         clock: None,
         initial_messages,
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     match probe {
         Some(probe) => ConversationRuntime::with_probe(config, probe),

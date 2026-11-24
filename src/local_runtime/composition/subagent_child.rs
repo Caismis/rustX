@@ -857,7 +857,14 @@ impl LocalConversationCore {
                 // A child runtime has no subagent registry: recursive
                 // delegation is absent by construction.
                 subagents: None,
-                workflow_output,
+                role: match workflow_output {
+                    Some(output) => {
+                        crate::runtime::conversation_runtime::ConversationRole::WorkflowAgentRun {
+                            output,
+                        }
+                    }
+                    None => crate::runtime::conversation_runtime::ConversationRole::SubagentChild,
+                },
             })?;
 
             Ok(Self {
@@ -888,7 +895,11 @@ impl LocalConversationCore {
         )?;
         let runtime = LocalConversationRuntime { core: self, host };
         runtime.runtime().install_interaction_route(route);
-        runtime.runtime().gate_child_turns();
+        runtime
+            .runtime()
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
         Ok(runtime)
     }

@@ -81,20 +81,21 @@ impl RuntimeInner {
                     .background()
                     .with_activity(|background| {
                         let read_children = |children, child_fault, approval, user_input| {
-                            self.auxiliary.with_activity(|auxiliary| RuntimeActivity {
-                                active: foreground
-                                    || tasks != 0
-                                    || background
-                                    || children
-                                    || auxiliary
-                                    || waits.0
-                                    || waits.1
-                                    || approval
-                                    || user_input,
-                                waiting_on_approval: waits.0 || approval,
-                                waiting_on_user_input: waits.1 || user_input,
-                                system_error: system_error || child_fault,
-                            })
+                            self.external_auxiliary
+                                .with_activity(|auxiliary| RuntimeActivity {
+                                    active: foreground
+                                        || tasks != 0
+                                        || background
+                                        || children
+                                        || auxiliary
+                                        || waits.0
+                                        || waits.1
+                                        || approval
+                                        || user_input,
+                                    waiting_on_approval: waits.0 || approval,
+                                    waiting_on_user_input: waits.1 || user_input,
+                                    system_error: system_error || child_fault,
+                                })
                         };
                         match &self.subagents {
                             Some(children) => children.with_activity(read_children).flatten(),
@@ -134,7 +135,7 @@ impl ConversationRuntime {
         if let Some(children) = &self.inner.subagents {
             children.wait_activity_ready();
         }
-        self.inner.auxiliary.wait_activity_ready();
+        self.inner.external_auxiliary.wait_activity_ready();
     }
     pub(crate) fn activity_changes(&self) -> ActivityChanges {
         ActivityChanges {
@@ -151,7 +152,7 @@ impl ConversationRuntime {
                 .subagents
                 .as_ref()
                 .map(crate::runtime::subagent::SubagentRegistry::activity_changes),
-            auxiliary: self.inner.auxiliary.activity_changes(),
+            auxiliary: self.inner.external_auxiliary.activity_changes(),
             child_recovery: self
                 .inner
                 .subagents

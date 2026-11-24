@@ -3,6 +3,7 @@ use crate::durable::InboxStore;
 use crate::durable::JournalStore;
 use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
+use crate::runtime::conversation_runtime::ConversationRole;
 use crate::runtime::conversation_runtime::test_support::*;
 
 fn has_permission_reminder(snapshot: &crate::model::RequestSnapshot) -> bool {
@@ -364,7 +365,7 @@ async fn permission_task_recovery_uses_the_exact_unanswered_adoption() {
             Some(&task_id)
         );
         runtime.activate();
-        runtime.child_attempt_settlement(0).await;
+        runtime.attempt_settlement(0).await;
         let snapshots = request_snapshots(&runtime.request_history());
         assert_eq!(snapshots.len(), 1);
         assert_eq!(
@@ -1727,7 +1728,12 @@ async fn preactivation_mcp_settlement_failure_is_replayed_and_fences_activation(
     assert!(model.requests().is_empty(), "no attempt crossed activation");
 
     assert!(
-        runtime.settle_child_physical_lifetime(false).await.is_err(),
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .settle_child_physical_lifetime(false)
+            .await
+            .is_err(),
         "MCP containment failure must remain physically unproven"
     );
     let shutdown = runtime.shutdown().await;
@@ -2122,7 +2128,7 @@ fn construction_validates_ownership() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect_err("mismatched ownership is rejected");
     assert!(matches!(
@@ -2207,7 +2213,7 @@ fn construction_outside_execution_runtime_fails_typed() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect_err("construction outside Tokio is rejected");
     assert!(matches!(
@@ -2262,7 +2268,7 @@ async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() 
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
-                workflow_output: None,
+                role: ConversationRole::Root,
             }
         }
     }
@@ -2379,7 +2385,7 @@ async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() 
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
-                workflow_output: None,
+                role: ConversationRole::Root,
             }
         }
     }
@@ -2592,7 +2598,7 @@ async fn complete_tool_group_is_recoverable_and_admits_normally() {
     let admission = runtime
         .submit_inbound(text_content("hello"))
         .expect("accepted after recovery");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert!(
         ledger
@@ -2706,7 +2712,7 @@ async fn recovered_pending_inbound_is_auto_admitted_with_zero_clients() {
 
     // Activation is the only trigger. Nothing submits, nothing attaches.
     runtime.activate();
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
 
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert_eq!(
@@ -2796,7 +2802,7 @@ async fn class_b_restart_continues_the_adopted_turn_without_duplicating_it() {
     );
 
     runtime.activate();
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
 
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert_eq!(
@@ -3068,7 +3074,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
     runtime
         .submit_inbound(text_content("a new turn"))
         .expect("accepted after recovery");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     assert_eq!(
         model.requests().len(),
         1,
@@ -3209,7 +3215,7 @@ async fn class_e_restart_issues_no_replacement_request() {
     runtime
         .submit_inbound(text_content("a new turn"))
         .expect("accepted after recovery");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     assert_eq!(
         model.requests().len(),
         1,
@@ -3272,7 +3278,7 @@ async fn a_restart_allocates_an_attempt_id_past_durable_history() {
     runtime
         .submit_inbound(text_content("after restart"))
         .expect("accepted");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
 
     // The durable Event Journal is the proof: the new attempt's start
     // fact carries an identity that never appeared before.

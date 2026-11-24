@@ -11,6 +11,7 @@ use crate::model::{
     AuxiliaryInputEvidence, ModelRequest,
 };
 use crate::runtime::auxiliary::executor::{AuxiliaryDispatchCheck, FrozenCall};
+use crate::runtime::auxiliary::external::AuxiliaryInvocationKind;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::{AuxiliaryCallId, ConversationId, SessionId};
 use crate::runtime::types::{CancellationReason, ConversationLifecycleState};
@@ -59,14 +60,114 @@ pub(crate) fn arm(
         return;
     };
     // Both finite source slots are armed before activation and before any read.
-    let capacity = runtime.title_capacity_changes();
-    if runtime.recover_title_source().is_err() {
+    let capacity = runtime.external_auxiliary().capacity_changes();
+    if recover_title_source(runtime).is_err() {
         tracing::warn!(%session_id, "Title source recovery remains unresolved");
         return;
     }
-    runtime.own_title_task(tokio::spawn(owner(
-        catalog, session_id, runtime, metadata, capacity,
-    )));
+    let task = tokio::spawn(owner(
+        catalog,
+        session_id.clone(),
+        runtime,
+        metadata,
+        capacity,
+    ));
+    if runtime.install_host_task(task).is_err() {
+        tracing::warn!(%session_id, "Title host task installation was refused");
+    }
+}
+
+/// Exact durable source query for the title business (Issue #606): moved off
+/// `ConversationRuntime`; the runtime only provides the store and probe.
+pub(crate) fn first_title_source(
+    runtime: &ConversationRuntime,
+) -> Result<
+    Option<crate::durable::store::canonical::FirstHumanSource>,
+    crate::durable::ConversationStoreError,
+> {
+    #[cfg(test)]
+    if let Some(reads) = runtime
+        .coordinator_probe()
+        .lock()
+        .expect("coordinator probe")
+        .as_ref()
+        .and_then(|probe| probe.title_source_reads.as_ref())
+    {
+        reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    runtime.store().first_human_source()
+}
+
+/// Exact terminal and request facts distinguish a released zero-request Call
+/// from preflight rejection; mere absence never confirms an uncertain write.
+pub(crate) fn title_zero_request_settled(
+    runtime: &ConversationRuntime,
+    call_id: &AuxiliaryCallId,
+) -> Result<bool, crate::durable::ConversationStoreError> {
+    let store = runtime.store();
+    let cut = store.auxiliary_audit_cut()?;
+    let Some(call) = store.load_auxiliary_call(call_id, cut)? else {
+        return Ok(false);
+    };
+    Ok(call.settled_sequence.is_some()
+        && store
+            .read_auxiliary_call_requests(call_id, cut, None, 1)?
+            .is_empty())
+}
+
+/// Composition has excluded the old runtime owner before this is called.
+/// Recovery may retire a stranded zero-request Call, never replay one.
+pub(crate) fn recover_title_source(runtime: &ConversationRuntime) -> Result<(), ()> {
+    let store = runtime.store();
+    if let Some(source) = store.first_human_source().map_err(|_| ())?
+        && let Some(binding) = crate::durable::auxiliary::AuxiliaryTitleSourceBinding::new(&source)
+    {
+        store
+            .recover_auxiliary_title_source(&binding, runtime.clock().now())
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
+
+/// The title admission bundle: full ownership is held from `Call → Call
+/// Settlement → SessionCatalog title publication` (Issue #606), so the
+/// business admission and resource snapshot never release early.
+struct PreparedTitle {
+    reservation: crate::runtime::auxiliary::executor::AuxiliaryReservation,
+    scope: Arc<crate::runtime::auxiliary::executor::AuxiliaryScope>,
+    invocation: crate::model::ResolvedModelInvocation,
+    timeout: crate::model::ModelTimeoutPolicy,
+    resource_revision: u64,
+    // The business owner remains counted after the physical Call retires.
+    _admission: crate::runtime::types::LifecycleAdmission,
+    _resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+}
+
+/// Title admission through the generic atomic auxiliary admission
+/// (Issue #606): invocation freeze, capacity reservation and the business
+/// `LifecycleAdmission` all happen inside the one coordinator critical
+/// section.
+fn prepare_title(
+    runtime: &ConversationRuntime,
+    cancellation: &crate::runtime::cancellation::CancellationSignal,
+) -> Result<PreparedTitle, ContextError> {
+    let admitted = runtime.external_auxiliary().admit_auxiliary_work(
+        AuxiliaryInvocationKind::Title,
+        3,
+        cancellation,
+        true,
+    )?;
+    Ok(PreparedTitle {
+        reservation: admitted.reservation,
+        scope: admitted.scope,
+        invocation: admitted.invocation,
+        timeout: admitted.timeout,
+        resource_revision: admitted.resource_revision,
+        _admission: admitted
+            .business_admission
+            .expect("title admission holds the business admission"),
+        _resources: admitted.resources,
+    })
 }
 
 pub(crate) fn owner(
@@ -194,7 +295,7 @@ async fn generate(
     {
         return TitleProgress::Finished;
     }
-    let source = match runtime.first_title_source() {
+    let source = match first_title_source(runtime) {
         Ok(Some(source)) => source,
         Ok(None) => return TitleProgress::Waiting,
         Err(_) => {
@@ -212,7 +313,7 @@ async fn generate(
         return TitleProgress::Finished;
     };
     let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
-    let prepared = match runtime.prepare_title(&cancellation.signal()) {
+    let prepared = match prepare_title(runtime, &cancellation.signal()) {
         Ok(prepared) => prepared,
         Err(error) if error.kind == ContextErrorKind::AuxiliaryLifecycleBusy => {
             return TitleProgress::WaitingForLifecycle;
@@ -301,11 +402,11 @@ async fn after_execution_failure(
         .lock()
         .await
         .title_eligible(session_id, &source.conversation_id)
-        || !matches!(runtime.first_title_source(), Ok(Some(current)) if current.message_id == source.message_id && current.eligible)
+        || !matches!(first_title_source(runtime), Ok(Some(current)) if current.message_id == source.message_id && current.eligible)
     {
         return TitleProgress::Finished;
     }
-    match runtime.title_zero_request_settled(call_id) {
+    match title_zero_request_settled(runtime, call_id) {
         Ok(true) => TitleProgress::WaitingAfterCall,
         Ok(false) => TitleProgress::WaitingForModel,
         Err(_) => TitleProgress::Finished,

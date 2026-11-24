@@ -1,10 +1,16 @@
-//! Named external consumers over the shared native auxiliary execution owner.
-use super::ConversationRuntime;
+//! Named external consumers over the shared native auxiliary execution owner
+//! (Issue #606): the extracted `ExternalAuxiliary` service owns submission
+//! admission, correlation dedup, prompt/parsing business logic, stream and
+//! result delivery, and the auxiliary executor itself. The `ConversationRuntime`
+//! keeps only a drain handle and hands this service to composed consumers;
+//! it holds no auxiliary business logic.
+
 use crate::{
     context::{ContextError, ContextErrorKind},
+    durable::store::ConversationStore,
     model::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
-        AuxiliaryInputEvidence, ModelRequest,
+        AuxiliaryInputEvidence, ModelRequest, ModelTimeoutPolicy,
     },
     runtime::{
         auxiliary::{
@@ -12,15 +18,22 @@ use crate::{
                 AuxiliaryResult, ConsumerFailure, ConsumerResult, DeliveryOwner,
                 RESULT_TEXT_BYTES_MAX, ResultAvailability, ResultCopy,
             },
-            executor::{AuxiliaryConsumer, AuxiliaryScope, ConfirmedExecution, FrozenCall},
+            executor::{
+                AuxiliaryConsumer, AuxiliaryExecutor, AuxiliaryScope, ConfirmedExecution,
+                FrozenCall,
+            },
             output::AuxiliaryOutput,
             submission::{
                 BtwSubmission, ClassificationInput, ClassificationSubmission, CorrelationId,
                 SubmissionPermit,
             },
         },
-        identity::AuxiliaryCallId,
+        cancellation::CancellationSignal,
+        conversation_runtime::CoordinatorState,
+        identity::{AuxiliaryCallId, ConversationId},
+        types::{ConversationLifecycle, LifecycleAdmission},
     },
+    tools::runtime::ConversationToolRuntime,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -94,19 +107,195 @@ struct Active {
     scope: Arc<AuxiliaryScope>,
     inference_stopped: Arc<std::sync::atomic::AtomicBool>,
 }
-pub(super) struct ExternalAuxiliary {
+/// The extracted external-auxiliary service (Issue #606): one owner of
+/// submission admission, correlation dedup, business result delivery and the
+/// auxiliary executor. It is composed beside the conversation runtime and
+/// shares the coordinator critical section for atomic admission.
+pub struct ExternalAuxiliary {
+    conversation_id: ConversationId,
+    /// The one coordinator critical section: `admit_auxiliary_work` freezes
+    /// invocation/resources/timeout and reserves capacity under this same
+    /// lock, never splitting snapshot reads from admission.
+    state: Arc<Mutex<CoordinatorState>>,
+    lifecycle: ConversationLifecycle,
+    store: Arc<dyn ConversationStore>,
+    policy: crate::context::SessionContextPolicy,
+    estimator: Arc<dyn crate::context::tokens::TokenEstimator>,
+    tool_runtime: ConversationToolRuntime,
+    model_timeout_policy: ModelTimeoutPolicy,
+    /// The shared native auxiliary execution owner. This is the one handle:
+    /// attempts, scheduled work and title admission all consume capacity
+    /// through it rather than the runtime owning a second reference.
+    executor: AuxiliaryExecutor,
     active: Mutex<BTreeMap<CorrelationId, Active>>,
     generation: std::sync::atomic::AtomicU64,
     delivery: DeliveryOwner,
     streams: crate::runtime::auxiliary::observer::StreamOwner,
 }
+/// The construction inputs every composed `ExternalAuxiliary` needs: all of
+/// them are the same shared handles the runtime itself was built from.
+pub(crate) struct ExternalAuxiliaryParts {
+    pub(crate) conversation_id: ConversationId,
+    pub(crate) state: Arc<Mutex<CoordinatorState>>,
+    pub(crate) lifecycle: ConversationLifecycle,
+    pub(crate) store: Arc<dyn ConversationStore>,
+    pub(crate) policy: crate::context::SessionContextPolicy,
+    pub(crate) estimator: Arc<dyn crate::context::tokens::TokenEstimator>,
+    pub(crate) tool_runtime: ConversationToolRuntime,
+    pub(crate) model_timeout_policy: ModelTimeoutPolicy,
+    pub(crate) executor: AuxiliaryExecutor,
+}
 impl ExternalAuxiliary {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new(parts: ExternalAuxiliaryParts) -> Arc<Self> {
         Arc::new(Self {
+            conversation_id: parts.conversation_id,
+            state: parts.state,
+            lifecycle: parts.lifecycle,
+            store: parts.store,
+            policy: parts.policy,
+            estimator: parts.estimator,
+            tool_runtime: parts.tool_runtime,
+            model_timeout_policy: parts.model_timeout_policy,
+            executor: parts.executor,
             active: Mutex::new(BTreeMap::new()),
             generation: std::sync::atomic::AtomicU64::new(0),
             delivery: DeliveryOwner::new(),
             streams: crate::runtime::auxiliary::observer::StreamOwner::default(),
+        })
+    }
+
+    /// The shared executor handle for runtime-owned auxiliary consumers
+    /// (attempt reviewers, workflow model capability, title admission).
+    pub(crate) fn executor(&self) -> AuxiliaryExecutor {
+        self.executor.clone()
+    }
+
+    pub(crate) fn capacity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.executor.capacity_changes()
+    }
+
+    pub(crate) fn activity_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.executor.activity_changes()
+    }
+
+    pub(crate) fn wait_activity_ready(&self) {
+        self.executor.wait_activity_ready();
+    }
+
+    pub(crate) fn with_activity<T>(&self, read: impl FnOnce(bool) -> T) -> Option<T> {
+        self.executor.with_activity(read)
+    }
+
+    pub(crate) fn begin_drain(&self) {
+        self.executor.begin_drain();
+    }
+
+    pub(crate) async fn drain(&self) {
+        self.executor.drain().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_retirement_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        self.executor.hold_retirement_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_resource_release_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        self.executor.hold_resource_release_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_settlement_for_test(
+        &self,
+    ) -> crate::runtime::auxiliary::executor::AuxiliaryWriteTestGates {
+        self.executor.hold_settlement_for_test()
+    }
+}
+/// The auxiliary invocation a submission freezes at admission.
+pub(crate) enum AuxiliaryInvocationKind {
+    Classification,
+    Btw,
+    Title,
+}
+/// The complete ownership bundle produced by one atomic auxiliary admission
+/// (Issue #606): frozen execution snapshots plus capacity and lifecycle
+/// ownership, all acquired inside the one coordinator critical section.
+pub(crate) struct AdmittedAuxiliaryWork {
+    pub(crate) invocation: crate::model::ResolvedModelInvocation,
+    pub(crate) resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+    pub(crate) timeout: ModelTimeoutPolicy,
+    pub(crate) resource_revision: u64,
+    pub(crate) scope: Arc<AuxiliaryScope>,
+    pub(crate) reservation: crate::runtime::auxiliary::executor::AuxiliaryReservation,
+    /// An optional business admission held beyond Call settlement (the title
+    /// publication tail). `None` for submissions whose settlement boundary is
+    /// the Call itself.
+    pub(crate) business_admission: Option<LifecycleAdmission>,
+}
+impl ExternalAuxiliary {
+    /// The one atomic auxiliary admission (Issue #606): inside a single
+    /// coordinator critical section it freezes the invocation, resources and
+    /// timeout, reserves executor capacity (which acquires the Call's own
+    /// `LifecycleAdmission`), and optionally acquires the business admission
+    /// that outlives Call settlement. Failure paths release everything.
+    pub(crate) fn admit_auxiliary_work(
+        &self,
+        kind: AuxiliaryInvocationKind,
+        allowance: u8,
+        cancellation: &CancellationSignal,
+        hold_business_admission: bool,
+    ) -> Result<AdmittedAuxiliaryWork, ContextError> {
+        let state = self.state.lock().expect("coordinator state");
+        let invocation = match kind {
+            AuxiliaryInvocationKind::Classification => {
+                state.config.model.classification_invocation().cloned()
+            }
+            AuxiliaryInvocationKind::Btw => state.config.model.btw_invocation().cloned(),
+            AuxiliaryInvocationKind::Title => state.config.model.title_invocation(),
+        }
+        .map_err(|_| {
+            ContextError::new(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "auxiliary model selection is unavailable",
+            )
+        })?;
+        let scope = self.executor.general_scope(allowance, cancellation);
+        let reservation = self.executor.reserve_general(&scope)?;
+        let business_admission = hold_business_admission
+            .then(|| {
+                self.lifecycle
+                    .try_enter_running()
+                    .map_err(|_| ContextError::new(ContextErrorKind::Cancelled, "runtime closed"))
+            })
+            .transpose()?;
+        let resources = state.config.resources.clone();
+        let timeout = resources
+            .configuration()
+            .map_or(self.model_timeout_policy, |generation| {
+                generation
+                    .config
+                    .timeout_policy()
+                    .expect("validated timeout")
+            });
+        let resource_revision = resources.revision().get();
+        Ok(AdmittedAuxiliaryWork {
+            invocation,
+            timeout,
+            resource_revision,
+            resources,
+            scope,
+            reservation,
+            business_admission,
         })
     }
 }
@@ -299,21 +488,21 @@ impl AuxiliaryConsumer for Consumer {
 fn failure(message: impl Into<String>) -> ContextError {
     ContextError::new(ContextErrorKind::AuxiliaryNotStarted, message)
 }
-impl ConversationRuntime {
+impl ExternalAuxiliary {
     pub(crate) fn auxiliary_subscribe(
         &self,
     ) -> Option<crate::runtime::auxiliary::observer::AuxiliarySubscription> {
-        self.inner.external_auxiliary.streams.subscribe()
+        self.streams.subscribe()
     }
     pub(crate) fn classify(
-        &self,
+        self: &Arc<Self>,
         submission: ClassificationSubmission,
         permit: &SubmissionPermit,
     ) -> Result<AuxiliaryAdmission, ContextError> {
         self.submit_auxiliary(Input::Classify(submission), permit)
     }
     pub(crate) fn btw(
-        &self,
+        self: &Arc<Self>,
         submission: BtwSubmission,
         permit: &SubmissionPermit,
     ) -> Result<AuxiliaryAdmission, ContextError> {
@@ -321,19 +510,18 @@ impl ConversationRuntime {
     }
     #[allow(clippy::too_many_lines)] // Linear reservation/transfer owns the frozen preparation closure.
     fn submit_auxiliary(
-        &self,
+        self: &Arc<Self>,
         input: Input,
         permit: &SubmissionPermit,
     ) -> Result<AuxiliaryAdmission, ContextError> {
-        let fingerprint = input.fingerprint(self.conversation_id()).map_err(failure)?;
+        let fingerprint = input.fingerprint(&self.conversation_id).map_err(failure)?;
         let correlation = input.correlation().clone();
-        let owner = self.inner.external_auxiliary.clone();
+        let owner = Arc::clone(self);
         let mut retries = 0;
         let active = loop {
             let generation = owner.generation.load(std::sync::atomic::Ordering::SeqCst);
             // Exact durable lookup precedes all mutable model/context preparation.
             if let Some(call) = self
-                .inner
                 .store
                 .load_auxiliary_submission(correlation.as_str())
                 .map_err(|_| failure("auxiliary submission evidence unavailable"))?
@@ -380,9 +568,26 @@ impl ConversationRuntime {
             .delivery
             .reserve()
             .map_err(|message| ContextError::new(ContextErrorKind::AuxiliaryBusy, message))?;
-        let cancellation = crate::runtime::cancellation::CancellationSignal::new();
-        let scope = self.inner.auxiliary.general_scope(3, &cancellation);
-        let reservation = self.inner.auxiliary.reserve_general(&scope)?;
+        let cancellation = CancellationSignal::new();
+        let kind = match &input {
+            Input::Classify(_) => AuxiliaryInvocationKind::Classification,
+            Input::Btw(_) => AuxiliaryInvocationKind::Btw,
+        };
+        let admitted = self.admit_auxiliary_work(kind, 3, &cancellation, false)?;
+        crate::context::resources::bounded_encoded_len(
+            admitted.invocation.request_params(),
+            131_072,
+        )
+        .map_err(|_| {
+            ContextError::new(
+                ContextErrorKind::CannotFit,
+                "auxiliary invocation parameters exceed 128 KiB",
+            )
+        })?;
+        let invocation = admitted.invocation;
+        let resources = admitted.resources;
+        let scope = admitted.scope;
+        let reservation = admitted.reservation;
         let call_id = reservation.call_id().clone();
         let scope_id = permit.id();
         let receipt = AuxiliarySubmissionReceipt {
@@ -390,51 +595,25 @@ impl ConversationRuntime {
             correlation: correlation.clone(),
             scope: scope_id.clone(),
         };
-        let state = self.inner.lock_state();
-        let invocation = match &input {
-            Input::Classify(_) => state.config.model.classification_invocation(),
-            Input::Btw(_) => state.config.model.btw_invocation(),
-        }
-        .map_err(|_| failure("auxiliary model selection is unavailable"))?;
-        crate::context::resources::bounded_encoded_len(invocation.request_params(), 131_072)
-            .map_err(|_| {
-                ContextError::new(
-                    ContextErrorKind::CannotFit,
-                    "auxiliary invocation parameters exceed 128 KiB",
-                )
-            })?;
-        let invocation = invocation.clone();
-        let resources = state.config.resources.clone();
         let policy = resources
             .configuration()
-            .map_or(self.inner.context.policy, |generation| {
-                generation.config.context_policy()
-            });
-        let timeout =
-            resources
-                .configuration()
-                .map_or(self.inner.model_timeout_policy, |generation| {
-                    generation
-                        .config
-                        .timeout_policy()
-                        .expect("validated timeout")
-                });
-        drop(state);
+            .map_or(self.policy, |generation| generation.config.context_policy());
+        let timeout = admitted.timeout;
         let mut engine = crate::context::ContextEngine::new(
             policy.config_for_window(invocation.context_window()),
-            self.inner.context.estimator.clone(),
+            self.estimator.clone(),
         )?;
         engine.set_image_projection(
-            self.inner.tool_runtime.artifacts().clone(),
+            self.tool_runtime.artifacts().clone(),
             invocation
                 .capabilities()
                 .input_modalities
                 .contains(&crate::model::catalog::Modality::Image),
         );
-        if let Some(uploads) = &self.inner.tool_runtime.uploads {
+        if let Some(uploads) = &self.tool_runtime.uploads {
             engine.set_upload_resolver(uploads.clone());
         }
-        let store = self.inner.store.clone();
+        let store = self.store.clone();
         let inference_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (confirmation, receiver) = tokio::sync::watch::channel(None);
         let admission = AuxiliaryAdmission {
@@ -639,14 +818,10 @@ impl ConversationRuntime {
         scope: Option<&AuxiliaryAttribution>,
     ) -> AuxiliarySubmissionLookup {
         use crate::runtime::auxiliary::submission::{ScopeEvidence, scope_evidence};
-        let evidence = scope_evidence(self.conversation_id(), correlation, scope);
+        let evidence = scope_evidence(&self.conversation_id, correlation, scope);
         // Scope closure is observed BEFORE this read, so successful absence
         // cannot race a still-eligible original writer.
-        let Ok(call) = self
-            .inner
-            .store
-            .load_auxiliary_submission(correlation.as_str())
-        else {
+        let Ok(call) = self.store.load_auxiliary_submission(correlation.as_str()) else {
             return AuxiliarySubmissionLookup::Unresolved;
         };
         if let Some(call) = call {
@@ -670,8 +845,6 @@ impl ConversationRuntime {
             ScopeEvidence::Pending(scope) => AuxiliarySubmissionLookup::Pending {
                 scope,
                 call_id: self
-                    .inner
-                    .external_auxiliary
                     .active
                     .lock()
                     .expect("auxiliary submissions")
@@ -685,7 +858,7 @@ impl ConversationRuntime {
         &self,
         call_id: &AuxiliaryCallId,
     ) -> Result<AuxiliaryStatus, ContextError> {
-        let owner = &self.inner.external_auxiliary;
+        let owner = self;
         let inference_stopped = owner
             .active
             .lock()
@@ -704,12 +877,10 @@ impl ConversationRuntime {
             .values()
             .any(|entry| entry.receipt.call_id == *call_id);
         let cut = self
-            .inner
             .store
             .auxiliary_audit_cut()
             .map_err(|_| failure("auxiliary audit unavailable"))?;
         let call = self
-            .inner
             .store
             .load_auxiliary_call(call_id, cut)
             .map_err(|_| failure("auxiliary audit unavailable"))?;
@@ -734,19 +905,10 @@ impl ConversationRuntime {
         &self,
         call: &AuxiliaryCallId,
     ) -> Result<Option<ResultCopy>, ContextError> {
-        self.inner
-            .external_auxiliary
-            .delivery
-            .read(call)
-            .map_err(failure)
+        self.delivery.read(call).map_err(failure)
     }
     pub(crate) fn auxiliary_cancel(&self, call: &AuxiliaryCallId) -> bool {
-        let active = self
-            .inner
-            .external_auxiliary
-            .active
-            .lock()
-            .expect("auxiliary submissions");
+        let active = self.active.lock().expect("auxiliary submissions");
         let Some(entry) = active.values().find(|entry| entry.receipt.call_id == *call) else {
             return false;
         };
@@ -754,6 +916,6 @@ impl ConversationRuntime {
         true
     }
     pub(crate) fn auxiliary_discard(&self, call: &AuxiliaryCallId) -> bool {
-        self.inner.external_auxiliary.delivery.discard(call)
+        self.delivery.discard(call)
     }
 }

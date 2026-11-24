@@ -337,11 +337,11 @@ impl RuntimeInner {
         let trigger = Arc::new(trigger);
         let mut context = preparation
             .execution_context(self.capability.clone(), id.clone())
-            .with_workflow_models(self.auxiliary.clone())
+            .with_workflow_models(self.external_auxiliary.executor())
             .with_workflow_deadline(self.monotonic_clock.clone(), deadline, trigger.clone());
         let reviewer = Arc::new(
             crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
-                self.auxiliary.clone(),
+                self.external_auxiliary.executor(),
                 auxiliary_invocation,
                 policy.model_timeout,
                 resources.revision().get(),

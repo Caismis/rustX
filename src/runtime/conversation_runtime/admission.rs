@@ -549,9 +549,7 @@ impl RuntimeInner {
             || state
                 .child()
                 .and_then(|child| child.parent_turn_permits)
-                .is_some_and(|permits| {
-                    state.child().map_or(0, |child| child.admitted_attempts) >= permits
-                })
+                .is_some_and(|permits| state.foreground.admitted_attempts >= permits)
         {
             return;
         }
@@ -909,7 +907,7 @@ impl RuntimeInner {
         // arbitration resolves `CancelledBeforeStart` and no provider
         // request ever starts. The intent is consumed exactly once; the
         // child is one-shot, so at most one admission can ever consume it.
-        if let Some(reason) = state.child_mut().one_shot_cancel.take() {
+        if let Some(reason) = state.foreground.one_shot_cancel.take() {
             // First winner by construction: the fresh attempt signal has no
             // prior cause.
             let _ = cancellation.request_cancel(reason);
@@ -946,8 +944,7 @@ impl RuntimeInner {
         // attempt becomes countable (Issue #193): the subagent child driver
         // compares this against the terminals it has observed to prove it
         // has seen every attempt an accepted steer could have opened.
-        let child = state.child_mut();
-        child.admitted_attempts = child.admitted_attempts.saturating_add(1);
+        state.foreground.admitted_attempts = state.foreground.admitted_attempts.saturating_add(1);
         {
             let mut steering = self.mailbox.steering.lock().expect("steering admission");
             steering.active = Some(attempt_id.clone());

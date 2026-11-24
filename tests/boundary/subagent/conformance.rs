@@ -374,7 +374,7 @@ async fn child_fixture_scoped_at_with_mode(
             // A child has no subagent registry: recursion is absent by
             // construction.
             subagents: None,
-            workflow_output: None,
+            role: crate::runtime::conversation_runtime::ConversationRole::Root,
         },
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )
@@ -710,7 +710,7 @@ async fn compose_parent_runtime_plane(
         clock: None,
         initial_messages: Vec::new(),
         subagents: Some(registry.clone()),
-        workflow_output: None,
+        role: crate::runtime::conversation_runtime::ConversationRole::Root,
     };
     // The scoped intermediate Child is intentionally parked while its nested
     // source is inspected. A real elapsed model-idle timeout would retire the

@@ -954,6 +954,70 @@ impl ConversationRuntime {
         )
         .map_err(|error| ConversationRuntimeError::Storage(error.message))?;
         let catalog_revision = config.capability.catalog_revision();
+        let state = Arc::new(Mutex::new(CoordinatorState {
+            foreground: super::ForegroundState {
+                slot: super::foreground::ForegroundSlot::Idle(
+                    super::foreground::IdleConversation::Durable,
+                ),
+                manual_tail: super::foreground::ManualTailState::None,
+                scheduled_retries: std::collections::BTreeMap::default(),
+                next_attempt_seq,
+                recovered_continuation,
+                recovered_permission_task_message,
+                // Durability health after a successful recovery is an
+                // explicit transition, not a silent reset (Issue #12,
+                // M9a): recovery either established a coherent durable
+                // state — in which case the runtime starts a fresh
+                // admission cycle — or it failed, in which case
+                // construction already returned and no runtime exists to
+                // be healthy. A previous process's crash never poisons a
+                // runtime whose classification and reconciliation
+                // succeeded. The absorbing DurabilityFailed fact itself
+                // lives only in the DurabilityGate.
+                admission_durability_cycle: AdmissionDurabilityCycle {
+                    budget: AdmissionRetryBudget::default(),
+                    pending_retry: None,
+                },
+                admitted_attempts: 0,
+                latest_settlement: None,
+                one_shot_cancel: None,
+            },
+            config: super::ConfigurationState {
+                binding_revision: 1,
+                catalog_revision,
+                pending_runtime_catalog: None,
+                catalog_commit_blocked: false,
+                catalog_admission_deferred: false,
+                staged_configuration: None,
+                configuration_commit_waiting: false,
+                configuration_admission_deferred: false,
+                runtime_refresh_sequence: 0,
+                runtime_catalog_failure: None,
+                explicit_model: config.explicit_model,
+                model: config.model,
+                resources: config.resources,
+                effective_approval_mode: config.approval_mode,
+                last_permission_reminder_mode,
+                permission_task_message,
+            },
+            child: config.role.is_child().then(ChildControlState::default),
+            health: super::HealthState {
+                mcp_settlement_failure: None,
+            },
+        }));
+        let external_auxiliary = crate::runtime::auxiliary::external::ExternalAuxiliary::new(
+            crate::runtime::auxiliary::external::ExternalAuxiliaryParts {
+                conversation_id: conversation_id.clone(),
+                state: state.clone(),
+                lifecycle: lifecycle.clone(),
+                store: store.clone(),
+                policy: config.context.policy.clone(),
+                estimator: config.context.estimator.clone(),
+                tool_runtime: config.tool_runtime.clone(),
+                model_timeout_policy: config.model_timeout_policy,
+                executor: auxiliary,
+            },
+        );
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
             unrecorded_configuration: Arc::default(),
@@ -977,7 +1041,7 @@ impl ConversationRuntime {
             capability: config.capability,
             capability_publication,
             subagents: config.subagents,
-            workflow_output: config.workflow_output,
+            role: config.role,
             interaction,
             lifecycle,
             clock,
@@ -985,59 +1049,11 @@ impl ConversationRuntime {
             tool_deadline_policy: config.tool_deadline_policy,
             monotonic_clock,
             durability_gate: durability_gate.clone(),
-            auxiliary,
-            external_auxiliary: super::auxiliary::ExternalAuxiliary::new(),
+            external_auxiliary,
             host_task: Mutex::new(None),
             recovery,
             executor,
-            state: Mutex::new(CoordinatorState {
-                foreground: super::ForegroundState {
-                    slot: super::foreground::ForegroundSlot::Idle(
-                        super::foreground::IdleConversation::Durable,
-                    ),
-                    manual_tail: super::foreground::ManualTailState::None,
-                    scheduled_retries: std::collections::BTreeMap::default(),
-                    next_attempt_seq,
-                    recovered_continuation,
-                    recovered_permission_task_message,
-                    // Durability health after a successful recovery is an
-                    // explicit transition, not a silent reset (Issue #12,
-                    // M9a): recovery either established a coherent durable
-                    // state — in which case the runtime starts a fresh
-                    // admission cycle — or it failed, in which case
-                    // construction already returned and no runtime exists to
-                    // be healthy. A previous process's crash never poisons a
-                    // runtime whose classification and reconciliation
-                    // succeeded. The absorbing DurabilityFailed fact itself
-                    // lives only in the DurabilityGate.
-                    admission_durability_cycle: AdmissionDurabilityCycle {
-                        budget: AdmissionRetryBudget::default(),
-                        pending_retry: None,
-                    },
-                },
-                config: super::ConfigurationState {
-                    binding_revision: 1,
-                    catalog_revision,
-                    pending_runtime_catalog: None,
-                    catalog_commit_blocked: false,
-                    catalog_admission_deferred: false,
-                    staged_configuration: None,
-                    configuration_commit_waiting: false,
-                    configuration_admission_deferred: false,
-                    runtime_refresh_sequence: 0,
-                    runtime_catalog_failure: None,
-                    explicit_model: config.explicit_model,
-                    model: config.model,
-                    resources: config.resources,
-                    effective_approval_mode: config.approval_mode,
-                    last_permission_reminder_mode,
-                    permission_task_message,
-                },
-                child: None,
-                health: super::HealthState {
-                    mcp_settlement_failure: None,
-                },
-            }),
+            state,
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
             drain: std::sync::OnceLock::new(),

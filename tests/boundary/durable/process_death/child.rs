@@ -307,7 +307,7 @@ impl Log {
             .clone()
             .expect("bound fixture runtime");
         runtime
-            .child_attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
+            .attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
             .await;
     }
 }

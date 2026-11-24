@@ -1,12 +1,10 @@
 //! Named native methods share the original close-fenced submission owner.
 use super::{RuntimeAttachment, RuntimeClientError};
 use crate::runtime::{
+    auxiliary::external::{AuxiliaryStatus, AuxiliarySubmissionLookup, AuxiliarySubmissionReceipt},
     auxiliary::{
         delivery::ResultCopy,
         submission::{BtwSubmission, ClassificationSubmission, CorrelationId, SubmissionPermit},
-    },
-    conversation_runtime::auxiliary::{
-        AuxiliaryStatus, AuxiliarySubmissionLookup, AuxiliarySubmissionReceipt,
     },
     identity::AuxiliaryCallId,
 };
@@ -43,10 +41,7 @@ impl RuntimeAttachment {
         &self,
         submission: ClassificationSubmission,
         permit: &SubmissionPermit,
-    ) -> Result<
-        crate::runtime::conversation_runtime::auxiliary::AuxiliaryAdmission,
-        RuntimeClientError,
-    > {
+    ) -> Result<crate::runtime::auxiliary::external::AuxiliaryAdmission, RuntimeClientError> {
         let authority = self.access(true)?;
         permit.bind_authority(self.authority.clone());
         authority.classify(submission, permit)
@@ -82,10 +77,7 @@ impl RuntimeAttachment {
         &self,
         submission: BtwSubmission,
         permit: &SubmissionPermit,
-    ) -> Result<
-        crate::runtime::conversation_runtime::auxiliary::AuxiliaryAdmission,
-        RuntimeClientError,
-    > {
+    ) -> Result<crate::runtime::auxiliary::external::AuxiliaryAdmission, RuntimeClientError> {
         let authority = self.access(true)?;
         permit.bind_authority(self.authority.clone());
         authority.btw(submission, permit)

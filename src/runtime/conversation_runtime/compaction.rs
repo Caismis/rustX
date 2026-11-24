@@ -484,7 +484,8 @@ impl ConversationRuntime {
             );
             let summary_backend = self
                 .inner
-                .auxiliary
+                .external_auxiliary
+                .executor()
                 .pre_admit_summary(budget.clone(), &cancellation.signal())
                 .map_err(ManualCompactionError::Context)?;
             let model = state.config.model.snapshot().map_err(|error| {

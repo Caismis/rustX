@@ -51,7 +51,7 @@ async fn transient_select_failure_recovers_and_admits_once() {
 
     // The retry adopts the pending item exactly once and completes the
     // admission cycle (settlement completes).
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert!(
         ledger.iter().any(|m| matches!(
@@ -167,7 +167,7 @@ async fn select_then_adopt_failures_get_independent_bounded_retries() {
         .expect("accepted");
     assert_eq!(admission.inbound_sequence.get(), 1);
 
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert!(
         ledger.iter().any(|m| matches!(
@@ -2780,7 +2780,11 @@ async fn abandoned_publication_never_precedes_the_last_failure_callback() {
         "the abandoned publication is honest settlement evidence: {shutdown:?}"
     );
     assert_eq!(
-        runtime.settle_child_physical_lifetime(false).await,
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .settle_child_physical_lifetime(false)
+            .await,
         Ok(()),
         "the native runner and callback settled; publication failure cannot erase physical proof",
     );

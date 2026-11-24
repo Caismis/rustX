@@ -91,7 +91,7 @@ impl RuntimeInner {
                 resources.context_assembly().clone(),
                 model_timeout_policy,
                 &resources,
-                Arc::new(self.auxiliary.clone()),
+                Arc::new(self.external_auxiliary.executor()),
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
@@ -113,7 +113,7 @@ impl RuntimeInner {
             )
         };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
-            workspace_changes: if record_changes && self.workflow_output.is_none() {
+            workspace_changes: if record_changes && self.role.is_root() {
                 Some(crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
@@ -159,13 +159,13 @@ impl RuntimeInner {
                                 }),
                         },
                     )
-                    .with_workflow_models(self.auxiliary.clone());
+                    .with_workflow_models(self.external_auxiliary.executor());
                     if let Some(registry) = self.subagents.clone() {
                         context = context.with_agent_registry(std::sync::Arc::new(registry));
                     }
                     context
                 }),
-            workflow_output: self.workflow_output.clone(),
+            workflow_output: self.role.workflow_output(),
             approval_mode,
             last_permission_reminder_mode,
             permission_task_message,
@@ -186,7 +186,7 @@ impl RuntimeInner {
         };
         let reviewer = std::sync::Arc::new(
             crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
-                self.auxiliary.clone(),
+                self.external_auxiliary.executor(),
                 auxiliary_invocation,
                 model_timeout_policy,
                 resources.revision().get(),
@@ -303,9 +303,9 @@ impl RuntimeInner {
             // (its in-memory content stayed consistent with the durable
             // Ledger: the failed commit installed nothing).
             let durable_failure = result.durable_failure.clone();
-            let child = state.child_mut();
-            child.latest_settlement = Some(NativeAttemptSettlement {
-                ordinal: child.admitted_attempts,
+            let ordinal = state.foreground.admitted_attempts;
+            state.foreground.latest_settlement = Some(NativeAttemptSettlement {
+                ordinal,
                 attempt_id: attempt_id.clone(),
                 outcome: NativeAttemptOutcome::from_execution(&result.outcome),
             });
@@ -539,7 +539,7 @@ impl ConversationRuntime {
             let _ = current.cancellation.request_cancel(reason);
             return Some(current.attempt_id.clone());
         }
-        state.child_mut().one_shot_cancel = Some(reason);
+        state.foreground.one_shot_cancel = Some(reason);
         None
     }
 }

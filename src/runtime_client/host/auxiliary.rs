@@ -3,13 +3,14 @@ use super::{ClientInner, RuntimeClientError};
 use crate::runtime::{
     auxiliary::{
         delivery::ResultCopy,
+        external::{
+            AuxiliaryAdmission, AuxiliaryStatus, AuxiliarySubmissionLookup, ExternalAuxiliary,
+        },
         submission::{BtwSubmission, ClassificationSubmission, CorrelationId, SubmissionPermit},
-    },
-    conversation_runtime::auxiliary::{
-        AuxiliaryAdmission, AuxiliaryStatus, AuxiliarySubmissionLookup,
     },
     identity::AuxiliaryCallId,
 };
+use std::sync::Arc;
 pub(crate) fn error(error: &crate::context::ContextError) -> RuntimeClientError {
     use crate::{context::ContextErrorKind, runtime::auxiliary::submission::AuxiliaryFailure};
     RuntimeClientError::Auxiliary {
@@ -25,13 +26,13 @@ pub(crate) fn error(error: &crate::context::ContextError) -> RuntimeClientError 
     }
 }
 impl ClientInner {
-    fn auxiliary_runtime(
-        &self,
-    ) -> Result<&crate::runtime::conversation_runtime::ConversationRuntime, RuntimeClientError>
-    {
-        self.runtime.as_ref().ok_or(RuntimeClientError::Auxiliary {
-            reason: crate::runtime::auxiliary::submission::AuxiliaryFailure::Unavailable,
-        })
+    fn auxiliary_runtime(&self) -> Result<Arc<ExternalAuxiliary>, RuntimeClientError> {
+        self.runtime
+            .as_ref()
+            .map(|runtime| runtime.external_auxiliary())
+            .ok_or(RuntimeClientError::Auxiliary {
+                reason: crate::runtime::auxiliary::submission::AuxiliaryFailure::Unavailable,
+            })
     }
     pub(crate) fn classify(
         &self,
