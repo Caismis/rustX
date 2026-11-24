@@ -2781,10 +2781,10 @@ async fn abandoned_publication_never_precedes_the_last_failure_callback() {
     );
     assert_eq!(
         runtime
-            .child_control()
-            .expect("child runtime")
-            .settle_child_physical_lifetime(false)
-            .await,
+            .shutdown_outcome()
+            .await
+            .expect("drain outcome")
+            .physical,
         Ok(()),
         "the native runner and callback settled; publication failure cannot erase physical proof",
     );

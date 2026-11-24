@@ -1729,10 +1729,10 @@ async fn preactivation_mcp_settlement_failure_is_replayed_and_fences_activation(
 
     assert!(
         runtime
-            .child_control()
-            .expect("child runtime")
-            .settle_child_physical_lifetime(false)
+            .shutdown_outcome()
             .await
+            .expect("drain outcome")
+            .physical
             .is_err(),
         "MCP containment failure must remain physically unproven"
     );

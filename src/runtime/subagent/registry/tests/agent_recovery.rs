@@ -680,10 +680,10 @@ async fn interrupted_authority_publication_reopens_without_logical_facts() {
                 )
                 .await;
             runtime
-                .child_control()
-                .expect("child runtime")
-                .settle_child_physical_lifetime(false)
+                .rollback_preparation_outcome()
                 .await
+                .expect("drain outcome")
+                .physical
                 .unwrap();
             runtime.shutdown().await.unwrap();
             assert!(runtime.is_quiescent());

@@ -2033,10 +2033,10 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
     assert_eq!(subagents.unproven_settlements(), vec![admitted.subagent_id]);
     assert!(
         runtime
-            .child_control()
-            .expect("child runtime")
-            .settle_child_physical_lifetime(false)
+            .shutdown_outcome()
             .await
+            .expect("drain outcome")
+            .physical
             .is_err(),
         "abandoning logical publication cannot invent a physical receipt for the containing child"
     );
@@ -2206,10 +2206,10 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
     );
     assert!(
         runtime
-            .child_control()
-            .expect("child runtime")
-            .settle_child_physical_lifetime(false)
+            .shutdown_outcome()
             .await
+            .expect("drain outcome")
+            .physical
             .is_err(),
         "the explicit unresolved physical owner forbids a child recovery receipt",
     );
