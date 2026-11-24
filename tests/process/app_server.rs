@@ -2169,7 +2169,8 @@ async fn assert_seeded_environment_tree(
 #[tokio::test]
 async fn execution_enrollment_precedes_client_and_workspace_configuration_readiness() {
     bounded(async {
-        use rustx::app_server::protocol::*;
+        use rustx::app_server::{protocol::*, session_deletion::SessionDeletionResult};
+        use std::path::Path;
         use rustx_execution_protocol::Bootstrap;
         use rustx_execution_protocol::transport::read_record;
         use std::os::unix::fs::PermissionsExt as _;
@@ -2178,6 +2179,10 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
         let workspace = f.root.path().join("a");
         grant_environment_roots(&f, std::slice::from_ref(&workspace));
         let project = workspace.join("rustx.toml");
+        let choice = workspace.join("selectable");
+        std::fs::create_dir(&choice).unwrap();
+        std::fs::write(choice.join("keep.txt"), b"keep after cancelling selection").unwrap();
+        std::os::unix::fs::symlink(f.root.path().join("b"), workspace.join("outside")).unwrap();
         std::fs::write(&project, b"[agent]\n").unwrap();
         std::fs::write(workspace.join("marker"), b"authorized").unwrap();
         let (_bin, rustx) = isolated_server_bin();
@@ -2234,22 +2239,73 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
         );
         assert_eq!(diagnostics(&client).await.loaded, 0);
         std::fs::write(project, b"[broken").unwrap();
-        let _execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
+        let execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
         await_admission(&client, &id, &workspace.join("marker")).await;
         assert!(matches!(
             result(&client, browse()).await,
             MethodResult::DirectoryPage { page }
-                if page.entries.iter().any(|entry| entry.file_name == "marker")
+                if page.entries.iter().any(|entry| entry.file_name == "selectable" && entry.metadata.is_directory)
         ));
+        let browse_path = |path: &Path| Method::FsReadDirectory {
+            session_id: id.clone(),
+            path: path.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        };
+        assert!(matches!(
+            result(&client, browse_path(&choice)).await,
+            MethodResult::DirectoryPage { page }
+                if page.next_offset.is_none() && page.entries.len() == 1
+                    && page.entries[0].file_name == "keep.txt"
+        ));
+        let Response::Failure(outside) =
+            rpc(&client, 43, browse_path(&f.root.path().join("b"))).await
+        else {
+            panic!("an absolute path outside the authorized root was accepted");
+        };
+        assert_eq!(outside.error.data, Some(ErrorData::EnvironmentUnauthorized));
+        let Response::Failure(linked) =
+            rpc(&client, 43, browse_path(&workspace.join("outside"))).await
+        else {
+            panic!("a directory symlink escaped the authorized root");
+        };
+        // openat with NOFOLLOW can report ELOOP or ENOTDIR, depending on the OS.
+        assert!(matches!(linked.error.data,
+            Some(ErrorData::EnvironmentUnauthorized | ErrorData::EnvironmentResourceNotFound)));
         assert!(matches!(
             rpc(&client, 44, Method::SessionAttach { thread_id }).await,
             Response::Failure(_)
         ));
         assert!(matches!(
-            result(&client, Method::SessionRead { session_id: id }).await,
+            result(&client, Method::SessionRead { session_id: id.clone() }).await,
             MethodResult::Session { .. }
         ));
         assert_eq!(diagnostics(&client).await.loaded, 0);
+        let MethodResult::Deletion {
+            result: SessionDeletionResult::Preview { preview },
+        } = result(&client, Method::SessionDeletePreview { session_id: id.clone() }).await
+        else {
+            panic!("selection cancellation needs a Session deletion preview");
+        };
+        assert!(matches!(
+            result(&client, Method::SessionDelete {
+                session_id: id.clone(),
+                expected_target_revision: preview.target_revision,
+            }).await,
+            MethodResult::Deletion { result: SessionDeletionResult::Deleted { session_id } }
+                if session_id == id
+        ));
+        assert_eq!(std::fs::read(choice.join("keep.txt")).unwrap(), b"keep after cancelling selection");
+        assert!(matches!(rpc(&client, 45, browse()).await, Response::Failure(_)));
+        assert!(matches!(
+            rpc(&client, 46, Method::SessionRead { session_id: id }).await,
+            Response::Failure(_)
+        ));
+        assert!(tokio::task::spawn_blocking(move || {
+            let mut execution = execution;
+            execution.0.wait().unwrap()
+        }).await.unwrap().success());
         client.close().await;
         terminate(&server);
         let output = server.wait_with_output().await.unwrap();
