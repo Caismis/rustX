@@ -257,12 +257,19 @@ impl ScheduledExecutor {
                 cancellation,
                 admission,
             } = reservation;
+            // The long-lived executor only upgrades a Weak handle for the
+            // admission decision; an ADMITTED task keeps a strong runtime
+            // reference until execution, physical proof, durable settlement,
+            // exact slot release and admission release are all done — a
+            // dropped last external ConversationRuntime handle can no longer
+            // strand a Claimed start (Issue #606 review).
             let result = if recovered_writer {
                 let _lease = executor
                     .capability
                     .acquire_attempt_lease_for(resources.capability().clone());
                 executor
                     .finish_scheduled_start(
+                        &runtime,
                         &start.head.id,
                         ScheduledWorkflowOutcome::OutcomeUnknown {
                             reason: "native writer recovered a Claim; graph was not replayed"
@@ -276,6 +283,7 @@ impl ScheduledExecutor {
                 executor
                     .clone()
                     .run_scheduled_start(
+                        runtime.clone(),
                         start,
                         resources,
                         model,
@@ -288,9 +296,8 @@ impl ScheduledExecutor {
             if let Err(error) = result {
                 tracing::warn!(%error,"scheduled Workflow native owner refused or failed");
             }
-            if let Some(runtime) = executor.runtime() {
-                runtime.finish_scheduled(&owner);
-            }
+            runtime.finish_scheduled(&owner);
+            drop(runtime);
             drop(admission);
             drop(activity);
         });
@@ -306,6 +313,7 @@ impl ScheduledExecutor {
     #[allow(clippy::too_many_arguments)]
     fn claim_scheduled_start(
         &self,
+        runtime: &Arc<RuntimeInner>,
         id: &ScheduledWorkflowStartId,
         contract: &super::PinnedScheduledWorkflow,
         resources: &Arc<RuntimeResourceSnapshot>,
@@ -321,9 +329,6 @@ impl ScheduledExecutor {
         )>,
         String,
     > {
-        let Some(runtime) = self.runtime() else {
-            return Ok(None);
-        };
         let snapshot = ScheduledSnapshot {
             resources: resources.clone(),
             model: model.clone(),
@@ -363,6 +368,7 @@ impl ScheduledExecutor {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn run_scheduled_start(
         self: Arc<Self>,
+        runtime: Arc<RuntimeInner>,
         start: ScheduledWorkflowStart,
         resources: Arc<RuntimeResourceSnapshot>,
         model: crate::model::session::SessionModelConfig,
@@ -444,6 +450,7 @@ impl ScheduledExecutor {
             }
         }
         let Some((claim, _resources_lease, auxiliary_invocation)) = self.claim_scheduled_start(
+            &runtime,
             &id,
             prepared.contract(),
             &resources,
@@ -539,12 +546,10 @@ impl ScheduledExecutor {
             Err(error) => (scheduled_failure_outcome(&error), None),
         };
         cancellation.cancel(CancellationReason::ParentCancelled);
-        if let Some(runtime) = self.runtime() {
-            runtime.mark_scheduled_graph_finished(owner);
-        }
+        runtime.mark_scheduled_graph_finished(owner);
         #[cfg(test)]
         tokio::task::block_in_place(|| self.enter_probe_gate());
-        self.finish_scheduled_start(&id, outcome, output, false)
+        self.finish_scheduled_start(&runtime, &id, outcome, output, false)
             .await
     }
 
@@ -566,6 +571,7 @@ impl ScheduledExecutor {
     /// reconciling, never releases early, and never replays the graph.
     async fn finish_scheduled_start(
         &self,
+        runtime: &Arc<RuntimeInner>,
         id: &ScheduledWorkflowStartId,
         outcome: ScheduledWorkflowOutcome,
         output: Option<serde_json::Value>,
@@ -573,10 +579,11 @@ impl ScheduledExecutor {
     ) -> Result<(), String> {
         // The graph is closed. A missing physical proof keeps this exact owner
         // and its resource lease accountable; neither cancellation nor elapsed
-        // time permits a second executor or releases deletion/capacity.
-        let settlement_wake = self
-            .runtime()
-            .and_then(|runtime| runtime.probe_scheduled_owner(id))
+        // time permits a second executor or releases deletion/capacity. The
+        // admitted task carries the strong runtime owner, so this probe cannot
+        // lose the coordinator while the run is still accountable.
+        let settlement_wake = runtime
+            .probe_scheduled_owner(id)
             .ok_or_else(|| "scheduled terminal publication lost its native owner".to_owned())?
             .settlement_wake;
         let mut uncertain = false;

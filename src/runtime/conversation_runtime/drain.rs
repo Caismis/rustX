@@ -382,6 +382,21 @@ impl RuntimeInner {
         }
     }
 
+    /// Test barrier: this reaper is provably parked on the shared
+    /// completion while the `JoinHandle` holder is still joining (Issue #606).
+    #[cfg(test)]
+    fn enter_waitjoined_probe_gate(&self) {
+        let waitjoined_gate = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.manual_tail_waitjoined_gate.clone());
+        if let Some(gate) = waitjoined_gate {
+            gate.enter();
+        }
+    }
+
     /// Reaps the manual compaction tail under the coordinator lock.
     ///
     /// `Pending` means the post-compaction callback has not published
@@ -422,13 +437,17 @@ impl RuntimeInner {
         };
         match reap {
             Reap::Idle => {}
-            Reap::WaitJoined(completion) => loop {
-                let notified = completion.notify.notified();
-                if completion.joined.load(Ordering::Acquire) {
-                    break;
+            Reap::WaitJoined(completion) => {
+                #[cfg(test)]
+                self.enter_waitjoined_probe_gate();
+                loop {
+                    let notified = completion.notify.notified();
+                    if completion.joined.load(Ordering::Acquire) {
+                        break;
+                    }
+                    notified.await;
                 }
-                notified.await;
-            },
+            }
             Reap::Work(tail) => {
                 #[cfg(test)]
                 {

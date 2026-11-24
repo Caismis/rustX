@@ -8557,6 +8557,22 @@ read repair never loads a cold runtime or repeats semantic work. See the
   `Poisoned` via `AttemptTaskPoisonGuard`; every subsequent foreground
   admission, idle claim and staged commit fails against the recorded evidence
   while drain still completes. No path recreates a slot out of thin air.
+- **Coordinator-lock recovery preserves the live owner.** When a panic
+  inside a critical section poisons the coordinator state lock, `lock_state`
+  recovers the guard, commits an explicit `DurabilityFailed` fact and clears
+  the poison mark so readers converge on the same recorded failure — but it
+  never poisons the foreground slot: a poisoned mutex proves only that the
+  critical section panicked, not that the task holding the slot exited. The
+  task's own cancellation and settlement ownership stays intact until it can
+  be proven the task exited or was joined; generic lock recovery commits the
+  irreversible health-failure fact and nothing more.
+- **The admitted scheduled task owns the runtime until settlement.** The
+  long-lived `ScheduledExecutor` keeps only a `Weak` link for admission
+  decisions, but every admitted scheduled task moves a strong
+  `RuntimeInner` reference into its spawn and holds it until execution, the
+  physical proof, the durable settlement, the exact slot release and the
+  admission release are all complete — so a settlement owner cannot lose its
+  runtime while a Claim it started is still open.
 - **Auxiliary admission is one atomic bundle.** `ExternalAuxiliary` — the
   extracted owner of classification, BTW and title auxiliary work — performs
   `admit_auxiliary_work` inside a single coordinator critical section: it

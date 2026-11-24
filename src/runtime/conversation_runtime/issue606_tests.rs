@@ -170,10 +170,13 @@ async fn concurrent_reapers_claim_one_join_handle() {
     // walks `WaitJoined`, waits for the join's completion signal rather
     // than racing a second join, and the tail ends `None` with
     // `completed && joined` both observed.
-    let gate = Arc::new(probe::Gate::default());
-    gate.arm();
+    let joining_gate = Arc::new(probe::Gate::default());
+    joining_gate.arm();
+    let waitjoined_gate = Arc::new(probe::Gate::default());
+    waitjoined_gate.arm();
     let coordinator_probe = probe::CoordinatorProbe {
-        manual_tail_joining_gate: Some(gate.clone()),
+        manual_tail_joining_gate: Some(joining_gate.clone()),
+        manual_tail_waitjoined_gate: Some(waitjoined_gate.clone()),
         ..Default::default()
     };
     let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
@@ -185,7 +188,7 @@ async fn concurrent_reapers_claim_one_join_handle() {
     runtime
         .submit_inbound(test_support::text_content("trigger a reaper pass"))
         .expect("inbound queued");
-    gate.wait_entered_async().await;
+    joining_gate.wait_entered_async().await;
     assert!(
         matches!(
             runtime.inner.lock_state().foreground.manual_tail,
@@ -193,15 +196,26 @@ async fn concurrent_reapers_claim_one_join_handle() {
         ),
         "the first reaper published Joining while holding the JoinHandle"
     );
-    // A second reaper — drain — sees Joining and waits for the shared
-    // completion instead of claiming a second join.
+    // A second reaper — drain — sees Joining and parks on the shared
+    // completion. The WaitJoined barrier PROVES it is parked there before
+    // the first reaper's join is allowed to finish.
     let drain = tokio::spawn({
         let runtime = runtime.clone();
         async move { runtime.shutdown().await }
     });
-    // Drain provably observed `Joining`: releasing the gate lets the first
-    // reaper join; only the shared completion can release the second.
-    gate.release();
+    waitjoined_gate.wait_entered_async().await;
+    assert!(
+        matches!(
+            runtime.inner.lock_state().foreground.manual_tail,
+            ManualTailState::Joining(_)
+        ),
+        "the second reaper observed Joining and parks in WaitJoined"
+    );
+    // Release the parked second reaper's gate and the first reaper's join
+    // in one go: `joined` publication is now the only frontier between
+    // them — exactly the shared-completion handoff under test.
+    waitjoined_gate.release();
+    joining_gate.release();
     // `handle.wait()` requires `completed && joined` — it returns only
     // because the one claimed join finished, which is the shared
     // completion the second reaper waited on.
@@ -571,4 +585,82 @@ async fn in_lock_panic_recovers_to_failed_admission_and_still_drains() {
     })
     .await
     .expect("reaper and shutdown terminate after lock poisoning");
+    // The converged failure state is consistent for every reader: the
+    // poison mark was cleared after the `DurabilityFailed` fact committed,
+    // so a non-blocking `try_lock` reader (`try_activity`) observes the
+    // failed health instead of spinning on `None` forever (Issue #606).
+    let activity = runtime.activity();
+    assert!(
+        activity.is_some_and(|activity| activity.system_error),
+        "non-blocking readers observe the converged failure: {activity:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lock_panic_during_a_live_attempt_preserves_cancellation_and_settlement_ownership() {
+    // Issue #606 (P1): the generic lock-recovery path must close business
+    // admission WITHOUT destroying the live foreground owner. The attempt
+    // parked on a cancellation-only model barrier keeps its owner record —
+    // drain's cancellation reaches the model, the task exits on its own
+    // settlement path, and admission is released. The test never releases
+    // the model manually: shutdown's cancellation is the only frontier.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let script = vec![
+        test_support::FakeStep::Emit(crate::model::event::ModelEvent::Started),
+        test_support::FakeStep::ParkUntilCancelled,
+    ];
+    let (runtime, model) = test_support::headless_runtime(&dir, vec![script], None, None).await;
+    runtime.activate();
+    runtime
+        .submit_inbound(test_support::text_content(
+            "hold the attempt on a cancel barrier",
+        ))
+        .expect("inbound accepted");
+    // The real model request is parked on the cancellation-only barrier:
+    // only the preserved owner's cancellation can move it.
+    model
+        .parks()
+        .wait_for(|parks| *parks >= 1)
+        .await
+        .expect("the attempt parks on the cancel barrier");
+    // Fault injection: a panic inside another coordinator critical
+    // section (e.g. `apply_execution_policy`'s compose closure) poisons
+    // the mutex while the Attempt still owns the slot.
+    let inner = runtime.inner.clone();
+    std::thread::spawn(move || {
+        let _guard = inner.state.lock().expect("pre-poison lock");
+        panic!("fault injection: panic inside a coordinator critical section");
+    })
+    .join()
+    .expect_err("the injected panic poisoned the coordinator lock");
+    // Business admission converges to failed.
+    let rejected = runtime.submit_inbound(test_support::text_content("post-poison inbound"));
+    assert!(
+        rejected.is_err(),
+        "a poisoned coordinator admits no new business work"
+    );
+    // The live attempt owner survived recovery: its slot is still lent
+    // (not Poisoned), so cancellation and settlement remain reachable.
+    assert!(
+        !runtime.inner.lock_state().foreground.slot.is_poisoned(),
+        "recovery preserves the live foreground owner"
+    );
+    // Shutdown's drain cancellation is the only thing that can release
+    // the parked model — the test never touches the release frontier.
+    let settlement = runtime.attempt_settlement(0);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("drain cancellation reaches the parked attempt");
+    // The task exited through its own settlement path with the real
+    // cancelled outcome — no fabricated terminal, no `RuntimeFailed`
+    // receipt pre-empted by a destroyed owner.
+    let settlement = settlement.await;
+    assert!(
+        matches!(
+            settlement.outcome,
+            attempt::NativeAttemptOutcome::Cancelled | attempt::NativeAttemptOutcome::ModelFailed
+        ),
+        "the attempt settles on its own cancelled outcome: {:?}",
+        settlement.outcome
+    );
 }

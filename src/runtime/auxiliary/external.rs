@@ -4,6 +4,12 @@
 //! result delivery, and the auxiliary executor itself. The `ConversationRuntime`
 //! keeps only a drain handle and hands this service to composed consumers;
 //! it holds no auxiliary business logic.
+//!
+//! Ownership boundary: `ExternalAuxiliary` holds no coordinator state. It is
+//! bound to the runtime through a `Weak<RuntimeInner>` and mutates foreground
+//! state only through the runtime's narrow interfaces (admission, activity,
+//! settlement), so a live auxiliary owner never outlives or bypasses the
+//! coordinator that owns cancellation and settlement.
 
 use crate::{
     context::{ContextError, ContextErrorKind},

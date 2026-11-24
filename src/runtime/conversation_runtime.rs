@@ -1132,21 +1132,33 @@ impl RuntimeInner {
     /// shutdown on a lock they can never fix, so the guard is recovered
     /// instead. The interrupted mutation may have left the coordinator
     /// state mid-transition, so recovery converges business admission to
-    /// the absorbing failed state — a lent slot becomes `Poisoned` and the
-    /// `DurabilityFailed` fact commits through the one authority — while
-    /// physical drain keeps working: reapers, joins and shutdown still
-    /// need the guard and observe the mid-transition facts as-is.
+    /// the absorbing failed state — the `DurabilityFailed` fact commits
+    /// through the one authority — while physical drain keeps working:
+    /// reapers, joins and shutdown still need the guard and observe the
+    /// mid-transition facts as-is.
+    ///
+    /// The lent foreground slot is deliberately NOT poisoned here: a
+    /// poisoned mutex proves the critical section panicked, not that the
+    /// live foreground task exited. Its owner record carries the
+    /// cancellation handle and the settlement responsibility — destroying
+    /// them would also pre-empt the task's own
+    /// `poison_foreground_for_task` handoff, which is the path that knows
+    /// the task exited and publishes the `RuntimeFailed` receipt. Once
+    /// the state has converged to its explicit failure fact, the mutex's
+    /// poison mark is cleared so non-blocking readers (`try_activity`)
+    /// observe the same converged state instead of spinning on a poison
+    /// flag that can never heal.
     fn lock_state(&self) -> MutexGuard<'_, CoordinatorState> {
         match self.state.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                let _ = guard.foreground.slot.poison();
+                let guard = poisoned.into_inner();
                 let _ = self.durability_gate.commit_failure(
                     DurableOperation::CanonicalCommit,
                     "the coordinator state lock was poisoned by a panic inside a critical section"
                         .to_owned(),
                 );
+                self.state.clear_poison();
                 guard
             }
         }

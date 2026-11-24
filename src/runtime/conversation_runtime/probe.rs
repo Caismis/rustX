@@ -83,6 +83,10 @@ pub(crate) struct CoordinatorProbe {
     /// already published — before its join starts, so a concurrent reaper
     /// provably walks `WaitJoined` against it (Issue #606).
     pub(crate) manual_tail_joining_gate: Option<Arc<Gate>>,
+    /// Parks a reaper just as it enters `WaitJoined` — proving a second
+    /// reaper is actually parked on the shared completion while the first
+    /// still holds the `JoinHandle` (Issue #606).
+    pub(crate) manual_tail_waitjoined_gate: Option<Arc<Gate>>,
     /// Parks a scheduled task after its command preparation finished and
     /// before `claim_scheduled_start` — proving the prep runs outside the
     /// Claim critical section (Issue #606).
