@@ -925,7 +925,8 @@ run and the complete external conformance target passed locally.
   the real Published reply and verifies the complete winner is the only
   remaining file before permitting same-instance recovery. Filesystem
   notifications drive this check while Client maintenance cleans the
-  abandoned allocation independently of the Save wire.
+  abandoned allocation independently of the Save wire. Early reconnect
+  attempts close promptly so expired handshakes cannot remain queued.
 - The integration-only Abort gate enforces Publish before loser Abort.
   Recovery still requires the original identity, forbids Save replay,
   and checks the canonical result and complete teardown.

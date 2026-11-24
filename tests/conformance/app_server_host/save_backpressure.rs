@@ -12,7 +12,7 @@ use rustx_execution_protocol::{
     changes::{ChangeReply, ChangeRequest},
     process::ProcessOperationKey,
     save::{Cleanup, Locator, SaveKey, SaveReply, SaveRequest},
-    transport::{MAX_RECORD_BYTES, read_record, write_record},
+    transport::{LOCAL_HANDSHAKE_TIMEOUT, MAX_RECORD_BYTES, read_record, write_record},
 };
 use serde::Serialize;
 use std::{
@@ -366,35 +366,55 @@ pub(super) async fn lose_publication_receipt(
         drop(data_peer);
         control.abort();
         let _ = control.await;
-        #[cfg(feature = "test-support")]
-        losing_abort
-            .await
-            .expect("losing Abort held before dispatch");
-        // Neither lane forwards any further requests until this check
-        // completes. The Client's independent expiry must retire the loser.
-        tokio::time::timeout(
-            rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW,
-            async {
-                loop {
-                    filesystem.borrow_and_update();
-                    if let [winner] = super::saved_files(&scratch).as_slice()
-                        && winner
-                            .metadata()
-                            .is_ok_and(|metadata| metadata.len() == length)
-                    {
-                        break;
+        let ready_for_recovery = async {
+            #[cfg(feature = "test-support")]
+            losing_abort
+                .await
+                .expect("losing Abort held before dispatch");
+            // Neither lane forwards any further requests until this check
+            // completes. The Client's independent expiry must retire the loser.
+            tokio::time::timeout(
+                rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW,
+                async {
+                    loop {
+                        filesystem.borrow_and_update();
+                        if let [winner] = super::saved_files(&scratch).as_slice()
+                            && winner
+                                .metadata()
+                                .is_ok_and(|metadata| metadata.len() == length)
+                        {
+                            break;
+                        }
+                        filesystem.changed().await.expect("Client scratch watcher");
                     }
-                    filesystem.changed().await.expect("Client scratch watcher");
-                }
-            },
-        )
-        .await
-        .expect("only the published file survives detached Save cleanup");
-        drop(watcher);
-        observed.send((owner, locator)).unwrap();
-        reconnecting
+                },
+            )
             .await
-            .expect("canonical commit before recovery");
+            .expect("only the published file survives detached Save cleanup");
+            drop(watcher);
+            observed.send((owner, locator)).unwrap();
+            reconnecting
+                .await
+                .expect("canonical commit before recovery");
+        };
+        tokio::pin!(ready_for_recovery);
+        loop {
+            tokio::select! {
+                biased;
+                // Reject early attempts promptly so the listener cannot retain
+                // a timed-out handshake across the Client's expiry period.
+                early = relay.proxy.accept() => {
+                    let (mut peer, _) = early.unwrap();
+                    // Let the Client finish its peer-owner check before closing.
+                    let _ = tokio::time::timeout(
+                        LOCAL_HANDSHAKE_TIMEOUT,
+                        receive::<PeerHello>(&mut peer),
+                    )
+                    .await;
+                }
+                () = &mut ready_for_recovery => break,
+            }
+        }
         let ((data_peer, data_server), (mut control_peer, mut control_server)) = relay.pair().await;
         let _ = tokio::join!(
             confirm_recovered_release(data_peer, data_server, &observations, release),
