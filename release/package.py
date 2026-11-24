@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SERVER = ("rustx", "workflow-renderer")
 CLIENT = ("rustx-execution-client", "bash-supervisor", "interactive-supervisor")
 PRODUCTS = ("rustx-server", "rustx-client", "rustx")
+UI_PROJECTS = ("dev", "tui", "protocol/app-server", "web-console")
 
 
 def run(*args: str, cwd: Path = ROOT) -> None:
@@ -73,9 +74,9 @@ def tree(source: Path, target: Path) -> None:
     shutil.copytree(source, target, symlinks=True)
 
 
-def runtime_modules(project: str, names: list[str], target: Path) -> None:
+def runtime_modules(source: Path, project: str, names: list[str], target: Path) -> None:
     """Install only the locked runtime closure from pnpm's isolated layout."""
-    modules = ROOT / project / "node_modules"
+    modules = source / project / "node_modules"
     packages = modules / ".pnpm"
     visited: set[Path] = set()
 
@@ -107,33 +108,42 @@ def runtime_modules(project: str, names: list[str], target: Path) -> None:
         install(modules / name)
 
 
-def install_ui(target: Path) -> None:
-    projects = ("dev", "tui", "protocol/app-server", "web-console")
-    managers = {json.loads((ROOT / project / "package.json").read_text())["packageManager"]
-                for project in projects}
+def install_ui(source: Path, target: Path, revision: str) -> None:
+    # An install rebuilds the native modules, and Vite replaces dist. Build
+    # from this release's tracked inputs away from any running browser carrier.
+    source.mkdir()
+    with tempfile.TemporaryFile() as stream:
+        subprocess.run(("git", "archive", revision, "--", *UI_PROJECTS), cwd=ROOT,
+                       stdout=stream, check=True)
+        stream.seek(0)
+        with tarfile.open(fileobj=stream) as tracked:
+            tracked.extractall(source, filter="data")
+
+    managers = {json.loads((source / project / "package.json").read_text())["packageManager"]
+                for project in UI_PROJECTS}
     if len(managers) != 1 or not next(iter(managers)).startswith("pnpm@"):
         raise ValueError("UI packages must agree on their pinned pnpm release")
     pnpm = ("corepack", managers.pop())
-    for project in projects:
-        run(*pnpm, "--dir", project, "install", "--frozen-lockfile")
-    run(*pnpm, "--dir", "web-console", "build")
+    for project in UI_PROJECTS:
+        run(*pnpm, "--dir", project, "install", "--frozen-lockfile", cwd=source)
+    run(*pnpm, "--dir", "web-console", "build", cwd=source)
     for location in ("dev", "tui", "web-console"):
-        copy(ROOT / location / "package.json", target / location / "package.json")
+        copy(source / location / "package.json", target / location / "package.json")
     for location in ("dev/src", "tui/src", "protocol/app-server", "web-console/shared", "web-console/dist"):
-        shutil.copytree(ROOT / location, target / location, symlinks=True,
+        shutil.copytree(source / location, target / location, symlinks=True,
                         ignore=shutil.ignore_patterns("node_modules", "test", "fixtures")
                         if location == "protocol/app-server" else None)
     web = target / "web-console"
-    shutil.copytree(ROOT / "web-console/host", web / "host",
+    shutil.copytree(source / "web-console/host", web / "host",
                     ignore=shutil.ignore_patterns("workspace-fs"))
     native = "host/workspace-fs/build/Release/workspace_fs.node"
     for path in ("browser-session.ts", "scripts/installed-carrier.ts", "src/workspaces/endpoint.ts",
                  "src/workspaces/host.ts", native):
-        copy(ROOT / "web-console" / path, web / path)
-    runtime_modules("dev", ["open"], target / "dev/node_modules")
-    runtime_modules("tui", ["@earendil-works/pi-tui", "ajv", "ajv-formats"], target / "tui/node_modules")
-    runtime_modules("web-console", ["node-pty", "saxes", "@deepseek-ai/libreoffice-kit"], web / "node_modules")
-    copy(ROOT / "tui/THIRD_PARTY_NOTICES.md", target / "tui/THIRD_PARTY_NOTICES.md")
+        copy(source / "web-console" / path, web / path)
+    runtime_modules(source, "dev", ["open"], target / "dev/node_modules")
+    runtime_modules(source, "tui", ["@earendil-works/pi-tui", "ajv", "ajv-formats"], target / "tui/node_modules")
+    runtime_modules(source, "web-console", ["node-pty", "saxes", "@deepseek-ai/libreoffice-kit"], web / "node_modules")
+    copy(source / "tui/THIRD_PARTY_NOTICES.md", target / "tui/THIRD_PARTY_NOTICES.md")
 
 
 def archive(directory: Path, path: Path, epoch: int) -> str:
@@ -172,7 +182,7 @@ def package(product: str, target: Path, server: Path, client: Path, revision: st
                 copy(client / "release" / binary, directory / "bin" / installed)
             copy(client / "dependency-audit/rustx-execution-client.txt", directory / "share/rustx-client-dependencies.txt")
         if product == "rustx":
-            install_ui(directory / "share/rustx")
+            install_ui(Path(scratch) / "ui-source", directory / "share/rustx", revision)
         copy(ROOT / "LICENSE", directory / "share/LICENSE")
         for document in ("installation.md", "execution-protocol.md", "exec-04-evidence.md"):
             copy(ROOT / "docs" / document, directory / "share" / document)

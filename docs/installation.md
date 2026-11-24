@@ -13,7 +13,9 @@ python3 release/package.py rustx --out /absolute/path/to/packages
 ```
 
 `all` builds the three layouts in one command. The Server and Client use
-separate Cargo target directories. Each archive has a sibling SHA-256 file
+separate Cargo target directories. The bundle builds its Web and TUI assets
+in a temporary source tree, so it can run alongside a live checkout preview.
+Each archive has a sibling SHA-256 file
 and an internal `manifest.json` with its source commit, Execution Protocol
 revision and installed file hashes, modes and links. Verify the checksum
 and extract into a directory you control. Keep the installation directory
