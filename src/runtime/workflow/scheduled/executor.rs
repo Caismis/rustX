@@ -159,40 +159,61 @@ impl ScheduledExecutor {
         clock: &dyn RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
-        let own = self
-            .runtime()
-            .and_then(|runtime| runtime.probe_scheduled_owner(id));
-        let retirement = ScheduledWorkflowOwnerRetirement {
-            start_id: id.clone(),
-            recovered_writer: own.as_ref().is_none_or(|probe| probe.recovered_writer),
-            agent_domain_quiescent: self
-                .subagents
-                .as_ref()
-                .is_some_and(|registry| !registry.owns_idle_work()),
-            interactions_closed: !self.interaction.scheduled_scope_is_pending(id),
+        let ownerless = move |recovered_writer: bool| {
+            let retirement = ScheduledWorkflowOwnerRetirement {
+                start_id: id.clone(),
+                recovered_writer,
+                agent_domain_quiescent: self
+                    .subagents
+                    .as_ref()
+                    .is_some_and(|registry| !registry.owns_idle_work()),
+                interactions_closed: !self.interaction.scheduled_scope_is_pending(id),
+            };
+            self.mailbox.schedule_operation(
+                self.store.as_ref(),
+                binding,
+                &crate::scheduler::ScheduleOperation::WorkflowReconcileOwned {
+                    id: id.clone(),
+                    after,
+                    limit,
+                    retirement,
+                },
+                clock,
+            )
         };
+        // The owner probe and the ownerless `WorkflowReconcileOwned`
+        // submission run under ONE coordinator critical section (Issue
+        // #606 review): a queued workflow claiming its start between the
+        // check and the durable write can no longer be retired to
+        // `OutcomeUnknown` while its live owner still holds the slot.
+        let (own, submitted) = self.runtime().map_or_else(
+            || (None, Some(ownerless(true))),
+            |runtime| runtime.reconcile_scheduled(id, || ownerless(true)),
+        );
         if let Some(owner) = own {
             // The graph closing does not transfer its known outcome or Return.
             if owner.graph_finished {
-                self.store
-                    .scheduled_workflow_recover_effects(id, after, limit, &retirement)?;
+                self.store.scheduled_workflow_recover_effects(
+                    id,
+                    after,
+                    limit,
+                    &ScheduledWorkflowOwnerRetirement {
+                        start_id: id.clone(),
+                        recovered_writer: owner.recovered_writer,
+                        agent_domain_quiescent: self
+                            .subagents
+                            .as_ref()
+                            .is_some_and(|registry| !registry.owns_idle_work()),
+                        interactions_closed: !self.interaction.scheduled_scope_is_pending(id),
+                    },
+                )?;
                 owner.settlement_wake.notify_one();
             }
             return Ok(crate::scheduler::ScheduleOperationResult::WorkflowRecovery(
                 self.store.scheduled_workflow_recovery(id, after, limit)?,
             ));
         }
-        self.mailbox.schedule_operation(
-            self.store.as_ref(),
-            binding,
-            &crate::scheduler::ScheduleOperation::WorkflowReconcileOwned {
-                id: id.clone(),
-                after,
-                limit,
-                retirement,
-            },
-            clock,
-        )
+        submitted.expect("reconcile_scheduled returns one of owner probe or ownerless result")
     }
 
     /// Reserve a native foreground execution slot through the

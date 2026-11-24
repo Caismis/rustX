@@ -212,7 +212,41 @@ impl RuntimeInner {
         &self,
         id: &ScheduledWorkflowStartId,
     ) -> Option<ScheduledOwnerProbe> {
-        self.lock_state()
+        let state = self.lock_state();
+        Self::probe_scheduled_owner_locked(&state, id)
+    }
+
+    /// The reconcile decision and the ownerless durable submission under
+    /// ONE coordinator critical section. A scheduled reservation can only
+    /// appear through this same lock, so the probe and the ownerless
+    /// `WorkflowReconcileOwned` write serialize against it: a live owner
+    /// that claimed its start between a check and the durable write can
+    /// never be retired to `OutcomeUnknown` behind its own result
+    /// (Issue #606). `ownerless` runs only when no owner exists and is
+    /// still covered by the lock while its synchronous store op commits.
+    pub(crate) fn reconcile_scheduled<R>(
+        &self,
+        id: &ScheduledWorkflowStartId,
+        ownerless: impl FnOnce() -> R,
+    ) -> (Option<ScheduledOwnerProbe>, Option<R>) {
+        let state = self.lock_state();
+        if let Some(probe) = Self::probe_scheduled_owner_locked(&state, id) {
+            return (Some(probe), None);
+        }
+        // The ownerless submission runs while the same guard is still
+        // held: `reserve_scheduled_start`/`claim_scheduled_start` cannot
+        // land a live `Claimed` owner between the probe and the reconcile
+        // write.
+        let result = ownerless();
+        drop(state);
+        (None, Some(result))
+    }
+
+    fn probe_scheduled_owner_locked(
+        state: &super::CoordinatorState,
+        id: &ScheduledWorkflowStartId,
+    ) -> Option<ScheduledOwnerProbe> {
+        state
             .foreground
             .slot
             .as_scheduled()
