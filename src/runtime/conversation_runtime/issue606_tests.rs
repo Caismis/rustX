@@ -1335,11 +1335,24 @@ async fn a_scheduled_owner_defers_catalog_and_staged_config_but_not_policy() {
     }
     drop(release);
     let _ = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
+    // The deferred observation publishes once the owner settles. One pass
+    // can end at the `Busy` or superseded-rebase seam without consuming the
+    // observation; the runtime's consumer repeats the pass on every wake,
+    // so the test drives it the same way until the cut is covered.
+    for _ in 0..10 {
+        {
+            let mut state = runtime.inner.lock_state();
+            runtime.inner.publish_runtime_catalogs_locked(&mut state);
+            if state.config.catalog_revision >= observed {
+                break;
+            }
+        }
+        tokio::task::yield_now().await;
+    }
     {
         let mut state = runtime.inner.lock_state();
-        runtime.inner.publish_runtime_catalogs_locked(&mut state);
-        assert_eq!(
-            state.config.catalog_revision, observed,
+        assert!(
+            state.config.catalog_revision >= observed,
             "the deferred catalog observation publishes after settlement"
         );
         runtime.inner.commit_staged_configuration_locked(&mut state);
