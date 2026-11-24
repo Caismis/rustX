@@ -783,7 +783,7 @@ async fn compose_session_child(
                     source,
                 ));
             }
-            crate::local_runtime::session_title::arm(catalog, title_session, runtime);
+            crate::local_runtime::session_title::arm(catalog, &title_session, runtime);
             if scenario == SESSION_TITLE_RECOVER_INERT {
                 rendezvous("title-reopen:recovered-before-activation");
             }

@@ -52,7 +52,7 @@ fn closed() -> ContextError {
 
 pub(crate) fn arm(
     catalog: Weak<tokio::sync::Mutex<SessionCatalog>>,
-    session_id: SessionId,
+    session_id: &SessionId,
     runtime: &ConversationRuntime,
 ) {
     let Ok(metadata) = runtime.session_observation_metadata() else {

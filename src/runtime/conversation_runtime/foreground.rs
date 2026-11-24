@@ -217,10 +217,7 @@ impl IdleConversation {
     pub(crate) fn lend(&mut self) -> Option<ConversationState> {
         match std::mem::replace(self, Self::Durable) {
             Self::Owned(conversation) => Some(conversation),
-            previous => {
-                *self = previous;
-                None
-            }
+            Self::Durable => None,
         }
     }
 }
@@ -397,9 +394,12 @@ impl ForegroundSlot {
     /// Installs the attempt owner record after the caller lent the
     /// conversation state out of `Idle`. On a non-`Idle` slot it refuses
     /// and returns the owner back.
-    pub(crate) fn start_attempt(&mut self, attempt: CurrentAttempt) -> Result<(), CurrentAttempt> {
+    pub(crate) fn start_attempt(
+        &mut self,
+        attempt: CurrentAttempt,
+    ) -> Result<(), Box<CurrentAttempt>> {
         if !self.is_idle() {
-            return Err(attempt);
+            return Err(Box::new(attempt));
         }
         *self = Self::Attempt(attempt);
         Ok(())
@@ -463,8 +463,8 @@ impl ForegroundSlot {
     /// Releases the slot of a settled scheduled run owned by `owner`,
     /// restoring `Idle` with the retained conversation.
     pub(crate) fn finish_scheduled(&mut self, owner: &str) -> bool {
-        let owned = matches!(self.as_scheduled(), Some(current) if current.owner == owner);
-        if !owned {
+        let is_owner = matches!(self.as_scheduled(), Some(current) if current.owner == owner);
+        if !is_owner {
             return false;
         }
         if let Self::Scheduled { conversation, .. } = std::mem::replace(self, Self::Poisoned) {

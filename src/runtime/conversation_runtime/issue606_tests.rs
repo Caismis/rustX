@@ -1,6 +1,6 @@
-//! Issue #606 architecture-contract tests: ForegroundSlot exclusivity and
-//! poisoning, ManualTail reclamation fencing, extracted-owner boundaries
-//! (ExternalAuxiliary / ScheduledExecutor / ChildControl / host task),
+//! Issue #606 architecture-contract tests: `ForegroundSlot` exclusivity and
+//! poisoning, `ManualTail` reclamation fencing, extracted-owner boundaries
+//! (`ExternalAuxiliary` / `ScheduledExecutor` / `ChildControl` / host task),
 //! three-role isolation, and atomic admission sections.
 use super::foreground::{
     CurrentManualCompaction, CurrentScheduled, ForegroundSlot, IdleConversation, ManualTailState,
@@ -117,8 +117,10 @@ async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
     // finished tail and admits the queued work.
     let gate = Arc::new(probe::Gate::default());
     gate.arm();
-    let mut coordinator_probe = probe::CoordinatorProbe::default();
-    coordinator_probe.manual_compaction_settlement_gate = Some(gate.clone());
+    let coordinator_probe = probe::CoordinatorProbe {
+        manual_compaction_settlement_gate: Some(gate.clone()),
+        ..Default::default()
+    };
     let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
     let handle = fixture
         .runtime
@@ -149,15 +151,14 @@ async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
         .expect("inbound queued");
     let settlement = fixture.runtime.attempt_settlement(0).await;
     assert!(settlement.ordinal >= 1);
-    assert_eq!(
-        fixture
+    assert!(
+        !fixture
             .runtime
             .inner
             .lock_state()
             .foreground
             .manual_tail
-            .is_unreaped(),
-        false
+            .is_unreaped()
     );
     fixture.runtime.shutdown().await.expect("fixture shutdown");
 }
@@ -281,7 +282,7 @@ async fn child_config(
     let store = child_store(dir, &id);
     let (_registry, mut config) = test_support::subagent_runtime_config_with_registry(
         dir,
-        &id.to_string(),
+        id.as_ref(),
         store,
         &id.clone(),
         &AgentId::new(format!("registry-agent-{conversation_id}").as_str()),

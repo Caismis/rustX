@@ -607,6 +607,7 @@ impl ConversationRuntime {
     /// An explicit retry uses the committed source closure and queues only its
     /// capability result. The eventual idle commit retains whatever model and
     /// context the runtime has adopted by then.
+    #[allow(clippy::too_many_lines)] // One capture/validate/commit pass, kept linear.
     pub(crate) async fn refresh_runtime_catalogs(&self) -> Result<(), String> {
         let sequence = {
             let mut state = self.inner.lock_state();

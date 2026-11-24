@@ -1038,7 +1038,7 @@ impl ConversationRuntime {
                 state: state.clone(),
                 lifecycle: lifecycle.clone(),
                 store: store.clone(),
-                policy: config.context.policy.clone(),
+                policy: config.context.policy,
                 estimator: config.context.estimator.clone(),
                 tool_runtime: config.tool_runtime.clone(),
                 model_timeout_policy: config.model_timeout_policy,

@@ -222,6 +222,7 @@ impl ExternalAuxiliary {
     }
 }
 /// The auxiliary invocation a submission freezes at admission.
+#[derive(Clone, Copy)]
 pub(crate) enum AuxiliaryInvocationKind {
     Classification,
     Btw,
@@ -290,9 +291,9 @@ impl ExternalAuxiliary {
         let resource_revision = resources.revision().get();
         Ok(AdmittedAuxiliaryWork {
             invocation,
+            resources,
             timeout,
             resource_revision,
-            resources,
             scope,
             reservation,
             business_admission,

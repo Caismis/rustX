@@ -2,7 +2,7 @@
 //! `claim_scheduled_start`, execution with deadline and panic containment,
 //! failure-outcome mapping, settlement reconciliation and retry backoff all
 //! live here, off `ConversationRuntime` — whose only responsibility is
-//! exposing the ForegroundSlot and composing this executor at construction.
+//! exposing the `ForegroundSlot` and composing this executor at construction.
 use std::sync::{Arc, Mutex};
 
 use futures_util::FutureExt;
@@ -281,7 +281,7 @@ impl ScheduledExecutor {
     /// `claim_scheduled_start` (Issue #606): the one critical section that
     /// re-checks lifecycle and cancellation, re-validates the frozen
     /// resources/model/approval snapshot, freezes the Auxiliary Reviewer
-    /// Invocation, acquires the AttemptCapabilityLease, and durably claims
+    /// Invocation, acquires the `AttemptCapabilityLease`, and durably claims
     /// the exact start via a Lifecycle Running Commit. A stale claim is
     /// rejected (retry backoff), never replayed.
     #[allow(clippy::too_many_arguments)]
@@ -412,7 +412,7 @@ impl ScheduledExecutor {
             .subagents
             .clone()
             .ok_or("native Workflow registry unavailable")?;
-        let (claim, _resources_lease, auxiliary_invocation) = match self.claim_scheduled_start(
+        let Some((claim, _resources_lease, auxiliary_invocation)) = self.claim_scheduled_start(
             &id,
             prepared.contract(),
             &resources,
@@ -420,9 +420,9 @@ impl ScheduledExecutor {
             approval,
             owner,
             &cancellation,
-        )? {
-            Some(claimed) => claimed,
-            None => return Ok(()),
+        )?
+        else {
+            return Ok(());
         };
         let policy = claim
             .start

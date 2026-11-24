@@ -146,7 +146,7 @@ impl ClientInner {
                     auxiliary: self
                         .runtime
                         .as_ref()
-                        .map(|runtime| runtime.external_auxiliary())
+                        .map(crate::runtime::conversation_runtime::ConversationRuntime::external_auxiliary)
                         .and_then(|service| service.auxiliary_subscribe()),
                     host: Arc::downgrade(self),
                     subscriber_id,

@@ -29,7 +29,7 @@ impl ClientInner {
     fn auxiliary_runtime(&self) -> Result<Arc<ExternalAuxiliary>, RuntimeClientError> {
         self.runtime
             .as_ref()
-            .map(|runtime| runtime.external_auxiliary())
+            .map(crate::runtime::conversation_runtime::ConversationRuntime::external_auxiliary)
             .ok_or(RuntimeClientError::Auxiliary {
                 reason: crate::runtime::auxiliary::submission::AuxiliaryFailure::Unavailable,
             })
