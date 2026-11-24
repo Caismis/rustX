@@ -49,6 +49,7 @@ PROCESS_CASES = (
 )
 HOST_CASES = (
     "standalone_server_validates_large_host_stream_without_a_client",
+    "standalone_server_arbitrates_two_streaming_host_candidates_without_a_client",
     "host_effect_is_unknown_after_process_death_and_is_never_automatically_replayed",
 )
 LINUX_HOST_CASES = (
@@ -57,6 +58,9 @@ LINUX_HOST_CASES = (
     "generation::host_result_after_client_death_at_private_save_cuts",
     "generation::client_death_after_canonical_host_result_cannot_rewrite_saved_history",
     "generation::process_cuts::client_death_at_wire_and_companion_boundaries_never_replays_start",
+    "generation::installed_detach::installed_ui_detach_cancels_the_client_with_both_lanes_occupied",
+    "generation::installed_file_tools::installed_native_file_tools_keep_large_results_on_the_client",
+    "generation::installed_file_tools::installed_bash_continuation_reads_only_the_selected_client_output",
 )
 LINUX_CASES = (
     "local_restart_requires_namespace_settlement_after_server_sigkill",

@@ -9,7 +9,7 @@ use super::{
 use crate::common::provider_emulator::ProviderEmulator;
 use rustx::{
     app_server::protocol::*,
-    durable::{CanonicalStore, SqliteConversationStore},
+    durable::{CanonicalStore, JournalStore, SqliteConversationStore},
     local_runtime::{session::SessionPersistentState, session_controller::SessionController},
     message::{content::TextBlock, types::MessageBlock},
     tools::{ToolExecutionStatus, host::HostToolDefinition},
@@ -119,6 +119,15 @@ provider.finish().await;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn standalone_server_validates_large_host_stream_without_a_client() {
+    standalone_host_stream(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standalone_server_arbitrates_two_streaming_host_candidates_without_a_client() {
+    standalone_host_stream(true).await;
+}
+
+async fn standalone_host_stream(concurrent_candidate: bool) {
     bounded(async {
         use base64::Engine as _;
         use rustx::{
@@ -168,6 +177,11 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         }).await else { panic!("Session creation") };
         host.rpc(Method::SessionName { session_id: session.id.clone(), name: "Installed Host stream".into() }).await;
         let target = host.follow(thread.id.clone()).await;
+        let mut loser = if concurrent_candidate {
+            let mut loser = Peer::connect(&endpoint).await;
+            loser.follow(thread.id.clone()).await;
+            Some(loser)
+        } else { None };
         #[cfg(target_os = "linux")]
         let measurement = std::env::var("RUSTX_HOST_MEASUREMENT_MIB").ok().map(|value| {
             let mebibytes = value.parse::<usize>().expect("measurement size in MiB");
@@ -208,6 +222,30 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         #[cfg(target_os = "linux")]
         let upload_started = std::time::Instant::now();
         accepted(send(&mut host, &mut counts, "begin", json!({"candidate":candidate,"items":items,"success":true})).await);
+        let mut losing_counts = (0, 0);
+        let losing = if let Some(peer) = loser.as_mut() {
+            let ServerMessage::Request(copy) = peer.callback().await else { panic!("second Host callback") };
+            let ServerRequestMethod::ToolCall(call) = copy.call else { panic!("second Host tool call") };
+            assert_eq!(call.arguments, tool.arguments);
+            let mut losing = serde_json::to_value(call.upload_scope.unwrap()).unwrap();
+            losing["requestId"] = json!(copy.id);
+            losing["threadId"] = json!(thread.id);
+            losing["turnId"] = json!(turn_id);
+            losing["callId"] = json!(call.call_id);
+            losing["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
+            accepted(send(peer, &mut losing_counts, "begin", json!({"candidate":losing,"items":items,"success":true})).await);
+            // Keep one incomplete candidate live while the other validates
+            // its whole body. Neither connection attaches storage to this Server.
+            for (index, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).take(4).enumerate() {
+                accepted(send(peer, &mut losing_counts, "chunk", json!({
+                    "candidate":losing,"itemIndex":0,"sequence":(index + 1).to_string(),
+                    "offset":(index * MAX_CHUNK_BYTES).to_string(),
+                    "dataBase64":base64::engine::general_purpose::STANDARD.encode(chunk),
+                    "sha256":format!("{:x}", Sha256::digest(chunk)),
+                })).await);
+            }
+            Some(losing)
+        } else { None };
         for (sequence, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
             accepted(send(&mut host, &mut counts, "chunk", json!({
                 "candidate":candidate,"itemIndex":0,"sequence":(sequence + 1).to_string(),
@@ -222,6 +260,12 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         let digest: sha2::digest::Output<Sha256> = canonical_digest(&[(1, body.as_bytes())]).into();
         end["digest"] = json!(format!("{digest:x}"));
         accepted(send(&mut host, &mut counts, "end", end).await);
+        if let (Some(peer), Some(losing)) = (loser.as_mut(), losing) {
+            assert!(matches!(send(peer, &mut losing_counts, "abort", json!({"candidate": losing})).await,
+                Response::Failure(error) if matches!(error.error.data,
+                Some(ErrorData::HostUploadRejected { reason: HostUploadRefusal::Late }))));
+        }
+        drop(loser);
         #[cfg(target_os = "linux")]
         let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
         host.settled(&turn_id).await;
@@ -237,6 +281,9 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
                 "server_cpu_ticks": cpu - start_cpu, "settlement_ms": started.elapsed().as_secs_f64() * 1000.0,
                 "upload_ms": upload_ms, "including_settlement_ms": upload_started.elapsed().as_secs_f64() * 1000.0,
                 "client_save_rpcs": 0,
+                "concurrent_candidates": if concurrent_candidate { 2 } else { 1 },
+                "losing_candidate_frames": losing_counts.0,
+                "losing_candidate_json_bytes": losing_counts.1,
             }));
         }
 
@@ -259,6 +306,15 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         let access = sessions.acquire_session(&session.id, Some(&thread.node_id)).await.unwrap();
         let store = SqliteConversationStore::open_existing(thread.id, &access.database_path).unwrap();
         let canonical = store.load_canonical().unwrap();
+        let durable_events = store.read_events(None, 128).unwrap().events.len();
+        assert!(durable_events <= 32, "streaming chunks must not generate durable events, got {durable_events}");
+        if std::env::var_os("RUSTX_HOST_MEASUREMENT_MIB").is_some() {
+            println!("HOST_JOURNAL_MEASUREMENT {}", json!({
+                "body_bytes": body.len(),
+                "durable_events": durable_events,
+                "database_bytes": access.database_path.metadata().unwrap().len(),
+            }));
+        }
         let results: Vec<_> = canonical.iter().filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(&tool.result),
             _ => None,

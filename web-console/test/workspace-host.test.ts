@@ -1,7 +1,7 @@
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 // @vitest-environment node
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalWorkspaceHost } from '../host/workspaces';
@@ -53,6 +53,15 @@ it('HTTP carrier refuses path adoption and cross-origin mutations', async () => 
     const foreign = await fetch(`${service.url}/product-host/list`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://foreign.example' }, body: '{}' });
     expect(foreign.status).toBe(400);
   } finally { await service.stop(); }
+});
+
+it('refuses persisted folder registrations that have no authorized root', () => {
+  const f = fixture();
+  const old = JSON.stringify([{ id: 'old', location: 'external', displayName: 'Outside',
+    folder: { path: f.b, device: '1', inode: '2' } }]);
+  writeFileSync(f.config.metadataFile, old);
+  expect(() => new LocalWorkspaceHost(f.config)).toThrow('Invalid Host registrations');
+  expect(readFileSync(f.config.metadataFile, 'utf8')).toBe(old);
 });
 
 it('requires the private native directory lane and refuses paths outside the selected root', async () => {

@@ -44,7 +44,7 @@ export interface LocalHostConfig {
   /** Operator-owned file outside the browser and rustX runtime root. */
   metadataFile: string;
 }
-type PickedFolder = { path: string; device: string; inode: string; root?: string };
+type PickedFolder = { path: string; device: string; inode: string; root: string };
 type Registration = { id: string; location: string; displayName: string; selected?: true; folder?: PickedFolder };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
@@ -87,8 +87,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       || (row.folder === undefined ? !this.roots.some(root => root.id === row.location)
         : !row.folder || typeof row.folder.path !== 'string' || !isAbsolute(row.folder.path)
           || ![row.folder.device, row.folder.inode].every(value => typeof value === 'string' && /^\d+$/.test(value))
-          || (row.folder.root !== undefined && !this.roots.some(root => root.id === row.folder!.root
-            && this.descendsFrom(root.cwd, row.folder!.path)))
+          || !this.roots.some(root => root.id === row.folder!.root
+            && this.descendsFrom(root.cwd, row.folder!.path))
           || this.roots.some(root => root.id === row.location))
       || (row.selected !== undefined && row.selected !== true))
       || this.registrations.filter(row => row.selected).length > 1) throw new Error('Invalid Host registrations');

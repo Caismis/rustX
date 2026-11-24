@@ -36,6 +36,8 @@ struct Launch {
     server_socket: PathBuf,
 }
 
+mod installed_detach;
+mod installed_file_tools;
 mod process_cuts;
 
 const START: &str = "start-of-host-output";

@@ -140,3 +140,12 @@ startup, scan, and settlement times.
 ```sh
 python3 test-support/measure_execution_reads.py /path/to/rustx-client/bin/rustx-client
 ```
+
+
+For the native macOS release check, run the same packager and verifier through
+`python3 release/verify_macos.py --out /absolute/path/to/packages`. The
+script compiles the native lib test target, runs strict Clippy, builds the
+three archives, and runs the installed process cases. On GitHub, dispatch
+`CI` with `installed_macos=true` for the desired release branch. This job
+runs only by explicit dispatch and has its own result and installation
+manifests.

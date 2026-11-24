@@ -2020,7 +2020,8 @@ async fn remote_execution_serves_session_reads_over_websocket() {
     bounded(async {
         use base64::Engine as _;
         use rustx::app_server::protocol::*;
-        use std::os::unix::fs::PermissionsExt;
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt};
         let f = Fixture::new().await;
         let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
         grant_environment_roots(&f, std::slice::from_ref(&workspace));
@@ -2044,6 +2045,29 @@ async fn remote_execution_serves_session_reads_over_websocket() {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600, "bootstrap must be owner-only");
+
+        // The actual Client refuses an incompatible bootstrap before binding.
+        // The same reservation must remain usable by the current wire revision.
+        let mut obsolete: rustx_execution_protocol::Bootstrap =
+            read_record(&mut std::fs::File::open(&bundle).unwrap()).unwrap();
+        obsolete.version -= 1;
+        let stale_path = private.join("previous-version");
+        let mut stale = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&stale_path)
+            .unwrap();
+        write_record(&mut stale, &obsolete).unwrap();
+        drop(stale);
+        let refused = Command::from(staged_client_command(&stale_path, &workspace))
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported protocol version"));
 
         let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
         let mut execution = ReapChild(execution);
