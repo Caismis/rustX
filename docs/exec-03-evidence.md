@@ -797,3 +797,33 @@ Hosted import saturation proof records four occupied fragment slots.
 | Host drain cutoff | `host_cutoff_rejects_an_already_delivered_revoke_receipt` tightens the cutoff after the Client reads Revoke. A receipt delivered inside the original command window cannot confirm settlement or release the durable marker. The split-lane tests tighten the cutoff only after data admission is observed. |
 | Skills refresh | `bound-resources.test.tsx` changes the same Session from authoring to Client authority without reconnecting. Refresh keeps the Session identity on the wire, reports pending and failed reads, and displays the Client catalog without authoring actions after success. |
 | Delegated Open witness | `parent_held_initial_open_keeps_child_relay_and_ready_mcp_intact` parks the chosen Open after the parent relay receives it and before it attempts physical dispatch. It observes a typed pre-forward rejection, zero physical Opens for that attempt, and continued use of the existing Ready peer. |
+
+### CI fixture follow-up
+
+The [Linux FULL run for `4e3f835fc`](https://github.com/Caismis/rustX/actions/runs/45341064307)
+exposed two fixture races. The Rust control test now parks the cancelled
+Attempt before restoring the conversation slot. The cancellation receipt
+names the exact Attempt, and admission checks run while that Attempt still
+occupies the slot. The browser test explicitly opens each target before
+closing its view, including the catalog-only Session left by reload. All
+34 cycles require the target's native detach acknowledgement and a fresh
+attachment acknowledgement with the same runtime incarnation.
+
+The independent Linux release builds at `4e3f835fc` ran with each executable
+in its own directory. Three warm-cache samples gave the following results.
+The Client used the revision 7 probe, which waits for confirmed Revoke.
+The Server workload initializes the API without a Client or a model request.
+
+| Workload | Data RPCs | Wire bytes sent / received | Median workload time | Highest process RSS |
+|---|---:|---:|---:|---:|
+| Server `initialize`, including launch | 1 | 212 / 362 | 13.32 ms | 26,540 KiB |
+| Client ReadLines, 67,108,877 input bytes | 1 | 99 / 265 | 61.61 ms (1,039 MiB/s) | 9,176 KiB |
+| Client Grep, same input | 1 | 149 / 132 | 20.04 ms (3,193 MiB/s) | 10,196 KiB |
+| Client create-only Write, 2 MiB | 34 | 2,798,628 / 2,212 | 41.38 ms (48.33 MiB/s) | 10,780 KiB |
+
+Median Client launch ranged from 2.74 to 3.47 ms. Confirmed Client shutdown
+ranged from 39.40 to 80.92 ms. Median Server shutdown took 7.46 ms. Grep
+throughput uses source size even though the algorithm scans twice. Cache and
+disk contention varied across the runs. The Server and Client samples use
+different workloads, and the Hosted output queue measurements above come
+from a separate saturation test.
