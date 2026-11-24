@@ -204,6 +204,48 @@ it('refreshes Skills authority when the same Workspace Session acquires a Client
   } finally { stop(); }
 });
 
+it('uses the authority of a follow-up Skills catalog without a manual refresh', async () => {
+  const skillResult = (authority: 'authoring' | 'client', name: string): MethodResult => {
+    const location = `${cwd}/.agents/skills/${name}/SKILL.md`;
+    return { type: 'skills', authority, page: { revision: name, diagnostics: [], diagnostics_truncated: false, data: [{
+      catalog: { name, description: name, location },
+      provenance: { name, source: 'workspace', location, shadowed: [] },
+      ...(authority === 'authoring' ? { operation_revision: name } : {}),
+      metadata_revision: name, disable_model_invocation: false, enabled_by_default: true,
+    }] } };
+  };
+  let respond!: (result: MethodResult) => void;
+  const followUp = new Promise<MethodResult>(resolve => { respond = resolve; });
+  let requests = 0;
+  const subject = cfg3Client(async op => {
+    if (op.method !== 'skills/list' || op.params.target.kind !== 'workspace') return;
+    expect(op.params).toMatchObject({ execution_session: first.id, target: { kind: 'workspace', directory: cwd } });
+    return ++requests === 1 ? skillResult('authoring', 'authored-skill') : followUp;
+  });
+  const { associations, surface } = mountResources(subject);
+  const stop = associations.start();
+  try {
+    const generation = subject.state.generation;
+    const ui = render(surface('skills', first));
+    const page = ui.container.querySelector('[data-resource-module="skills"]');
+    await waitFor(() => expect(requests).toBe(2));
+    expect(subject.request.mock.calls.some(([op]) =>
+      op.method === 'configuration/sourcesRead' && op.params.target.kind === 'workspace')).toBe(true);
+    expect(page?.getAttribute('data-lifecycle')).toBe('loading');
+    expect(screen.getByRole('listitem', { name: 'authored-skill' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Skill access' })).toBeTruthy();
+
+    await act(async () => respond(skillResult('client', 'client-skill')));
+    const clientSkill = await screen.findByRole('listitem', { name: 'client-skill' });
+    expect(page?.getAttribute('data-lifecycle')).toBe('ready');
+    expect(within(clientSkill).queryByRole('switch')).toBeNull();
+    expect(within(clientSkill).queryByRole('button', { name: /Actions/ })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Skill access' })).toBeNull();
+    expect(screen.queryByRole('listitem', { name: 'authored-skill' })).toBeNull();
+    expect(subject.state.generation).toBe(generation);
+  } finally { stop(); }
+});
+
 it('tracks bound Skills data-lifecycle from the real skills/list response', async () => {
   let resolveSkills!: (result: MethodResult) => void;
   let rejectSkills!: (error: Error) => void;

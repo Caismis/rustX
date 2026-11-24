@@ -2570,13 +2570,22 @@ fn python_fallback_packages(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn selective_python_watch_fallback_skips_healthy_siblings() {
+    python_watch_fallback(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn selective_python_watch_fallback_recovers_after_configuration_read_failure() {
+    python_watch_fallback(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn python_watch_fallback(fail_configuration_read: bool) {
     use crate::capabilities::ToolSourceId;
     use rustx_execution_protocol::{
         Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, ControlHelloReply,
-        DataHelloReply, PeerHello,
-        mcp::PythonSourceRequest,
+        DataHelloReply, PeerHello, ReadError,
+        mcp::{PythonSourceReply, PythonSourceRequest},
         transport::{read_record, write_record},
     };
     use std::collections::BTreeMap;
@@ -2642,6 +2651,8 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
         let server_listener = server_listener.try_clone().unwrap();
         let capture_counts = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
         let counts_wire = capture_counts.clone();
+        let (arm_failure, arm_wire) = std::sync::mpsc::channel();
+        let (injected, mut injected_wire) = tokio::sync::oneshot::channel();
         let endpoint_ref = endpoint.clone();
         let (live_tx, live_rx) = tokio::sync::oneshot::channel();
         let proxy_join = std::thread::spawn(move || {
@@ -2670,24 +2681,46 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
             admit_ctrl.join().unwrap().unwrap();
             let _ = live_tx.send(());
 
-            let mut data_peer_rx = data_peer.try_clone().unwrap();
-            let mut data_server_tx = data_server.try_clone().unwrap();
-            let request_fwd = std::thread::spawn(move || {
+            let exchange_data = std::thread::spawn(move || {
+                let mut affected_capture = None;
+                let mut captured_digest = None;
+                let mut injected = Some(injected);
                 while let Ok(req) = read_record::<ClientRequest>(&mut data_server) {
                     if let ClientRequest::PythonSource(PythonSourceRequest::Capture {
-                        name, ..
+                        name, key, ..
                     }) = &req
                     {
                         *counts_wire.lock().unwrap().entry(name.clone()).or_insert(0) += 1;
+                        if name == "incomplete-pkg" && arm_wire.try_recv().is_ok() {
+                            affected_capture = Some(key.clone());
+                        }
                     }
                     if write_record(&mut data_peer, &req).is_err() {
                         break;
                     }
-                }
-            });
-            let reply_fwd = std::thread::spawn(move || {
-                while let Ok(rep) = read_record::<ClientReply>(&mut data_peer_rx) {
-                    if write_record(&mut data_server_tx, &rep).is_err() {
+                    let Ok(mut reply) = read_record::<ClientReply>(&mut data_peer) else {
+                        break;
+                    };
+                    match (&req, &reply) {
+                        (
+                            ClientRequest::PythonSource(
+                                PythonSourceRequest::Capture { key, .. } | PythonSourceRequest::State { key },
+                            ),
+                            ClientReply::PythonSource(PythonSourceReply::Captured { digest, .. }),
+                        ) if affected_capture.as_ref() == Some(key) => {
+                            affected_capture = None;
+                            captured_digest = Some(digest.clone());
+                        }
+                        (ClientRequest::ReadRange { relative_path, .. }, _) if relative_path == std::path::Path::new("rustx.toml") =>
+                        {
+                            if let Some(digest) = captured_digest.take() {
+                                reply = ClientReply::Error { kind: ReadError::Unavailable };
+                                injected.take().unwrap().send(digest).unwrap();
+                            }
+                        }
+                        _ => {}
+                    }
+                    if write_record(&mut data_server, &reply).is_err() {
                         break;
                     }
                 }
@@ -2700,8 +2733,7 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
             let ctrl_c2s = std::thread::spawn(move || {
                 let _ = std::io::copy(&mut ctrl_peer_rx, &mut ctrl_server_tx);
             });
-            let _ = request_fwd.join();
-            let _ = reply_fwd.join();
+            let _ = exchange_data.join();
             let _ = ctrl_s2c.join();
             let _ = ctrl_c2s.join();
         });
@@ -2752,11 +2784,21 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
         assert_eq!(healthy_after_register, 2);
         assert_eq!(incomplete_after_register, 2);
 
+        let watch_owner = endpoint.control().unwrap();
+        if fail_configuration_read {
+            let unmonitored_file = incomplete.join("d000/helper.py");
+            fixture.manager.configuration.test_hooks.insert("before_bound_python_fallback_read", move || {
+                std::fs::write(unmonitored_file, "HELPER = 2\n").unwrap();
+                arm_failure.send(()).unwrap();
+            });
+        }
+        let (resume, parked) = std::sync::mpsc::channel();
         let (fallback_tx, fallback_rx) = tokio::sync::oneshot::channel();
         fixture.manager.configuration.test_hooks.insert(
             "bound_python_fallback_checked",
             move || {
                 fallback_tx.send(()).unwrap();
+                let _ = parked.recv();
             },
         );
         fallback_rx.await.unwrap();
@@ -2776,6 +2818,35 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
             digest(&runtime.runtime_resources(), &incomplete_source),
             initial_incomplete
         );
+
+        if fail_configuration_read {
+            let captured = injected_wire.try_recv().expect("one configuration read failed after the updated package was captured");
+            assert_ne!(captured, initial_incomplete);
+            assert!(fixture.manager.applications.lock().latest_bound_source(id.as_str()).is_none());
+            assert!(endpoint.control().unwrap().same_pair(&watch_owner));
+            let (rechecked, next_check) = tokio::sync::oneshot::channel();
+            fixture.manager.configuration.test_hooks.insert("bound_python_fallback_checked", move || {
+                rechecked.send(()).unwrap();
+            });
+            // The watch schedules its next recheck after this hook returns.
+            // The workspace receives no further changes before recovery.
+            resume.send(()).unwrap();
+            next_check.await.unwrap();
+            stop.cancel();
+            watch.await.unwrap().unwrap();
+            let adopted = applied(&fixture, 0).await;
+            assert_eq!(adopted.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
+            assert_eq!(digest(&runtime.runtime_resources(), &incomplete_source), captured);
+            assert_eq!(digest(&runtime.runtime_resources(), &healthy_source), initial_healthy);
+            assert!(endpoint.control().unwrap().same_pair(&watch_owner));
+            assert_eq!(capture_counts.lock().unwrap()["healthy-pkg"], healthy_after_register + 1);
+            assert_eq!(capture_counts.lock().unwrap()["incomplete-pkg"], incomplete_after_register + 2);
+            assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+            assert!(client.wait().await.unwrap().success());
+            proxy_join.join().unwrap();
+            return;
+        }
+        resume.send(()).unwrap();
 
         let mut settlement = super::SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("request-A")).unwrap();

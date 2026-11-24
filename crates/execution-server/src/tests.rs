@@ -4107,6 +4107,9 @@ fn host_cutoff_rejects_an_already_delivered_revoke_receipt() {
         .unwrap()
         .unwrap();
     let handle = binding.control().unwrap();
+    let (entered, confirmation_pending) = mpsc::channel();
+    let (resume, proceed) = mpsc::channel();
+    *handle.shared.before_revoke_confirmation.lock().unwrap() = Some((entered, proceed));
     let command_deadline = Instant::now() + Duration::from_secs(5);
     thread::scope(|scope| {
         let settling = scope.spawn(|| binding.settle_revocation_by(command_deadline));
@@ -4125,11 +4128,6 @@ fn host_cutoff_rejects_an_already_delivered_revoke_receipt() {
         .unwrap();
         let turn: ControlTurn = read_record(&mut control).unwrap();
         assert_eq!(turn.request, Some(ControlRequest::Revoke));
-        binding.begin_revocation_by(Instant::now());
-        assert!(
-            Instant::now() < command_deadline,
-            "the old command deadline is still open"
-        );
         write_record(
             &mut control,
             &ControlPoll {
@@ -4139,6 +4137,15 @@ fn host_cutoff_rejects_an_already_delivered_revoke_receipt() {
             },
         )
         .unwrap();
+        let pending = confirmation_pending
+            .recv_timeout(command_deadline.saturating_duration_since(Instant::now()));
+        binding.begin_revocation_by(Instant::now());
+        let _ = resume.send(());
+        pending.expect("the worker parsed the original Revoked receipt");
+        assert!(
+            Instant::now() < command_deadline,
+            "the old command deadline is still open"
+        );
         assert_eq!(
             settling.join().unwrap().unwrap_err().kind(),
             io::ErrorKind::TimedOut

@@ -13,6 +13,8 @@ pub(super) struct ControlShared {
     pub(super) before_capacity_wait: Mutex<Option<mpsc::Sender<()>>>,
     #[cfg(test)]
     pub(super) before_revoke_send: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    pub(super) before_revoke_confirmation: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 pub(super) struct ControlState {
@@ -54,6 +56,18 @@ impl ControlShared {
             before_capacity_wait: Mutex::new(None),
             #[cfg(test)]
             before_revoke_send: Mutex::new(None),
+            #[cfg(test)]
+            before_revoke_confirmation: Mutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    fn pause_before_revocation_confirmation(&self, receipt: Option<&ControlReply>) {
+        if matches!(receipt, Some(ControlReply::Revoked))
+            && let Some((entered, resume)) = self.before_revoke_confirmation.lock().unwrap().take()
+        {
+            let _ = entered.send(());
+            let _ = resume.recv();
         }
     }
 
@@ -549,6 +563,8 @@ impl ControlWorker {
                         health: poll.health,
                         request: None,
                     };
+                    #[cfg(test)]
+                    shared.pause_before_revocation_confirmation(poll.receipt.as_ref());
                     let mut acknowledged = None;
                     if !shared.resolve(poll.receipt, |command_deadline| {
                         if !worker_owner.confirm_revocation(&connection, command_deadline) {

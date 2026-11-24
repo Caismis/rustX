@@ -787,23 +787,9 @@ impl SessionRuntimeManager {
         {
             return;
         }
-        let Some(mut input) = self
-            .sessions
-            .configuration_bindings
-            .lock()
-            .expect("Session configuration bindings")
-            .get(session)
-            .map(|binding| binding.input.clone())
-        else {
+        let Some(input) = self.bound_watch_input(session) else {
             return;
         };
-        {
-            let catalog = self.sessions.catalog.blocking_lock();
-            let Ok((_, settings)) = catalog.lineage(session, None) else {
-                return;
-            };
-            input.authoring = settings.input().authoring;
-        }
         let ticket = application.begin_bound_capture(session.clone());
         drop(application);
         self.capture_bound_consumers(vec![BoundCapture {
@@ -814,6 +800,24 @@ impl SessionRuntimeManager {
             ticket,
             prefetched_python: None,
         }]);
+    }
+
+    fn bound_watch_input(
+        &self,
+        session: &SessionId,
+    ) -> Option<super::super::configuration::SessionConfigInput> {
+        let mut input = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)?
+            .input
+            .clone();
+        let catalog = self.sessions.catalog.blocking_lock();
+        let (_, settings) = catalog.lineage(session, None).ok()?;
+        input.authoring = settings.input().authoring;
+        Some(input)
     }
 
     pub(super) fn observe_incomplete_bound_python(
@@ -841,7 +845,23 @@ impl SessionRuntimeManager {
         }
         let Some((source, source_attempt)) = application.latest_bound_source(session.as_str())
         else {
-            return false;
+            // Rebuild the source after a failed capture. An adopted catalog
+            // cannot serve as the baseline for a newer desired configuration.
+            let Some(input) = self.bound_watch_input(session) else {
+                return false;
+            };
+            let Some(ticket) = application.try_begin_bound_capture(session) else {
+                return false;
+            };
+            drop(application);
+            return self.capture_bound_consumers(vec![BoundCapture {
+                session: session.clone(),
+                input,
+                endpoint: endpoint.clone(),
+                watch: Some(watch),
+                ticket,
+                prefetched_python: None,
+            }]);
         };
         let input = source.input.clone();
         let retained_python = source.managed_python.clone();

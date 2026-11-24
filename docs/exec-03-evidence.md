@@ -827,3 +827,11 @@ throughput uses source size even though the algorithm scans twice. Cache and
 disk contention varied across the runs. The Server and Client samples use
 different workloads, and the Hosted output queue measurements above come
 from a separate saturation test.
+
+## Follow-up to the review of `f7c9ba335`
+
+| Boundary | Regression |
+|---|---|
+| Python watch recovery | `selective_python_watch_fallback_recovers_after_configuration_read_failure` observes the real updated package digest, then substitutes one typed Unavailable for the configuration read on the same Client lane. The failed capture leaves the binding live. The next watch recheck rebuilds the full source on that binding and adopts the digest without another file change. The successful selective path still leaves the healthy package's capture count unchanged. |
+| Skills authority on a follow-up read | `bound-resources.test.tsx` holds the catalog request triggered by the initial authoring observation and returns a Client descriptor for the same Session. The row, availability controls and selection policy use the authority of that response. No refresh or transport change is needed. |
+| Revoke confirmation cutoff | `host_cutoff_rejects_an_already_delivered_revoke_receipt` now parks the control worker after it parses Revoked, then tightens the cutoff before it may confirm settlement. The waiter receives TimedOut and the durable recovery marker remains. |

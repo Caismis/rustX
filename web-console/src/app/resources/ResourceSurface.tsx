@@ -167,6 +167,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setNewAgent(undefined);
     setQuery('');
   };
+  if (transferIntent?.family === 'skill' && boundSkillState?.authority === 'client') setTransferIntent(undefined);
   if (owner !== presentedOwner) {
     mcpDrafts.current.clear();
     setPresentedOwner(owner);
@@ -304,10 +305,10 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   };
 
   const lifecycle = awaitingAssociation ? 'loading'
+    : sessionCandidate && module === 'skills' && (!authoringConfirmed || boundSkillState?.status !== 'ready')
+      ? (boundSkillState?.status ?? 'loading')
     : sessionCandidate && !authoringConfirmed
-      ? (module === 'mcp'
-        ? (boundSource?.authority === 'client' && boundSource.source ? 'ready' : boundSource?.error ? 'failed' : 'loading')
-        : (boundSkillState?.status ?? 'loading'))
+      ? (boundSource?.authority === 'client' && boundSource.source ? 'ready' : boundSource?.error ? 'failed' : 'loading')
       : (available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading');
 
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}
@@ -369,13 +370,18 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             </div>
           </div>
           {awaitingAssociation ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p>
-          : sessionCandidate && !authoringConfirmed && module === 'skills' ? <SettingsActorContext value={actor}>
-            <ResourceBrowser key={boundKey} client={client} target={{ kind: 'workspace', directory: sessionCandidate.cwd }} scope="workspace" query={query} view={view}
-              refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={sessionCandidate.id}
-              bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} transferDisabled readOnly
-              onCatalogState={state => setBoundSkillObservation(prev =>
-                prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority
-                  ? prev : { key: boundKey, ...state })} />
+          : sessionCandidate && module === 'skills' ? <SettingsActorContext value={actor}>
+            <SourceContext value={authoringConfirmed ? source : undefined}>
+              {authoringConfirmed && [readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
+              <fieldset className={css.editor} disabled={authoringConfirmed && !!source && !editable}>
+                <ResourceBrowser key={boundKey} client={client} source={source} target={{ kind: 'workspace', directory: sessionCandidate.cwd }} scope="workspace" revision={revision}
+                  query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={sessionCandidate.id}
+                  bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled}
+                  onCatalogState={state => setBoundSkillObservation(prev =>
+                    prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority
+                      ? prev : { key: boundKey, ...state })} />
+              </fieldset>
+            </SourceContext>
           </SettingsActorContext> : sessionCandidate && !authoringConfirmed && module === 'mcp' ? (
             boundSource?.authority === 'client' && boundSource.source ? <McpPage workspaceDocument={boundSource.source} scope="workspace" query={query} view={view}
               probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />
@@ -386,7 +392,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
                 {module === 'skills' ? <ResourceBrowser client={client} source={source} target={source.target} scope={scope} revision={revision}
-                  query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={sessionCandidate?.id}
+                  query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
                   bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}
