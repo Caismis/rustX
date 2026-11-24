@@ -1126,8 +1126,15 @@ async fn construction_rejects_a_child_role_holding_a_subagent_registry() {
         .expect("in-memory store"),
     );
     for role in [
-        ConversationRole::SubagentChild,
         ConversationRole::WorkflowAgentRun { output: None },
+        ConversationRole::WorkflowAgentRun {
+            output: Some(Arc::new(
+                crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                    "type": "object"
+                }))
+                .expect("test schema compiles"),
+            )),
+        },
     ] {
         let (_subagents, mut config) = subagent_runtime_config_with_registry(
             &dir,
@@ -1139,16 +1146,36 @@ async fn construction_rejects_a_child_role_holding_a_subagent_registry() {
         )
         .await;
         config.role = role;
-        let error =
-            ConversationRuntime::new(config).expect_err("child role + registry is rejected");
+        let error = ConversationRuntime::new(config)
+            .expect_err("workflow child role + registry is rejected");
         assert!(
             matches!(
                 error,
                 ConversationRuntimeError::SubagentOwnershipMismatch { .. }
             ),
-            "a child role holding a registry is rejected: {error}"
+            "a WorkflowAgentRun role holding a registry is rejected: {error}"
         );
     }
+    // A `SubagentChild` keeps its registry: a middle runtime is both the
+    // child of its parent and the parent of deeper children (nested
+    // delegation), so construction must accept the combination.
+    let (_subagents, mut config) = subagent_runtime_config_with_registry(
+        &dir,
+        "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
+        store.clone(),
+        &ConversationId::new("conv_efeaf863-95c1-73d9-8623-5a766b1967be"),
+        &AgentId::new("agent-a"),
+        &AgentId::new("agent-a"),
+    )
+    .await;
+    config.role = ConversationRole::SubagentChild;
+    let runtime =
+        ConversationRuntime::new(config).expect("a SubagentChild holding a registry is accepted");
+    runtime.activate();
+    runtime
+        .shutdown()
+        .await
+        .expect("the accepted nested-delegation runtime shuts down");
 }
 
 /// A registry that already owns a committed child record can be

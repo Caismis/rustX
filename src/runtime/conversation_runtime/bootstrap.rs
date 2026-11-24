@@ -674,11 +674,14 @@ impl ConversationRuntime {
                     && !active_plane.invalid_goal,
             });
         }
-        // A child-scoped runtime never owns a subagent registry: the
-        // registry is a parent-plane authority. The `role + subagents`
-        // combination is rejected here, before any claim, exactly as
-        // `docs/invariants.md` declares (Issue #606).
-        if config.role.is_child()
+        // A headless `WorkflowAgentRun` runtime never owns a subagent
+        // registry: delegation is a conversation authority, so a registry
+        // on that role is a misconfiguration, rejected here before any
+        // claim exactly as `docs/invariants.md` declares (Issue #606).
+        // `SubagentChild` legitimately keeps its registry — a middle
+        // runtime is simultaneously a child of its parent and the parent
+        // of deeper children (nested delegation).
+        if matches!(config.role, ConversationRole::WorkflowAgentRun { .. })
             && let Some(subagents) = &config.subagents
         {
             return Err(ConversationRuntimeError::SubagentOwnershipMismatch {

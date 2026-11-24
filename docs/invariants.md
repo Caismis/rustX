@@ -8581,8 +8581,10 @@ read repair never loads a cold runtime or repeats semantic work. See the
   chosen at construction, never inferred from configuration contents. Child
   physical settlement moves behind `ChildControl`, reachable only through
   `runtime.child_control()` on a child-role runtime; a `subagents` registry
-  configured on a child role fails validation instead of silently
-  re-interpreting intent. Root runtimes observe the same physical drain
+  configured on a `WorkflowAgentRun` role fails validation instead of
+  silently re-interpreting intent, while a `SubagentChild` keeps its
+  registry as the parent plane of deeper children (nested delegation).
+  Root runtimes observe the same physical drain
   through `shutdown_outcome`/`rollback_preparation_outcome`.
 - **Session title publication owns its lifecycle boundary.** Title refresh
   is a local-runtime owner (`SessionTitle`) driving auxiliary invocation
