@@ -1609,8 +1609,8 @@ pub(crate) mod tests {
                 role: match &workflow_output {
                     Some(latch) => {
                         crate::runtime::conversation_runtime::ConversationRole::WorkflowAgentRun {
-                            output: latch.clone()
-                                as Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>,
+                            output: Some(latch.clone()
+                                as Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>),
                         }
                     }
                     None => crate::runtime::conversation_runtime::ConversationRole::SubagentChild,

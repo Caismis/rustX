@@ -342,13 +342,13 @@ async fn workflow_agent_run_has_no_guidance_or_seal() {
         &dir,
         "7a2b9c4d-1234-7000-8000-000000000002",
         ConversationRole::WorkflowAgentRun {
-            output: Arc::new(
+            output: Some(Arc::new(
                 crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
                     "type": "object", "properties": {"summary": {"type": "string"}},
                     "required": ["summary"], "additionalProperties": false
                 }))
                 .expect("output latch"),
-            ),
+            )),
         },
     )
     .await;
@@ -368,13 +368,13 @@ async fn workflow_agent_run_cannot_submit_parent_guidance() {
         &dir,
         "7a2b9c4d-1234-7000-8000-000000000003",
         ConversationRole::WorkflowAgentRun {
-            output: Arc::new(
+            output: Some(Arc::new(
                 crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
                     "type": "object", "properties": {"summary": {"type": "string"}},
                     "required": ["summary"], "additionalProperties": false
                 }))
                 .expect("output latch"),
-            ),
+            )),
         },
     )
     .await;

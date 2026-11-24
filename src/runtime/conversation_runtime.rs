@@ -733,8 +733,10 @@ pub enum ConversationRole {
     /// permits/settlement/rollback, but never parent guidance or the
     /// terminal seal.
     WorkflowAgentRun {
-        /// The reserved Workflow Agent terminal protocol.
-        output: Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>,
+        /// The reserved Workflow Agent terminal protocol; `None` for a
+        /// schema-free run (`WorkflowChildTerminal::Text`) whose final
+        /// reply is itself the result.
+        output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
     },
 }
 
@@ -755,7 +757,7 @@ impl ConversationRole {
         &self,
     ) -> Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>> {
         match self {
-            Self::WorkflowAgentRun { output } => Some(output.clone()),
+            Self::WorkflowAgentRun { output } => output.clone(),
             Self::Root | Self::SubagentChild => None,
         }
     }
