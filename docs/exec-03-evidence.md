@@ -866,3 +866,22 @@ from a separate saturation test.
   submit intent is revoked. Controlled Host replies verify that uncertain
   and conflicting results survive refresh, and a late completion leaves a
   newer transfer dialog open.
+
+## Follow-up to the review of `fdbc73541`
+
+- Session settings take a short admission cut on the exact live pair.
+  The catalog rename and durability barriers run outside the Binding lock.
+  An accepted catalog commit keeps its revision after pair retirement and
+  discards the retired pair's derived observation. The catalog-sync gate
+  verifies Host drain can close admission while the disk write is parked.
+  The same regression checks failures before rename, after rename and
+  before pair admission.
+- Session input validation records the Session's semantic and physical
+  observation generations alongside the User and Workspace source cuts.
+  The reverse-order mount test parks the input after reading Skill A,
+  lets the watcher publish B, then verifies that the old input is refused
+  and a change to B's marker is still observed.
+- Skill transfer notices are keyed by operation and scoped to the
+  originating Workspace. Two controlled Host replies arrive in reverse
+  order. The test checks that the conflict and uncertainty remain visible
+  independently with exactly two submitted operations.

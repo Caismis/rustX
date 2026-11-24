@@ -1114,6 +1114,21 @@ impl LocalExecutionEndpoint {
         }
     }
 
+    pub(crate) fn with_live_control_lane<T>(
+        &self,
+        lane: &rustx_execution_server::ControlHandle,
+        publish: impl FnOnce() -> T,
+    ) -> Option<T> {
+        match &self.authority {
+            EndpointAuthority::Reserved(reserved) => {
+                reserved.binding.with_live_control_lane(lane, publish)
+            }
+            EndpointAuthority::Delegated { control, .. } => {
+                (control.same_pair(lane) && control.is_live()).then(publish)
+            }
+        }
+    }
+
     /// One bounded logical-text page of a whitelisted document through
     /// the admitted Client — the same complete-line projection the Read
     /// tool owns, decoded by the shared parser policy — plus the verified

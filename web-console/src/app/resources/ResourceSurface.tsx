@@ -107,7 +107,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
   const [pendingTransfer, setPendingTransfer] = useState<{ intent: TransferIntent; skillScope?: string; token: number }>();
-  const [transferNotices, setTransferNotices] = useState<ReadonlyMap<string, { token: number; reason: TransferReopenReason }>>(() => new Map());
+  const [transferNotices, setTransferNotices] = useState<ReadonlyMap<number, { scope: string; name: string; reason: TransferReopenReason }>>(() => new Map());
   const [owedTransferRefresh, setOwedTransferRefresh] = useState<string>();
   const transferSequence = useRef(0);
   const liveTransfer = useRef<number | undefined>(undefined);
@@ -161,7 +161,6 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const config = configAuthoring(source, scope);
   const revision = config.state === 'structured' ? config.revision : undefined;
   const editable = available && !bound && !awaitingAssociation && (!sessionCandidate || authoringConfirmed) && !!observation && !readError && transport.connection === 'connected';
-  const transferNotice = transferNotices.get(lifetime);
   const skillTransferScope = module === 'skills' && visible && showingWorkspace && editable && directory
     && (!sessionCandidate || boundSkillState?.status === 'ready') ? JSON.stringify([lifetime, boundKey, directory]) : undefined;
   const activeTransfer = pendingTransfer && (pendingTransfer.intent.family !== 'skill' || (
@@ -436,22 +435,23 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         </TabPanel>
       </Tabs>
     </div>}
-    {transferNotice && <div className={catalogCss.banner} role="alert">
-      <p>{tx(`resources:transfer.notice-${transferNotice.reason}`)}</p>
-      <Button size="sm" variant="outline" onClick={() => setTransferNotices(current => {
-        if (current.get(lifetime)?.token !== transferNotice.token) return current;
-        const remaining = new Map(current);
-        remaining.delete(lifetime);
-        return remaining;
-      })}>{tx('workflows:dialog.close')}</Button>
-    </div>}
+    {[...transferNotices].filter(([, notice]) => notice.scope === lifetime).map(([token, notice]) =>
+      <div className={catalogCss.banner} role="alert" key={token}>
+        <p><strong>{notice.name}</strong> {tx(`resources:transfer.notice-${notice.reason}`)}</p>
+        <Button size="sm" variant="outline" onClick={() => setTransferNotices(current => {
+          const remaining = new Map(current);
+          remaining.delete(token);
+          return remaining;
+        })}>{tx('workflows:dialog.close')}</Button>
+      </div>)}
     {activeTransfer && <TransferDialog key={activeTransfer.token} intent={activeTransfer.intent}
       close={() => setPendingTransfer(current => current?.token === activeTransfer.token ? undefined : current)}
       refresh={activeTransfer.intent.family === 'skill' ? () => refreshTransferredWorkspace(lifetime, activeTransfer.token) : refresh}
       onReopen={activeTransfer.intent.family === 'skill' ? reason => {
         const token = activeTransfer.token;
-        setTransferNotices(current => (current.get(lifetime)?.token ?? 0) >= token
-          ? current : new Map(current).set(lifetime, { token, reason }));
+        setTransferNotices(current => new Map(current).set(token, {
+          scope: lifetime, name: activeTransfer.intent.name, reason,
+        }));
         setPendingTransfer(current => current?.token === token ? undefined : current);
         refreshTransferredWorkspace(lifetime, token);
       } : undefined} />}

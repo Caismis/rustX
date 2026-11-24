@@ -535,6 +535,8 @@ pub struct SessionCatalog {
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
     #[cfg(test)]
+    write_gate: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
+    #[cfg(test)]
     preparation_cleanup_fault: Arc<std::sync::atomic::AtomicBool>,
     /// Test-only gate parked between the Surface-head observation and the
     /// acceptance-watermark read of `is_unused`, so a race regression can
@@ -578,6 +580,8 @@ impl SessionCatalog {
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            write_gate: None,
             #[cfg(test)]
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
@@ -929,6 +933,8 @@ impl SessionCatalog {
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            write_gate: None,
             #[cfg(test)]
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]

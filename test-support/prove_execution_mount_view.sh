@@ -107,6 +107,9 @@ cargo test -p rustx --all-features --locked --lib \
     session_input_commit_publishes_its_bound_skill_dependencies \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
+    newer_bound_skill_observation_fences_an_older_session_input \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
     a_bound_source_rechecks_after_its_final_document_read_fails \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \

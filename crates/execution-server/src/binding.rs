@@ -934,6 +934,23 @@ impl Binding {
             .then(publish)
     }
 
+    /// Admit a short local operation on the exact pair before normal
+    /// admission closes. The callback must neither do I/O nor reenter Binding.
+    pub fn with_live_control_lane<T>(
+        &self,
+        lane: &ControlHandle,
+        publish: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let state = self.inner();
+        (state.phase == BindingPhase::Live
+            && !state.closing
+            && state
+                .control
+                .as_ref()
+                .is_some_and(|control| control.handle.same_pair(lane)))
+        .then(publish)
+    }
+
     /// Wait for the admitted Client's physical revocation receipt. A
     /// never-admitted reservation is closed atomically so a pairing cannot
     /// gain execution authority after it was counted as settled.

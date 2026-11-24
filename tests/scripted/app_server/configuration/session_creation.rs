@@ -2437,6 +2437,292 @@ async fn session_input_commit_publishes_its_bound_skill_dependencies() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
+    use crate::app_server::{
+        connection::AppServerConnection,
+        host::ServerLifecycle,
+        protocol::{ErrorData, JsonRpcVersion, Method, Request, RequestId, Response},
+    };
+    use crate::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+    use crate::runtime::conversation_runtime::Gate;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = &fixture.sessions[0].id;
+        let endpoint = fixture.manager.execution_endpoint(id).unwrap();
+        let lane = endpoint.control().unwrap();
+        let (revision, original) = fixture.manager.sessions.read_settings(id).await.unwrap();
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::super::protocol::initialize(&connection).await;
+        let content =
+            SessionConfigContent("[tool_deadline_policy]\nhard_deadline_ms=12345\n".into());
+        let request = |wire_id| Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(wire_id),
+            call: Method::SessionInputsWrite {
+                session_id: id.clone(),
+                expected_revision: revision,
+                session_config: Some(SessionInputChange::Replace(content.clone())),
+                session_resources: None,
+            },
+        };
+        let observe = || {
+            fixture
+                .manager
+                .applications
+                .lock()
+                .bound_source_cut(id.as_str())
+        };
+
+        let before = observe();
+        fixture
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .arm_write_fault_before_rename();
+        let Response::Failure(failure) = connection.handle_request(request(1)).await else {
+            panic!("pre-rename catalog failure");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::OperationFailed));
+        assert_eq!(
+            fixture.manager.sessions.read_settings(id).await.unwrap(),
+            (revision, original.clone())
+        );
+        assert_eq!(observe(), before);
+
+        // The capture was initially admitted, but the pair disappears
+        // before the settings transaction reaches its admission cut.
+        let captured = Arc::new(Gate::default());
+        let _released = captured.arm_scoped();
+        fixture
+            .manager
+            .configuration
+            .test_hooks
+            .insert("before_capture_verification", {
+                let captured = captured.clone();
+                move || captured.enter()
+            });
+        let stale = tokio::spawn({
+            let connection = connection.clone();
+            let request = request(2);
+            async move { connection.handle_request(request).await }
+        });
+        captured.wait_entered_async().await;
+        endpoint.detach_live_pair_for_test();
+        captured.release();
+        let Response::Failure(failure) = stale.await.unwrap() else {
+            panic!("lost pair accepted");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        assert_eq!(
+            fixture.manager.sessions.read_settings(id).await.unwrap(),
+            (revision, original)
+        );
+        assert_eq!(observe(), before);
+        Fixture::admit_execution_pair(&endpoint).await;
+        assert!(!endpoint.control().unwrap().same_pair(&lane));
+
+        let disk = Arc::new(Gate::default());
+        let _release = disk.arm_scoped();
+        {
+            let mut catalog = fixture.manager.sessions.catalog.lock().await;
+            catalog.gate_catalog_file_sync(disk.clone());
+            catalog.arm_write_fault_after_rename();
+        }
+        let committing = tokio::spawn({
+            let connection = connection.clone();
+            let request = request(3);
+            async move { connection.handle_request(request).await }
+        });
+        disk.wait_entered_async().await;
+        tokio::task::spawn_blocking({
+            let host = fixture.host.clone();
+            move || host.begin_drain()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            fixture.host.diagnostics().lifecycle,
+            ServerLifecycle::Draining
+        );
+        assert!(!committing.is_finished(), "catalog sync is still parked");
+        disk.release();
+
+        let Response::Failure(failure) = committing.await.unwrap() else {
+            panic!("post-rename durability fault");
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::CommittedDurabilityUncertain)
+        );
+        let (visible_revision, saved) = fixture.manager.sessions.read_settings(id).await.unwrap();
+        assert_eq!(visible_revision, revision + 1);
+        assert_eq!(saved.session_config, Some(content));
+        let from_disk = crate::local_runtime::session::SessionCatalog::open_existing(
+            &fixture.manager.configuration.source_bindings().runtime_root,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(from_disk.settings_revision(id).unwrap(), visible_revision);
+        assert_eq!(from_disk.lineage(id, None).unwrap().1, saved);
+        assert_ne!(observe().0, before.0);
+        assert_eq!(observe().1, None);
+        assert!(
+            fixture
+                .manager
+                .applications
+                .lock()
+                .bound_source_failed(id.as_str())
+        );
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn newer_bound_skill_observation_fences_an_older_session_input() {
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{ErrorData, JsonRpcVersion, Method, Request, RequestId, Response},
+    };
+    use crate::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+    use crate::runtime::conversation_runtime::Gate;
+
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let (_mount, physical, mut client) = isolate_bound_skill_workspace(&fixture).await;
+        let id = &fixture.sessions[0].id;
+        let endpoint = fixture.manager.execution_endpoint(id).unwrap();
+        let lane = endpoint.control().unwrap();
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let description = || {
+            runtime.runtime_resources().capability().skills().packages()[0]
+                .description()
+                .to_owned()
+        };
+        let hooks = &fixture.manager.configuration.test_hooks;
+        let next_resync = || {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            hooks.insert("bound_configuration_watch_resynced", move || {
+                tx.send(()).unwrap();
+            });
+            rx
+        };
+        let registered = next_resync();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let watcher = tokio::spawn({
+            let manager = fixture.manager.clone();
+            let stop = stop.clone();
+            async move { manager.run_source_watch(stop).await }
+        });
+        registered.await.unwrap();
+
+        let gate = Arc::new(Gate::default());
+        let _release = gate.arm_scoped();
+        let after_retarget = Arc::new(Gate::default());
+        let _unpark_watch = after_retarget.arm_scoped();
+        hooks.insert("before_capture_verification", {
+            let gate = gate.clone();
+            move || gate.enter()
+        });
+        let connection = AppServerConnection::new(fixture.host.clone());
+        super::super::protocol::initialize(&connection).await;
+        let (revision, original) = fixture.manager.sessions.read_settings(id).await.unwrap();
+        let session = id.clone();
+        let write = tokio::spawn(async move {
+            connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(1),
+                    call: Method::SessionInputsWrite {
+                        session_id: session,
+                        expected_revision: revision,
+                        session_config: Some(SessionInputChange::Replace(SessionConfigContent(
+                            "[tool_deadline_policy]\nhard_deadline_ms=12345\n".into(),
+                        ))),
+                        session_resources: None,
+                    },
+                })
+                .await
+        });
+        gate.wait_entered_async().await;
+        assert_eq!(description(), "Skill a");
+
+        hooks.insert("bound_configuration_watch_resynced", {
+            let after_retarget = after_retarget.clone();
+            move || after_retarget.enter()
+        });
+        let staged = physical.join(".next");
+        std::os::unix::fs::symlink("../../targets/b", &staged).unwrap();
+        std::fs::rename(staged, physical.join(".agents/skills/foo")).unwrap();
+        after_retarget.wait_entered_async().await;
+        let adopted = applied(&fixture, 0).await.desired;
+        assert_eq!(description(), "Skill b");
+        gate.release();
+        let Response::Failure(failure) = write.await.unwrap() else {
+            panic!("old capture overwrote the new observation");
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::SessionInputSourceChanged)
+        );
+        assert_eq!(
+            fixture.manager.sessions.read_settings(id).await.unwrap(),
+            (revision, original)
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(id)
+                .unwrap()
+                .desired,
+            adopted
+        );
+        {
+            let application = fixture.manager.applications.lock();
+            let paths = &application
+                .bound_source_reads(id.as_str(), &lane)
+                .unwrap()
+                .skills
+                .as_ref()
+                .unwrap()
+                .paths;
+            assert!(paths.contains_key(&fixture.workspaces[0].join("targets/b")));
+            assert!(!paths.contains_key(&fixture.workspaces[0].join("targets/a")));
+        }
+        let new_watch = next_resync();
+        after_retarget.release();
+        new_watch.await.unwrap();
+        let updated = next_resync();
+        std::fs::write(
+            physical.join("targets/b/SKILL.md"),
+            "---\nname: foo\ndescription: Updated b\n---\nBody\n",
+        )
+        .unwrap();
+        updated.await.unwrap();
+        assert_ne!(applied(&fixture, 0).await.desired, adopted);
+        assert_eq!(description(), "Updated b");
+        assert!(endpoint.control().unwrap().same_pair(&lane));
+        assert!(!fixture.workspaces[0].exists());
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
+        stop.cancel();
+        watcher.await.unwrap().unwrap();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]

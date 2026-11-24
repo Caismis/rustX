@@ -119,7 +119,7 @@ impl SessionRuntimeManager {
         config: Option<SessionInputChange<SessionConfigContent>>,
         resources: Option<SessionInputChange<SessionResources>>,
     ) -> Result<u64, SessionInputError> {
-        let (settings, endpoint, retained_model, source_cut) = {
+        let (settings, endpoint, retained_model, source_cut, bound_cut) = {
             let application = self.applications.lock();
             let catalog = self.sessions.catalog.blocking_lock();
             let actual = catalog.settings_revision(session)?;
@@ -153,7 +153,10 @@ impl SessionRuntimeManager {
                 .expect("Session configuration bindings");
             let retained = bindings.get(session);
             let retained_model = retained.map(|binding| binding.input.model.clone());
-            (settings, endpoint, retained_model, source_cut)
+            let bound_cut = endpoint
+                .as_ref()
+                .map(|_| application.bound_source_cut(session.as_str()));
+            (settings, endpoint, retained_model, source_cut, bound_cut)
         };
         let mut input = settings.input();
         if let Some(model) = retained_model {
@@ -175,14 +178,19 @@ impl SessionRuntimeManager {
             None,
             &mut reads,
         );
-        if let Some((endpoint, lane)) = endpoint.as_ref().zip(lane.as_ref())
-            && !endpoint
-                .control()
-                .is_some_and(|after| after.same_pair(lane))
-        {
-            return Err(SessionInputError::ExecutionUnavailable);
-        }
-        let capture = capture.map_err(|_| SessionInputError::Invalid)?;
+        let capture = capture.map_err(|_| {
+            if endpoint
+                .as_ref()
+                .zip(lane.as_ref())
+                .is_some_and(|(endpoint, lane)| {
+                    endpoint.with_live_control_lane(lane, || ()).is_none()
+                })
+            {
+                SessionInputError::ExecutionUnavailable
+            } else {
+                SessionInputError::Invalid
+            }
+        })?;
         let context = capture
             .context
             .as_ref()
@@ -199,7 +207,10 @@ impl SessionRuntimeManager {
             (Some(before), Some(after)) => Arc::ptr_eq(before, after),
             _ => false,
         };
-        if !same_endpoint || application.source_cut(&input.cwd) != source_cut {
+        if !same_endpoint
+            || application.source_cut(&input.cwd) != source_cut
+            || bound_cut.is_some_and(|cut| application.bound_source_cut(session.as_str()) != cut)
+        {
             return Err(SessionInputError::SourceChanged);
         }
         let mut catalog = self.sessions.catalog.blocking_lock();
@@ -207,43 +218,47 @@ impl SessionRuntimeManager {
         if actual != expected {
             return Err(SessionError::StaleSettings { expected, actual }.into());
         }
+        let pair = endpoint.as_ref().zip(lane.as_ref());
+        if let Some((endpoint, lane)) = pair {
+            endpoint
+                .with_live_control_lane(lane, || ())
+                .ok_or(SessionInputError::ExecutionUnavailable)?;
+        }
         if catalog.lineage(session, None)?.1 == settings {
             return Ok(actual);
         }
-        let commit = || {
-            let revision = catalog.replace_settings(session, expected, settings);
-            let committed =
-                revision.is_ok() || revision.as_ref().is_err_and(SessionError::committed);
-            if committed {
-                application.cancel_bound_capture(session);
-                let scope = session.to_string();
-                if let Some(lane) = &lane {
-                    application.publish_bound_observation(
-                        scope,
-                        &input.cwd,
-                        Ok(capture),
-                        reads,
-                        lane.clone(),
-                        false,
-                    );
-                } else {
-                    application.capture_bound_source(scope, &input.cwd, Ok(capture));
+        // Admission orders this settings transaction before a later pair
+        // loss. The Binding lock is free throughout the disk commit.
+        let revision = catalog.replace_settings(session, expected, settings);
+        if revision.is_ok() || revision.as_ref().is_err_and(SessionError::committed) {
+            application.cancel_bound_capture(session);
+            let scope = session.to_string();
+            if let Some((endpoint, lane)) = pair {
+                if endpoint
+                    .with_live_control_lane(lane, || {
+                        application.publish_bound_observation(
+                            scope.clone(),
+                            &input.cwd,
+                            Ok(capture),
+                            reads,
+                            lane.clone(),
+                            false,
+                        );
+                    })
+                    .is_none()
+                {
+                    // The visible settings stay committed. A new capture
+                    // must use their revision and the next admitted pair.
+                    application.capture_bound_source(scope, &input.cwd, Err(
+                        "Workspace configuration unavailable: the Execution Client disconnected or is closing".into(),
+                    ));
                 }
-                self.applications.notify(&application);
-            }
-            (revision, committed)
-        };
-        let (revision, committed) =
-            if let Some((endpoint, lane)) = endpoint.as_ref().zip(lane.as_ref()) {
-                endpoint
-                    .with_control_lane(lane, commit)
-                    .ok_or(SessionInputError::ExecutionUnavailable)?
             } else {
-                commit()
-            };
-        drop(catalog);
-        drop(application);
-        if committed {
+                application.capture_bound_source(scope, &input.cwd, Ok(capture));
+            }
+            self.applications.notify(&application);
+            drop(catalog);
+            drop(application);
             self.applications.run(self.clone());
         }
 

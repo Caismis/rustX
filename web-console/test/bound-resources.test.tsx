@@ -443,3 +443,69 @@ it('keeps a new Skill transfer open when the superseded request finishes', async
     expect(configure.mock.calls.filter(([, , request]) => request.kind === 'transfer')).toHaveLength(1);
   } finally { stop(); }
 });
+
+it('retains independent Skill transfer results arriving in reverse order', async () => {
+  let releaseCatalog!: (value: MethodResult) => void;
+  let catalogRead: Promise<MethodResult> | undefined;
+  const subject = cfg3Client(async op => {
+    if (op.method !== 'skills/list' || op.params.target.kind !== 'workspace') return;
+    const firstSkill = skillResult('authoring', 'authored-skill');
+    const secondSkill = skillResult('authoring', 'other-skill');
+    if (firstSkill.type !== 'skills' || secondSkill.type !== 'skills') throw new Error('Skills fixture');
+    firstSkill.page.data.push(...secondSkill.page.data);
+    return await catalogRead ?? firstSkill;
+  });
+  subject.publish({ authorityId: 'native-fixture' });
+  const { associations, host, surface } = mountResources(subject);
+  const replies = new Map<string, (error: WorkspaceHostError) => void>();
+  const configure = host.configureWorkspace!;
+  const observed = vi.spyOn(host, 'configureWorkspace').mockImplementation((...args) => {
+    const operation = args[2];
+    if (operation.kind !== 'transfer') return configure(...args);
+    return new Promise((_, reject) => replies.set(operation.mutation.resource.source, reject));
+  });
+  const stop = associations.start();
+  try {
+    const ui = render(surface('skills', first));
+    const page = ui.container.querySelector('[data-resource-module="skills"]');
+    const ready = () => waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe('ready'));
+    await ready();
+    const older = await openSkillCopy();
+    fireEvent.click(within(older).getByRole('button', { name: 'Copy' }));
+    expect(replies.has('authored-skill')).toBe(true);
+
+    catalogRead = new Promise(resolve => { releaseCatalog = resolve; });
+    await act(async () => {
+      configurationSystem(subject.client).settingsTarget(workspaceSettingsTarget('A', 'A'), () => host).send({ type: 'REFRESH' });
+    });
+    await waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe('loading'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const restored = skillResult('authoring', 'authored-skill');
+    const other = skillResult('authoring', 'other-skill');
+    if (restored.type !== 'skills' || other.type !== 'skills') throw new Error('Skills fixture');
+    restored.page.data.push(...other.page.data);
+    await act(async () => {
+      catalogRead = undefined;
+      releaseCatalog(restored);
+    });
+    await ready();
+
+    const later = await openSkillCopy('other-skill');
+    fireEvent.click(within(later).getByRole('button', { name: 'Copy' }));
+    expect(replies.has('other-skill')).toBe(true);
+    await act(async () => replies.get('other-skill')!(new WorkspaceHostError('source changed', undefined, false, {
+      kind: 'source_conflict', scope: 'workspace', expected: 'old', actual: 'new',
+    })));
+    await ready();
+    await act(async () => replies.get('authored-skill')!(new WorkspaceHostError('reply lost', undefined, true)));
+    await ready();
+
+    const notices = screen.getAllByRole('alert');
+    expect(notices).toHaveLength(2);
+    expect(notices[0].textContent).toContain('other-skill The source changed.');
+    expect(notices[1].textContent).toContain('authored-skill The transfer may have committed.');
+    fireEvent.click(within(notices[0]).getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('alert').textContent).toContain('authored-skill The transfer may have committed.');
+    expect(observed.mock.calls.filter(([, , operation]) => operation.kind === 'transfer')).toHaveLength(2);
+  } finally { stop(); }
+});

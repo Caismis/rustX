@@ -121,6 +121,7 @@ pub(crate) struct ApplicationState {
     bound_captures: BTreeMap<crate::runtime::identity::SessionId, Arc<()>>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
     bound_observations: BTreeMap<String, BoundSourceObservation>,
+    next_bound_observation: u64,
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
@@ -173,6 +174,7 @@ pub(crate) struct BoundSourceReads {
 struct BoundSourceObservation {
     lane: rustx_execution_server::ControlHandle,
     reads: BoundSourceReads,
+    generation: u64,
 }
 
 fn same_capture_failure(
@@ -381,6 +383,17 @@ impl ApplicationState {
         .then_some((capture, self.scopes.get(scope)?.desired.attempt))
     }
 
+    /// The Session-specific cut includes physical observations that need
+    /// no new semantic application, such as a changed watch dependency.
+    pub(crate) fn bound_source_cut(&self, scope: &str) -> (Option<u64>, Option<u64>) {
+        (
+            self.scopes.get(scope).map(|view| view.desired.attempt),
+            self.bound_observations
+                .get(scope)
+                .map(|observation| observation.generation),
+        )
+    }
+
     pub(crate) fn bound_source_reads(
         &self,
         scope: &str,
@@ -425,8 +438,18 @@ impl ApplicationState {
             return false;
         }
         self.capture_bound_source(scope.clone(), source, input);
-        self.bound_observations
-            .insert(scope, BoundSourceObservation { lane, reads });
+        self.next_bound_observation = self
+            .next_bound_observation
+            .checked_add(1)
+            .expect("bound source observation generation exhausted");
+        self.bound_observations.insert(
+            scope,
+            BoundSourceObservation {
+                lane,
+                reads,
+                generation: self.next_bound_observation,
+            },
+        );
         true
     }
 
