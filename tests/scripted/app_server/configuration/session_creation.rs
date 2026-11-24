@@ -3634,6 +3634,122 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unchanged_client_observations_do_not_conflict_with_session_settings() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{Method, MethodResult},
+    };
+    use crate::capabilities::ToolSourceId;
+    use crate::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+    use crate::runtime::conversation_runtime::Gate;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        python_fallback_packages(&fixture.workspaces[0]);
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = fixture.sessions[0].id.clone();
+        let endpoint = fixture.manager.execution_endpoint(&id).unwrap();
+        let lane = endpoint.control().unwrap();
+        assert!(
+            tokio::task::spawn_blocking({
+                let manager = fixture.manager.clone();
+                let id = id.clone();
+                let endpoint = endpoint.clone();
+                let lane = lane.clone();
+                move || manager.observe_bound_source(&id, &endpoint, lane, true)
+            })
+            .await
+            .unwrap()
+        );
+        applied(&fixture, 0).await;
+
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        initialize(&connection).await;
+        for subset in [true, false] {
+            let gate = Arc::new(Gate::default());
+            let _release = gate.arm_scoped();
+            fixture
+                .manager
+                .configuration
+                .test_hooks
+                .insert("before_capture_verification", {
+                    let gate = gate.clone();
+                    move || gate.enter()
+                });
+            let (revision, _) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+            let deadline = if subset { 12345 } else { 12346 };
+            let config = SessionConfigContent(format!(
+                "[tool_deadline_policy]\nhard_deadline_ms={deadline}\n"
+            ));
+            let write = tokio::spawn({
+                let connection = connection.clone();
+                let session_id = id.clone();
+                let config = config.clone();
+                async move {
+                    call(
+                        &connection,
+                        deadline,
+                        Method::SessionInputsWrite {
+                            session_id,
+                            expected_revision: revision,
+                            session_config: Some(SessionInputChange::Replace(config)),
+                            session_resources: None,
+                        },
+                    )
+                    .await
+                }
+            });
+            gate.wait_entered_async().await;
+            let cut = || fixture.manager.applications.lock().bound_source_cut(&id);
+            let before = cut();
+            let observed = tokio::task::spawn_blocking({
+                let manager = fixture.manager.clone();
+                let id = id.clone();
+                let endpoint = endpoint.clone();
+                let lane = lane.clone();
+                move || {
+                    if subset {
+                        manager.observe_incomplete_bound_python(
+                            &id,
+                            &endpoint,
+                            lane,
+                            &std::collections::BTreeSet::from([ToolSourceId::ManagedPython(
+                                "incomplete-pkg".into(),
+                            )]),
+                        )
+                    } else {
+                        manager.observe_bound_source(&id, &endpoint, lane, false)
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(observed, !subset);
+            let after = cut();
+            assert_eq!((after.0, after.1), (before.0, before.1));
+            assert!(after.2 > before.2);
+            gate.release();
+            let MethodResult::SessionInputsWritten { revision: written } = write.await.unwrap()
+            else {
+                panic!("unchanged source must allow the settings commit");
+            };
+            assert_eq!(written, revision + 1);
+            let (actual, settings) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+            assert_eq!(actual, written);
+            assert_eq!(settings.session_config, Some(config));
+            applied(&fixture, 0).await;
+        }
+        assert!(endpoint.control().unwrap().same_pair(&lane));
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_input_commit_fences_a_parked_python_fallback() {
     use super::super::protocol::{call, initialize};
     use crate::app_server::{

@@ -945,3 +945,26 @@ run and the complete external conformance target passed locally.
   changes neither scope. Dismissing the notice and opening a new move
   verifies the updated package still transfers through its exact scope.
   The focused case passed twice in the pinned Chromium image.
+
+## Source facts, Hosted replies, and stdio diagnostics follow-up
+
+- A newer in-flight source capture fences settings that were read before
+  it took ownership. An unchanged completion leaves the physical source
+  and semantic application generations intact. The real Client settings
+  fixture parks each validation while an unchanged Python subset probe or
+  full reread finishes, then checks exactly one persisted revision advance.
+  The changed-Skill and superseded Python regressions cover the other cuts.
+- A winning ordinary Hosted response uses the same preview, truncation and
+  continuation as a verified upload. The real Host test sends identical
+  roughly 100 KiB content by both routes with saved, unbound and full-disk
+  Clients. It checks one canonical result, the exact provider continuation,
+  authentic saved bytes through Read and Grep, and explicit unavailable
+  storage where applicable.
+- Execution revision 8 transmits typed complete or incomplete startup stderr.
+  A real Managed Python import error reaches activation diagnostics. A
+  separate real stdio Client fixture checks frozen credential redaction and
+  omission when capture exceeds the limit, preserving the handshake
+  failure and physical close contract. Revision 7 is refused before dispatch.
+- Workspace Skill transfer notices identify the submitted operation, source
+  scope and exact destination. A reverse-order component fixture uses two
+  uncertain copies of the same Skill with different submitted names.

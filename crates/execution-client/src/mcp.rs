@@ -23,8 +23,8 @@ use rmcp::{
 use rustx_execution_protocol::{
     MAX_RAW_CHUNK_BYTES,
     mcp::{
-        Failure, Launch, MAX_PENDING_SENDS, MAX_RECORD_BYTES, MAX_SEND_BYTES, MAX_SESSIONS, Reply,
-        Request, Response,
+        Failure, Launch, MAX_PENDING_SENDS, MAX_RECORD_BYTES, MAX_SEND_BYTES, MAX_SESSIONS,
+        MAX_STARTUP_STDERR_BYTES, Reply, Request, Response, StartupStderr,
     },
     process::{OperationId, ProcessOperationKey},
 };
@@ -44,6 +44,7 @@ const MAX_IDENTITIES: usize = 4096;
 const MAX_ADMISSION_BYTES: usize = 64 * 1024;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(20);
 const SEND_BUDGET: Duration = Duration::from_secs(5);
+const STARTUP_STDERR_BUDGET: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub(crate) struct Sessions {
@@ -72,7 +73,10 @@ struct Session {
 enum Status {
     Opening,
     Ready(String),
-    Settled(Option<Failure>),
+    Settled {
+        failure: Option<Failure>,
+        startup_stderr: Option<StartupStderr>,
+    },
 }
 
 impl Sessions {
@@ -112,14 +116,15 @@ impl Sessions {
         };
         match request {
             Request::Open { .. } => unreachable!("handled above"),
-            Request::State { .. } => session.state(),
+            Request::State { .. } => session.state(true),
             Request::Send { data_base64, .. } => session.send(&data_base64),
             Request::Receive {
                 sequence, offset, ..
             } => session.receive(sequence.get(), offset.get()),
             Request::Close { .. } => {
                 session.signal.cancel();
-                let Status::Settled(failure) = *session.status.lock().expect("stdio MCP status")
+                let Status::Settled { failure, .. } =
+                    *session.status.lock().expect("stdio MCP status")
                 else {
                     return Reply::Closing;
                 };
@@ -213,21 +218,28 @@ impl Entry {
 
     fn state(&self) -> Reply {
         match self {
-            Self::Session(session) => session.state(),
+            Self::Session(session) => session.state(true),
             Self::Retired { failure, .. } => failure.map_or(Reply::Closed, Reply::Failed),
         }
     }
 }
 
 impl Session {
-    fn state(&self) -> Reply {
+    fn state(&self, include_startup_stderr: bool) -> Reply {
         match &*self.status.lock().expect("stdio MCP status") {
             Status::Opening => Reply::Opening,
             Status::Ready(_) if self.signal.is_cancelled() => Reply::Closing,
             Status::Ready(admission) => Reply::Ready {
                 admission_base64: admission.clone(),
             },
-            Status::Settled(failure) => failure.map_or(Reply::Closed, Reply::Failed),
+            Status::Settled {
+                failure: Some(failure),
+                startup_stderr: Some(stderr),
+            } if include_startup_stderr => Reply::StartupFailed {
+                failure: *failure,
+                stderr: stderr.clone(),
+            },
+            Status::Settled { failure, .. } => failure.map_or(Reply::Closed, Reply::Failed),
         }
     }
 
@@ -278,7 +290,7 @@ impl Session {
             self.current = match self.incoming.try_recv() {
                 Ok(message) => Some(message),
                 Err(mpsc::error::TryRecvError::Empty) => return Reply::Pending,
-                Err(mpsc::error::TryRecvError::Disconnected) => return self.state(),
+                Err(mpsc::error::TryRecvError::Disconnected) => return self.state(false),
             };
         }
         let Some(current) = &self.current else {
@@ -481,42 +493,67 @@ async fn run(
     let Ok(mut process) = SupervisedInteractiveProcess::spawn_cancellable(spec, signal.clone())
     else {
         worker.physical_settlement(true);
-        *status.lock().expect("stdio MCP status") = Status::Settled(Some(Failure::Unavailable));
+        *status.lock().expect("stdio MCP status") = Status::Settled {
+            failure: Some(Failure::Unavailable),
+            startup_stderr: None,
+        };
         return;
     };
-    let failure = if let (Some(stdout), Some(stdin)) = (process.stdout.take(), process.stdin.take())
-    {
-        let mut startup = StartupTransport {
-            pipe: AsyncRwTransport::new_client(stdout, stdin)
-                .with_received_record_limit(MAX_RECORD_BYTES),
-            sent_initialize: false,
-        };
-        let result = negotiate(&mut startup, &info, lifecycle, &signal).await;
-        match result {
-            Ok((admission, request_context)) => {
-                *status.lock().expect("stdio MCP status") = Status::Ready(admission);
-                transfer(
-                    &mut startup.pipe,
-                    request_context,
-                    requests,
-                    &replies,
-                    &signal,
-                )
-                .await
+    let (failure, startup_failed) =
+        if let (Some(stdout), Some(stdin)) = (process.stdout.take(), process.stdin.take()) {
+            let mut startup = StartupTransport {
+                pipe: AsyncRwTransport::new_client(stdout, stdin)
+                    .with_received_record_limit(MAX_RECORD_BYTES),
+                sent_initialize: false,
+            };
+            let result = negotiate(&mut startup, &info, lifecycle, &signal).await;
+            match result {
+                Ok((admission, request_context)) => {
+                    *status.lock().expect("stdio MCP status") = Status::Ready(admission);
+                    (
+                        transfer(
+                            &mut startup.pipe,
+                            request_context,
+                            requests,
+                            &replies,
+                            &signal,
+                        )
+                        .await,
+                        false,
+                    )
+                }
+                Err(failure) => (failure, failure.is_some()),
             }
-            Err(failure) => failure,
-        }
-    } else {
-        Some(Failure::Transport)
-    };
+        } else {
+            (Some(Failure::Transport), true)
+        };
     process.request_shutdown();
     let proven = process.wait_for_settlement().await.is_ok();
     worker.physical_settlement(proven);
-    *status.lock().expect("stdio MCP status") = Status::Settled(if proven {
-        failure
+    // Optional diagnostic capture carries no physical worker responsibility.
+    drop(worker);
+    let startup_stderr = if proven && startup_failed {
+        let cutoff = tokio::time::Instant::now() + STARTUP_STDERR_BUDGET;
+        Some(
+            process
+                .complete_stderr_by(cutoff)
+                .await
+                .filter(|text| text.len() <= MAX_STARTUP_STDERR_BYTES)
+                .map_or(StartupStderr::Incomplete, |text| StartupStderr::Complete {
+                    text,
+                }),
+        )
     } else {
-        Some(Failure::SettlementUnconfirmed)
-    });
+        None
+    };
+    *status.lock().expect("stdio MCP status") = Status::Settled {
+        failure: if proven {
+            failure
+        } else {
+            Some(Failure::SettlementUnconfirmed)
+        },
+        startup_stderr,
+    };
 }
 
 async fn negotiate(

@@ -720,7 +720,7 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
                     conversation.clone(),
                     request,
                     Some(Validity::Tool(cancellation.clone())),
-                    execution,
+                    execution.clone(),
                 )
             }) {
                 Some(Ok(ticket)) => ticket,
@@ -756,13 +756,9 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
                         upload.into_result(duration(), locator)
                     },
                     Ok(CallbackReply::Message(ClientReply::Success(reply))) => match serde_json::from_value::<super::protocol::HostToolResponse>(reply.result) {
-                        Ok(response) => result(
-                            if response.success { Status::Success } else { Status::Failed { error: "application reported a failed tool result".into() } },
-                            response.content_items.into_iter().map(|item| match item {
-                                super::protocol::HostToolContent::Text { text } => crate::tools::ToolResultContent::Text(crate::message::content::TextBlock { text }),
-                            }).collect(),
-                            duration(),
-                        ),
+                        Ok(response) => upload::complete_message(
+                            response, execution, conversation, &cancellation, duration,
+                        ).await,
                         Err(_) => result(unknown(), Vec::new(), duration()),
                     },
                     Ok(CallbackReply::Message(ClientReply::Error(_))) | Err(_) => {

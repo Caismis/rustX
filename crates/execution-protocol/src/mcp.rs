@@ -15,6 +15,8 @@ pub const MAX_SESSIONS: usize = 2 * MAX_GENERATION_SESSIONS;
 pub const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 /// A complete outbound record fits in one Execution frame after base64.
 pub const MAX_SEND_BYTES: usize = 512 * 1024;
+/// Maximum complete UTF-8 startup stderr retained from one settled process.
+pub const MAX_STARTUP_STDERR_BYTES: usize = 64 * 1024;
 /// Pending outbound records per session.
 pub const MAX_PENDING_SENDS: usize = 4;
 
@@ -266,6 +268,19 @@ pub struct Response {
     pub reply: Reply,
 }
 
+/// Evidence from the startup process stderr pipe after physical settlement.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum StartupStderr {
+    /// Complete UTF-8 from a pipe that reached EOF within the capture limit.
+    Complete {
+        /// Untrusted text. Redact with the admitted source's credentials.
+        text: String,
+    },
+    /// Clipped, invalid UTF-8, unavailable or not yet complete at the cutoff.
+    Incomplete,
+}
+
 /// A correlated reply from the physical session owner.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -296,6 +311,13 @@ pub enum Reply {
     Closing,
     /// The physical unit is proved terminal.
     Closed,
+    /// Startup failed and the physical owner has settled.
+    StartupFailed {
+        /// The original startup failure classification.
+        failure: Failure,
+        /// Bounded evidence from that exact process.
+        stderr: StartupStderr,
+    },
     /// Request refused or the owner retained a failure.
     Failed(Failure),
 }
@@ -320,6 +342,10 @@ impl fmt::Debug for Reply {
                 .finish_non_exhaustive(),
             Self::Closing => formatter.write_str("Closing"),
             Self::Closed => formatter.write_str("Closed"),
+            Self::StartupFailed { failure, .. } => formatter
+                .debug_struct("StartupFailed")
+                .field("failure", failure)
+                .finish_non_exhaustive(),
             Self::Failed(failure) => formatter.debug_tuple("Failed").field(failure).finish(),
         }
     }

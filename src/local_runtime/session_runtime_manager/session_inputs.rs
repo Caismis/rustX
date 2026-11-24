@@ -207,7 +207,7 @@ impl SessionRuntimeManager {
         };
         if !same_endpoint
             || application.source_cut(&input.cwd) != source_cut
-            || bound_cut.is_some_and(|cut| application.bound_source_cut(session) != cut)
+            || bound_cut.is_some_and(|cut| application.bound_source_changed_since(session, cut))
         {
             return Err(SessionInputError::SourceChanged);
         }
@@ -240,7 +240,7 @@ impl SessionRuntimeManager {
                             Ok(capture),
                             reads,
                             lane.clone(),
-                            false,
+                            super::super::configuration::application::BoundObservationMode::Explicit,
                         );
                     })
                     .is_none()

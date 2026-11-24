@@ -96,39 +96,103 @@ impl CompletedUpload {
         duration: u64,
         locator: Option<std::path::PathBuf>,
     ) -> ToolExecutionResult {
-        let status = if self.end.success() {
-            ToolExecutionStatus::Success
-        } else {
-            ToolExecutionStatus::Failed {
-                error: "application reported a failed tool result".into(),
-            }
-        };
-        let (items, truncated) = match self.preview {
-            Preview::Items(items) => (items, false),
-            Preview::Combined { text, .. } => {
-                let (text, truncated) = text.finish();
-                (vec![text], truncated)
-            }
-        };
-        let content = items
-            .into_iter()
-            .map(|text| ToolResultContent::Text(TextBlock { text }))
-            .collect();
-        let mut result = crate::tools::host::result(status, content, duration);
-        if truncated {
-            result.truncation = Some(TruncationState {
-                truncated: true,
-                original_bytes: Some(self.end.total()),
-            });
-            result.managed_output = Some(Box::new(match locator {
-                Some(locator) => ManagedOutputContinuation::Complete { locator },
-                None => ManagedOutputContinuation::Unavailable {
-                    diagnostic: "complete Hosted output was not saved".into(),
-                },
-            }));
-        }
-        result
+        project_result(
+            self.end.success(),
+            self.preview,
+            duration,
+            self.end.total(),
+            locator,
+        )
     }
+}
+
+pub(super) async fn complete_message(
+    response: crate::app_server::protocol::HostToolResponse,
+    execution: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
+    conversation: &crate::runtime::identity::ConversationId,
+    cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    duration: impl FnOnce() -> u64,
+) -> ToolExecutionResult {
+    let items: Vec<_> = response
+        .content_items
+        .into_iter()
+        .map(|item| match item {
+            crate::app_server::protocol::HostToolContent::Text { text } => text,
+        })
+        .collect();
+    let total: usize = items.iter().map(String::len).sum();
+    let normalized_total = total + items.len().saturating_sub(1);
+    let (preview, locator) = if normalized_total <= PREVIEW_BYTES {
+        (Preview::Items(items), None)
+    } else {
+        // The complete message is already bounded by the callback wire limit.
+        // Queue its normalized bytes together so many small items cannot
+        // exhaust the Save window before the asynchronous writer is polled.
+        let normalized = items.join("\n");
+        drop(items);
+        let mut text = TextPreviewCapture::new(PREVIEW_BYTES);
+        text.push(&normalized);
+        let mut save =
+            execution.map(|scope| Import::new(scope, conversation.clone(), cancellation.clone()));
+        if let Some(save) = &mut save {
+            save.push(&normalized);
+        }
+        drop(normalized);
+        let locator = if let Some(save) = save {
+            save.publish().await
+        } else {
+            None
+        };
+        (
+            Preview::Combined {
+                text,
+                item_index: 0,
+            },
+            locator,
+        )
+    };
+    project_result(response.success, preview, duration(), total as u64, locator)
+}
+
+fn project_result(
+    success: bool,
+    preview: Preview,
+    duration: u64,
+    original_bytes: u64,
+    locator: Option<std::path::PathBuf>,
+) -> ToolExecutionResult {
+    let status = if success {
+        ToolExecutionStatus::Success
+    } else {
+        ToolExecutionStatus::Failed {
+            error: "application reported a failed tool result".into(),
+        }
+    };
+    let (items, truncated) = match preview {
+        Preview::Items(items) => (items, false),
+        Preview::Combined { text, .. } => {
+            let (text, truncated) = text.finish();
+            (vec![text], truncated)
+        }
+    };
+    let content = items
+        .into_iter()
+        .map(|text| ToolResultContent::Text(TextBlock { text }))
+        .collect();
+    let mut result = crate::tools::host::result(status, content, duration);
+    if truncated {
+        result.truncation = Some(TruncationState {
+            truncated: true,
+            original_bytes: Some(original_bytes),
+        });
+        result.managed_output = Some(Box::new(match locator {
+            Some(locator) => ManagedOutputContinuation::Complete { locator },
+            None => ManagedOutputContinuation::Unavailable {
+                diagnostic: "complete Hosted output was not saved".into(),
+            },
+        }));
+    }
+    result
 }
 
 struct Step {

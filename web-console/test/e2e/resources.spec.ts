@@ -283,6 +283,7 @@ test('skill directories copy, move and delete from their exact scopes', async ({
       await moveToWorkspace.getByRole('button', {name: 'Move', exact: true}).click();
       await expect(conflict).toContainText('global-guide');
       await expect(conflict).toContainText('reopen the transfer');
+      await expect(conflict).toContainText('Move from Global to global-guide in Workspace A.');
       await expect(moveToWorkspace).toHaveCount(0);
       expect(staleMoves).toBe(1);
       expect(existsSync(globalOriginal)).toBe(true);

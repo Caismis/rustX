@@ -46,7 +46,7 @@ export function TransferDialog({ intent, close, refresh, onReopen }: {
   intent: TransferIntent;
   close: () => void;
   refresh: () => void;
-  onReopen?: (reason: TransferReopenReason) => void;
+  onReopen?: (reason: TransferReopenReason, destination: string) => void;
 }) {
   const tx = useTranslation();
   const moving = intent.operation === 'move';
@@ -82,7 +82,7 @@ export function TransferDialog({ intent, close, refresh, onReopen }: {
         : native?.kind === 'source_conflict' || error?.kind === 'workspace_unavailable' || error?.kind === 'authority_replaced' || error?.kind === 'native_replaced'
           ? 'changed' : undefined;
       if (reason) {
-        if (onReopen) onReopen(reason);
+        if (onReopen) onReopen(reason, destination);
         else {
           setFailure(tx(`resources:transfer.${reason}`));
           setReopen(true);

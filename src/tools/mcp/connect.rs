@@ -217,6 +217,7 @@ impl McpServerRuntime {
                     launch,
                     &cancellation,
                     protocol_violation.clone(),
+                    &binding.credentials,
                 )
                 .await?;
                 let transport = dispatch::ObservingTransport::new(
@@ -704,7 +705,7 @@ async fn settle_admitted_failure(
     settle_connect_failure(credentials, process, error).await
 }
 
-fn append_server_stderr(error: McpError, preview: &str) -> McpError {
+pub(super) fn append_server_stderr(error: McpError, preview: &str) -> McpError {
     if preview.is_empty() {
         return error;
     }

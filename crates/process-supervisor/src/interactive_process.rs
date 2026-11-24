@@ -535,6 +535,31 @@ impl SupervisedInteractiveProcess {
         Some(self.stderr_preview())
     }
 
+    /// Returns complete, unmodified UTF-8 after stderr reaches EOF. The
+    /// caller supplies an absolute cutoff for optional diagnostics.
+    ///
+    /// # Panics
+    /// Panics if the internal stderr preview mutex is poisoned.
+    pub async fn complete_stderr_by(&self, cutoff: tokio::time::Instant) -> Option<String> {
+        let mut completion = self.stderr_complete.clone();
+        let complete = tokio::time::timeout_at(cutoff, completion.wait_for(Option::is_some))
+            .await
+            .ok()?
+            .ok()?
+            .as_ref()
+            .copied()?;
+        if !complete {
+            return None;
+        }
+        String::from_utf8(
+            self.stderr_preview
+                .lock()
+                .expect("interactive stderr lock")
+                .clone(),
+        )
+        .ok()
+    }
+
     /// Observes the direct child of this owner for process fixtures.
     #[doc(hidden)]
     #[cfg(feature = "test-support")]

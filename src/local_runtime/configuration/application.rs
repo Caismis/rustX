@@ -182,20 +182,37 @@ struct BoundSourceObservation {
     generation: u64,
 }
 
-fn same_capture_failure(
-    previous: &Result<CapturedApplication, String>,
-    current: &Result<CapturedApplication, String>,
-) -> bool {
-    match (previous, current) {
-        (Err(previous), Err(current)) => previous == current,
-        (Ok(previous), Ok(current)) => {
-            previous.revision == current.revision
-                && matches!((&previous.context, &current.context),
-                    (Err(previous), Err(current)) if previous == current)
+#[derive(Clone, Copy)]
+pub(crate) enum BoundObservationMode {
+    Explicit,
+    NativeHint,
+    Recheck,
+}
+
+impl BoundObservationMode {
+    fn same_capture(
+        self,
+        previous: &Result<CapturedApplication, String>,
+        current: &Result<CapturedApplication, String>,
+    ) -> bool {
+        match (self, previous, current) {
+            (Self::Explicit, _, _) => false,
+            (Self::Recheck, Err(previous), Err(current)) => previous == current,
+            (_, Ok(previous), Ok(current)) if previous.revision == current.revision => {
+                match (&previous.context, &current.context) {
+                    (Ok(_), Ok(_)) => true,
+                    (Err(previous), Err(current)) if matches!(self, Self::Recheck) => {
+                        previous == current
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
         }
-        _ => false,
     }
 }
+
+pub(crate) type BoundSourceCut = (Option<u64>, Option<u64>, Option<u64>);
 
 impl std::fmt::Debug for ApplicationState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -406,12 +423,12 @@ impl ApplicationState {
         .then_some((capture, self.scopes.get(scope)?.desired.attempt))
     }
 
-    /// A capture can own a consumed watch hint before it publishes anything.
-    /// Its start advances this cut even if its result is subsequently discarded.
+    /// Records the source facts used by a settings write and which capture
+    /// had most recently started when validation began.
     pub(crate) fn bound_source_cut(
         &self,
         session: &crate::runtime::identity::SessionId,
-    ) -> (Option<u64>, Option<u64>, Option<u64>) {
+    ) -> BoundSourceCut {
         let scope = session.as_str();
         (
             self.scopes.get(scope).map(|view| view.desired.attempt),
@@ -422,6 +439,22 @@ impl ApplicationState {
                 .get(session)
                 .map(|capture| capture.generation),
         )
+    }
+
+    pub(crate) fn bound_source_changed_since(
+        &self,
+        session: &crate::runtime::identity::SessionId,
+        (desired, observation, started): BoundSourceCut,
+    ) -> bool {
+        let (current_desired, current_observation, _) = self.bound_source_cut(session);
+        // A newer in-flight capture can own a consumed native hint. Once
+        // it finishes without changing the source facts, it no longer fences.
+        current_desired != desired
+            || current_observation != observation
+            || self
+                .bound_captures
+                .get(session)
+                .is_some_and(|capture| capture.active && Some(capture.generation) > started)
     }
 
     pub(crate) fn bound_source_reads(
@@ -445,7 +478,8 @@ impl ApplicationState {
     }
 
     /// Retain the physical observation even when configuration validation
-    /// failed. Only automatic observations coalesce an identical failure.
+    /// failed. Automatic observations preserve the generation for identical
+    /// reads and source facts. Explicit observations still allow retries.
     pub(crate) fn publish_bound_observation(
         &mut self,
         scope: String,
@@ -453,17 +487,16 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
         reads: BoundSourceReads,
         lane: rustx_execution_server::ControlHandle,
-        coalesce_failure: bool,
+        mode: BoundObservationMode,
     ) -> bool {
-        if coalesce_failure
-            && self
-                .bound_observations
-                .get(&scope)
-                .is_some_and(|previous| previous.lane.same_pair(&lane) && previous.reads == reads)
+        if self
+            .bound_observations
+            .get(&scope)
+            .is_some_and(|previous| previous.lane.same_pair(&lane) && previous.reads == reads)
             && self
                 .inputs
                 .get(&scope)
-                .is_some_and(|previous| same_capture_failure(previous, &input))
+                .is_some_and(|previous| mode.same_capture(previous, &input))
         {
             return false;
         }

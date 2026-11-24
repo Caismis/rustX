@@ -167,6 +167,7 @@ async fn stream_large_result(
     second: &mut Peer,
     call: &ServerRequest,
     copy: &ServerRequest,
+    body: &str,
     SaveStaging {
         scratch,
         mut receipts,
@@ -177,12 +178,7 @@ async fn stream_large_result(
 ) {
     let a = candidate(call);
     let b = candidate(copy);
-    let body = format!(
-        "{}host-middle{}🙂end-of-host-output",
-        "q".repeat(600_000),
-        "z".repeat(600_000)
-    );
-    let parts = ["start-of-host-output", "", body.as_str(), ""];
+    let parts = ["start-of-host-output", "", body, ""];
     let items = json!(parts.map(|part| json!({"typeTag": 1, "length": part.len().to_string()})));
     let total = parts.iter().map(|part| part.len()).sum::<usize>();
     let begin =
@@ -448,9 +444,16 @@ async fn verify_native_continuation(
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit_once() {
     tokio::time::timeout(std::time::Duration::from_secs(180),async {
-        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused","stream_save_saturated","stream_save_receipt_lost","stream_disk_full","stream_save_cancelled"] {
-            if winner == "stream_disk_full" && !cfg!(target_os = "linux") { continue; }
+        for winner in ["success","error","invalid","stream","stream_saved","stream_save_refused","stream_save_saturated","stream_save_receipt_lost","stream_disk_full","stream_save_cancelled",
+            "ordinary_unbound","ordinary_saved","ordinary_disk_full",
+            "small_stream_unbound","small_stream_saved","small_stream_disk_full"] {
+            if winner.ends_with("_disk_full") && !cfg!(target_os = "linux") { continue; }
             let saved_cancelled = winner == "stream_save_cancelled";
+            let ordinary = winner.starts_with("ordinary_");
+            let streamed = winner.starts_with("stream") || winner.starts_with("small_stream");
+            let saved = winner.ends_with("_saved");
+            let body = if ordinary || winner.starts_with("small_stream") { 50 * 1024 } else { 600_000 };
+            let body = format!("{}host-middle{}🙂end-of-host-output", "q".repeat(body), "z".repeat(body));
             let scenario = if saved_cancelled { "app_server_host_save_cancel" } else { "app_server_host_broadcast" };
             let Some(provider)=ProviderEmulator::start(scenario).await else {return;};
             let ServerFixture { root,workspace,sessions,manager,host,endpoint,shutdown,server }=ServerFixture::start(&provider).await;
@@ -475,7 +478,7 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 missing_receipt = Some(receipt);
                 save_receipts = Some(receipts);
                 Some(child)
-            } else if winner == "stream_disk_full" {
+            } else if winner.ends_with("_disk_full") {
                 let (child, receipt) = save_backpressure::spawn_disk_limited(&manager, &session.id, &scratch).await;
                 disk_failure = Some(receipt);
                 Some(child)
@@ -484,7 +487,7 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 cancel_at_seal = Some(seal);
                 save_receipts = Some(receipts);
                 Some(child)
-            } else if matches!(winner, "stream_saved" | "stream_save_refused") {
+            } else if saved || winner == "stream_save_refused" {
                 let (child, receipts) = save_backpressure::observe_save_receipts(&manager, &session.id, &scratch).await;
                 save_receipts = Some(receipts);
                 Some(child)
@@ -522,12 +525,18 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let selected=match winner {
                 "success"=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":{"success":true,"contentItems":[{"type":"inputText","text":"authoritative-host-result"}]}}),
                 "error"=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"error":{"code":-32000,"message":"remote result unknown"}}),
+                _ if ordinary => {
+                    let items = ["start-of-host-output", "", body.as_str(), ""]
+                        .map(|text| json!({"type":"inputText","text":text}));
+                    json!({"jsonrpc":"2.0","id":call.id,"result":{"success":true,"contentItems":items}})
+                }
+
                 _=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":"invalid domain payload"}),
             };
-            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost" | "stream_disk_full" | "stream_save_cancelled") {
-                stream_large_result(&mut first, &mut second, &call, &copy, SaveStaging {
+            if streamed {
+                stream_large_result(&mut first, &mut second, &call, &copy, &body, SaveStaging {
                     scratch: &scratch, receipts: save_receipts.as_mut(),
-                    refuse_save: winner == "stream_save_refused", wait_for_winner: winner == "stream_saved",
+                    refuse_save: winner == "stream_save_refused", wait_for_winner: saved,
                     backpressure,
                 }).await;
             } else {
@@ -561,14 +570,16 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let store=SqliteConversationStore::open_existing(thread.id.clone(),&access.database_path).unwrap();
             let canonical=store.load_canonical().unwrap(); let results:Vec<_>=canonical.iter().filter_map(|message|if let MessageBlock::Tool(tool)=message {Some(&tool.result)}else{None}).collect();
             assert_eq!(results.len(),1,"one canonical ToolResult");
-            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),matches!(winner, "success" | "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost" | "stream_disk_full" | "stream_save_cancelled"));
+            assert_eq!(matches!(results[0].status,ToolExecutionStatus::Success),winner == "success" || streamed || ordinary);
             if matches!(winner, "error" | "invalid") {assert!(matches!(results[0].status,ToolExecutionStatus::OutcomeUnknown {..}));}
             assert_eq!(manager.execution_endpoint(&session.id).is_ok(), client.is_some());
             let requests = provider.requests().await;
             assert_eq!(requests.len(), if saved_cancelled { 1 } else { 2 }, "no business replay or post-cancel inference");
-            if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost" | "stream_disk_full" | "stream_save_cancelled") {
+            if streamed || ordinary {
                 let result = results[0];
-                if winner == "stream_saved" {
+                let raw_bytes = ("start-of-host-output".len() + body.len()) as u64;
+                assert_eq!(result.truncation.as_ref().unwrap().original_bytes, Some(raw_bytes));
+                if saved {
                     let Some(ManagedOutputContinuation::Complete { locator }) = result.managed_output.as_deref() else {
                         panic!("confirmed Client publication: {result:?}");
                     };
@@ -579,11 +590,10 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                     let physical = std::fs::read_dir(&directories[0]).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
                     assert_eq!(physical.len(), 1, "only the winner's complete output is retained");
                     let text = std::fs::read_to_string(physical[0].path()).unwrap();
-                    assert_eq!(text, format!("start-of-host-output\n\n{}host-middle{}🙂end-of-host-output\n", "q".repeat(600_000), "z".repeat(600_000)));
+                    assert_eq!(text, format!("start-of-host-output\n\n{body}\n"));
                     verify_native_continuation(&manager, &session.id, &thread.id, &workspace, &root.path().join("readback"), locator).await;
                 } else {
                     assert!(matches!(result.managed_output.as_deref(), Some(ManagedOutputContinuation::Unavailable { .. })));
-                    assert!(result.truncation.as_ref().unwrap().original_bytes.unwrap() > 1_048_576);
                     if winner == "stream_save_receipt_lost" {
                         let [file] = saved_files(&scratch).try_into().unwrap();
                         assert_eq!(file.metadata().unwrap().len(), 1_200_056);

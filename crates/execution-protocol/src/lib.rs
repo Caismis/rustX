@@ -28,10 +28,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v7";
+pub const EXECUTION_PATH: &str = "/execution/v8";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -1720,7 +1720,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v7` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v8` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

@@ -768,6 +768,10 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         failure,
         rustx::capabilities::CapabilityPreparationError::ToolActivation(_)
     ));
+    assert!(
+        failure.to_string().contains("issue174-import-boom"),
+        "{failure}"
+    );
     assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
     assert_eq!(
         execution
@@ -779,6 +783,61 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         2,
         "both physical environments exist before their independent stdio failures"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bound_stdio_startup_stderr_is_redacted_or_omitted() {
+    use rustx::tools::mcp::{McpError, McpServerBinding};
+
+    const ECHOED: &str = "fixture-startup-token";
+    let root = tempfile::tempdir().expect("workspace");
+    let path = root.path().canonicalize().unwrap();
+    let execution = crate::common::session_execution::ExecutionFixture::new(&path);
+    let workspace = Workspace::for_session(&path, execution.scope.clone()).unwrap();
+
+    for (name, command, expected) in [
+        (
+            "complete",
+            "printf '%s startup-marker\n' \"$FIXTURE_TOKEN\" >&2; exit 7",
+            "server stderr: <redacted> startup-marker",
+        ),
+        (
+            "oversized",
+            "printf '%s oversized-marker\n' \"$FIXTURE_TOKEN\" >&2; head -c 65536 /dev/zero >&2; exit 7",
+            "<incomplete stderr capture omitted>",
+        ),
+    ] {
+        let binding = McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            transport: McpTransportConfig::Stdio {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), command.into()],
+                cwd: None,
+                environment: [("FIXTURE_TOKEN".into(), ECHOED.into())].into(),
+            },
+            policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
+        };
+        let Err(McpError::Discovery(diagnostic)) = tokio::time::timeout(
+            LIVENESS,
+            McpServerRuntime::connect_fixture(
+                &McpServerId::new(name),
+                &binding,
+                &workspace,
+                Arc::new(McpInvalidationState::new()),
+            ),
+        )
+        .await
+        .expect("startup failure settles") else {
+            panic!("a physically settled startup failure must retain its discovery classification");
+        };
+        assert!(diagnostic.contains("(Handshake)"), "{diagnostic}");
+        assert!(diagnostic.contains(expected), "{diagnostic}");
+        assert!(!diagnostic.contains(ECHOED));
+        assert!(!diagnostic.contains("oversized-marker"));
+    }
 }
 
 /// Executes one managed tool through a committed capability snapshot's

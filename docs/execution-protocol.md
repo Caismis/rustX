@@ -116,7 +116,7 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client opens a pair with a revision 7 Hello. It retains
+The Client opens a pair with a revision 8 Hello. It retains
 `physical_settlement_proven` in terminal process snapshots and requires the
 same-instance recovery handshake after a transport loss. Managed Python
 source capture and generic stdio launch carry exact binding identity in
@@ -504,7 +504,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v7` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v8` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -558,7 +558,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v7]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v8]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1117,6 +1117,13 @@ teardown and Revoke attempt cleanup. Offline cleanup after Client death
 requires physical-domain attestation. See the Hosted reception contract
 and [EXEC-03 evidence](exec-03-evidence.md).
 
+Both ordinary Hosted replies and validated uploads use the same result
+projection. The claimed business response fixes success or failure before
+Save is attempted. Text items are joined with one newline on the bounded
+preview and complete-output path, including empty items. A result exceeding
+the preview limit retains the exact Client locator if publication succeeds,
+or an unavailable continuation with the business result intact.
+
 ### Client-owned stdio MCP
 
 The Server admits the configured source and freezes its credential resolution.
@@ -1150,7 +1157,12 @@ record per receiving task, with a single item in the SDK input queue. Each
 execution page carries at most 64 KiB with checked sequence and offset. The
 wire encoding, parse allocations and transient serialization add to these
 payload budgets. Negotiation has a 20-second physical deadline and admission
-metadata is capped at 64 KiB. An absent binding provides no stdio capability.
+metadata is capped at 64 KiB. Startup failures can carry up to 64 KiB of
+complete UTF-8 stderr from the correlated process after physical settlement.
+Incomplete captures carry an explicit marker and no preview bytes. The
+Server redacts the complete text with the frozen source credentials before
+trimming or applying the final diagnostic bound. An absent binding provides
+no stdio capability.
 HTTP requests, their credentials and their network connection remain on the
 Server.
 
@@ -1476,7 +1488,10 @@ retirement, and bounded directory dependencies to Python capture receipts.
 Client package coverage includes the package root and all observed nested
 directories up to 128 paths and 16 KiB of escaped path bytes. If full
 coverage cannot be registered, the configuration observer periodically
-recaptures. Both lanes reject revision 6 at handshake.
+recaptures.
+
+Execution revision 8 adds typed startup stderr evidence to stdio MCP.
+Both lanes reject revision 7 before dispatch.
 
 Each capture key includes the original Session binding identity. The Client
 allows at most 128 names per authored scope, 256 retained capture identities,

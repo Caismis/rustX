@@ -19,7 +19,7 @@ use rmcp::{
 };
 use rustx_execution_protocol::{
     MAX_RAW_CHUNK_BYTES,
-    mcp::{Failure, Launch, MAX_RECORD_BYTES, MAX_SEND_BYTES, Reply, Request},
+    mcp::{Failure, Launch, MAX_RECORD_BYTES, MAX_SEND_BYTES, Reply, Request, StartupStderr},
 };
 use tokio::sync::mpsc;
 
@@ -164,6 +164,7 @@ impl Session {
         launch: Launch,
         cancellation: &CancellationSignal,
         violation: Arc<ProtocolViolationRecorder>,
+        credentials: &crate::credentials::SourceCredentials,
     ) -> Result<(Arc<Self>, PeerTransport, ClientTransportAdmission), McpError> {
         let binding = scope
             .bind_stdio_mcp(workspace)
@@ -173,7 +174,9 @@ impl Session {
             closed: AtomicBool::new(false),
             violation,
         });
-        let admitted = owner.await_admission(source_id, launch, cancellation).await;
+        let admitted = owner
+            .await_admission(source_id, launch, cancellation, credentials)
+            .await;
         match admitted {
             Ok(admission) => {
                 let transport = PeerTransport::new(owner.clone());
@@ -193,6 +196,7 @@ impl Session {
         source_id: &str,
         launch: Launch,
         signal: &CancellationSignal,
+        credentials: &crate::credentials::SourceCredentials,
     ) -> Result<ClientTransportAdmission, McpError> {
         let cancellation = cancellation(signal.clone());
         let deadline = Instant::now() + STARTUP;
@@ -221,22 +225,15 @@ impl Session {
                     return Ok(admission);
                 }
                 Reply::Opening => (),
-                Reply::Failed(Failure::UnsupportedRevision) => {
-                    return Err(McpError::ProtocolCompatibility(
-                        "Client stdio MCP found no compatible revision".into(),
-                    ));
+                Reply::StartupFailed { failure, stderr } => {
+                    let error = self.admission_error(failure);
+                    let preview = match stderr {
+                        StartupStderr::Complete { text } => credentials.redact(&text),
+                        StartupStderr::Incomplete => "<incomplete stderr capture omitted>".into(),
+                    };
+                    return Err(super::connect::append_server_stderr(error, preview.trim()));
                 }
-                Reply::Failed(Failure::InvalidRecord) => {
-                    self.violation.record_client_rejection();
-                    return Err(McpError::ProtocolViolation(
-                        "Client stdio MCP rejected a malformed or oversized record".into(),
-                    ));
-                }
-                Reply::Failed(failure) => {
-                    return Err(McpError::Discovery(format!(
-                        "Client stdio MCP admission failed ({failure:?})"
-                    )));
-                }
+                Reply::Failed(failure) => return Err(self.admission_error(failure)),
                 _ => {
                     return Err(McpError::Discovery(
                         "Client stdio MCP closed during admission".into(),
@@ -251,6 +248,21 @@ impl Session {
             request = Request::State {
                 key: self.binding.key.clone(),
             };
+        }
+    }
+
+    fn admission_error(&self, failure: Failure) -> McpError {
+        match failure {
+            Failure::UnsupportedRevision => McpError::ProtocolCompatibility(
+                "Client stdio MCP found no compatible revision".into(),
+            ),
+            Failure::InvalidRecord => {
+                self.violation.record_client_rejection();
+                McpError::ProtocolViolation(
+                    "Client stdio MCP rejected a malformed or oversized record".into(),
+                )
+            }
+            _ => McpError::Discovery(format!("Client stdio MCP admission failed ({failure:?})")),
         }
     }
 

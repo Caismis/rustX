@@ -851,7 +851,9 @@ impl LocalConnection {
         deadline: Instant,
         admit: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<rustx_execution_protocol::mcp::Reply> {
-        use rustx_execution_protocol::mcp::{Reply, Request};
+        use rustx_execution_protocol::mcp::{
+            Failure, MAX_STARTUP_STDERR_BYTES, Reply, Request, StartupStderr,
+        };
 
         if !self.supports(Capability::StdioMcp) {
             return Err(io::ErrorKind::Unsupported.into());
@@ -878,6 +880,22 @@ impl LocalConnection {
             && response.key == key
             && match &response.reply {
                 Reply::Failed(_) | Reply::Closed => true,
+                Reply::StartupFailed { failure, stderr } => {
+                    state
+                        && matches!(
+                            failure,
+                            Failure::Handshake
+                                | Failure::UnsupportedRevision
+                                | Failure::InvalidRecord
+                                | Failure::Transport
+                        )
+                        && match stderr {
+                            StartupStderr::Complete { text } => {
+                                text.len() <= MAX_STARTUP_STDERR_BYTES
+                            }
+                            StartupStderr::Incomplete => true,
+                        }
+                }
                 Reply::Opening | Reply::Ready { .. } => state,
                 Reply::Closing => close || state,
                 Reply::Queued => send,

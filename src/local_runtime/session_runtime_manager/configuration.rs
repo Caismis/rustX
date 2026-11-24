@@ -2,7 +2,7 @@
 //! gates, process limits, configuration hosts and applications,
 //! reconciliation, and source repair/read/write.
 
-use super::super::session::SessionId;
+use super::super::{configuration::application::BoundObservationMode, session::SessionId};
 use super::Entry;
 use super::SessionRuntimeManager;
 use crate::runtime::conversation_runtime::ConversationRuntime;
@@ -14,7 +14,7 @@ pub(super) struct BoundCapture {
     input: super::super::configuration::SessionConfigInput,
     endpoint: Arc<super::LocalExecutionEndpoint>,
     watch: Option<rustx_execution_server::ControlHandle>,
-    coalesce_failure: bool,
+    mode: BoundObservationMode,
     ticket: u64,
     prefetched_python: Option<PrefetchedPython>,
 }
@@ -755,7 +755,7 @@ impl SessionRuntimeManager {
                         input,
                         endpoint,
                         watch: None,
-                        coalesce_failure: false,
+                        mode: BoundObservationMode::Explicit,
                         ticket,
                         prefetched_python: None,
                     });
@@ -808,7 +808,11 @@ impl SessionRuntimeManager {
             input,
             endpoint: endpoint.clone(),
             watch: Some(watch),
-            coalesce_failure: !native_change,
+            mode: if native_change {
+                BoundObservationMode::NativeHint
+            } else {
+                BoundObservationMode::Recheck
+            },
             ticket,
             prefetched_python: None,
         }])
@@ -873,7 +877,7 @@ impl SessionRuntimeManager {
                     input,
                     endpoint: endpoint.clone(),
                     watch: Some(watch),
-                    coalesce_failure: true,
+                    mode: BoundObservationMode::Recheck,
                     ticket,
                     prefetched_python: None,
                 }])
@@ -921,7 +925,7 @@ impl SessionRuntimeManager {
             input,
             endpoint: endpoint.clone(),
             watch: Some(watch),
-            coalesce_failure: true,
+            mode: BoundObservationMode::Recheck,
             ticket,
             prefetched_python: Some(PrefetchedPython {
                 catalog: updated_python,
@@ -960,7 +964,7 @@ impl SessionRuntimeManager {
             input,
             endpoint,
             watch,
-            coalesce_failure,
+            mode,
             ticket,
             prefetched_python,
         } in bound
@@ -1034,7 +1038,7 @@ impl SessionRuntimeManager {
                         capture,
                         reads,
                         lane.clone(),
-                        coalesce_failure,
+                        mode,
                     )
                 })
             } else {

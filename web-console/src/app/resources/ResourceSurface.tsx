@@ -40,6 +40,16 @@ interface Props {
 }
 
 /** Retain each module's presentation independently of its source transactions. */
+type TransferNotice = {
+  scope: string;
+  name: string;
+  operation: TransferIntent['operation'];
+  fromLabel: string;
+  destination: string;
+  destinationLabel: string;
+  reason: TransferReopenReason;
+};
+
 export function ResourceSurface(props: Props) {
   const [visited, setVisited] = useState(props.visible);
   if (props.visible && !visited) setVisited(true);
@@ -106,8 +116,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [query, setQuery] = useState('');
   const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
-  const [pendingTransfer, setPendingTransfer] = useState<{ intent: TransferIntent; skillScope?: string; token: number }>();
-  const [transferNotices, setTransferNotices] = useState<ReadonlyMap<number, { scope: string; name: string; reason: TransferReopenReason }>>(() => new Map());
+  const [pendingTransfer, setPendingTransfer] = useState<{ intent: TransferIntent; skillScope?: string; token: number; fromLabel: string }>();
+  const [transferNotices, setTransferNotices] = useState<ReadonlyMap<number, TransferNotice>>(() => new Map());
   const [owedTransferRefresh, setOwedTransferRefresh] = useState<string>();
   const transferSequence = useRef(0);
   const liveTransfer = useRef<number | undefined>(undefined);
@@ -298,7 +308,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     const destination = from === 'user' ? resourceNames(source, 'workspace') : resourceNames(globalSource, 'user');
     const names = from === 'user' ? resourceNames(globalSource, 'user') : resourceNames(source, 'workspace');
     const token = ++transferSequence.current;
-    setPendingTransfer({ token, skillScope: skillTransferScope, intent: {
+    const fromLabel = from === 'user' ? tx('resources:scope.global') : workspace.displayName;
+    setPendingTransfer({ token, skillScope: skillTransferScope, fromLabel, intent: {
       from, name, revision, operation, family: module === 'skills' ? 'skill' : module === 'subagents' ? 'agent' : 'mcp', directory,
       destinationLabel: from === 'user' ? workspace.displayName : tx('resources:scope.global'),
       taken: skillNames ?? new Set([...names.filter(id => id !== name), ...destination]),
@@ -438,6 +449,9 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     {[...transferNotices].filter(([, notice]) => notice.scope === lifetime).map(([token, notice]) =>
       <div className={catalogCss.banner} role="alert" key={token}>
         <p><strong>{notice.name}</strong> {tx(`resources:transfer.notice-${notice.reason}`)}</p>
+        <p>{tx(notice.operation === 'move' ? 'resources:transfer.notice-move-target' : 'resources:transfer.notice-copy-target', {
+          p0: notice.fromLabel, p1: notice.destination, p2: notice.destinationLabel,
+        })}</p>
         <Button size="sm" variant="outline" onClick={() => setTransferNotices(current => {
           const remaining = new Map(current);
           remaining.delete(token);
@@ -447,10 +461,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     {activeTransfer && <TransferDialog key={activeTransfer.token} intent={activeTransfer.intent}
       close={() => setPendingTransfer(current => current?.token === activeTransfer.token ? undefined : current)}
       refresh={activeTransfer.intent.family === 'skill' ? () => refreshTransferredWorkspace(lifetime, activeTransfer.token) : refresh}
-      onReopen={activeTransfer.intent.family === 'skill' ? reason => {
-        const token = activeTransfer.token;
+      onReopen={activeTransfer.intent.family === 'skill' ? (reason, destination) => {
+        const { token, intent, fromLabel } = activeTransfer;
         setTransferNotices(current => new Map(current).set(token, {
-          scope: lifetime, name: activeTransfer.intent.name, reason,
+          scope: lifetime, name: intent.name, operation: intent.operation, fromLabel,
+          destination, destinationLabel: intent.destinationLabel, reason,
         }));
         setPendingTransfer(current => current?.token === token ? undefined : current);
         refreshTransferredWorkspace(lifetime, token);
