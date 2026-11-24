@@ -41,6 +41,14 @@ pub struct RangeRead {
     pub metadata: FileStamp,
 }
 
+/// A bounded resource resolution and the paths that can invalidate it.
+pub struct ResourceResolution {
+    /// Verified physical target, if the Client found one.
+    pub entry: Option<(PathBuf, EntryStamp)>,
+    /// Workspace-relative watch dependencies.
+    pub dependencies: Vec<PathBuf>,
+}
+
 /// A verified directory page reply from the Client.
 ///
 /// Names, order, cursor, and every entry stamp were checked against the
@@ -54,12 +62,16 @@ pub struct DirectoryListing {
     pub entries: Vec<PageEntry>,
     /// The index the next page starts at, absent at the end.
     pub next_offset: Option<u32>,
+    /// Hidden entries charged to an opted-in Skill discovery page.
+    pub skipped: u32,
 }
 
-/// The result of one bounded Bash continuation query.
-pub enum BashOutputPage {
+/// The result of one bounded Client continuation query.
+pub enum ContinuationPage {
     /// A checked logical-text page.
     Lines(LinesPage),
+    /// A checked byte range of a saved output.
+    Range(RangeRead),
     /// A checked search page.
     Search(SearchResult),
 }
@@ -129,6 +141,34 @@ pub struct SearchResult {
     pub short_lines: bool,
 }
 
+/// This watch no longer covers its path and retains its native cleanup slot.
+#[derive(Debug)]
+pub struct WatchRetiring;
+
+impl std::fmt::Display for WatchRetiring {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("watch cleanup is pending")
+    }
+}
+
+impl std::error::Error for WatchRetiring {}
+
+/// This MCP request was refused before it could reach the Execution Client.
+#[derive(Debug)]
+pub struct UnsentMcpExchange(io::Error);
+
+impl std::fmt::Display for UnsentMcpExchange {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for UnsentMcpExchange {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 enum ExchangeFailure {
     Refused(io::Error),
     Unknown(io::Error),
@@ -139,6 +179,23 @@ impl LocalConnection {
     #[must_use]
     pub fn admission(&self) -> &Admission {
         &self.admission
+    }
+
+    /// Whether this peer advertised a capability at admission.
+    #[must_use]
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
+    /// Whether this data lane still belongs to the current authenticated pair.
+    #[must_use]
+    pub fn is_current(&self) -> bool {
+        self.usable
+            && !self.closed
+            && self
+                .owner
+                .as_ref()
+                .is_none_or(|owner| owner.is_live(&self.connection))
     }
 
     /// The server-generated identity of this connection.
@@ -165,7 +222,7 @@ impl LocalConnection {
                 Ok(())
             };
         };
-        if owner.is_live(&self.connection) {
+        if owner.permits_dispatch(&self.connection) {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -186,16 +243,29 @@ impl LocalConnection {
     /// connection only disconnects and shuts down.
     pub fn close(&mut self) {
         if self.usable && !self.closed {
+            // Announce intentional shutdown to a Client that otherwise
+            // treats a transport close as a possibly recoverable loss.
+            let started = Instant::now();
+            let cutoff = started + ORDERLY_CLOSE_BUDGET;
+            if self.is_current()
+                && self
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| !owner.revocation_confirmed())
+                && let Some(control) = self.control()
+            {
+                let revoke_budget = ORDERLY_CLOSE_BUDGET
+                    .saturating_sub(rustx_execution_protocol::transport::CONTROL_POLL_INTERVAL);
+                let _ = control.request_revoke_by(started + revoke_budget);
+            }
             self.closed = true;
-            let _ = self
-                .channel
-                .close_graceful(Some(Instant::now() + ORDERLY_CLOSE_BUDGET));
+            let _ = self.channel.close_graceful(Some(cutoff));
         }
         if let Some(control) = self.control.take() {
             control.stop();
         }
         if let Some(owner) = &self.owner {
-            owner.disconnect(&self.connection).shutdown();
+            owner.disconnect(&self.connection, false).shutdown();
         }
         self.channel.shutdown();
     }
@@ -217,7 +287,12 @@ impl LocalConnection {
             control.stop();
         }
         if let Some(owner) = &self.owner {
-            owner.disconnect(&self.connection).shutdown();
+            owner
+                .disconnect(
+                    &self.connection,
+                    rustx_execution_protocol::transport::recoverable_lane_loss(&error),
+                )
+                .shutdown();
         }
         self.channel.shutdown();
         error
@@ -326,16 +401,15 @@ impl LocalConnection {
                 .receive(deadline)
                 .map_err(ExchangeFailure::Unknown);
         }
+        let reply_deadline = deadline.map(|limit| limit + delegation::DATA_REPLY_BUDGET);
         match self
             .channel
-            .receive(deadline)
+            .receive(reply_deadline)
             .map_err(ExchangeFailure::Unknown)?
         {
             delegation::DataReply::Client(reply) => Ok(reply),
-            delegation::DataReply::Rejected(
-                refusal @ (delegation::Refusal::Busy | delegation::Refusal::Denied),
-            ) => Err(ExchangeFailure::Refused(refusal.into())),
-            delegation::DataReply::Rejected(error) => Err(ExchangeFailure::Unknown(error.into())),
+            delegation::DataReply::Rejected(error) => Err(ExchangeFailure::Refused(error.into())),
+            delegation::DataReply::Unknown(error) => Err(ExchangeFailure::Unknown(error.into())),
         }
     }
 
@@ -629,48 +703,272 @@ impl LocalConnection {
         })
     }
 
-    /// Run one bounded Read or Grep over the authorized Bash continuation.
+    /// Execute an optional output save over the existing admitted data lane.
+    ///
+    /// # Errors
+    ///
+    /// Capability, request-admission, transport or reply-integrity failure.
+    pub fn save_by(
+        &mut self,
+        request: &rustx_execution_protocol::save::SaveRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::save::SaveReply> {
+        use rustx_execution_protocol::save::{SaveReply, SaveRequest, decode_chunk};
+
+        if !self.supports(Capability::ManagedOutput) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let reply = self.exchange_admitted(
+            &ClientRequest::Save(request.clone()),
+            Some(deadline),
+            admit,
+            || (),
+        )?;
+        let ClientReply::Save(reply) = reply else {
+            return Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected save reply",
+            )));
+        };
+        let valid = match (request, &reply) {
+            (_, SaveReply::Refused { .. }) => true,
+            (SaveRequest::Begin { owner, .. }, SaveReply::Begun { key }) => owner == &key.owner,
+            (
+                SaveRequest::Chunk {
+                    key,
+                    offset,
+                    sequence,
+                    data_base64,
+                    ..
+                },
+                SaveReply::Chunked {
+                    key: received,
+                    sequence: echoed,
+                    next_offset,
+                    ..
+                },
+            ) => {
+                key == received
+                    && sequence == echoed
+                    && decode_chunk(data_base64).is_ok_and(|data| {
+                        offset.get().checked_add(data.len() as u64) == Some(next_offset.get())
+                    })
+            }
+            (
+                SaveRequest::Seal {
+                    key,
+                    length,
+                    sha256,
+                    extent,
+                },
+                SaveReply::Sealed {
+                    key: received,
+                    length: actual,
+                    sha256: digest,
+                    extent: saved,
+                },
+            )
+            | (
+                SaveRequest::Publish {
+                    key,
+                    length,
+                    sha256,
+                    extent,
+                },
+                SaveReply::Published {
+                    key: received,
+                    length: actual,
+                    sha256: digest,
+                    extent: saved,
+                    ..
+                },
+            ) => (key, length, sha256, extent) == (received, actual, digest, saved),
+            (SaveRequest::Abort { key }, SaveReply::Aborted { key: received, .. })
+            | (SaveRequest::Probe { key }, SaveReply::Readability { key: received, .. }) => {
+                key == received
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(reply)
+        } else {
+            Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "save reply contradicts its request",
+            )))
+        }
+    }
+
+    /// Exchanges one message with this binding's stdio MCP session.
+    ///
+    /// # Errors
+    ///
+    /// Missing capability, a pre-dispatch refusal, lost connection or
+    /// contradictory operation identity.
+    pub fn python_source_by(
+        &mut self,
+        request: &rustx_execution_protocol::mcp::PythonSourceRequest,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
+        self.python_source_admitted(request, deadline, || Ok(()))
+    }
+
+    /// Dispatches a Python source exchange after the caller's dispatch grant.
+    ///
+    /// # Errors
+    /// Returns grant, transport, correlation and capability failures.
+    pub fn python_source_admitted(
+        &mut self,
+        request: &rustx_execution_protocol::mcp::PythonSourceRequest,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
+        if !self.supports(Capability::ManagedPython) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        match self.exchange_admitted(
+            &ClientRequest::PythonSource(request.clone()),
+            Some(deadline),
+            admit,
+            || (),
+        )? {
+            ClientReply::PythonSource(reply) => Ok(reply),
+            _ => Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid Python source reply",
+            ))),
+        }
+    }
+
+    /// One typed exchange on the admitted Client's stdio MCP session.
+    ///
+    /// # Errors
+    /// Returns a physical refusal, transport failure, or expired deadline.
+    pub fn mcp_by(
+        &mut self,
+        request: rustx_execution_protocol::mcp::Request,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<rustx_execution_protocol::mcp::Reply> {
+        use rustx_execution_protocol::mcp::{
+            Failure, MAX_STARTUP_STDERR_BYTES, Reply, Request, StartupStderr,
+        };
+
+        if !self.supports(Capability::StdioMcp) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let key = request.key().clone();
+        let state = matches!(&request, Request::Open { .. } | Request::State { .. });
+        let close = matches!(&request, Request::Close { .. });
+        let send = matches!(&request, Request::Send { .. });
+        let page = match &request {
+            Request::Receive {
+                sequence, offset, ..
+            } => Some((*sequence, *offset)),
+            _ => None,
+        };
+        let reply = self
+            .exchange_classified(&ClientRequest::Mcp(request), Some(deadline), admit, || ())
+            .map_err(|failure| match failure {
+                ExchangeFailure::Refused(error) => {
+                    io::Error::new(error.kind(), UnsentMcpExchange(error))
+                }
+                ExchangeFailure::Unknown(error) => error,
+            })?;
+        if let ClientReply::Mcp(response) = reply
+            && response.key == key
+            && match &response.reply {
+                Reply::Failed(_) | Reply::Closed => true,
+                Reply::StartupFailed { failure, stderr } => {
+                    state
+                        && matches!(
+                            failure,
+                            Failure::Handshake
+                                | Failure::UnsupportedRevision
+                                | Failure::InvalidRecord
+                                | Failure::Transport
+                        )
+                        && match stderr {
+                            StartupStderr::Complete { text } => {
+                                text.len() <= MAX_STARTUP_STDERR_BYTES
+                            }
+                            StartupStderr::Incomplete => true,
+                        }
+                }
+                Reply::Opening | Reply::Ready { .. } => state,
+                Reply::Closing => close || state,
+                Reply::Queued => send,
+                Reply::Pending => page.is_some(),
+                Reply::Page {
+                    sequence, offset, ..
+                } => page == Some((*sequence, *offset)),
+            }
+        {
+            return Ok(response.reply);
+        }
+        Err(self.retire(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "stdio MCP reply contradicts its request",
+        )))
+    }
+
+    /// Run one bounded Read or Grep over the authorized Client-owned continuation.
     ///
     /// # Errors
     ///
     /// Returns capability, cancellation, transport or typed read/search errors.
-    pub fn inspect_bash_output(
+    pub fn inspect_output(
         &mut self,
         request: &ClientRequest,
         deadline: Instant,
         admit: impl FnOnce() -> io::Result<()>,
-    ) -> io::Result<BashOutputPage> {
-        if !self.capabilities.contains(&Capability::AgentBash) {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "peer admitted no Agent Bash capability",
-            ));
-        }
-        if !matches!(
-            request,
+    ) -> io::Result<ContinuationPage> {
+        let capability = match request {
             ClientRequest::ReadBashOutput { .. }
-                | ClientRequest::SearchBashOutput {
-                    spec: SearchSpec::Grep { .. },
-                    ..
-                }
-        ) {
-            return Err(io::ErrorKind::InvalidInput.into());
+            | ClientRequest::SearchBashOutput {
+                spec: SearchSpec::Grep { .. },
+                ..
+            } => Capability::AgentBash,
+            ClientRequest::ReadSavedOutput { .. }
+            | ClientRequest::ReadSavedOutputRange { .. }
+            | ClientRequest::SearchSavedOutput {
+                spec: SearchSpec::Grep { .. },
+                ..
+            } => Capability::ManagedOutput,
+            _ => return Err(io::ErrorKind::InvalidInput.into()),
+        };
+        if !self.supports(capability) {
+            return Err(io::ErrorKind::Unsupported.into());
         }
         let reply = self.exchange_admitted(request, Some(deadline), admit, || ())?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
         match request {
-            ClientRequest::ReadBashOutput { offset, limit, .. } => self
+            ClientRequest::ReadBashOutput { offset, limit, .. }
+            | ClientRequest::ReadSavedOutput { offset, limit, .. } => self
                 .validate_lines(offset.get(), limit.map(DecimalU64::get), None, &reply)
-                .map(BashOutputPage::Lines),
+                .map(ContinuationPage::Lines),
+            ClientRequest::ReadSavedOutputRange { offset, .. } => self
+                .validate_range(
+                    offset.get(),
+                    rustx_execution_protocol::MAX_TEXT_BYTES,
+                    None,
+                    &reply,
+                )
+                .map(ContinuationPage::Range),
             ClientRequest::SearchBashOutput {
+                spec: SearchSpec::Grep { context, limit, .. },
+                ..
+            }
+            | ClientRequest::SearchSavedOutput {
                 spec: SearchSpec::Grep { context, limit, .. },
                 ..
             } => self
                 .validate_search(false, *context, *limit, &reply)
-                .map(BashOutputPage::Search),
-            _ => unreachable!("Bash output exchange must name Read or Grep"),
+                .map(ContinuationPage::Search),
+            _ => unreachable!("Continuation exchange must name Read or Grep"),
         }
     }
 
@@ -829,6 +1127,9 @@ impl LocalConnection {
         )?;
         let notice = match result {
             ClientReply::Watch(WatchReply::Changed(notice)) if notice.id == id => notice,
+            ClientReply::Watch(WatchReply::Retiring { id: echoed }) if echoed == id => {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, WatchRetiring));
+            }
             ClientReply::Watch(WatchReply::Refused { id: echoed, kind }) if echoed == id => {
                 return Err(read_error(kind));
             }
@@ -1032,6 +1333,85 @@ impl LocalConnection {
         Ok(metadata)
     }
 
+    /// Resolves a Workspace resource within the admitted Client directory.
+    ///
+    /// # Errors
+    /// Returns the Client's typed read error or retires the connection on an invalid reply.
+    pub fn resolve_resource_entry_until(
+        &mut self,
+        relative_path: &Path,
+        deadline: Instant,
+    ) -> io::Result<ResourceResolution> {
+        if !self.capabilities.contains(&Capability::DirectoryMetadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no directory metadata capability",
+            ));
+        }
+        let valid_path = |path: &Path| {
+            path.as_os_str().len() <= rustx_execution_protocol::MAX_RESOURCE_PATH_BYTES
+                && path.components().all(|component| {
+                    matches!(component, std::path::Component::Normal(name)
+                            if !name.as_encoded_bytes().contains(&0))
+                })
+        };
+        let valid_dependency = |path: &Path| !path.as_os_str().is_empty() && valid_path(path);
+        let valid_links = |paths: &[PathBuf]| {
+            paths.len() <= rustx_execution_protocol::MAX_RESOURCE_LINK_HOPS
+                && paths.iter().all(|path| valid_dependency(path))
+                && paths
+                    .first()
+                    .is_none_or(|first| relative_path.starts_with(first))
+        };
+        match self.exchange_admitted(
+            &ClientRequest::ResolveResourceEntry {
+                relative_path: relative_path.to_path_buf(),
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )? {
+            ClientReply::Error { kind } => Err(read_error(kind)),
+            ClientReply::ResourceEntry {
+                relative_path: resolved,
+                metadata,
+                link_paths,
+            } if valid_path(&resolved)
+                && metadata.kind != rustx_execution_protocol::EntryKind::Symlink
+                && valid_links(&link_paths)
+                && (!link_paths.is_empty() || resolved == relative_path) =>
+            {
+                if let Some(reason) = stamp_violation(&metadata.stamp) {
+                    return Err(self.retire(io::Error::new(io::ErrorKind::InvalidData, reason)));
+                }
+                Ok(ResourceResolution {
+                    entry: Some((resolved, metadata)),
+                    dependencies: link_paths,
+                })
+            }
+            ClientReply::ResourceUnavailable {
+                mut link_paths,
+                unresolved_path,
+            } if valid_links(&link_paths)
+                && unresolved_path.as_deref().is_none_or(|path| {
+                    valid_dependency(path)
+                        && (!link_paths.is_empty() || relative_path.starts_with(path))
+                })
+                && (!link_paths.is_empty() || unresolved_path.is_some()) =>
+            {
+                link_paths.extend(unresolved_path);
+                Ok(ResourceResolution {
+                    entry: None,
+                    dependencies: link_paths,
+                })
+            }
+            _ => Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid resource entry reply",
+            ))),
+        }
+    }
+
     /// One bounded, revision-checked directory page under the binding
     /// workspace.
     ///
@@ -1065,6 +1445,68 @@ impl LocalConnection {
         limit: u32,
         expected_revision: Option<&str>,
     ) -> io::Result<DirectoryListing> {
+        self.directory_page_until(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            Instant::now() + PAGE_REQUEST_TIMEOUT,
+        )
+    }
+
+    /// Reads one directory page using the absolute deadline of the source capture.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::directory_page`], including transport timeout.
+    pub fn directory_page_until(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+    ) -> io::Result<DirectoryListing> {
+        self.scan_directory(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            deadline,
+            false,
+        )
+    }
+
+    /// Reads a discovery page, withholding hidden names and counting them toward the limit.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::directory_page_until`] for visible names.
+    pub fn skill_directory_page_until(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+    ) -> io::Result<DirectoryListing> {
+        self.scan_directory(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            deadline,
+            true,
+        )
+    }
+
+    fn scan_directory(
+        &mut self,
+        relative_path: &Path,
+        offset: u32,
+        limit: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+        skip_hidden: bool,
+    ) -> io::Result<DirectoryListing> {
         if !self.capabilities.contains(&Capability::DirectoryMetadata) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -1080,16 +1522,22 @@ impl LocalConnection {
                 "invalid directory page request",
             ));
         }
-        let reply = self.exchange(&ClientRequest::ReadDirectory {
-            relative_path: relative_path.to_path_buf(),
-            offset,
-            limit,
-            expected_revision: expected_revision.map(str::to_owned),
-        })?;
+        let reply = self.exchange_admitted(
+            &ClientRequest::ReadDirectory {
+                relative_path: relative_path.to_path_buf(),
+                offset,
+                limit,
+                expected_revision: expected_revision.map(str::to_owned),
+                skip_hidden,
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
-        self.validate_directory(offset, limit, expected_revision, &reply)
+        self.validate_directory(offset, limit, expected_revision, skip_hidden, &reply)
     }
 
     /// Verifies a `Directory` reply against the request before trusting
@@ -1101,6 +1549,7 @@ impl LocalConnection {
         offset: u32,
         limit: u32,
         expected_revision: Option<&str>,
+        skip_hidden: bool,
         reply: &ClientReply,
     ) -> io::Result<DirectoryListing> {
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
@@ -1108,6 +1557,7 @@ impl LocalConnection {
             revision,
             entries,
             next_offset,
+            skipped,
         } = reply
         else {
             return Err(self.retire(violation("unexpected reply to directory read")));
@@ -1115,7 +1565,9 @@ impl LocalConnection {
         if !valid_revision(revision) {
             return Err(self.retire(violation("directory reply carries an invalid revision")));
         }
-        if entries.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
+        let names = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        let delivered = names.saturating_add(*skipped);
+        if delivered > limit || (!skip_hidden && *skipped != 0) {
             return Err(self.retire(violation("directory reply exceeds requested page")));
         }
         let mut previous: Option<&str> = None;
@@ -1132,6 +1584,7 @@ impl LocalConnection {
                 || name.contains('\0')
                 || name == "."
                 || name == ".."
+                || (skip_hidden && (name.starts_with('.') || name == "node_modules"))
             {
                 return Err(self.retire(violation("directory reply carries an invalid entry name")));
             }
@@ -1143,7 +1596,6 @@ impl LocalConnection {
                 return Err(self.retire(violation(reason)));
             }
         }
-        let delivered = u32::try_from(entries.len()).unwrap_or(u32::MAX);
         let Some(cursor) = offset.checked_add(delivered) else {
             return Err(self.retire(violation("directory reply overflows the name space")));
         };
@@ -1174,6 +1626,7 @@ impl LocalConnection {
             revision: revision.clone(),
             entries: entries.clone(),
             next_offset: *next_offset,
+            skipped: *skipped,
         })
     }
 

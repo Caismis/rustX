@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { chooseOption, openResourceModule, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import type { MethodResult } from '../../protocol/app-server/v80';
+import type { MethodResult } from '../../protocol/app-server/v81';
 
 afterEach(cleanup);
 const writes = (subject: ReturnType<typeof cfg3Client>) => subject.request.mock.calls.flatMap(([op]) => op.method === 'configuration/sourceWrite' ? [op.params] : []);
@@ -45,7 +45,7 @@ const policy = () => screen.getByRole('button', { name: /Skill access$/ });
 async function settled() { await waitFor(() => expect((policy() as HTMLButtonElement).disabled).toBe(false)); }
 
 function catalogPage(names: string[], next_offset: number | null = null): SkillsPage {
-  return { type: 'skills', page: { revision: 'catalog-1', next_offset, diagnostics: [], diagnostics_truncated: false,
+  return { type: 'skills', authority: 'authoring', page: { revision: 'catalog-1', next_offset, diagnostics: [], diagnostics_truncated: false,
     data: names.map(name => ({ catalog: { name, description: `Skill ${name}`, location: `/skills/${name}/SKILL.md` },
       provenance: { name, source: 'user', location: `/skills/${name}/SKILL.md`, shadowed: [] },
       metadata_revision: 'skill-1', disable_model_invocation: false, enabled_by_default: true })) } };

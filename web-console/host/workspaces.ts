@@ -170,7 +170,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v80.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v81.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -692,7 +692,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope }, 'workflow_tool_catalog');
+          const execution_session = operation.execution_session?.cwd === cwd ? operation.execution_session.id : undefined;
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope, execution_session }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -710,7 +711,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v80.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v81.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {
@@ -744,7 +745,16 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       this.cwd(location);
       const workspaceId = registration?.id;
       return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
-    } catch { return { authorized: false, reason: 'unavailable' }; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // A previously registered path can identify a native Session's Client
+        // catalog. This carries no authority for the Host to access the path.
+        const root = this.roots.find(root => root.cwd === cwd);
+        const registration = this.registrations.find(row => row.folder ? row.folder.path === cwd : row.location === root?.id);
+        if (registration) return { authorized: false, reason: 'unavailable', clientCatalogWorkspaceId: registration.id };
+      }
+      return { authorized: false, reason: 'unavailable' };
+    }
   }
 }
 
@@ -769,15 +779,23 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
       && Number.isInteger(row.offset) && Number(row.offset) >= 0 && Number(row.offset) <= 4294967295
       && Object.keys(row).every(key => ['offset', 'digest'].includes(key));
   };
+  const catalogSession = (session: unknown) => {
+    if (session === undefined) return true;
+    if (!object(session)) return false;
+    const row = session as Record<string, unknown>;
+    return typeof row.id === 'string' && row.id.length > 0 && row.id.length <= 64
+      && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd.length <= 4096
+      && Object.keys(row).every(key => ['id', 'cwd'].includes(key));
+  };
   const valid = object(value) && (
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory'])
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory', 'execution_session'])
           && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
           && (value!.expected_scope == null || value!.source != null && (value!.expected_scope === 'user' || value!.expected_scope === 'workspace'))
           && (value!.expected_directory === undefined || typeof value!.expected_directory === 'string' && value!.expected_directory.length > 0)
-          && catalogCursor(value!.cursor)
+          && catalogCursor(value!.cursor) && catalogSession(value!.execution_session)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)

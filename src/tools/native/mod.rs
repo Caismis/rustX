@@ -221,6 +221,7 @@ pub(crate) fn definitions(
 // The trusted fixture executor is a root-side Bash construction that hands
 // the supervisor package's diagnostics contract to the real tool path; it is
 // a documented-hidden test capability, never tool-plane API.
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use bash::fixture_executor;
 

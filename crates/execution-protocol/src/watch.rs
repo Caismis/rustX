@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 /// Maximum admitted native observers in one authenticated binding.
 pub const MAX_WATCHES: usize = 32;
+/// Separate physical slots for configuration discovery, including watch retirement.
+pub const MAX_CONFIGURATION_WATCHES: usize = 128;
 /// Maximum number of paths retained for one coalesced watch update.
 pub const MAX_WATCH_HINT_PATHS: usize = 16;
 /// Budget of the escaped path representation in one update.
@@ -16,6 +18,38 @@ pub const MAX_WATCH_HINT_BYTES: usize = 16 * 1024;
 pub struct WatchId(DecimalU64);
 
 impl WatchId {
+    const CONFIGURATION_BIT: u64 = 1 << 63;
+
+    /// Allocate an identifier for a public file observer.
+    #[must_use]
+    pub fn file() -> Option<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+            id.checked_add(1)
+                .filter(|next| *next < Self::CONFIGURATION_BIT)
+        })
+        .ok()
+        .map(|id| Self(DecimalU64::new(id)))
+    }
+
+    /// Allocate a process-wide configuration observer identifier. Public file
+    /// observer counters use the lower half of the same wire identity range.
+    #[must_use]
+    pub fn configuration() -> Option<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(WatchId::CONFIGURATION_BIT);
+        NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .ok()
+            .map(|id| Self(DecimalU64::new(id)))
+    }
+
+    /// Whether this identity owns a slot in the configuration watch quota.
+    #[must_use]
+    pub const fn is_configuration(self) -> bool {
+        self.0.get() & Self::CONFIGURATION_BIT != 0
+    }
+
     /// Mint from a fresh nonzero Server counter.
     #[must_use]
     pub fn new(value: std::num::NonZeroU64) -> Self {
@@ -52,6 +86,11 @@ pub enum WatchReply {
     },
     /// Coalesced changes since the last poll.
     Changed(WatchChange),
+    /// Coverage is lost while the exact watcher still owns native cleanup.
+    Retiring {
+        /// Identifies the request.
+        id: WatchId,
+    },
     /// Genuine admission or lookup refusal.
     Refused {
         /// Identifies the request.

@@ -149,14 +149,14 @@ impl HttpFixtureControl {
         *self.catalog_reads.borrow()
     }
 
-    /// Await a tools/list handler, independently of whether it may answer.
+    /// Await a number of tools/list handlers, independently of whether they may answer.
     ///
     /// # Panics
     /// Panics if the fixture observation channel closes.
-    pub async fn wait_catalog(&self) {
+    pub async fn wait_catalog(&self, minimum: u32) {
         self.catalog_reads
             .subscribe()
-            .wait_for(|count| *count > 0)
+            .wait_for(|count| *count >= minimum)
             .await
             .expect("catalog observation");
     }

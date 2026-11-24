@@ -36,7 +36,10 @@ repository = "https://github.com/Caismis/rustX"
 publish = false
 
 [features]
-mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
+# Fixture executors for external Rust integration tests. Product admission
+# continues to use the bound Execution Client with this feature enabled.
+test-support = []
+mcp-fixture = ["test-support", "rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
 # Issue #387 measurement-only counters (reservation / conflict / legacy-layout
 # probe and the rustX logical owner-operation counters). Non-default: ordinary
 # production builds compile the recorders to no-ops and carry no measurement
@@ -129,8 +132,8 @@ httpdate = "1"
 # types directly. This is rmcp's own SSE crate, unified to one version.
 sse-stream = "0.2.5"
 # Observe queued SSE tools/list responses before publishing them (SEP-2243).
-# See docs/pr-425-mcp-drain-repair.md and the dependency regression at this revision.
-rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0", default-features = false, features = [
+# Bound buffered HTTP JSON and error bodies before parsing. See docs/exec-03-evidence.md.
+rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "53f7aaef44d40d769ab1c274819019c6c457eead", default-features = false, features = [
     "client",
     "transport-async-rw",
     "transport-streamable-http-client-reqwest",

@@ -1336,7 +1336,7 @@ async fn frozen_fixture_tool(
     workspace: &crate::tools::Workspace,
     name: &str,
 ) -> ToolDefinition {
-    let runtime = crate::tools::mcp::McpServerRuntime::connect(
+    let runtime = crate::tools::mcp::McpServerRuntime::connect_fixture(
         server_id,
         binding,
         workspace,

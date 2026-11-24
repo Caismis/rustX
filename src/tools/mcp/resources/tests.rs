@@ -79,7 +79,7 @@ impl HttpPeer {
         name: &str,
     ) -> Arc<McpConnection> {
         let invalidation = Arc::new(McpInvalidationState::default());
-        let connected = McpServerRuntime::connect(
+        let connected = McpServerRuntime::connect_fixture(
             &McpServerId::new(name),
             &self.binding,
             tools.workspace(),
@@ -482,7 +482,7 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
                 environment,
             },
         };
-        let connected = McpServerRuntime::connect(
+        let connected = McpServerRuntime::connect_fixture(
             &McpServerId::new("resource-stdio"),
             &binding,
             tools.workspace(),
@@ -994,9 +994,6 @@ fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
 
 #[test]
 fn resource_error_redacts_nested_keys_values_and_diagnostics_before_bounding() {
-    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000001");
-    let progress = NoProgress;
-    let context = context(&tools, None, &progress);
     // The credential alone is larger than the metadata budget. Redaction must
     // happen first so this safe diagnostic remains available to the caller.
     let secret = format!("RESOURCE_CREDENTIAL_{}", "s".repeat(MAX_METADATA_BYTES));
@@ -1013,7 +1010,6 @@ fn resource_error_redacts_nested_keys_values_and_diagnostics_before_bounding() {
             })),
         ),
         &source_credentials,
-        &context,
         Instant::now(),
     );
     assert_redacted(&result, &secret);
@@ -1041,7 +1037,6 @@ fn resource_error_redacts_nested_keys_values_and_diagnostics_before_bounding() {
                     None,
                 ),
                 &source_credentials,
-                &context,
                 Instant::now(),
             );
             assert_redacted(&result, "SENTINEL");

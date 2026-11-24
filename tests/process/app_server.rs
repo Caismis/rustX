@@ -177,7 +177,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":80,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":81,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -347,6 +347,541 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
 #[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_spilling() {
+    http_mcp_output(HttpMcpOutput::PreviewOverflow).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client() {
+    http_mcp_output(HttpMcpOutput::NearLimit).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn http_mcp_imports_complete_output_through_the_bound_client() {
+    http_mcp_output(HttpMcpOutput::BoundImport).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+async fn oversized_http_mcp_body_is_refused_without_replaying_the_call() {
+    http_mcp_output(HttpMcpOutput::Oversized).await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+#[ignore = "requires Linux mount namespace; run test-support/prove_execution_mount_view.sh"]
+async fn stdio_mcp_session_runs_and_publishes_from_the_client_mount_view() {
+    bounded(Box::pin(async {
+        use rustx::app_server::protocol::Method;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+        let fixture = Fixture::new().await;
+        let skill = "packages/client-guide/guide.md";
+        let reference = "packages/client-guide/references/notes.md";
+        let script = "packages/client-guide/scripts/check.sh";
+        let provider = crate::common::FixtureServer::start(move |attempt, _| match attempt {
+            0 => crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse"),
+            1 => crate::common::FixtureReply::body(
+                200, "OK", "text/event-stream",
+                include_str!("../fixtures/m2/openai_chat/issue189_child_read_tool_call.sse")
+                    .replace("local/runtime.env", skill),
+            ),
+            2 => {
+                let response = serde_json::json!({
+                    "id": "chatcmpl-client-skill-assets",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "gpt-test",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "tool_calls": [
+                            {"index": 0, "id": "call_client_reference", "type": "function",
+                             "function": {"name": "read", "arguments":
+                                 serde_json::json!({"arguments": {"path": reference}}).to_string()}},
+                            {"index": 1, "id": "call_client_script", "type": "function",
+                             "function": {"name": "bash", "arguments":
+                                 serde_json::json!({"execution_mode": "foreground",
+                                     "arguments": {"command": format!("/bin/bash {script}")}}).to_string()}}
+                        ]},
+                        "finish_reason": "tool_calls"
+                    }]
+                });
+                crate::common::FixtureReply::body(
+                    200, "OK", "text/event-stream", format!("data: {response}\n\ndata: [DONE]\n\n"),
+                )
+            }
+            _ => crate::common::sse_fixture("openai_chat", "plain_text.sse"),
+        }).await;
+        let home = fixture.root.path().join("home");
+        let workspace = fixture.root.path().join("a").canonicalize().unwrap();
+        let logical_program = workspace.join("fixture-server");
+        let catalog = home.join("rustx/rustx.toml");
+        let raw = std::fs::read_to_string(&catalog).unwrap()
+            .replace("http://127.0.0.1:9/v1", &provider.url("/v1"));
+        let mut authored: toml::Value = toml::from_str(&raw).unwrap();
+        authored.as_table_mut().unwrap().insert(
+            "approval_mode".into(), toml::Value::String("full_access".into())
+        );
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".into(), toml::from_str("overflow = ['echo']").unwrap()
+        );
+        authored["agent"].as_table_mut().unwrap().insert(
+            "skills".into(), toml::Value::String("all".into())
+        );
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "builtin".into(), toml::Value::Array(vec!["read".into(), "bash".into()])
+        );
+        std::fs::write(catalog, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        let (bin, rustx) = isolated_server_pair();
+        let launcher = bin.path().join("rustx-execution-client");
+        std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+        let physical = bin.path().join("physical");
+        std::fs::create_dir_all(physical.join(".agents")).unwrap();
+        std::fs::write(physical.join(".agents/mcp.toml"), "[mcp_servers.overflow]\ncommand = '../fixture-server'\n").unwrap();
+        assert!(!workspace.join(".agents/mcp.toml").exists());
+        let collection = physical.join("workspace-skills");
+        std::fs::create_dir_all(collection.join("project")).unwrap();
+        symlink("../workspace-skills", physical.join(".agents/skills")).unwrap();
+        symlink("../../packages/client-guide", collection.join("project/client-guide")).unwrap();
+        std::fs::write(collection.join(std::ffi::OsStr::from_bytes(b".\xff")), b"hidden bytes").unwrap();
+        let outside = bin.path().join("outside-skill");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("SKILL.md"), "---\nname: outside-secret\ndescription: Never follow outside the Workspace\n---\n").unwrap();
+        symlink(outside, collection.join("outside")).unwrap();
+        let skill_path = physical.join(skill);
+        let package = skill_path.parent().unwrap();
+        std::fs::create_dir_all(package).unwrap();
+        symlink("guide.md", package.join("SKILL.md")).unwrap();
+        std::fs::write(&skill_path, "---\nname: client-guide\ndescription: Client-only discovery metadata\n---\nclient-skill-body-observed-on-demand\nRead references/notes.md and run scripts/check.sh.\n").unwrap();
+        std::fs::create_dir(package.join("references")).unwrap();
+        std::fs::create_dir(package.join("scripts")).unwrap();
+        std::fs::write(physical.join(reference), b"client-reference-observed-on-demand\n").unwrap();
+        std::fs::write(physical.join(script), b"printf '%s\\n' started >> skill-starts\nprintf '%s\\n' client-script-observed-on-demand\n").unwrap();
+        // A package marker must stop enumeration before the listing bound.
+        for index in 0..2050 {
+            std::fs::write(package.join(format!("asset-{index}")), b"decoy").unwrap();
+        }
+        let hidden = physical.join(".agents/skills/ignored");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("SKILL.md"), "---\nname: rejected-skill\ndescription: Ignored source\n---\n").unwrap();
+        std::fs::write(physical.join(".agents/skills/.ignore"), "ignored/\n").unwrap();
+        for locator in [skill, reference, script] {
+            assert!(!workspace.join(locator).exists());
+        }
+        std::fs::create_dir(bin.path().join("tmp")).unwrap();
+        std::fs::write(&launcher, r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+export TMPDIR="$bin/tmp"
+unset RUSTX_CLIENT_DOMAIN_STAGING
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@"
+"#).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(physical.join("commands")).unwrap();
+        symlink("commands/peer", physical.join("fixture-server")).unwrap();
+        let program = physical.join("commands/peer");
+        std::fs::write(&program, r#"#!/usr/bin/env python3
+import json
+import sys
+for line in sys.stdin:
+    req = json.loads(line)
+    method = req["method"]
+    with open("stdio-requests", "a", encoding="utf-8") as observation:
+        observation.write(f"{method} {req.get('id', '-')}\n")
+    if "id" not in req:
+        continue
+    reply = {"jsonrpc":"2.0", "id": req["id"]}
+    if method == "server/discover":
+        reply["error"] = {"code": -32601, "message": "legacy fixture"}
+    elif method == "initialize":
+        reply["result"] = {"protocolVersion":"2025-11-25", "capabilities":{"tools":{}}, "serverInfo":{"name":"client-stdio", "version":"1"}}
+    elif method == "tools/list":
+        assert "io.modelcontextprotocol/protocolVersion" not in req.get("params", {}).get("_meta", {})
+        reply["result"] = {"tools":[{"name":"echo","inputSchema":{"type":"object", "properties":{}}}]}
+    elif method == "tools/call":
+        reply["result"] = {"content":[{"type":"text", "text":"client-only-output\n" + "x" * 1100000 + "\nclient-only-end"}]}
+    else:
+        reply["error"] = {"code": -32601, "message": "unknown fixture method"}
+    print(json.dumps(reply), flush=True)
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!logical_program.exists());
+        let session = &fixture.sessions[0];
+        let mut child = local_exec_command(&rustx, &fixture, session.as_str(), &workspace)
+            .env("TEST_KEY", "fixture").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let target = attach(&client, session.clone(), 2).await;
+        start_turn(&client, &target, "run a tool through the Client-owned MCP session").await;
+        let state = settled(&client, &target).await;
+        assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[0].contains("Client-only discovery metadata"));
+        assert!(requests[0].contains(&*workspace.join(skill).to_string_lossy()));
+        assert!(!requests[0].contains("rejected-skill"));
+        assert!(!requests[0].contains("outside-secret"));
+        assert!(!requests[0].contains("workspace-skills/project/client-guide"));
+        assert!(!requests[0].contains("client-skill-body-observed-on-demand"));
+        assert!(!requests[0].contains("references/notes.md"));
+        assert!(!requests[0].contains("scripts/check.sh"));
+        assert!(requests[1].contains("client-only-output"));
+        assert!(requests[1].contains("client-only-end"));
+        assert!(requests[2].contains("client-skill-body-observed-on-demand"));
+        assert!(requests[3].contains("client-reference-observed-on-demand"));
+        assert!(requests[3].contains("client-script-observed-on-demand"));
+        assert_eq!(std::fs::read(physical.join("skill-starts")).unwrap(), b"started\n");
+        assert!(!workspace.join("skill-starts").exists());
+        assert!(!workspace.join("stdio-requests").exists());
+        let observed = std::fs::read_to_string(physical.join("stdio-requests")).unwrap();
+        let messages: Vec<_> = observed.lines().collect();
+        assert_eq!(messages, [
+            "server/discover 0",
+            "initialize 1",
+            "notifications/initialized -",
+            "tools/list 2",
+            "tools/call 3",
+        ]);
+        result(&client, Method::SessionDetach { target }).await;
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
+    })).await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+async fn seed_managed_python_wheel_cache(
+    bin: &std::path::Path,
+    uv: &std::path::Path,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    let fixture = tempfile::tempdir().unwrap();
+    let interpreter = ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .expect("Client Python");
+    let minor = std::process::Command::new(interpreter)
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .output()
+        .unwrap();
+    assert!(minor.status.success());
+    let minor = std::str::from_utf8(&minor.stdout).unwrap().trim();
+    std::fs::write(
+        fixture.path().join("pyproject.toml"),
+        format!(
+            r#"
+[project]
+name = "wheel-cache-fixture"
+version = "0.0.0"
+requires-python = "=={minor}.*"
+dependencies = ["fastmcp==4.0.3"]
+"#
+        ),
+    )
+    .unwrap();
+    let store = bin.join("client-home/.local/share/rustx/environments/python-tools");
+    let cache = store.join("uv-cache");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&cache)
+        .unwrap();
+    let mut uv_sync = tokio::process::Command::new(uv);
+    if let Some(warmed) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE") {
+        let source = std::path::PathBuf::from(warmed).join(".");
+        let copied = tokio::process::Command::new("/bin/cp")
+            .args(["-a", "--reflink=auto"])
+            .arg(source)
+            .arg(&cache)
+            .kill_on_drop(true)
+            .status()
+            .await
+            .unwrap();
+        assert!(copied.success(), "copy the verified test wheel cache");
+        uv_sync.arg("--offline");
+    }
+    let output = tokio::time::timeout(
+        std::time::Duration::from_mins(2),
+        uv_sync
+            .args([
+                "sync",
+                "--no-config",
+                "--no-install-project",
+                "--no-default-groups",
+            ])
+            .current_dir(fixture.path())
+            .env("UV_CACHE_DIR", &cache)
+            .env("UV_NO_PYTHON_DOWNLOADS", "1")
+            .env("UV_PYTHON", interpreter)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("wheel cache setup liveness")
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "populate fixture wheels: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!store.join("packages").exists());
+    let uv_path = uv.to_str().unwrap().replace('\'', "'\\''");
+    let directory = bin.join("tools");
+    std::fs::create_dir(&directory).unwrap();
+    let wrapper = directory.join("uv");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec '{uv_path}' --offline \"$@\"\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    directory
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+async fn doctor_probes_selected_managed_python_in_an_owned_client() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let uv = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("uv"))
+        .find(|candidate| candidate.is_file())
+        .expect("Managed Python acceptance requires uv");
+    let (bin, executable) = isolated_server_pair();
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    let client = bin.path().join("rustx-execution-client");
+    std::fs::rename(&client, bin.path().join("client-real")).unwrap();
+    std::fs::write(
+        &client,
+        b"#!/bin/sh\nexec \"${0%/*}/client-real\" \"$@\" 2> \"${0%/*}/client-stderr\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&client, std::fs::Permissions::from_mode(0o700)).unwrap();
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let workspace = fixture.root.path().join("a");
+        std::fs::write(workspace.join("rustx.toml"), b"# diagnostic Workspace\n").unwrap();
+        let home = fixture.root.path().join("home");
+        let config = home.join("rustx/rustx.toml");
+        let mut authored: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".into(),
+            toml::from_str("'python:diagnostic' = ['ping']").unwrap(),
+        );
+        std::fs::write(&config, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        let source = workspace.join(".agents/tools/diagnostic");
+        std::fs::create_dir_all(&source).unwrap();
+        let business = workspace.join("business-call");
+        std::fs::write(
+            source.join("server.py"),
+            format!(
+                "from pathlib import Path\nfrom fastmcp import FastMCP\nmcp = FastMCP('diagnostic')\n@mcp.tool\ndef ping() -> str:\n    Path({business:?}).touch()\n    return 'pong'\n",
+                business = business.display().to_string(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(source.join("requirements.txt"), b"").unwrap();
+        let runtime = fixture.root.path().join("diagnostic-runtime");
+        let scratch = fixture.root.path().join("diagnostic-scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let store = bin.path().join("client-home/.local/share");
+        let paths = [uv_path, PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        let path = std::env::join_paths(paths).unwrap();
+        for prepare in [false, true] {
+            let mut probe = Command::new(&executable);
+            probe
+                .current_dir(&workspace)
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", &path)
+                .env("XDG_DATA_HOME", &store)
+                .env("TMPDIR", &scratch)
+                .arg("doctor")
+                .arg("--workspace")
+                .arg(&workspace)
+                .args(["--probe", "--json", "--runtime-root"])
+                .arg(&runtime)
+                .kill_on_drop(true);
+            if prepare {
+                probe.arg("--prepare");
+            }
+            let output = probe.output().await.unwrap();
+            assert_eq!(output.status.code(), Some(3), "{}\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr), std::fs::read_to_string(bin.path().join("client-stderr")).unwrap_or_default());
+            let stdout = std::str::from_utf8(&output.stdout).unwrap();
+            let records = stdout.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).collect::<Vec<_>>();
+            let [plan, results] = records.as_slice() else { panic!("one plan followed by one outcome: {records:?}") };
+            assert_eq!(plan["phase"], "probe_plan");
+            assert_eq!(results["phase"], "probe_results");
+            let target = plan["targets"].as_array().unwrap().iter().find(|value| value["target"] == "python:diagnostic").unwrap();
+            assert_eq!(target["spawn_process"], prepare);
+            let result = results["results"].as_array().unwrap().iter().find(|value| value["target"] == "python:diagnostic").unwrap();
+            assert_eq!(result["state"], if prepare { "verified" } else { "skipped" }, "{result:?}");
+            assert!(!business.exists(), "a metadata probe made zero business calls");
+            if prepare {
+                assert_eq!(result["verified"], "MCP handshake and capability discovery");
+            }
+            assert!(!runtime.exists(), "no diagnostic Session entered product history");
+            assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0, "the private diagnostic root was removed after settlement");
+        }
+        let packages = store.join("rustx/environments/python-tools/packages");
+        assert_eq!(std::fs::read_dir(packages).unwrap().count(), 1);
+    })
+    .await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+#[ignore = "requires Linux mount namespace and uv; run test-support/prove_execution_mount_view.sh"]
+async fn managed_python_prepares_and_runs_in_the_bound_client_mount() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    managed_python_store_for_client(true).await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test]
+#[ignore = "requires Linux namespaces and prepared uv wheels; run test-support/prove_execution_mount_view.sh"]
+async fn managed_python_revokes_only_its_guarded_unpublished_root() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    managed_python_store_for_client(false).await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+async fn managed_python_store_for_client(isolated_mount: bool) {
+    let uv = crate::common::provider_emulator::required_uv("the Client Managed Python boundary")
+        .expect("the isolated Managed Python proof requires uv");
+    let (bin, rustx) = isolated_server_pair();
+    // Set up only wheels. The authenticated Client still creates the first
+    // fingerprint, resolves its lock offline, and installs the venv itself.
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    bounded(Box::pin(async {
+        use rustx::app_server::{protocol::{Method, MethodResult}, session_deletion::SessionDeletionResult};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = Fixture::new().await;
+        let provider = crate::common::FixtureServer::start(move |attempt, _| match attempt {
+            0 => crate::common::sse_fixture("openai_chat", "mcp_overflow_tool_call.sse"),
+            1 => crate::common::sse_fixture("openai_chat", "plain_text.sse"),
+            _ => panic!("unexpected model request"),
+        }).await;
+        let workspace = fixture.root.path().join("a").canonicalize().unwrap();
+        let settings = fixture.root.path().join("home/rustx/rustx.toml");
+        let raw = std::fs::read_to_string(&settings).unwrap()
+            .replace("http://127.0.0.1:9/v1", &provider.url("/v1"));
+        let mut authored: toml::Value = toml::from_str(&raw).unwrap();
+        authored.as_table_mut().unwrap().insert("approval_mode".into(), "full_access".into());
+        authored["agent"]["tools"].as_table_mut().unwrap().insert(
+            "sources".into(), toml::from_str("'python:echo' = ['echo']").unwrap()
+        );
+        std::fs::write(settings, toml::to_string_pretty(&authored).unwrap()).unwrap();
+        let launcher = bin.path().join("rustx-execution-client");
+        std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+        let physical = if isolated_mount {
+            bin.path().join("physical")
+        } else {
+            workspace.clone()
+        };
+        let package = physical.join(".agents/tools/echo");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("requirements.txt"), b"# no extra dependencies\n").unwrap();
+        std::fs::write(package.join("common.py"), b"answer = 'isolated-managed-python-result'\n").unwrap();
+        std::fs::write(package.join("server.py"), br"
+from pathlib import Path
+from fastmcp import FastMCP
+from common import answer
+
+mcp = FastMCP('echo')
+@mcp.tool
+def echo() -> str:
+    with Path('managed-calls').open('a') as calls:
+        calls.write('echo\n')
+    return answer
+").unwrap();
+        let launch = if isolated_mount {
+            assert!(!workspace.join(".agents/tools").exists());
+            std::fs::create_dir(bin.path().join("tmp")).unwrap();
+            // This fixture introduces a second mount launcher. Run the
+            // actual Client with a private mount-owned temporary root.
+            // The native case keeps the guardian's admitted PID and proves
+            // the independent Store settlement protocol.
+            r#"export TMPDIR="$bin/tmp"
+unset RUSTX_CLIENT_DOMAIN_STAGING
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind "$bin/physical" "$4" --bind "$HOME" "$HOME" --tmpfs "$bin/tmp" -- "$bin/client-real" "$@""#
+        } else {
+            r#"exec "$bin/client-real" "$@""#
+        };
+        std::fs::write(&launcher, format!(r#"#!/bin/sh
+set -eu
+bin=${{0%/*}}
+export PATH='{}':/usr/local/bin:/usr/bin:/bin HOME="$bin/client-home"
+export XDG_DATA_HOME="$HOME/.local/share"
+{launch}
+"#, uv_path.display().to_string().replace('\'', "'\\''"))).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let session = &fixture.sessions[0];
+        let mut server = local_exec_command(&rustx, &fixture, session.as_str(), &workspace)
+            .env("TEST_KEY", "fixture").env("PATH", "/usr/bin:/bin").spawn().unwrap();
+        let peer = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&peer).await;
+        let target = attach(&peer, session.clone(), 2).await;
+        start_turn(&peer, &target, "call the Client-owned Python package").await;
+        let state = settled(&peer, &target).await;
+        assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        let requests = provider.request_bodies();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("isolated-managed-python-result"), "{}", requests[1]);
+        assert_eq!(std::fs::read(physical.join("managed-calls")).unwrap(), b"echo\n");
+        if isolated_mount {
+            assert!(!workspace.join("managed-calls").exists());
+        }
+        let store = bin.path().join("client-home/.local/share/rustx/environments/python-tools/packages");
+        let (staging, installed): (Vec<_>, Vec<_>) = store.read_dir().unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap().into_iter()
+            .partition(|entry| entry.file_name().to_string_lossy().starts_with(".rustx-domain-stage-"));
+        assert_eq!(staging.len(), usize::from(!isolated_mount));
+        let [installed]: [std::fs::DirEntry; 1] = installed.try_into().unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(installed.path().join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["fastmcp"], "4.0.3");
+        assert_eq!(manifest["package"], "echo");
+        assert!(!fixture.root.path().join("home/.local/share/rustx/environments/python-tools").exists());
+        let MethodResult::Deletion { result: SessionDeletionResult::Preview { preview } } =
+            result(&peer, Method::SessionDeletePreview { session_id: session.clone() }).await
+        else { panic!("Session deletion preview is unavailable"); };
+        let deletion = result(&peer, Method::SessionDelete {
+            session_id: session.clone(),
+            expected_target_revision: preview.target_revision,
+        }).await;
+        assert!(matches!(&deletion, MethodResult::Deletion {
+            result: SessionDeletionResult::Deleted { session_id }
+        } if session_id == session), "{deletion:?}");
+        assert_eq!(store.read_dir().unwrap().count(), 1);
+        for stage in staging {
+            assert!(!stage.path().exists(), "authenticated Revoke confirmed staging removal");
+        }
+        assert!(installed.path().join("source/common.py").is_file());
+        assert_eq!(std::fs::read(physical.join("managed-calls")).unwrap(), b"echo\n");
+        peer.close().await;
+        detach_then_shutdown(&mut server).await;
+        assert!(server.wait().await.unwrap().success());
+        assert!(installed.path().join("source/common.py").is_file());
+    })).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+enum HttpMcpOutput {
+    PreviewOverflow,
+    NearLimit,
+    BoundImport,
+    Oversized,
+}
+
+#[cfg(feature = "mcp-fixture")]
+async fn http_mcp_output(case: HttpMcpOutput) {
     bounded(Box::pin(async {
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -362,10 +897,18 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
                 types::{ManagedOutputContinuation, ToolExecutionStatus},
             },
         };
-        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 
         let fixture = Fixture::new().await;
-        let original_bytes = FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1;
+        let with_client = matches!(case, HttpMcpOutput::BoundImport);
+        let over_limit = matches!(case, HttpMcpOutput::Oversized);
+        let original_bytes = match case {
+            HttpMcpOutput::PreviewOverflow => FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1,
+            HttpMcpOutput::BoundImport => 5 * rustx_execution_protocol::MAX_RAW_CHUNK_BYTES,
+            // Allow room for the MCP JSON envelope.
+            HttpMcpOutput::NearLimit => 16 * 1024 * 1024 - 4096,
+            HttpMcpOutput::Oversized => 16 * 1024 * 1024 + 1,
+        };
         let mcp_calls = fixture.root.path().join("mcp-calls");
         let mcp = McpFixture {
             result_bytes: Some(original_bytes),
@@ -375,7 +918,7 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
         let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
             move || Ok(mcp.clone()),
             std::sync::Arc::default(),
-            StreamableHttpServerConfig::default(),
+            StreamableHttpServerConfig::default().with_json_response(true),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -416,41 +959,74 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
         )
         .unwrap();
 
-        let (bin, rustx) = isolated_server_bin();
-        let launch_probe = bin.path().join("rustx-execution-client");
-        std::fs::write(
-            &launch_probe,
-            "#!/bin/sh\nprintf 'launch\n' >> \"${0%/*}/client-launches\"\nexit 99\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(launch_probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (bin, rustx) = if with_client { isolated_server_pair() } else { isolated_server_bin() };
+        if !with_client {
+            let launch_probe = bin.path().join("rustx-execution-client");
+            std::fs::write(
+                &launch_probe,
+                "#!/bin/sh\nprintf 'launch\n' >> \"${0%/*}/client-launches\"\nexit 99\n",
+            ).unwrap();
+            std::fs::set_permissions(launch_probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let session = &fixture.sessions[0];
         let scratch = fixture.root.path().join("scratch");
         std::fs::create_dir(&scratch).unwrap();
-        let mut child = fixture
-            .command_with_program(rustx, "stdio")
+        let workspace = fixture.root.path().join("a").canonicalize().unwrap();
+        let client_scratch = bin.path().join("client-scratch");
+        let mut command = if with_client {
+            std::fs::create_dir(&client_scratch).unwrap();
+            let launcher = bin.path().join("rustx-execution-client");
+            std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+            std::fs::write(&launcher,
+                r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+export TMPDIR="$bin/client-scratch"
+exec "$bin/client-real" "$@"
+"#,
+            ).unwrap();
+            std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+            local_exec_command(&rustx, &fixture, session.as_str(), &workspace)
+        } else {
+            fixture.command_with_program(rustx, "stdio")
+        };
+        let mut child = command
             .env_clear()
             .env("HOME", home)
             .env("PATH", bin.path())
             .env("TMPDIR", &scratch)
             .env("TEST_KEY", "fixture")
-            .spawn()
-            .unwrap();
+            .spawn().unwrap();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
-        let session = &fixture.sessions[0];
         let target = attach(&client, session.clone(), 2).await;
         start_turn(&client, &target, "overflow without execution binding").await;
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
-        assert_eq!(
-            std::fs::read_dir(&scratch).unwrap().count(),
-            0,
-            "no Spill before detach or shutdown"
-        );
-        assert!(
-            !bin.path().join("client-launches").exists(),
-            "zero Client starts before teardown"
-        );
+        let scratch_entries = std::fs::read_dir(&scratch).unwrap()
+            .map(|entry| entry.unwrap().path()).collect::<Vec<_>>();
+        if with_client {
+            let [binding] = scratch_entries.as_slice() else {
+                panic!("Server scratch contains only the local binding: {scratch_entries:?}");
+            };
+            assert!(binding.file_name().unwrap().to_string_lossy().starts_with("rx-"));
+            let mut binding_entries = std::fs::read_dir(binding).unwrap()
+                .map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+            binding_entries.sort_unstable();
+            assert_eq!(binding_entries, ["b", "s"], "only bootstrap and Unix socket");
+            assert!(binding.join("s").metadata().unwrap().file_type().is_socket());
+            assert!(binding.join("b").metadata().unwrap().len() <= 4096);
+            let captures = std::fs::read_dir(&client_scratch).unwrap().filter_map(|entry| {
+                let entry = entry.unwrap();
+                entry.file_name().to_string_lossy().starts_with("rustx-save-").then(|| entry.path())
+            }).collect::<Vec<_>>();
+            let [directory] = captures.as_slice() else { panic!("one physical save: {captures:?}") };
+            let files = std::fs::read_dir(directory).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            let [file] = files.as_slice() else { panic!("one physical published file: {files:?}") };
+            assert_eq!(std::fs::read_to_string(file.path()).unwrap(), "x".repeat(original_bytes));
+        } else {
+            assert_eq!(scratch_entries, [] as [PathBuf; 0], "no Server Spill before teardown");
+        }
         result(&client, Method::SessionDetach { target }).await;
         client.close().await;
         detach_then_shutdown(&mut child).await;
@@ -473,7 +1049,11 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
             !bin.path().join("client-launches").exists(),
             "zero Client starts"
         );
-        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+        if with_client {
+            assert!(std::fs::read_dir(&client_scratch).unwrap().all(|entry| {
+                !entry.unwrap().file_name().to_string_lossy().starts_with("rustx-save-")
+            }));
+        }
         let runtime = fixture.root.path().join("runtime");
         let controller = SessionController::open(&runtime).unwrap();
         let access = controller.acquire_session(session, None).await.unwrap();
@@ -517,26 +1097,39 @@ async fn standalone_server_reports_mcp_overflow_without_launching_a_client_or_sp
             panic!("canonical tool result");
         };
         let preview = tool.result.model_facing_projection();
-        assert_eq!(
-            tool.result.status,
-            ToolExecutionStatus::Success,
-            "{}",
-            preview.as_text()
+        assert!(
+            serde_json::to_vec(&tool.result).unwrap().len() <= 64 * 1024,
+            "the canonical ToolResult must stay bounded with the preview"
         );
         assert_eq!(std::fs::read_to_string(mcp_calls).unwrap(), "echo\n");
-        assert_eq!(
-            tool.result
-                .truncation
-                .as_ref()
-                .and_then(|cut| cut.original_bytes),
-            Some(original_bytes as u64)
-        );
-        assert!(matches!(
-            tool.result.managed_output.as_deref(),
-            Some(ManagedOutputContinuation::Unavailable { diagnostic })
-                if diagnostic.contains("no eligible Execution Client save binding")
-        ));
-        assert!(!preview.as_text().contains("Read or Grep"));
+        if over_limit {
+            assert!(matches!(
+                &tool.result.status,
+                ToolExecutionStatus::OutcomeUnknown { detail } if detail.contains("no correlated remote response")
+            ), "{:?}", tool.result.status);
+            assert_eq!(tool.result.truncation, None);
+            assert_eq!(tool.result.managed_output, None);
+        } else {
+            assert_eq!(tool.result.status, ToolExecutionStatus::Success, "{}", preview.as_text());
+            assert_eq!(
+                tool.result.truncation.as_ref().and_then(|cut| cut.original_bytes),
+                Some(original_bytes as u64)
+            );
+            if with_client {
+                assert!(matches!(
+                    tool.result.managed_output.as_deref(),
+                    Some(ManagedOutputContinuation::Complete { locator }) if locator.starts_with("/.rustx-output/import")
+                ));
+                assert!(preview.as_text().contains("Read or Grep"));
+            } else {
+                assert!(matches!(
+                    tool.result.managed_output.as_deref(),
+                    Some(ManagedOutputContinuation::Unavailable { diagnostic })
+                        if diagnostic.contains("no eligible Execution Client save binding")
+                ));
+                assert!(!preview.as_text().contains("Read or Grep"));
+            }
+        }
         for entry in ignore::WalkBuilder::new(&runtime)
             .standard_filters(false)
             .build()
@@ -577,6 +1170,17 @@ fn stage_binary(bin: &std::path::Path, name: &str, source: &std::path::Path) -> 
     destination
 }
 
+fn stage_supervisors(bin: &std::path::Path) {
+    for supervisor in ["bash-supervisor", "interactive-supervisor"] {
+        let artifact = std::env::current_exe().unwrap().with_file_name(supervisor);
+        assert!(
+            artifact.is_file(),
+            "staged supervisor is absent: {artifact:?}"
+        );
+        stage_binary(bin, supervisor, &artifact);
+    }
+}
+
 fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
     let rustx = stage_binary(
@@ -587,7 +1191,7 @@ fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
     (bin, rustx)
 }
 
-fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
     // The Client is only ever the artifact preparation staged beside this
     // harness — never a runtime build, a PATH lookup, or a fallback path.
@@ -599,6 +1203,7 @@ fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
         "staged Execution Client is absent: {client:?}"
     );
     stage_binary(bin.path(), "rustx-execution-client", &client);
+    stage_supervisors(bin.path());
     let rustx = stage_binary(
         bin.path(),
         "rustx",
@@ -763,6 +1368,10 @@ async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
         assert!(
             stderr.contains("not the Session's reserved workspace"),
             "{stderr}"
+        );
+        assert!(
+            !f.root.path().join("runtime/execution-pending").exists(),
+            "a refused Workspace must not leave a durable execution claim"
         );
     })
     .await;
@@ -1882,16 +2491,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             "staged Execution Client is absent: {staged:?}"
         );
         stage_binary(bin, "client-real", &staged);
-        // The Client's own sibling supervisor, staged beside it exactly as
-        // the production executable boundary resolves it.
-        let supervisor = std::env::current_exe()
-            .unwrap()
-            .with_file_name("bash-supervisor");
-        assert!(
-            supervisor.is_file(),
-            "staged bash-supervisor is absent: {supervisor:?}"
-        );
-        stage_binary(bin, "bash-supervisor", &supervisor);
+        stage_supervisors(bin);
         let physical = bin.join("physical");
         std::fs::create_dir(&physical).unwrap();
         let marker = b"mount-view proof marker";
@@ -1908,7 +2508,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         let launcher = bin.join("rustx-execution-client");
         std::fs::write(
             &launcher,
-            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexport TMPDIR=\"$bin/tmp\"\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind \"$bin/physical\" \"$4\" --tmpfs \"$bin/tmp\" -- \"$bin/client-real\" \"$@\"\n",
+            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexport TMPDIR=\"$bin/tmp\"\nunset RUSTX_CLIENT_DOMAIN_STAGING\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --bind \"$bin/physical\" \"$4\" --tmpfs \"$bin/tmp\" -- \"$bin/client-real\" \"$@\"\n",
         )
         .unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2302,9 +2902,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v80"),
+            Some("rustx.app-server.v81"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v80, rustx-token.wrong"),
+            Some("rustx.app-server.v81, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -2898,7 +3498,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v80".parse().unwrap(),
+                            "rustx.app-server.v81".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -3186,6 +3786,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             let MethodResult::SessionTransition { session, .. } = result(
                 &client,
                 Method::SessionCreate {
+                    input_references: None,
                     dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
@@ -3523,7 +4124,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             initialize_client(&client).await;
             // Exercise writable catalog management while execution stays
             // bound to the exact Session reserved before this Client started.
-            let MethodResult::SessionTransition { session: other, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            let MethodResult::SessionTransition { session: other, .. } = result(&client, Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
             }).await else { panic!("created") };
             let session = user.sessions[0].clone();
@@ -3547,7 +4148,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         for (index, count) in [(0, 1), (1, 2)] {
             let mut id = targets[index].session_id.clone();
             for _ in 0..count {
-                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(users[index].1.root.path().join("b")))
                 }).await else { panic!("private Session") };
                 id = session.id;
@@ -3626,26 +4227,85 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let MethodResult::Sessions { sessions, .. } = result(&recovered, Method::SessionList { query: None, offset: 0, limit: 32 }).await else { panic!("catalog") };
         assert_eq!(sessions.len(), 5);
         assert_eq!(diagnostics(&recovered).await.loaded, 0, "listing never starts Sessions");
-        let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
-        let after = checkpoint_state(&recovered, &cold).await;
-        assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
-        assert!(after["messages"].to_string().contains("b:unset"));
-        assert!(!after["messages"].to_string().contains("fake-b"));
-        assert!(!after["messages"].to_string().contains("result-b"));
-        assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
+        let session = &targets[1].session_id;
+        let settings = || Method::SettingsRead { session_id: session.clone() };
+        let MethodResult::Settings { projection } = result(&recovered, settings()).await else { panic!("cold settings") };
+        assert_eq!(projection.inline.unwrap().model.as_ref(), Some(&selections[1]));
+        let history = || Method::SessionHistory {
+            session_id: session.clone(),
+            node_id: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
+            limit: 8,
+        };
+        let history_before = result(&recovered, history()).await;
+        let history_body = serde_json::to_string(&history_before).unwrap();
+        assert!(matches!(history_before, MethodResult::SessionHistory { .. }));
+        assert!(history_body.contains("b:unset"));
+        assert!(!history_body.contains("fake-b"));
+        assert!(!history_body.contains("result-b"));
+        let thread_id = app_server_conformance::thread_id(&recovered, session.clone()).await;
+        let Response::Failure(attach_failure) = rpc(&recovered, 3, Method::SessionAttach { thread_id }).await else {
+            panic!("bare Server cannot attach while the previous execution claim is outstanding");
+        };
+        assert!(attach_failure.error.message.contains("unsettled execution binding"));
+        assert_eq!(diagnostics(&recovered).await.loaded, 0);
+        let workspace = users[1].1.root.path().join("a");
+        let effect = workspace.join("host-effect");
+        assert_eq!(std::fs::read(&effect).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
         assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], completed["attempt"], "B's cold recovery cannot change A's completed attempt");
-        // Changing A's source is confined to A; B's admitted composition stays.
-        let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
-        let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
-        source["agent"]["plugins"]["todo"]["enabled"] = false.into();
-        std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
-        assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
-        assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
+        let edit_a_source = || {
+            let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
+            let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+            source["agent"]["plugins"]["todo"]["enabled"] = false.into();
+            std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
+        };
+        #[cfg(target_os = "linux")]
+        {
+            recovered.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+            let user = &users[1].1;
+            let pending = user.root.path().join("runtime/execution-pending");
+            wait_for_local_execution_receipt(&pending).await;
+            grant_environment_roots(user, std::slice::from_ref(&workspace));
+            let mut replacement = user.command("ws://127.0.0.1:0")
+                .arg("--token-file").arg(user.root.path().join("token"))
+                .arg("--local-execution-session").arg(session.as_str())
+                .arg("--local-execution-workspace").arg(&workspace)
+                .env("TEST_KEY", "fake-b")
+                .spawn().unwrap();
+            let (endpoint, _stderr) = websocket_startup(&mut replacement).await;
+            let recovered = driver::websocket(&endpoint).await;
+            initialize_client(&recovered).await;
+            await_admission(&recovered, session, &effect).await;
+            let cold = attach(&recovered, session.clone(), 3).await;
+            let after = checkpoint_state(&recovered, &cold).await;
+            assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
+            assert!(after["messages"].to_string().contains("b:unset"));
+            assert!(!after["messages"].to_string().contains("fake-b"));
+            assert!(!after["messages"].to_string().contains("result-b"));
+            edit_a_source();
+            assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
+            assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
+            recovered.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            edit_a_source();
+            assert_eq!(serde_json::to_string(&result(&recovered, history()).await).unwrap(), history_body);
+            let MethodResult::Settings { projection: after } = result(&recovered, settings()).await else { panic!("cold settings after editing A") };
+            assert_eq!(after.revision, projection.revision);
+            assert_eq!(after.inline.unwrap().model.as_ref(), Some(&selections[1]));
+            recovered.close().await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+        }
+        assert_eq!(std::fs::read(effect).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
         assert_eq!(pa.requests().await.len(), 2);
-        recovered.close().await;
-        terminate(&replacement); assert!(replacement.wait().await.unwrap().success());
         for client in clients { client.close().await; }
         terminate(&processes[0]); assert!(processes[0].wait().await.unwrap().success());
         pa.finish().await; pb.finish().await;
@@ -4056,7 +4716,7 @@ async fn app_server_ordinary_clients_have_equal_delivery_eligibility() {
             driver::try_socket(
                 &url,
                 &format!(
-                    "rustx.app-server.v80, {}, rustx-delivery-access.obsolete",
+                    "rustx.app-server.v81, {}, rustx-delivery-access.obsolete",
                     driver::credential_offer(driver::TOKEN)
                 )
             )
@@ -4737,6 +5397,15 @@ async fn python_preparation_event(
     (reader.into_inner(), serde_json::from_str(&line).unwrap())
 }
 
+fn fixture_host_pid(stream: &tokio::net::UnixStream, reported: &serde_json::Value) -> Pid {
+    let pid = stream
+        .peer_cred()
+        .unwrap()
+        .pid()
+        .unwrap_or_else(|| i32::try_from(reported.as_i64().unwrap()).unwrap());
+    Pid::from_raw(pid)
+}
+
 #[tokio::test]
 async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
     bounded(async {
@@ -4752,6 +5421,7 @@ async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
             "rustx",
             std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
         );
+        stage_supervisors(bin.path());
         let staged_client = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
             .with_file_name("rustx-execution-client");
         let uv = bin.path().join("uv");
@@ -4775,22 +5445,24 @@ else:
         std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
         // Only the real Execution Client receives this fixture's uv. Each
         // trusted App Server launch enrolls one existing, exact Session.
-        let quote = |value: &std::path::Path| {
-            format!("'{}'", value.display().to_string().replace('\'', "'\\''"))
-        };
         let wrapper = bin.path().join("rustx-execution-client");
         let scratch = gate_dir.path().join("scratch");
-        let client_pids = gate_dir.path().join("client-pids");
         std::fs::create_dir(&scratch).unwrap();
         std::fs::write(
             &wrapper,
             format!(
-                "#!/bin/sh\nexport PATH={}:\"/usr/bin:/bin\" UV_TEST_GATE={} TMPDIR={}\nprintf '%s\\n' \"$$\" >> {}\nexec {} \"$@\"\n",
-                quote(bin.path()),
-                quote(&socket),
-                quote(&scratch),
-                quote(&client_pids),
-                quote(&staged_client),
+                r"#!/usr/bin/python3
+import json, os, socket, sys
+os.environ.update(PATH={path:?}, UV_TEST_GATE={socket:?}, TMPDIR={scratch:?})
+with socket.socket(socket.AF_UNIX) as peer:
+    peer.connect(os.environ['UV_TEST_GATE'])
+    peer.sendall((json.dumps(['client', os.getpid()]) + '\n').encode())
+os.execv({binary:?}, [{binary:?}, *sys.argv[1:]])
+",
+                path = format!("{0}:/usr/bin:/bin", bin.path().display()),
+                socket = socket.display().to_string(),
+                scratch = scratch.display().to_string(),
+                binary = staged_client.display().to_string(),
             ),
         )
         .unwrap();
@@ -4818,15 +5490,23 @@ else:
             running.push((child, client));
         }
         let mut versions = std::collections::BTreeMap::new();
-        for _ in 0..2 {
+        let mut client_pids = Vec::new();
+        for _ in 0..4 {
             let (stream, event) = python_preparation_event(&listener).await;
-            assert_eq!(event[0], "version");
-            versions.insert(
-                event[1].as_str().unwrap().to_owned(),
-                (stream, event[2].as_i64().unwrap()),
-            );
+            match event[0].as_str().unwrap() {
+                "client" => {
+                    let pid = fixture_host_pid(&stream, &event[1]);
+                    client_pids.push(pid);
+                }
+                "version" => {
+                    let pid = fixture_host_pid(&stream, &event[2]);
+                    versions.insert(event[1].as_str().unwrap().to_owned(), (stream, pid));
+                }
+                event => panic!("unexpected startup event: {event}"),
+            }
         }
         assert_eq!(versions.len(), 2);
+        assert_eq!(client_pids.len(), 2);
         let mut diagnostic_pipes = Vec::new();
         for (child, client) in &mut running {
             client.close_output().await;
@@ -4854,9 +5534,6 @@ else:
         assert_eq!(event[1], a);
         let discovery = PathBuf::from(event[2].as_str().unwrap());
         assert!(discovery.starts_with(&scratch) && discovery.is_dir());
-        let client_pids = std::fs::read_to_string(client_pids).unwrap();
-        let client_pids = client_pids.lines().map(|line| Pid::from_raw(line.parse().unwrap())).collect::<Vec<_>>();
-        assert_eq!(client_pids.len(), 2);
         for pid in &client_pids { assert_eq!(kill(*pid, None), Ok(())); }
         assert!(workspaces[0].join(".venv/pyvenv.cfg").is_file());
         assert!(!workspaces[1].join(".venv").exists());
@@ -4874,7 +5551,7 @@ else:
             client.close().await;
         }
         assert_eq!(
-            kill(Pid::from_raw(i32::try_from(pending_pid).unwrap()), None),
+            kill(pending_pid, None),
             Err(nix::errno::Errno::ESRCH),
             "shutdown joined the uv process"
         );
@@ -4885,4 +5562,900 @@ else:
         drop(diagnostic_pipes);
     })
     .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn namespace_receipt_covers_a_detached_session_and_requires_the_guardian() {
+    use futures_util::FutureExt as _;
+    use std::os::unix::fs::DirBuilderExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    bounded(async {
+        let script = r"
+import array, ctypes, json, os, pathlib, signal, socket, sys
+assert os.getpid() == 1
+# Exercise the inherited pidfd lease even if the launcher cannot propagate
+# its parent-death signal. Linux PR_SET_PDEATHSIG is 1.
+assert ctypes.CDLL(None).prctl(1, 0, 0, 0, 0) == 0
+assert not pathlib.Path(sys.argv[2]).exists()
+scratch = pathlib.Path(os.environ['TMPDIR'])
+(scratch / 'candidate').write_bytes(b'private namespace output')
+def stage_identity(parent, kind):
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.connect(os.environ['RUSTX_CLIENT_DOMAIN_STAGING'])
+            connection.sendmsg([kind], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))])
+            with connection.makefile('rb') as reader:
+                count = reader.read(1)[0]
+                device = int.from_bytes(reader.read(8), 'big')
+                inode = int.from_bytes(reader.read(8), 'big')
+                path = pathlib.Path(parent) / reader.read(count).decode('ascii')
+            identity = path.stat()
+            assert (device, inode) == (identity.st_dev, identity.st_ino)
+            return path
+    finally:
+        os.close(fd)
+stage = stage_identity(sys.argv[3], b'S')
+assert stage_identity(sys.argv[3], b'S') == stage
+mutation = stage_identity(sys.argv[4], b'M')
+assert stage_identity(sys.argv[4], b'M') == mutation
+(stage / 'incomplete').write_bytes(b'unpublished Python stage')
+(mutation / 'incomplete').write_bytes(b'unpublished Workspace mutation')
+child = os.fork()
+if child == 0:
+    os.setsid()
+    assert os.getsid(0) == os.getpid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with socket.socket(socket.AF_UNIX) as peer:
+        peer.connect(sys.argv[1])
+        peer.sendall((json.dumps([str(scratch), str(stage), str(mutation)]) + '\n').encode())
+        peer.recv(1)
+    os._exit(0)
+os.waitpid(child, 0)
+";
+        let executable = std::env::current_exe()
+            .unwrap()
+            .with_file_name("interactive-supervisor");
+        let mut unrelated = Command::new("/bin/sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        for kill_guardian in [false, true] {
+            let private = tempfile::tempdir_in("/tmp").unwrap();
+            let authority = private.path().join("authority");
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&authority)
+                .unwrap();
+            let verifier = authority.join("domain.authority");
+            let proof = authority.join("domain.proof");
+            std::fs::write(&verifier, b"private authority").unwrap();
+            let store = private.path().join("packages");
+            std::fs::create_dir(&store).unwrap();
+            std::fs::write(store.join("published"), b"published Python environment").unwrap();
+            let workspace = private.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            std::fs::write(workspace.join("file"), b"committed workspace file").unwrap();
+            let witness = private.path().join("witness");
+            let listener = tokio::net::UnixListener::bind(&witness).unwrap();
+            let mut guard = Command::new(&executable)
+                .arg("client-domain")
+                .arg(&proof)
+                .args(["/usr/bin/python3", "-c", script])
+                .arg(&witness)
+                .arg(&verifier)
+                .arg(&store)
+                .arg(&workspace)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut lease = guard.stdin.take().unwrap();
+            let mut reports = BufReader::new(guard.stdout.take().unwrap()).lines();
+            let token = [42; 32];
+            lease.write_all(&token).await.unwrap();
+            let ready = reports.next_line().await.unwrap().unwrap();
+            let init = Pid::from_raw(ready.strip_prefix("ready ").unwrap().parse().unwrap());
+            assert!(listener.accept().now_or_never().is_none());
+            assert!(!proof.exists());
+            lease.write_all(b"G").await.unwrap();
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut ownership = String::new();
+            peer.read_line(&mut ownership).await.unwrap();
+            let [scratch, stage, mutation]: [PathBuf; 3] = serde_json::from_str(&ownership).unwrap();
+            assert_eq!(
+                std::fs::read(stage.join("incomplete")).unwrap(),
+                b"unpublished Python stage",
+            );
+            assert_eq!(
+                std::fs::read(scratch.join("candidate")).unwrap(),
+                b"private namespace output"
+            );
+            assert_eq!(std::fs::read(mutation.join("incomplete")).unwrap(), b"unpublished Workspace mutation");
+            assert!(!proof.exists());
+            if kill_guardian {
+                guard.start_kill().unwrap();
+                assert_eq!(
+                    std::os::unix::process::ExitStatusExt::signal(&guard.wait().await.unwrap()),
+                    Some(libc::SIGKILL),
+                );
+                assert!(!proof.exists(), "dead owner emitted no receipt");
+            } else {
+                kill(init, Signal::SIGKILL).unwrap();
+                assert_eq!(
+                    reports.next_line().await.unwrap().as_deref(),
+                    Some("settled 137")
+                );
+                assert!(guard.wait().await.unwrap().success());
+                assert_eq!(std::fs::read(&proof).unwrap(), token);
+                assert!(!scratch.exists());
+            }
+            assert_eq!(
+                peer.read(&mut [0]).await.unwrap(),
+                0,
+                "the detached session lost its writer"
+            );
+            if kill_guardian {
+                // The watcher runs after namespace closure. It cleans the
+                // exact stage without any authority to publish a receipt.
+                while stage.exists() || mutation.exists() {
+                    tokio::task::yield_now().await;
+                }
+                assert!(!proof.exists());
+            }
+            assert!(!stage.exists(), "the independent watcher reaped the Python stage");
+            assert!(!mutation.exists(), "the independent watcher reaped the mutation stage");
+            assert_eq!(
+                std::fs::read(workspace.join("file")).unwrap(),
+                b"committed workspace file",
+            );
+            assert_eq!(
+                std::fs::read(store.join("published")).unwrap(),
+                b"published Python environment",
+            );
+            assert!(unrelated.try_wait().unwrap().is_none());
+            if kill_guardian {
+                // Only the test fixture can discard an exact scratch path
+                // after observing the fault. No product receipt was issued.
+                std::fs::remove_dir_all(scratch).unwrap();
+            }
+        }
+        unrelated.kill().await.unwrap();
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_local_execution_receipt(pending: &std::path::Path) {
+    loop {
+        if std::fs::read_dir(pending).unwrap().any(|entry| {
+            let path = entry.unwrap().path();
+            path.extension()
+                .is_some_and(|extension| extension == "proof")
+                && path.metadata().is_ok_and(|identity| identity.len() == 32)
+        }) {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn assert_no_local_recovery_owner(pending: &std::path::Path) {
+    let entries = std::fs::read_dir(pending)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, [std::ffi::OsString::from(".publication-lock")]);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
+    use rustx::app_server::{
+        command::ExecParams,
+        protocol::{Method, MethodResult},
+    };
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    struct ResumeOnDrop(Pid);
+    impl Drop for ResumeOnDrop {
+        fn drop(&mut self) {
+            let _ = kill(self.0, Signal::SIGCONT);
+        }
+    }
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let companion = bin.path().join("interactive-supervisor");
+        std::fs::rename(&companion, bin.path().join("domain-real")).unwrap();
+        std::fs::write(
+            &companion,
+            r#"#!/bin/sh
+set -eu
+if [ "$1" = client-domain ]; then
+    printf '%s' "$$" > "${0%/*}/guardian.pid"
+fi
+exec "${0%/*}/domain-real" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&companion, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("read-after-restart");
+        std::fs::write(&probe, b"original bytes").unwrap();
+        let socket_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = socket_dir.path().join("witness");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut original = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let driver = driver::jsonl(
+            original.stdout.take().unwrap(),
+            original.stdin.take().unwrap(),
+        );
+        initialize_client(&driver).await;
+        await_admission(&driver, session, &probe).await;
+        let script = r"
+import errno, os, signal, socket, sys
+with open('started', 'ab') as marker:
+    marker.write(b'one start\n')
+child = os.fork()
+if child == 0:
+    try:
+        os.setsid()
+        raise RuntimeError('ordinary command escaped per-operation supervisor')
+    except OSError as error:
+        assert error.errno == errno.EPERM
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with socket.socket(socket.AF_UNIX) as peer:
+        peer.connect(sys.argv[1])
+        peer.sendall(b'ready')
+        peer.recv(1)
+    os._exit(0)
+_, status = os.waitpid(child, 0)
+os._exit(os.waitstatus_to_exitcode(status))
+";
+        let mut command = Box::pin(result(
+            &driver,
+            Method::CommandExec(ExecParams {
+                session_id: session.clone(),
+                command: vec![
+                    "/usr/bin/python3".into(),
+                    "-c".into(),
+                    script.into(),
+                    socket.display().to_string(),
+                ],
+                cwd: workspace.display().to_string(),
+                env: std::collections::BTreeMap::new(),
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                timeout_ms: None,
+                size: None,
+            }),
+        ));
+        let mut peer = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            outcome = &mut command => panic!("physical operation settled before its descendant: {outcome:?}"),
+        };
+        let mut started = [0; 5];
+        peer.read_exact(&mut started).await.unwrap();
+        assert_eq!(&started, b"ready");
+        let guardian = std::fs::read_to_string(bin.path().join("guardian.pid"))
+            .unwrap()
+            .parse()
+            .map(Pid::from_raw)
+            .unwrap();
+        let resume = ResumeOnDrop(guardian);
+        kill(guardian, Signal::SIGSTOP).unwrap();
+        let status_path = format!("/proc/{guardian}/status");
+        loop {
+            let status = std::fs::read_to_string(&status_path).unwrap();
+            if status.lines().any(|line| line.starts_with("State:\tT")) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        kill(Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()), Signal::SIGKILL)
+            .unwrap();
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&original.wait().await.unwrap()),
+            Some(libc::SIGKILL)
+        );
+        drop(command);
+        driver.close().await;
+        let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .output()
+            .await
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr)
+                .contains("previous Session execution domain requires physical settlement"),
+            "{}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        let mut byte = [0];
+        assert_eq!(peer.try_read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        drop(resume);
+        assert_eq!(peer.read(&mut byte).await.unwrap(), 0, "original namespace closed the descendant's writer");
+
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        wait_for_local_execution_receipt(&pending).await;
+        // Fully sealed publication and the fresh admission are both
+        // verified by the product. A proof never replays the old argv.
+        let mut replacement =
+            local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+                .spawn()
+                .unwrap();
+        let current = driver::jsonl(
+            replacement.stdout.take().unwrap(),
+            replacement.stdin.take().unwrap(),
+        );
+        initialize_client(&current).await;
+        await_admission(&current, session, &probe).await;
+        assert_eq!(std::fs::read(workspace.join("started")).unwrap(), b"one start\n");
+        assert_eq!(std::fs::read(probe).unwrap(), b"original bytes");
+        let destination = workspace.join("nested/new/committed.txt");
+        assert!(matches!(
+            result(&current, Method::FsWriteFile {
+                session_id: session.clone(),
+                path: destination.display().to_string(),
+                data_base64: "cmVwbGFjZW1lbnQgY29tbWl0".into(),
+                expected_revision: None,
+            }).await,
+            MethodResult::FileMetadata { .. }
+        ));
+        assert_eq!(std::fs::read(destination).unwrap(), b"replacement commit");
+        assert!(std::fs::read_dir(&workspace).unwrap().all(|entry| {
+            !entry.unwrap().file_name().to_string_lossy().starts_with(".rustx-domain-stage-")
+        }));
+        current.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+        assert_no_local_recovery_owner(&pending);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn client_sigkill_advances_only_the_original_session_generation() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    async fn client_namespace_pid(listener: &tokio::net::UnixListener) -> Pid {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let pid = peer.peer_cred().unwrap().pid().unwrap();
+        let mut ready = [0; 11];
+        peer.read_exact(&mut ready).await.unwrap();
+        assert_eq!(&ready, b"client init");
+        Pid::from_raw(pid)
+    }
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let launcher = bin.path().join("rustx-execution-client");
+        std::fs::rename(&launcher, bin.path().join("client-real")).unwrap();
+        let gate = tempfile::tempdir_in("/tmp").unwrap();
+        let witness = gate.path().join("witness");
+        let listener = tokio::net::UnixListener::bind(&witness).unwrap();
+        std::fs::write(
+            &launcher,
+            format!(
+                r"#!/usr/bin/python3
+import os, socket, sys
+assert os.getpid() == 1
+with socket.socket(socket.AF_UNIX) as peer:
+    peer.connect({witness:?})
+    peer.sendall(b'client init')
+os.execv({client:?}, [{client:?}, *sys.argv[1:]])
+",
+                witness = witness.display().to_string(),
+                client = bin.path().join("client-real").display().to_string(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("probe");
+        std::fs::write(&probe, b"physical Workspace").unwrap();
+        let mut server = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let first = client_namespace_pid(&listener).await;
+        let driver = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&driver).await;
+        await_admission(&driver, session, &probe).await;
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        let admission = || {
+            let paths = std::fs::read_dir(&pending)
+                .unwrap()
+                .map(|item| item.unwrap().path())
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(paths.len(), 1);
+            serde_json::from_slice::<rustx_execution_protocol::Admission>(
+                &std::fs::read(&paths[0]).unwrap(),
+            )
+            .unwrap()
+        };
+        let original = admission();
+        assert_eq!(original.generation.get(), 1);
+        kill(first, Signal::SIGKILL).unwrap();
+        let second = client_namespace_pid(&listener).await;
+        assert_ne!(first, second);
+        let recovered = admission();
+        assert_eq!(recovered.generation.get(), 2);
+        assert_eq!(recovered.server_incarnation, original.server_incarnation);
+        assert_eq!(recovered.session, original.session);
+        assert_ne!(recovered.instance, original.instance);
+        assert_eq!(recovered.workspace, original.workspace);
+        assert!(server.try_wait().unwrap().is_none());
+        await_admission(&driver, session, &probe).await;
+        assert_eq!(std::fs::read(&probe).unwrap(), b"physical Workspace");
+        driver.close().await;
+        detach_then_shutdown(&mut server).await;
+        assert!(server.wait().await.unwrap().success());
+        assert_no_local_recovery_owner(&pending);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
+    use rustx::app_server::protocol::{ErrorData, Method, MethodResult, Response};
+    use rustx::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+    use rustx::local_runtime::{
+        HeadlessConversationRuntime, HostEnvironment, LaunchRequest, LocalRuntimeDependencies,
+        StartupSession, launch,
+    };
+    use rustx::message::{content::TextBlock, types::UserContentBlock};
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::DirBuilderExt as _;
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (_bin, executable) = isolated_server_pair();
+        let session = &fixture.sessions[0];
+        let private_database = {
+            let controller = SessionController::open(&fixture.root.path().join("runtime")).unwrap();
+            controller
+                .acquire_session(session, None)
+                .await
+                .unwrap()
+                .database_path
+        };
+        assert!(private_database.is_file());
+        let workspace = fixture.root.path().join("a");
+        let other_workspace = fixture.root.path().join("b");
+        grant_environment_roots(&fixture, &[workspace.clone(), other_workspace.clone()]);
+        let provider = crate::common::FixtureServer::start_with_body(|_, _, _| {
+            crate::common::sse_fixture("openai_chat", "plain_text.sse")
+        })
+        .await;
+        let home = fixture.root.path().join("home");
+        let user_config = home.join("rustx/rustx.toml");
+        let authored = std::fs::read_to_string(&user_config).unwrap();
+        std::fs::write(
+            user_config,
+            authored.replace("http://127.0.0.1:9/v1", &provider.url("/v1")),
+        )
+        .unwrap();
+        let first_probe = workspace.join("admitted");
+        let other_probe = other_workspace.join("admitted");
+        std::fs::write(&first_probe, b"a").unwrap();
+        std::fs::write(&other_probe, b"b").unwrap();
+        let private = fixture.root.path().join("remote-private");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&private)
+            .unwrap();
+        let bundle = private.join("binding");
+        let mut original =
+            remote_exec_command(&executable, &fixture, Some(session.as_str()), &bundle)
+                .spawn()
+                .unwrap();
+        let driver = driver::jsonl(
+            original.stdout.take().unwrap(),
+            original.stdin.take().unwrap(),
+        );
+        initialize_client(&driver).await;
+        let mut execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
+        await_admission(&driver, session, &first_probe).await;
+        let history = || Method::SessionHistory {
+            session_id: session.clone(),
+            node_id: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
+            limit: 4,
+        };
+        let history_before = serde_json::to_value(result(&driver, history()).await).unwrap();
+        kill(
+            Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()),
+            Signal::SIGKILL,
+        )
+        .unwrap();
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&original.wait().await.unwrap()),
+            Some(libc::SIGKILL)
+        );
+        assert!(execution.0.try_wait().unwrap().is_none());
+        driver.close().await;
+
+        let decoy = workspace.join("rustx.toml");
+        let decoy_bytes = b"[tool_deadline_policy]\nhard_deadline_ms = 23456\n";
+        std::fs::write(&decoy, decoy_bytes).unwrap();
+        let host = HostEnvironment::from_paths(workspace.clone(), home).unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            runtime_root: Some(fixture.root.path().join("runtime")),
+            ..LaunchRequest::default()
+        };
+        let paths = launch::analyze(&request, &host)
+            .unwrap()
+            .admit(|| {
+                rustx::credentials::CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())])
+            })
+            .unwrap();
+        let dependencies = LocalRuntimeDependencies {
+            startup_session: StartupSession::Select {
+                session: session.clone(),
+                node: None,
+            },
+            ..LocalRuntimeDependencies::default()
+        };
+        let failure = HeadlessConversationRuntime::compose_and_submit(
+            &paths,
+            &dependencies,
+            vec![UserContentBlock::Text(TextBlock {
+                text: "a new standalone turn".into(),
+            })],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            failure
+                .to_string()
+                .contains("previous Session execution domain requires physical settlement"),
+            "{failure}"
+        );
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        let database = rusqlite::Connection::open_with_flags(
+            &private_database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let attempts = database
+            .query_row(
+                "SELECT count(*) FROM events WHERE event_kind = 'attempt_started'",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap();
+        assert_eq!(attempts, 0);
+        drop(database);
+
+        let rejected = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .output()
+            .await
+            .unwrap();
+        assert!(!rejected.status.success());
+        let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+        assert!(
+            diagnostic.contains("previous Session execution domain requires physical settlement"),
+            "{diagnostic}"
+        );
+
+        let other = &fixture.sessions[1];
+        let mut replacement =
+            local_exec_command(&executable, &fixture, other.as_str(), &other_workspace)
+                .env("TEST_KEY", "fixture")
+                .spawn()
+                .unwrap();
+        let driver = driver::jsonl(
+            replacement.stdout.take().unwrap(),
+            replacement.stdin.take().unwrap(),
+        );
+        initialize_client(&driver).await;
+        await_admission(&driver, other, &other_probe).await;
+        let cold_history = result(&driver, history()).await;
+        assert!(matches!(cold_history, MethodResult::SessionHistory { .. }));
+        assert_eq!(serde_json::to_value(cold_history).unwrap(), history_before);
+
+        let document = format!("[mcp_servers.decoy]\nurl = {:?}\n", provider.url("/mcp"));
+        let resources = workspace.join(".agents");
+        std::fs::create_dir(&resources).unwrap();
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
+        let MethodResult::SessionTransition {
+            session: alternate, ..
+        } = result(
+            &driver,
+            Method::SessionCreate {
+                settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                    workspace.clone(),
+                )),
+                input_references: None,
+                submission: None,
+                dynamic_tools: Vec::new(),
+            },
+        )
+        .await
+        else {
+            panic!("another unbound Session in the same Workspace");
+        };
+        let target = rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        for execution_session in [Some(session.clone()), Some(alternate.id), None] {
+            let id = rustx::runtime::identity::McpServerId::new("decoy");
+            for method in [
+                Method::WorkflowToolCatalog {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    source: None,
+                    cursor: None,
+                    expected_scope: None,
+                },
+                Method::McpProbe {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    id: id.clone(),
+                    expected_revision: revision.clone(),
+                },
+                Method::McpCatalog {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    id,
+                    expected_revision: revision.clone(),
+                    kind: rustx::tools::mcp::catalog::CatalogKind::Tools,
+                },
+            ] {
+                let Response::Failure(refused) = rpc(&driver, 80, method).await else {
+                    panic!("a prior physical owner bars the Server-authored Workspace catalog");
+                };
+                assert_eq!(refused.error.data, Some(ErrorData::ExecutionUnavailable));
+            }
+        }
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        let thread_id = app_server_conformance::thread_id(&driver, session.clone()).await;
+        let Response::Failure(attach) = rpc(&driver, 81, Method::SessionAttach { thread_id }).await
+        else {
+            panic!("the prior Client still owns Workspace configuration");
+        };
+        assert!(
+            attach.error.message.contains("unsettled execution binding"),
+            "{attach:?}"
+        );
+
+        let settings = || Method::SettingsRead {
+            session_id: session.clone(),
+        };
+        let MethodResult::Settings { projection } = result(&driver, settings()).await else {
+            panic!("cold Session settings");
+        };
+        let Response::Failure(write) = rpc(
+            &driver,
+            82,
+            Method::SessionInputsWrite {
+                session_id: session.clone(),
+                expected_revision: projection.revision,
+                session_config: Some(SessionInputChange::Replace(SessionConfigContent(
+                    "[tool_deadline_policy]\nhard_deadline_ms = 34567\n".into(),
+                ))),
+                session_resources: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session inputs cannot validate against the Server decoy");
+        };
+        assert_eq!(write.error.data, Some(ErrorData::ExecutionUnavailable));
+        let MethodResult::Settings { projection: after } = result(&driver, settings()).await else {
+            panic!("cold Session settings after refusal");
+        };
+        assert_eq!(after.revision, projection.revision);
+        assert_eq!(std::fs::read(decoy).unwrap(), decoy_bytes);
+        assert_offline_session_deletion(&driver, session).await;
+        assert!(private_database.is_file());
+        assert_eq!(std::fs::read(&first_probe).unwrap(), b"a");
+        await_admission(&driver, other, &other_probe).await;
+        driver.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session() {
+    use base64::Engine as _;
+    use rustx::app_server::command::ExecParams;
+    use rustx::app_server::protocol::Method;
+    use sha2::{Digest, Sha256};
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("probe");
+        std::fs::write(&probe, b"unchanged bytes").unwrap();
+        let private = || {
+            tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir_in("/tmp")
+                .unwrap()
+        };
+        let operator = private();
+        let bundle = operator.path().join("client");
+        let secret = operator.path().join("custody");
+        let mut original =
+            remote_exec_command(&executable, &fixture, Some(session.as_str()), &bundle)
+                .arg("--execution-settlement-grant-out")
+                .arg(&secret)
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap();
+        let connected = driver::jsonl(original.stdout.take().unwrap(), original.stdin.take().unwrap());
+        initialize_client(&connected).await;
+        let grant: serde_json::Value = serde_json::from_slice(&std::fs::read(&secret).unwrap()).unwrap();
+        assert_eq!(secret.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let proof = std::path::PathBuf::from(grant["receipt_path"].as_str().unwrap());
+        let token = base64::engine::general_purpose::STANDARD.decode(grant["proof_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(token.len(), 32);
+        assert!(!std::fs::read(&bundle).unwrap().windows(token.len()).any(|window| window == token));
+        let deployment = private();
+        let remote_proof = deployment.path().join(proof.file_name().unwrap());
+        let mut authority = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(remote_proof.with_extension("authority")).unwrap();
+        authority.write_all(&Sha256::digest(&token)).unwrap();
+        authority.sync_all().unwrap();
+        drop(authority);
+        let mut guardian = Command::new(bin.path().join("interactive-supervisor"))
+            .arg("client-domain").arg(&remote_proof).arg(bin.path().join("rustx-execution-client"))
+            .arg("--binding-file").arg(&bundle).arg("--workspace").arg(&workspace)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+        let mut lease = guardian.stdin.take().unwrap();
+        lease.write_all(&token).await.unwrap();
+        let mut reports = BufReader::new(guardian.stdout.take().unwrap()).lines();
+        let ready = reports.next_line().await.unwrap().unwrap();
+        let pid: i32 = ready.strip_prefix("ready ").unwrap().parse().unwrap();
+        lease.write_all(b"G").await.unwrap();
+        await_admission(&connected, session, &probe).await;
+
+        let socket = operator.path().join("writer");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut running = Box::pin(result(&connected, Method::CommandExec(ExecParams {
+            session_id: session.clone(),
+            command: vec![
+                "/usr/bin/python3".into(),
+                "-c".into(),
+                "import socket,sys\ns=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\ns.sendall(b'owned')\ns.recv(1)".into(),
+                socket.display().to_string(),
+            ],
+            cwd: workspace.display().to_string(),
+            env: std::collections::BTreeMap::new(),
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: None,
+            size: None,
+        })));
+        let mut writer = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            result = &mut running => panic!("remote process settled before its writer was retained: {result:?}"),
+        };
+        let mut owned = [0; 5];
+        writer.read_exact(&mut owned).await.unwrap();
+        assert_eq!(&owned, b"owned");
+        kill(Pid::from_raw(i32::try_from(original.id().unwrap()).unwrap()), Signal::SIGKILL).unwrap();
+        assert!(!original.wait().await.unwrap().success());
+        drop(running);
+        connected.close().await;
+
+        let fresh = operator.path().join("replacement");
+        let refused = remote_exec_command(&executable, &fixture, Some(session.as_str()), &fresh)
+            .output().await.unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr)
+            .contains("previous Session execution domain requires physical settlement"));
+        assert_eq!(writer.try_read(&mut [0]).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert!(!proof.exists());
+
+        kill(Pid::from_raw(pid), Signal::SIGKILL).unwrap();
+        assert_eq!(writer.read(&mut [0]).await.unwrap(), 0);
+        assert_eq!(reports.next_line().await.unwrap().as_deref(), Some("settled 137"));
+        assert!(guardian.wait().await.unwrap().success());
+        assert_eq!(std::fs::read(&remote_proof).unwrap(), token);
+        std::fs::rename(remote_proof, &proof).unwrap();
+        let mut replacement = remote_exec_command(&executable, &fixture, Some(session.as_str()), &fresh)
+            .spawn().unwrap();
+        let restored = driver::jsonl(replacement.stdout.take().unwrap(), replacement.stdin.take().unwrap());
+        initialize_client(&restored).await;
+        let mut new_client = ReapChild(staged_client_command(&fresh, &workspace).spawn().unwrap());
+        await_admission(&restored, session, &probe).await;
+        assert!(!proof.exists());
+        assert_eq!(std::fs::read(probe).unwrap(), b"unchanged bytes");
+        restored.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+        assert!(new_client.0.wait().unwrap().success());
+    }).await;
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_offline_session_deletion(driver: &driver::Driver, session: &SessionId) {
+    use rustx::app_server::{
+        protocol::{Method, MethodResult},
+        session_deletion::SessionDeletionResult,
+    };
+    let MethodResult::Deletion {
+        result: SessionDeletionResult::Preview { preview },
+    } = result(
+        driver,
+        Method::SessionDeletePreview {
+            session_id: session.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("offline Session should remain eligible for logical deletion");
+    };
+    let deleted = result(
+        driver,
+        Method::SessionDelete {
+            session_id: session.clone(),
+            expected_target_revision: preview.target_revision,
+        },
+    )
+    .await;
+    let MethodResult::Deletion {
+        result: SessionDeletionResult::CommittedCleanupPending { session_id },
+    } = deleted
+    else {
+        panic!("unconfirmed physical owner must retain cleanup: {deleted:?}");
+    };
+    assert_eq!(&session_id, session);
+    let recovered = result(
+        driver,
+        Method::SessionRecoverDeletion {
+            session_id: session.clone(),
+        },
+    )
+    .await;
+    let MethodResult::Deletion {
+        result: SessionDeletionResult::CommittedCleanupPending { session_id },
+    } = recovered
+    else {
+        panic!("retry still lacks physical cleanup evidence: {recovered:?}");
+    };
+    assert_eq!(&session_id, session);
 }

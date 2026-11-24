@@ -13,9 +13,13 @@
 
 pub(crate) mod storage;
 
+#[cfg(any(test, feature = "test-support"))]
 use std::collections::BTreeMap;
+#[cfg(any(test, feature = "test-support"))]
 use std::fs::File;
+#[cfg(any(test, feature = "test-support"))]
 use std::io::Write;
+#[cfg(any(test, feature = "test-support"))]
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -51,6 +55,7 @@ impl core::fmt::Display for ManagedOutputError {
 }
 impl std::error::Error for ManagedOutputError {}
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 struct AllocatedBackground {
     path: PathBuf,
@@ -61,6 +66,7 @@ struct AllocatedBackground {
 #[derive(Debug)]
 struct ManagedOutputState {
     namespaces: storage::Namespaces,
+    #[cfg(any(test, feature = "test-support"))]
     background: BTreeMap<ToolExecutionId, AllocatedBackground>,
     #[cfg(test)]
     force_open_failures: bool,
@@ -113,6 +119,7 @@ impl ManagedToolOutput {
             conversation_id,
             state: Arc::new(Mutex::new(ManagedOutputState {
                 namespaces,
+                #[cfg(any(test, feature = "test-support"))]
                 background: BTreeMap::new(),
                 #[cfg(test)]
                 force_open_failures: false,
@@ -167,6 +174,7 @@ impl ManagedToolOutput {
     /// Temporary storage may be unavailable without preventing Session recovery.
     /// # Panics
     /// Panics if another storage operation poisoned the owner mutex.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn root(&self) -> Result<PathBuf, ManagedOutputError> {
         self.state
             .lock()
@@ -216,6 +224,7 @@ impl ManagedToolOutput {
         }
         Ok(())
     }
+    #[cfg(any(test, feature = "test-support"))]
     fn create(
         state: &mut ManagedOutputState,
         prefix: &str,
@@ -243,6 +252,7 @@ impl ManagedToolOutput {
     /// Reports allocation failure without overwriting any existing file.
     /// # Panics
     /// Panics if another storage operation poisoned the owner mutex.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn open_spill(&self) -> Result<ResultSpill, ManagedOutputError> {
         let mut state = self.state.lock().expect("managed output lock");
         let (file, path) = Self::create(&mut state, "r", ".txt")?;
@@ -258,6 +268,7 @@ impl ManagedToolOutput {
     /// # Panics
     /// The caller must have successfully allocated this execution before use.
     #[must_use]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn background_output_path(&self, execution_id: &ToolExecutionId) -> PathBuf {
         self.state
             .lock()
@@ -274,6 +285,7 @@ impl ManagedToolOutput {
     /// A duplicate execution or failed file creation refuses dispatch.
     /// # Panics
     /// Panics if another storage operation poisoned the owner mutex.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn allocate_background_output(
         &self,
         execution_id: &ToolExecutionId,
@@ -293,6 +305,7 @@ impl ManagedToolOutput {
         Ok(path)
     }
     /// Discard only a pre-commit allocation; unknown executions are a no-op.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn discard_background_output(&self, execution_id: &ToolExecutionId) {
         let mut state = self.state.lock().expect("managed output lock");
         if let Some(allocated) = state.background.remove(execution_id)
@@ -303,6 +316,7 @@ impl ManagedToolOutput {
     }
     /// Executor settlement releases the allocation handle without removing
     /// published output. The locator remains available for terminal projection.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn settle_background_output(&self, execution: &ToolExecutionId) {
         if let Some(allocated) = self
             .state
@@ -316,6 +330,7 @@ impl ManagedToolOutput {
     }
     /// Read a bounded live tail through the same open file as the executor.
     /// Positional reads do not move the writer cursor or resolve a client path.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn live_tail(&self, id: &ToolExecutionId) -> std::io::Result<(String, bool)> {
         const LIMIT: u64 = 16 * 1024;
         let file = self
@@ -353,6 +368,7 @@ impl ManagedToolOutput {
     /// Missing, redirected or replaced output is unavailable, never empty output.
     /// # Panics
     /// Panics if another storage operation poisoned the owner mutex.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn open_background_output_sink(
         &self,
         execution_id: &ToolExecutionId,
@@ -401,6 +417,7 @@ impl ManagedToolOutput {
 /// [`crate::tools::types::ManagedOutputContinuation::Partial`] locator instead
 /// of claiming that it
 /// contains the complete result.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct ResultSpill {
     _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
@@ -412,6 +429,7 @@ pub struct ResultSpill {
     fail_writes_after: Option<u64>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl ResultSpill {
     /// The canonical absolute model-facing locator of this spill file.
     #[must_use]
@@ -443,6 +461,7 @@ impl ResultSpill {
 /// is observable through Read/Grep. A sink failure after advertisement can
 /// never be hidden by unpublishing the path; the producer must represent
 /// it explicitly as incomplete output at settlement.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct BackgroundOutput {
     _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
@@ -454,6 +473,7 @@ pub struct BackgroundOutput {
     fail_writes_after: Option<u64>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl BackgroundOutput {
     /// The canonical absolute model-facing locator of this output file:
     /// the same path the dispatch advertised.
@@ -482,6 +502,7 @@ impl BackgroundOutput {
 
 /// Writes one text fragment, honoring the test-only write-failure
 /// allowance when compiled in.
+#[cfg(any(test, feature = "test-support"))]
 fn write_text(
     file: &mut File,
     text: &str,

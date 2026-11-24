@@ -168,6 +168,16 @@ async fn drain_reports_an_admitted_client_with_lost_control_as_unconfirmed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_accepts_the_original_receipt_after_revoke_lane_loss() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::drain_accepts_the_original_receipt_after_revoke_lane_loss()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_rejects_split_lane_recovery_across_cutoff() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::drain_rejects_split_lane_recovery_across_cutoff()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::refused_register_does_not_allocate_a_cancellation_tombstone()).await;
 }
@@ -175,6 +185,11 @@ async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::delete_revoke_does_not_pin_residency_or_forget_failure()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offline_deleted_session_accepts_only_its_original_cleanup_owner() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::an_offline_deleted_session_accepts_only_its_original_cleanup_owner()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

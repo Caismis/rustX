@@ -73,10 +73,14 @@ pub struct DataRequest {
     pub remaining_ms: u32,
 }
 
+/// Separate wire return time from the physical dispatch budget.
+pub const DATA_REPLY_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum DataReply {
     Client(ClientReply),
     Rejected(Refusal),
+    Unknown(Refusal),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -150,7 +154,7 @@ impl LocalConnection {
                         .and_then(|()| control.receive::<ControlReceipt>(deadline));
                     match receipt {
                         Ok(ControlReceipt::Client(reply)) => {
-                            if !shared.resolve(Some(reply), || {}) {
+                            if !shared.resolve(Some(reply), |_| false) {
                                 break;
                             }
                         }
@@ -227,6 +231,14 @@ impl LocalConnection {
             return self
                 .process_admitted(request, deadline, permit)
                 .map(ClientReply::Process);
+        }
+        if let ClientRequest::Mcp(request) = request {
+            let key = request.key().clone();
+            let reply = self.mcp_by(request.clone(), deadline, permit)?;
+            return Ok(ClientReply::Mcp(rustx_execution_protocol::mcp::Response {
+                key,
+                reply,
+            }));
         }
         let reply = self.exchange_admitted(request, Some(deadline), permit, || ())?;
         if matches!(reply, ClientReply::Error { .. }) {

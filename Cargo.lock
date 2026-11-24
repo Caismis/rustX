@@ -4490,7 +4490,7 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "3.2.0"
-source = "git+https://github.com/Caismis/rust-sdk.git?rev=cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0#cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0"
+source = "git+https://github.com/Caismis/rust-sdk.git?rev=53f7aaef44d40d769ab1c274819019c6c457eead#53f7aaef44d40d769ab1c274819019c6c457eead"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -4797,6 +4797,7 @@ name = "rustx-execution-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chumsky",
  "futures-util",
  "getrandom 0.3.4",
  "globset",
@@ -4805,7 +4806,9 @@ dependencies = [
  "libc",
  "nix",
  "notify",
+ "pep-508",
  "pep440_rs",
+ "rmcp",
  "rustix",
  "rustx-confined-fs",
  "rustx-document-reader",
@@ -4814,14 +4817,17 @@ dependencies = [
  "rustx-execution-transport",
  "rustx-process-supervisor",
  "rustx-text-edit",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "similar 3.2.0",
  "tempfile",
+ "thiserror",
  "tokio",
  "tokio-util",
  "toml_edit 0.22.27",
  "tracing",
+ "uv-normalize",
 ]
 
 [[package]]
@@ -4878,6 +4884,7 @@ dependencies = [
  "futures-util",
  "libc",
  "nix",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

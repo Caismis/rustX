@@ -902,13 +902,17 @@ impl ConversationRuntime {
         let _ = self.inner.capability.settle_ready_mcp_runtimes().await;
     }
 
-    pub(crate) fn restore_configuration_binding(&self, revision: u64) {
+    pub(crate) fn restore_configuration_binding(&self, revision: u64) -> Result<(), String> {
         let mut state = self.inner.lock_state();
+        if let Some(detail) = &state.mcp_settlement_failure {
+            return Err(detail.clone());
+        }
         assert_eq!(
             self.inner.lifecycle.state(),
             ConversationLifecycleState::Inactive
         );
         state.binding_revision = revision;
+        Ok(())
     }
 
     /// Publish a newly available Model Catalog to this Session for future

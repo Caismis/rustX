@@ -17,11 +17,15 @@ mod common;
 #[path = "../common/launch.rs"]
 mod launch_fixture;
 
+#[cfg(feature = "test-support")]
 mod bash;
 mod mcp;
+#[cfg(feature = "test-support")]
 mod mcp_managed;
 mod mcp_runtime;
 mod skills;
+#[cfg(feature = "test-support")]
 mod tool_packages;
 mod tool_plane;
+#[cfg(feature = "test-support")]
 mod uv;

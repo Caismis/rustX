@@ -35,6 +35,7 @@ pub trait HostToolDispatcher: Send + Sync {
         definition: &'a HostToolDefinition,
         invocation: ToolInvocation,
         cancellation: ExecutionCancellation,
+        execution: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
     ) -> BoxFuture<'a, ToolExecutionResult>;
 }
 
@@ -215,6 +216,7 @@ impl ToolExecutor for Executor {
                         &self.definition,
                         invocation,
                         context.cancellation.clone(),
+                        context.workspace.execution_scope().cloned(),
                     )
                     .await
             }),

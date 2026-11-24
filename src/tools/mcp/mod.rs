@@ -135,6 +135,7 @@ pub mod fixture;
 pub mod catalog;
 mod connect;
 mod connection;
+pub(crate) mod declaration_cache;
 mod diagnostics;
 mod dispatch;
 mod executor;
@@ -152,6 +153,8 @@ mod resources;
 mod resources_executor;
 mod result;
 mod runtime;
+mod stdio;
+pub(crate) use stdio::launch_spec as stdio_launch_spec;
 mod streamable_http;
 mod task_driver;
 mod tasks;
@@ -306,6 +309,11 @@ pub enum McpTransportConfig {
         /// Explicit child environment.
         environment: BTreeMap<String, String>,
     },
+    /// A synthesized Managed Python connection rooted in an exact Client capture.
+    ManagedPython {
+        /// Frozen source identity of the original Session and generation.
+        source: ManagedPythonSource,
+    },
     /// A stateless Streamable HTTP endpoint with explicit headers.
     StreamableHttp {
         /// Endpoint URL.
@@ -314,6 +322,32 @@ pub enum McpTransportConfig {
         headers: BTreeMap<String, String>,
     },
 }
+
+/// A frozen Client capture. Only its admitted key crosses the child boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedPythonSource {
+    key: rustx_execution_protocol::process::ProcessOperationKey,
+    #[serde(skip)]
+    _owner: Option<std::sync::Arc<crate::tools::python::ClientSource>>,
+}
+
+impl ManagedPythonSource {
+    pub(crate) fn retain(source: std::sync::Arc<crate::tools::python::ClientSource>) -> Self {
+        Self {
+            key: source.key.clone(),
+            _owner: Some(source),
+        }
+    }
+}
+
+impl PartialEq for ManagedPythonSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for ManagedPythonSource {}
 
 impl std::fmt::Debug for McpTransportConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -329,6 +363,10 @@ impl std::fmt::Debug for McpTransportConfig {
                 .field("arg_count", &args.len())
                 .field("cwd", cwd)
                 .field("environment_keys", &environment.keys().collect::<Vec<_>>())
+                .finish(),
+            Self::ManagedPython { source } => formatter
+                .debug_tuple("ManagedPython")
+                .field(source)
                 .finish(),
             Self::StreamableHttp { endpoint, headers } => formatter
                 .debug_struct("StreamableHttp")
@@ -365,17 +403,24 @@ pub struct McpServerBinding {
 impl McpServerBinding {
     /// Freeze every accepted credential input at the native connection owner,
     /// including bindings constructed without the configuration parser.
-    fn with_connection_redactions(&self) -> Self {
+    fn with_connection_redactions(&self, server_id: &McpServerId) -> Self {
         let mut binding = self.clone();
         let mut values = Vec::new();
         match &self.transport {
-            McpTransportConfig::Stdio { environment, .. } => {
+            // The reserved Managed Python namespace is generated internally.
+            // Its fixed runtime settings contain no authored secrets.
+            McpTransportConfig::Stdio { environment, .. }
+                if !server_id
+                    .as_str()
+                    .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE) =>
+            {
                 values.extend(
                     environment
                         .values()
                         .map(|value| crate::model::catalog::ResolvedCredential::new(value.clone())),
                 );
             }
+            McpTransportConfig::Stdio { .. } | McpTransportConfig::ManagedPython { .. } => (),
             McpTransportConfig::StreamableHttp { headers, .. } => {
                 let mut header = |name: &str, value: &str| {
                     values.push(crate::model::catalog::ResolvedCredential::new(value));

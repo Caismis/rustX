@@ -2,7 +2,7 @@ import type {
   WorkflowDefinitionPath,
   WorkflowNodeInstance,
   WorkflowRunId,
-} from '../../../../../protocol/app-server/v80';
+} from '../../../../../protocol/app-server/v81';
 import { workflowKey } from '../../../bindings/workflow-children';
 import type { BlockPath, BlockStep } from '../document/model';
 import type { SceneNode } from '../ui/editor/scene';

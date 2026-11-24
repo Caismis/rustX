@@ -1,5 +1,5 @@
 import {traceAttemptKey,traceStepKey,traceFieldKey} from '../../../protocol/app-server/trace-identity';
-import type { TraceLocation, TraceRecord } from '../../../protocol/app-server/v80';
+import type { TraceLocation, TraceRecord } from '../../../protocol/app-server/v81';
 
 export interface ModelRetryNotice {
   key: string;

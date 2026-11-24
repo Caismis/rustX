@@ -1,3 +1,4 @@
+import { startHttpMcpPeer } from './http-mcp-startup-gate';
 import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
@@ -106,10 +107,19 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
-    const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
-    const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
+    const gatedModel = ['tui_multi_session', 'live_model_switch'].includes(scenario);
+    const primaryModel = gatedModel || scenario === 'mcp_startup' ? 'integration-model' : 'console-model';
+    const profiles = gatedModel ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
+    const secondProfiles = scenario === 'live_model_switch' ? `
+default_profile = "native"
+[models."fixture/second-model".profiles.high]
+max_output_tokens = 256
+[models."fixture/second-model".profiles.native]
+request_params = '{"reasoning_effort":"medium"}'
+max_output_tokens = 2048
+` : '';
     const catalog = `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
+      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : secondProfiles}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
@@ -182,6 +192,8 @@ timezone = "UTC"
       app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
       return readiness(app, 'stderr', appServerEndpoint);
     };
+    const mcpFixtureLifetime = new AbortController();
+    const mcpFixtures: Awaited<ReturnType<typeof startHttpMcpPeer>>[] = [];
     const endpoint = await startApp();
     const control = async (path: string, method = 'GET') => {
       const response = await fetch(`${providerUrl}/__control/${path}`, { method });
@@ -208,6 +220,11 @@ timezone = "UTC"
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
       restartApp,
+      async serveMcpCatalog(catalog: (cursor: string | undefined) => unknown) {
+        const peer = await startHttpMcpPeer(mcpFixtureLifetime.signal, catalog);
+        mcpFixtures.push(peer);
+        return peer.url;
+      },
       /** Model-tool fixtures enroll the exact Session through trusted startup. */
       async bindExecution(sessionId: string, workspace: string) {
         execution = { sessionId, workspace };
@@ -247,7 +264,9 @@ timezone = "UTC"
           try { await workspaceHost.stop(); }
           finally {
             app?.kill('SIGTERM'); provider.kill('SIGTERM');
-            rmSync(directory, { recursive: true, force: true });
+            mcpFixtureLifetime.abort(new Error('Dogfood fixture settled'));
+            try { await Promise.all(mcpFixtures.map(peer => peer.close())); }
+            finally { rmSync(directory, { recursive: true, force: true }); }
           }
         }
       },

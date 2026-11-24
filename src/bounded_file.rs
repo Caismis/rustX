@@ -89,35 +89,47 @@ pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn read_with_limit(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    read_with_limit_io(path, limit).map_err(|error| error.to_string())
+}
+
+pub(crate) fn read_with_limit_io(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
     record_read(path);
-    if !std::fs::metadata(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
-        .is_file()
-    {
-        return Err(format!("{} must be a regular file", path.display()));
-    }
+    let read_error = |error: std::io::Error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("cannot read {}: {error}", path.display()),
+        )
+    };
+    let require_regular = |metadata: std::fs::Metadata| {
+        if metadata.is_file() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{} must be a regular file", path.display()),
+            ))
+        }
+    };
+    require_regular(std::fs::metadata(path).map_err(read_error)?)?;
     // A regular file replaced by a FIFO between metadata and open must not block.
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    read_bounded_file(file, limit).map_err(|reason| format!("{} {reason}", path.display()))
-}
-
-/// The bounded contents of an already opened file, which must be regular.
-fn read_bounded_file(file: std::fs::File, limit: u64) -> Result<Vec<u8>, String> {
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("must be a regular file".into());
-    }
+        .map_err(read_error)?;
+    require_regular(file.metadata().map_err(read_error)?)?;
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(read_error)?;
     if bytes.len() as u64 > limit {
-        return Err(format!(
-            "exceeds {} MiB ({limit} bytes)",
-            limit / (1024 * 1024)
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} exceeds {} MiB ({limit} bytes)",
+                path.display(),
+                limit / (1024 * 1024)
+            ),
         ));
     }
     Ok(bytes)

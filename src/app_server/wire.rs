@@ -667,7 +667,6 @@ pub(super) fn protocol_schema() -> Value {
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
     let _ = generator.subschema_for::<crate::runtime::interaction::InteractionResponse>();
     let _ = generator.subschema_for::<super::protocol::HostToolResponse>();
-    let _ = generator.subschema_for::<super::host_upload::HostUploadEnvelope>();
     let _ = generator.subschema_for::<super::protocol::ServerOutput>();
     // Assign envelope-owned names first; the chunked report shares domain type names.
     let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
@@ -837,7 +836,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v80.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v81.ts"),
         )
         .unwrap();
         for domain in [

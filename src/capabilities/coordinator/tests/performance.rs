@@ -304,6 +304,7 @@ impl SupervisedProcessRunner for DelayedPythonRunner {
                 Vec::new()
             };
             Ok(CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(0),
                 intent: ProcessOutcomeIntent::Completed,
                 stdout,

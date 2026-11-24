@@ -4,13 +4,17 @@ import { accessSync, constants, mkdirSync, realpathSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Native stdio MCP launches its process through this sibling executable. */
+/** The bound Client and its supervisor must both be staged beside the Server. */
 export function requireMcpStartupSupervisor(binary: string): void {
-  const supervisor = join(dirname(realpathSync(binary)), `interactive-supervisor${process.platform === 'win32' ? '.exe' : ''}`);
-  try {
-    accessSync(supervisor, constants.X_OK);
-  } catch (cause) {
-    throw new Error(`Missing executable ${supervisor}; run \`cargo build --bins\` before the TUI MCP integration test`, { cause });
+  const directory = dirname(realpathSync(binary));
+  const extension = process.platform === 'win32' ? '.exe' : '';
+  for (const name of ['rustx-execution-client', 'interactive-supervisor']) {
+    const path = join(directory, `${name}${extension}`);
+    try {
+      accessSync(path, constants.X_OK);
+    } catch (cause) {
+      throw new Error(`Missing executable ${path}; run \`cargo build --bins\` before the MCP integration test`, { cause });
+    }
   }
 }
 

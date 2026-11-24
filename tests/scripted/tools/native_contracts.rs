@@ -162,7 +162,12 @@ fn read_write_edit_schemas_are_path_oriented_and_read_accepts_zero_offset() {
     let fixture = common::native_fixture();
     let read = definition(&fixture, "read").input_schema;
     assert_eq!(required(&read), ["path"]);
-    assert_eq!(properties(&read), ["limit", "offset", "path"]);
+    assert_eq!(
+        properties(&read),
+        ["byte_offset", "limit", "offset", "path"]
+    );
+    assert_eq!(read["properties"]["byte_offset"]["type"], "integer");
+    assert_eq!(read["properties"]["byte_offset"]["minimum"], 0);
     assert_eq!(read["properties"]["offset"]["minimum"], 0);
     assert_eq!(read["properties"]["limit"]["minimum"], 1);
     assert!(read["properties"]["limit"]["maximum"].is_null());

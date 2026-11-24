@@ -7,15 +7,12 @@ use rustx_execution_protocol::watch::WatchId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, ErrorKind};
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 const POLL_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
-static WATCH_SERIAL: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -139,14 +136,7 @@ impl Watches {
             .file_observers()
             .try_acquire_owned()
             .map_err(|_| domain(ErrorData::EnvironmentCapacityOrConflict))?;
-        let id = WATCH_SERIAL
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                next.checked_add(1)
-            })
-            .ok()
-            .and_then(NonZeroU64::new)
-            .map(WatchId::new)
-            .ok_or_else(|| domain(ErrorData::EnvironmentCapacityOrConflict))?;
+        let id = WatchId::file().ok_or_else(|| domain(ErrorData::EnvironmentCapacityOrConflict))?;
         let publication = Publication::new();
         let (settled, observation) = watch::channel(None);
         {
@@ -207,7 +197,7 @@ impl Observation {
     ) {
         let relative = self.register().await;
         drop(owner);
-        let relative = match relative {
+        let (relative, lane) = match relative {
             Ok(relative) => relative,
             Err(error) => {
                 self.remove();
@@ -224,7 +214,7 @@ impl Observation {
             }
         };
         let _ = admitted.send(Ok(()));
-        let ended_on_client = self.observe(&relative).await;
+        let ended_on_client = self.observe(&relative, &lane).await;
         if !ended_on_client && self.host.server_draining() {
             // The drain may already be physically retiring this observer
             // through a binding-wide revoke. Use that receipt before
@@ -236,7 +226,7 @@ impl Observation {
         } else {
             let endpoint = self.source.endpoint.clone();
             let id = self.id;
-            match tokio::task::spawn_blocking(move || endpoint.stop_watch(id)).await {
+            match tokio::task::spawn_blocking(move || endpoint.stop_watch(id, &lane)).await {
                 Ok(Ok(())) => Ok(()),
                 _ => Err(ErrorData::OutcomeUnknown),
             }
@@ -252,7 +242,7 @@ impl Observation {
         self.settled.send_replace(Some(physically_settled));
     }
 
-    async fn register(&self) -> Result<PathBuf, RpcError> {
+    async fn register(&self) -> Result<(PathBuf, rustx_execution_server::ControlHandle), RpcError> {
         let endpoint = self.source.endpoint.clone();
         let path = self.source.path.clone();
         let stop = self.publication.stop.clone();
@@ -282,11 +272,12 @@ impl Observation {
         })
     }
 
-    async fn observe(&self, relative: &Path) -> bool {
+    async fn observe(&self, relative: &Path, lane: &rustx_execution_server::ControlHandle) -> bool {
         loop {
             let endpoint = self.source.endpoint.clone();
             let path = relative.to_path_buf();
             let id = self.id;
+            let poll_lane = lane.clone();
             let result = tokio::select! {
                 biased;
                 () = self.publication.stop.cancelled() => return false,
@@ -294,7 +285,7 @@ impl Observation {
                 () = self.source.root_grant.cancelled() => return false,
                 result = async {
                     tokio::time::sleep(POLL_PERIOD).await;
-                    tokio::task::spawn_blocking(move || endpoint.poll_watch(id, &path)).await
+                    tokio::task::spawn_blocking(move || endpoint.poll_watch(id, &path, &poll_lane)).await
                 } => result,
             };
             let change = match result {
@@ -326,7 +317,9 @@ impl Observation {
             ) {
                 continue;
             }
-            self.publication.emit(&self.events, change);
+            self.source
+                .endpoint
+                .with_control_lane(lane, || self.publication.emit(&self.events, change));
         }
     }
 

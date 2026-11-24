@@ -50,6 +50,8 @@
 #    inspect the committed prefix. The final output uses the same locator.
 #  - Workspace Python resolves and runs the interpreter from a Client-only
 #    overlay, using an actual uv and the existing supervisor.
+#  - Stdio MCP reads the Client-only source declaration and launches the peer
+#    in that same mount. One foreground call crosses multiple execution pages.
 #
 # The product proof runs only against the real prepared artifacts — the
 # process harness plus its metadata-verified sibling Execution Client — so
@@ -75,6 +77,15 @@ cargo test -p rustx-execution-client --locked \
 cargo test -p rustx --all-features --locked \
     --test process app_server::explicit_composition_reads_from_client_mount_namespace \
     -- --exact --ignored --nocapture
+cargo test -p rustx --all-features --locked \
+    --test process app_server::stdio_mcp_session_runs_and_publishes_from_the_client_mount_view \
+    -- --exact --ignored --nocapture
+cargo test -p rustx --all-features --locked \
+    --test process app_server::managed_python_prepares_and_runs_in_the_bound_client_mount \
+    -- --exact --ignored --nocapture
+cargo test -p rustx --all-features --locked \
+    --test process app_server::managed_python_revokes_only_its_guarded_unpublished_root \
+    -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
     tools::background::tests::background_live_output_is_readable_while_running_and_reused_at_settlement \
     -- --exact --nocapture
@@ -85,4 +96,38 @@ cargo test -p rustx --all-features --locked --lib \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
     bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_lost \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    client_source_watch_reloads_guidance_and_skill_metadata_after_registration \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    bound_skill_watch_keeps_the_failed_target_observable \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    session_input_commit_publishes_its_bound_skill_dependencies \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    newer_bound_skill_observation_fences_an_older_session_input \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    in_flight_bound_skill_capture_fences_older_settings \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    a_bound_source_rechecks_after_its_final_document_read_fails \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    bound_workspace_mcp_catalog_uses_client_definitions_and_server_network \
+    -- --ignored --nocapture
+retirement_client=$(cargo build -p rustx-execution-client --features test-support --locked \
+    --bin rustx-execution-client --message-format=json | python3 -c '
+import json, sys
+for line in sys.stdin:
+    row = json.loads(line)
+    if row.get("reason") == "compiler-artifact" and row.get("executable"):
+        print(row["executable"])
+')
+test -x "$retirement_client"
+RUSTX_WATCH_RETIREMENT_PROOF_CLIENT="$retirement_client" \
+    cargo test -p rustx --all-features --locked --lib \
+    replacing_a_skill_refreshes_the_catalog_while_native_watch_retirement_is_held \
     -- --ignored --nocapture

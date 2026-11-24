@@ -5,8 +5,8 @@ use crate::{read_error, relative_entry};
 use rustx_confined_fs::{FileMetadata, PackageDirectory};
 use rustx_execution_protocol::ReadError;
 use rustx_execution_protocol::watch::{
-    MAX_WATCH_HINT_BYTES, MAX_WATCH_HINT_PATHS, MAX_WATCHES, WatchChange, WatchId, WatchReply,
-    WatchRequest,
+    MAX_CONFIGURATION_WATCHES, MAX_WATCH_HINT_BYTES, MAX_WATCH_HINT_PATHS, MAX_WATCHES,
+    WatchChange, WatchId, WatchReply, WatchRequest,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -38,10 +38,27 @@ struct Entry {
     delta: Arc<Mutex<Pending>>,
 }
 
-struct Finished(mpsc::Sender<()>);
+struct Finished {
+    receipt: mpsc::Sender<()>,
+    #[cfg(all(target_os = "linux", feature = "test-support"))]
+    retirement_gate: Option<(File, PathBuf)>,
+}
+
 impl Drop for Finished {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        #[cfg(all(target_os = "linux", feature = "test-support"))]
+        if let Some((descriptor, socket)) = self.retirement_gate.take() {
+            use std::io::{Read as _, Write as _};
+            if let Ok(mut gate) = std::os::unix::net::UnixStream::connect(socket) {
+                let _ = gate.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = gate.set_write_timeout(Some(Duration::from_secs(10)));
+                if gate.write_all(b"retiring").is_ok() {
+                    let _ = gate.read_exact(&mut [0]);
+                }
+            }
+            drop(descriptor);
+        }
+        let _ = self.receipt.send(());
     }
 }
 
@@ -168,17 +185,37 @@ impl Watches {
         let delta = Arc::new(Mutex::new(Pending::default()));
         let pending = delta.clone();
         let (sender, finished) = mpsc::channel();
-        let finished_sender = Finished(sender);
+        let finished_sender = Finished {
+            receipt: sender,
+            #[cfg(all(target_os = "linux", feature = "test-support"))]
+            retirement_gate: if id.is_configuration()
+                && std::env::var_os("RUSTX_TEST_WATCH_RETIREMENT_PATH").as_deref()
+                    == Some(path.as_os_str())
+                && let Some(socket) = std::env::var_os("RUSTX_TEST_WATCH_RETIREMENT_SOCKET")
+            {
+                Some((file.try_clone()?, PathBuf::from(socket)))
+            } else {
+                None
+            },
+        };
         let event_root = workspace.to_path_buf();
         let event_path = path.clone();
         let mut state = self.active.lock().expect("watch registry");
         if state.closed {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
-        if state.entries.len() + state.stopping.len() >= MAX_WATCHES
-            || state.entries.contains_key(&id)
-            || state.stopping.contains_key(&id)
-        {
+        let used = state
+            .entries
+            .keys()
+            .chain(state.stopping.keys())
+            .filter(|key| key.is_configuration() == id.is_configuration())
+            .count();
+        let limit = if id.is_configuration() {
+            MAX_CONFIGURATION_WATCHES
+        } else {
+            MAX_WATCHES
+        };
+        if used >= limit || state.entries.contains_key(&id) || state.stopping.contains_key(&id) {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
 
@@ -224,7 +261,10 @@ impl Watches {
 
     fn poll(&self, root: &PackageDirectory, id: WatchId) -> WatchReply {
         let (path, expected, delta) = {
-            let state = self.active.lock().expect("watch registry");
+            let mut state = self.active.lock().expect("watch registry");
+            if state.stopping.contains_key(&id) {
+                return Self::poll_retirement(&mut state, id);
+            }
             let Some(entry) = state.entries.get(&id) else {
                 return WatchReply::Refused {
                     id,
@@ -242,15 +282,9 @@ impl Watches {
             .is_ok_and(|meta| meta.identity == expected);
         let pending = std::mem::take(&mut *delta.lock().expect("watch delta"));
         if !same || pending.retired {
-            if !self.stop(id) {
-                return WatchReply::Unknown { id };
-            }
-            return WatchReply::Changed(WatchChange {
-                id,
-                changed_paths: Vec::new(),
-                resync_required: true,
-                retired: true,
-            });
+            let mut state = self.active.lock().expect("watch registry");
+            Self::begin_stop(&mut state, id);
+            return Self::poll_retirement(&mut state, id);
         }
         WatchReply::Changed(WatchChange {
             id,
@@ -262,10 +296,35 @@ impl Watches {
 
     pub(super) fn stop(&self, id: WatchId) -> bool {
         let mut state = self.active.lock().expect("watch registry");
+        Self::begin_stop(&mut state, id);
+        Self::await_stopped(&mut state, id, CLEANUP_BUDGET)
+    }
+
+    fn begin_stop(state: &mut State, id: WatchId) {
         if let Some(entry) = state.entries.remove(&id) {
             state.stopping.insert(id, entry.stop());
         }
-        Self::await_stopped(&mut state, id, CLEANUP_BUDGET)
+    }
+
+    fn poll_retirement(state: &mut State, id: WatchId) -> WatchReply {
+        if let Some(pending) = state.stopping.get(&id) {
+            match pending.try_recv() {
+                Ok(()) => {
+                    state.stopping.remove(&id);
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    return WatchReply::Retiring { id };
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return WatchReply::Unknown { id },
+            }
+        }
+        // Concurrent control stop also removes the entry only after proof.
+        WatchReply::Changed(WatchChange {
+            id,
+            changed_paths: Vec::new(),
+            resync_required: true,
+            retired: true,
+        })
     }
 
     fn await_stopped(state: &mut State, id: WatchId, budget: Duration) -> bool {
@@ -326,18 +385,87 @@ mod tests {
     ) -> WatchChange {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let WatchReply::Changed(change) = watches.poll(root, id) else {
-                panic!("watch disappeared before a physical change was reported");
-            };
-            if want(&change) {
-                return change;
+            let notice = watches.poll(root, id);
+            match &notice {
+                WatchReply::Changed(change) if want(change) => return change.clone(),
+                WatchReply::Changed(_) | WatchReply::Retiring { .. } => (),
+                _ => panic!("watch disappeared before a physical change was reported: {notice:?}"),
             }
             assert!(
                 Instant::now() < deadline,
-                "watch did not publish the expected change: {change:?}"
+                "watch did not publish the expected change: {notice:?}"
             );
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn pending_native_retirement_keeps_independent_watches_live() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let path = base.join("leaf");
+        fs::write(&path, b"original").unwrap();
+        fs::create_dir(base.join("directory")).unwrap();
+        let root = PackageDirectory::open(&base).unwrap();
+        let watches = Watches::new();
+        let leaf = id(1);
+        let directory = id(2);
+        watches
+            .register(&root, &base, leaf, "leaf".into(), |_| {})
+            .unwrap();
+        watches
+            .register(&root, &base, directory, "directory".into(), |_| {})
+            .unwrap();
+        // Withhold the stopped observer's cleanup receipt after replacing its path.
+        let (finish, pending) = mpsc::channel();
+        watches
+            .active
+            .lock()
+            .unwrap()
+            .entries
+            .get_mut(&leaf)
+            .unwrap()
+            .finished = pending;
+        fs::rename(&path, base.join("previous")).unwrap();
+        fs::write(&path, b"replacement").unwrap();
+        let busy = WatchReply::Retiring { id: leaf };
+        assert_eq!(watches.poll(&root, leaf), busy);
+        assert_eq!(watches.poll(&root, leaf), busy);
+        assert_eq!(
+            watches
+                .register(&root, &base, leaf, "leaf".into(), |_| {})
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+
+        fs::write(base.join("directory/new"), b"independent change").unwrap();
+        wait_for_change(&watches, &root, directory, |notice| {
+            assert!(!notice.retired);
+            notice
+                .changed_paths
+                .contains(&PathBuf::from("directory/new"))
+                || cfg!(target_os = "macos") && notice.resync_required
+        });
+
+        finish.send(()).unwrap();
+        assert_eq!(
+            watches.poll(&root, leaf),
+            WatchReply::Changed(WatchChange {
+                id: leaf,
+                changed_paths: Vec::new(),
+                resync_required: true,
+                retired: true,
+            })
+        );
+        assert_eq!(
+            watches.poll(&root, leaf),
+            WatchReply::Refused {
+                id: leaf,
+                kind: ReadError::NotFound
+            }
+        );
+        assert!(watches.stop(directory));
     }
 
     #[test]

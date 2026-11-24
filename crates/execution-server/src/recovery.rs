@@ -1,0 +1,440 @@
+//! Durable admission fence for a physical binding which might outlive Server
+//! memory. Only exact, confirmed binding settlement may remove this record.
+use std::fs::File;
+use std::io::{self, Read as _, Write as _};
+use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::Path;
+
+use nix::fcntl::{AtFlags, OFlag, openat};
+use nix::sys::stat::{Mode, fstat, fstatat, mkdirat};
+use nix::unistd::{LinkatFlags, UnlinkatFlags, linkat, unlinkat};
+use sha2::{Digest, Sha256};
+
+use super::binding::ConnectionOwner;
+
+mod domain;
+#[cfg(target_os = "linux")]
+pub use domain::LocalDomainGrant;
+
+const DIRECTORY: &str = "execution-pending";
+const MAX_MARKER_BYTES: usize = 8192;
+const MAX_INVENTORY_ENTRIES: usize = 4096;
+const STAGED_OWNER: &str = ".staged-owner";
+const PUBLICATION_LOCK: &str = ".publication-lock";
+
+fn pending_directory(root: &File) -> io::Result<File> {
+    let directory = File::from(openat(
+        root,
+        DIRECTORY,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )?);
+    let metadata = directory.metadata()?;
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o777 != 0o700 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "unsafe execution recovery directory",
+        ));
+    }
+    Ok(directory)
+}
+
+fn marker_name(session: &rustx_execution_protocol::SessionId) -> std::ffi::OsString {
+    format!("{:x}.json", Sha256::digest(session.as_str())).into()
+}
+
+fn publish_marker(
+    directory: &File,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+    #[cfg(test)] before_publish: impl FnOnce() -> io::Result<()>,
+) -> io::Result<File> {
+    if bytes.len() > MAX_MARKER_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "execution recovery owner exceeds its size bound",
+        ));
+    }
+    let lock = File::from(openat(
+        directory,
+        PUBLICATION_LOCK,
+        OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+        Mode::from_bits_truncate(0o600),
+    )?);
+    if !lock.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid execution recovery publication lock",
+        ));
+    }
+    lock.lock()?;
+    // Only publishers use this lock. The single staging name is ignored by
+    // readers and can be safely unlinked after a crash, even after linkat.
+    match unlinkat(directory, STAGED_OWNER, UnlinkatFlags::NoRemoveDir) {
+        Ok(()) | Err(nix::errno::Errno::ENOENT) => (),
+        Err(error) => return Err(error.into()),
+    }
+    let mut file = File::from(openat(
+        directory,
+        STAGED_OWNER,
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )?);
+    let published = (|| {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        #[cfg(test)]
+        before_publish()?;
+        // Publish the complete record without replacing an admitted owner.
+        linkat(
+            directory,
+            STAGED_OWNER,
+            directory,
+            name,
+            LinkatFlags::empty(),
+        )?;
+        directory.sync_all()
+    })();
+    let _ = unlinkat(directory, STAGED_OWNER, UnlinkatFlags::NoRemoveDir);
+    published?;
+    Ok(file)
+}
+
+/// An exclusive durable reservation for one Session's possible physical work.
+/// Dropping its descriptors retains the record.
+pub struct RecoveryFence {
+    owner: std::sync::Weak<ConnectionOwner>,
+    file: std::fs::File,
+    name: std::ffi::OsString,
+    directory: std::fs::File,
+    domain: domain::DomainKey,
+}
+
+impl RecoveryFence {
+    /// Observes a previous execution claim without consuming settlement or
+    /// modifying the trusted product root.
+    ///
+    /// # Errors
+    /// Fails when the trusted record directory cannot be inspected.
+    pub fn session_pending(
+        product_root: &Path,
+        session: &rustx_execution_protocol::SessionId,
+    ) -> io::Result<bool> {
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        let directory = match pending_directory(&root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        match fstatat(
+            &directory,
+            marker_name(session).as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => Ok(true),
+            Err(nix::errno::Errno::ENOENT) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Checks authored Workspace authority without consuming any settlement.
+    ///
+    /// # Errors
+    /// Refuses an unreadable owner record or inventory beyond the scan bound.
+    pub fn workspace_pending(product_root: &Path, workspace: &Path) -> io::Result<bool> {
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        let directory = match pending_directory(&root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let mut entries = nix::dir::Dir::from_fd(directory.try_clone()?.into())?;
+        for (index, entry) in entries.iter().enumerate() {
+            if index == MAX_INVENTORY_ENTRIES {
+                return Err(io::Error::other(
+                    "execution recovery inventory exceeds scan bound",
+                ));
+            }
+            let entry = entry?;
+            let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+            if Path::new(name)
+                .extension()
+                .is_none_or(|extension| extension != "json")
+            {
+                continue;
+            }
+            let invalid = || {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid execution recovery owner",
+                )
+            };
+            let Some(file) = domain::private_file(&directory, name)? else {
+                if matches!(
+                    fstatat(&directory, name, AtFlags::AT_SYMLINK_NOFOLLOW),
+                    Err(nix::errno::Errno::ENOENT)
+                ) {
+                    continue;
+                }
+                return Err(invalid());
+            };
+            let mut bytes = Vec::new();
+            file.take(MAX_MARKER_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > MAX_MARKER_BYTES {
+                return Err(invalid());
+            }
+            let owner: rustx_execution_protocol::Admission =
+                serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+            if marker_name(&owner.session) != name {
+                return Err(invalid());
+            }
+            if owner.workspace.as_os_str() == workspace.as_os_str() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(super) fn create(
+        product_root: &Path,
+        admission: &rustx_execution_protocol::Admission,
+        owner: std::sync::Weak<ConnectionOwner>,
+    ) -> io::Result<Self> {
+        Self::require_session_settled(product_root, &admission.session).map_err(|error| {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                io::Error::new(io::ErrorKind::AlreadyExists, error)
+            } else {
+                error
+            }
+        })?;
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        match mkdirat(&root, DIRECTORY, Mode::from_bits_truncate(0o700)) {
+            Ok(()) | Err(nix::errno::Errno::EEXIST) => (),
+            Err(error) => return Err(error.into()),
+        }
+        let directory = pending_directory(&root)?;
+        root.sync_all()?;
+        let name = marker_name(&admission.session);
+        let bytes = serde_json::to_vec(admission)?;
+        let file = publish_marker(
+            &directory,
+            &name,
+            &bytes,
+            #[cfg(test)]
+            || Ok(()),
+        )?;
+        Ok(RecoveryFence {
+            owner,
+            file,
+            name,
+            directory,
+            domain: domain::DomainKey::new(product_root.join(DIRECTORY), &bytes),
+        })
+    }
+
+    /// Checks the durable fence before destructive cleanup of a deleted Session.
+    /// The caller must already have durably closed Session admission.
+    ///
+    /// # Errors
+    /// Fails while a possible physical owner remains or the trusted directory
+    /// cannot be checked. Even an unreadable marker retains the fence.
+    pub fn require_session_settled(
+        product_root: &Path,
+        session: &rustx_execution_protocol::SessionId,
+    ) -> io::Result<()> {
+        let root = rustx_execution_transport::open_dir_nofollow(product_root)?;
+        let directory = match pending_directory(&root) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match fstatat(
+            &directory,
+            marker_name(session).as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Err(nix::errno::Errno::ENOENT) => directory.sync_all(),
+            Err(error) => Err(error.into()),
+            Ok(_) => {
+                if domain::reconcile(&directory, session)? {
+                    return Ok(());
+                }
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "previous Session execution domain requires physical settlement",
+                ))
+            }
+        }
+    }
+}
+
+impl RecoveryFence {
+    /// Create one private grant for a separately trusted deployment host.
+    /// The grant proves only the exact reservation and is withheld from the
+    /// execution transport and its Client bootstrap.
+    ///
+    /// # Errors
+    /// Rejects unsafe destinations, conflicting files or a lost reservation.
+    pub fn publish_external_grant(&self, path: &Path) -> io::Result<()> {
+        use base64::Engine as _;
+
+        #[derive(serde::Serialize)]
+        struct Grant<'a> {
+            receipt_path: &'a Path,
+            proof_base64: String,
+        }
+
+        let parent = super::bootstrap::require_private_child(path)?;
+        self.file.lock()?;
+        let result = (|| {
+            self.verify_marker()?;
+            let grant = self.domain.arm(&self.directory)?;
+            let publication = Grant {
+                receipt_path: grant.receipt(),
+                proof_base64: base64::engine::general_purpose::STANDARD.encode(grant.token()),
+            };
+            super::bootstrap::publish_private(&parent, |file| {
+                serde_json::to_writer(file, &publication).map_err(io::Error::other)
+            })?;
+            Ok(())
+        })();
+        let unlock = self.file.unlock();
+        result.and(unlock)
+    }
+
+    /// Arms an independent trusted Linux host before granting Client START.
+    /// The durable store retains the verifier. Send the token only to the
+    /// helper through its private inherited pipe.
+    /// # Errors
+    /// Refuses an unsafe, already armed or no longer owned marker.
+    #[cfg(target_os = "linux")]
+    pub fn arm_local_domain(&self) -> io::Result<LocalDomainGrant> {
+        self.verify_marker()?;
+        self.domain.arm(&self.directory)
+    }
+
+    pub(super) fn belongs_to(&self, owner: &std::sync::Arc<ConnectionOwner>) -> bool {
+        self.owner.ptr_eq(&std::sync::Arc::downgrade(owner))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn release_independent_domain(&self) -> io::Result<()> {
+        self.file.lock()?;
+        let result = (|| {
+            self.verify_marker()?;
+            if !self.domain.proved(&self.directory)? {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "previous Client namespace settlement is unconfirmed",
+                ));
+            }
+            self.remove_locked()
+        })();
+        let unlock = self.file.unlock();
+        result.and(unlock)
+    }
+
+    fn verify_marker(&self) -> io::Result<()> {
+        let retained = fstat(&self.file)?;
+        let current = fstatat(
+            &self.directory,
+            self.name.as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        )?;
+        if current.st_dev != retained.st_dev || current.st_ino != retained.st_ino {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "execution recovery marker identity changed",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn remove(&self) -> io::Result<()> {
+        self.file.lock()?;
+        let result = self.remove_locked();
+        let unlock = self.file.unlock();
+        result.and(unlock)
+    }
+
+    fn remove_locked(&self) -> io::Result<()> {
+        self.verify_marker()?;
+        unlinkat(
+            &self.directory,
+            self.name.as_os_str(),
+            UnlinkatFlags::NoRemoveDir,
+        )?;
+        self.directory.sync_all()?;
+        self.domain.cleanup(&self.directory)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustx_execution_protocol::{
+        Admission, ClientInstanceId, EnvironmentId, Generation, PROTOCOL_VERSION, SessionId,
+        process::ServerIncarnation,
+    };
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    #[test]
+    fn unpublished_owner_never_fences_an_unrelated_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join(DIRECTORY))
+            .unwrap();
+        let directory = pending_directory(&File::open(root.path()).unwrap()).unwrap();
+        let other = root.path().join("other-workspace");
+        let admission = Admission {
+            version: PROTOCOL_VERSION,
+            server_incarnation: ServerIncarnation::generate(),
+            session: SessionId::new("published"),
+            environment: EnvironmentId::new("environment"),
+            instance: ClientInstanceId::new("client"),
+            generation: Generation::new(std::num::NonZeroU64::MIN),
+            workspace: root.path().join("owner-workspace"),
+        };
+        let name = marker_name(&admission.session);
+        let bytes = serde_json::to_vec(&admission).unwrap();
+        assert_eq!(
+            publish_marker(&directory, &name, &bytes, || {
+                assert!(!RecoveryFence::workspace_pending(root.path(), &other).unwrap());
+                assert!(!RecoveryFence::session_pending(root.path(), &admission.session).unwrap());
+                Err(io::ErrorKind::Interrupted.into())
+            })
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::Interrupted
+        );
+        // Simulate a crash leaving a partial staging file and opening a
+        // fresh descriptor, with no admission ever exposed by that writer.
+        std::fs::write(root.path().join(DIRECTORY).join(STAGED_OWNER), b"{").unwrap();
+        RecoveryFence::require_session_settled(root.path(), &admission.session).unwrap();
+        assert!(!RecoveryFence::workspace_pending(root.path(), &other).unwrap());
+        drop(publish_marker(&directory, &name, &bytes, || Ok(())).unwrap());
+        assert!(RecoveryFence::workspace_pending(root.path(), &admission.workspace).unwrap());
+        assert!(!RecoveryFence::workspace_pending(root.path(), &other).unwrap());
+        assert_eq!(
+            RecoveryFence::require_session_settled(root.path(), &admission.session)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            publish_marker(&directory, &name, b"another owner", || Ok(()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(DIRECTORY).join(name)).unwrap(),
+            bytes
+        );
+    }
+}

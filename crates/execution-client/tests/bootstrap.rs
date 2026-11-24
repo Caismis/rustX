@@ -152,6 +152,14 @@ fn admit_pair_stream(
     }
 }
 
+fn expect_terminal_refusal(rig: &Rig, child: &mut Child) {
+    assert!(matches!(
+        rig.binding.accept_local(accept(rig, child)).unwrap(),
+        rustx_execution_server::ChannelAccept::Rejected(Reject::Revoked)
+    ));
+    expect_success(child);
+}
+
 fn assert_never_connected(rig: &Rig) {
     rig.listener.set_nonblocking(true).unwrap();
     assert_eq!(
@@ -176,6 +184,350 @@ fn handshake_ping_pong_and_clean_shutdown() {
     // closes the socket; the client observes EOF and exits by itself.
     drop(connection);
     assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
+    expect_success(&mut child);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // The same peer proves START, input deduplication and journal continuity.
+fn same_instance_recovery_preserves_the_process_and_output_cursor() {
+    use rustx_execution_protocol::process::{
+        OperationId, ProcessOperationKey, ProcessProgram, ProcessReply, ProcessRequest,
+        ProcessSpec, ProcessStdin, ProcessStream,
+    };
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    let mut old = admit_pair(&rig, &mut child);
+    let admission = old.admission().clone();
+    let key = ProcessOperationKey {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        operation: OperationId::new(),
+    };
+    let spec = ProcessSpec {
+        cwd: PathBuf::new(),
+        program: ProcessProgram::Argv(
+            [
+                "/bin/sh",
+                "-c",
+                "printf start >> started; printf pre; /bin/cat",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        ),
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: 15_000,
+        pty: None,
+        stdin: ProcessStdin::Streamed,
+        capture: true,
+        output_cap: 1024,
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    assert_eq!(
+        old.process_until(
+            &ProcessRequest::Register {
+                key: key.clone(),
+                fingerprint: spec.fingerprint(),
+                spec,
+            },
+            deadline,
+        )
+        .unwrap(),
+        ProcessReply::Registered { key: key.clone() }
+    );
+    let start = ProcessRequest::Start { key: key.clone() };
+    assert!(matches!(
+        old.process_until(&start, deadline),
+        Ok(ProcessReply::State { .. })
+    ));
+    let page = |cursor| ProcessRequest::OutputPage {
+        key: key.clone(),
+        cursor,
+        max_bytes: 1024,
+    };
+    let read_page = |connection: &mut rustx_execution_server::LocalConnection, cursor| {
+        loop {
+            match connection.process_until(&page(cursor), deadline).unwrap() {
+                ProcessReply::Output {
+                    sequence,
+                    stream: ProcessStream::Stdout,
+                    delta_base64,
+                    offset,
+                    ..
+                } => break (sequence, offset.get(), delta_base64),
+                ProcessReply::OutputPending { .. } => std::thread::yield_now(),
+                other => panic!("unexpected output: {other:?}"),
+            }
+        }
+    };
+    let (cursor, offset, contents) = read_page(&mut old, 0.into());
+    assert!(cursor.get() > 0);
+    assert_eq!((offset, contents), (0, String::from("cHJl")));
+    let input = ProcessRequest::WriteStdin {
+        key: key.clone(),
+        sequence: 1.into(),
+        delta_base64: "cG9zdA==".to_owned(),
+        close: false,
+    };
+    let accepted = ProcessReply::InputAccepted {
+        key: key.clone(),
+        sequence: 1.into(),
+    };
+    assert_eq!(old.process_until(&input, deadline).unwrap(), accepted);
+    rig.binding.disconnect(old.connection_id());
+    assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
+    let mut new = admit_pair(&rig, &mut child);
+    assert_ne!(old.connection_id(), new.connection_id());
+    assert_eq!(new.admission(), &admission);
+    assert!(old.ping().is_err());
+    drop(old);
+    assert!(matches!(
+        new.process_until(&start, deadline),
+        Ok(ProcessReply::State { .. })
+    ));
+    // The original write may already have taken effect. Matching the retained
+    // sequence attaches to that write without putting more bytes on stdin.
+    assert_eq!(new.process_until(&input, deadline).unwrap(), accepted);
+    assert_eq!(
+        new.process_until(
+            &ProcessRequest::CloseStdin {
+                key: key.clone(),
+                sequence: 2.into()
+            },
+            deadline
+        )
+        .unwrap(),
+        ProcessReply::InputAccepted {
+            key: key.clone(),
+            sequence: 2.into()
+        }
+    );
+    let (next, offset, contents) = read_page(&mut new, cursor);
+    assert!(next > cursor);
+    assert_eq!((offset, contents), (3, String::from("cG9zdA==")));
+    loop {
+        match new.process_until(&page(next), deadline).unwrap() {
+            ProcessReply::OutputPending { .. } => std::thread::yield_now(),
+            ProcessReply::OutputEnd { final_sequence, .. } => {
+                assert_eq!(final_sequence, next);
+                break;
+            }
+            other => panic!("unexpected duplicate or gap after recovery: {other:?}"),
+        }
+    }
+    assert_eq!(
+        std::fs::read(rig.workspace_path.join("started")).unwrap(),
+        b"start"
+    );
+    new.control().unwrap().request_revoke().unwrap();
+    drop(new);
+    expect_success(&mut child);
+}
+
+#[test]
+fn real_client_recovers_after_losing_its_revoke_receipt() {
+    use rustx_execution_protocol::transport::{read_record, write_record};
+    use rustx_execution_protocol::{
+        ControlHelloReply, ControlPoll, ControlReply, ControlRequest, ControlTurn, PeerHello,
+    };
+    use rustx_execution_server::ChannelAccept;
+    use std::os::unix::net::UnixStream;
+
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    assert!(matches!(
+        rig.binding.accept_local(accept(&rig, &mut child)).unwrap(),
+        ChannelAccept::Pending
+    ));
+
+    let mut client_control = accept(&rig, &mut child);
+    let (mut proxy, server_control) = UnixStream::pair().unwrap();
+    for lane in [&client_control, &proxy] {
+        lane.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    }
+    let hello: PeerHello = read_record(&mut client_control).unwrap();
+    write_record(&mut proxy, &hello).unwrap();
+    let ChannelAccept::Live(mut old) = rig.binding.accept_local(server_control).unwrap() else {
+        panic!("the real Client control Hello must pair");
+    };
+    write_record(
+        &mut client_control,
+        &read_record::<ControlHelloReply>(&mut proxy).unwrap(),
+    )
+    .unwrap();
+    let original = old.admission().clone();
+    std::thread::scope(|scope| {
+        let settle = scope.spawn(|| {
+            rig.binding
+                .settle_revocation_by(Instant::now() + Duration::from_secs(5))
+        });
+        loop {
+            let poll = read_record::<ControlPoll>(&mut client_control).unwrap();
+            assert!(poll.receipt.is_none());
+            write_record(&mut proxy, &poll).unwrap();
+            let turn = read_record::<ControlTurn>(&mut proxy).unwrap();
+            write_record(&mut client_control, &turn).unwrap();
+            if turn.request == Some(ControlRequest::Revoke) {
+                break;
+            }
+        }
+        let poll = read_record::<ControlPoll>(&mut client_control).unwrap();
+        assert_eq!(poll.receipt, Some(ControlReply::Revoked));
+        assert!(!rig.binding.revocation_confirmed());
+        // The Client's physical proof exists, but the Server never saw it.
+        drop((proxy, client_control));
+        assert!(settle.join().unwrap().is_err());
+    });
+    assert!(rig.binding.may_recover());
+    assert!(old.ping().is_err());
+    let mut recovered = admit_pair(&rig, &mut child);
+    assert_eq!(recovered.admission(), &original);
+    assert_ne!(recovered.connection_id(), old.connection_id());
+    assert_eq!(
+        recovered.ping().unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    rig.binding
+        .settle_revocation_by(Instant::now() + Duration::from_secs(5))
+        .unwrap();
+    assert!(rig.binding.revocation_confirmed());
+    assert!(!rig.binding.may_recover());
+    expect_success(&mut child);
+}
+
+#[test]
+fn either_one_way_control_failure_recovers_the_same_authenticated_instance() {
+    use rustx_execution_server::ChannelAccept;
+    use std::net::Shutdown;
+
+    for direction in [Shutdown::Read, Shutdown::Write] {
+        let rig = rig();
+        let mut child = spawn_client(&rig);
+        let data = accept(&rig, &mut child);
+        assert!(matches!(
+            rig.binding.accept_local(data).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let control = accept(&rig, &mut child);
+        let cut = control.try_clone().unwrap();
+        let ChannelAccept::Live(first) = rig.binding.accept_local(control).unwrap() else {
+            panic!("expected paired Client");
+        };
+        first.control().unwrap().health().unwrap();
+        cut.shutdown(direction).unwrap();
+        let deadline = Instant::now() + ACCEPT_DEADLINE;
+        while rig.binding.status().phase != BindingPhase::Detached {
+            assert!(
+                Instant::now() < deadline,
+                "half-closed control lane was not retired"
+            );
+            std::thread::yield_now();
+        }
+        let mut second = admit_pair(&rig, &mut child);
+        assert_eq!(first.admission(), second.admission());
+        assert_ne!(first.connection_id(), second.connection_id());
+        assert!(!first.is_current());
+        second.ping().unwrap();
+        second.control().unwrap().health().unwrap();
+        second.control().unwrap().request_revoke().unwrap();
+        drop(second);
+        expect_success(&mut child);
+    }
+}
+
+#[test]
+fn reattachment_retires_old_watchers_before_admitting_a_rescan() {
+    use rustx_execution_protocol::watch::WatchId;
+    use std::num::NonZeroU64;
+
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    let mut first = admit_pair(&rig, &mut child);
+    let source = Path::new("watched");
+    std::fs::create_dir(rig.workspace_path.join(source)).unwrap();
+    let retired_id = WatchId::new(NonZeroU64::MIN);
+    first.register_watch(retired_id, source, || Ok(())).unwrap();
+    let changed = source.join("during-detach");
+    rig.binding.disconnect(first.connection_id());
+    std::fs::write(rig.workspace_path.join(&changed), b"current").unwrap();
+
+    let mut current = admit_pair(&rig, &mut child);
+    assert_eq!(first.admission(), current.admission());
+    assert!(!first.is_current());
+    assert_eq!(
+        current.poll_watch(retired_id, source).unwrap_err().kind(),
+        io::ErrorKind::NotFound,
+    );
+    assert_eq!(
+        current.read_range(&changed, 0, 64, None).unwrap().bytes,
+        b"current"
+    );
+
+    let id = WatchId::new(NonZeroU64::new(2).unwrap());
+    current.register_watch(id, source, || Ok(())).unwrap();
+    let hint = source.join("after-reattach");
+    std::fs::write(rig.workspace_path.join(&hint), b"new").unwrap();
+    let deadline = Instant::now() + ACCEPT_DEADLINE;
+    loop {
+        let notice = current.poll_watch(id, source).unwrap();
+        assert_eq!(notice.id, id);
+        assert!(!notice.retired);
+        assert!(!notice.changed_paths.contains(&changed));
+        if notice.changed_paths.contains(&hint) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "replacement watch did not report the new file"
+        );
+        std::thread::yield_now();
+    }
+    current.control().unwrap().request_revoke().unwrap();
+    drop(current);
+    expect_success(&mut child);
+}
+
+#[test]
+fn a_silent_control_peer_can_recover_after_the_probe_expires() {
+    use nix::sys::{
+        signal::{Signal, kill},
+        wait::{WaitPidFlag, WaitStatus, waitpid},
+    };
+    use nix::unistd::Pid;
+    struct ResumeOnDrop(Pid);
+    impl Drop for ResumeOnDrop {
+        fn drop(&mut self) {
+            let _ = kill(self.0, Signal::SIGCONT);
+        }
+    }
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    let first = admit_pair(&rig, &mut child);
+    let control = first.control().unwrap();
+    control.health().unwrap();
+    let pid = Pid::from_raw(i32::try_from(child.id()).unwrap());
+    kill(pid, Signal::SIGSTOP).unwrap();
+    let resume = ResumeOnDrop(pid);
+    assert_eq!(
+        waitpid(pid, Some(WaitPidFlag::WUNTRACED)).unwrap(),
+        WaitStatus::Stopped(pid, Signal::SIGSTOP)
+    );
+    let started = Instant::now();
+    assert!(control.health().is_err());
+    while rig.binding.status().phase != BindingPhase::Detached {
+        assert!(Instant::now() < started + ACCEPT_DEADLINE);
+        std::thread::yield_now();
+    }
+    assert!(started.elapsed() < rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW);
+    drop(resume);
+    let second = admit_pair(&rig, &mut child);
+    assert_eq!(first.admission(), second.admission());
+    assert_ne!(first.connection_id(), second.connection_id());
+    second.control().unwrap().health().unwrap();
+    second.control().unwrap().request_revoke().unwrap();
+    drop(second);
     expect_success(&mut child);
 }
 
@@ -953,7 +1305,7 @@ fn revocation_linearizes_before_any_new_request() {
     assert!(connection.ping().is_err());
 
     drop(connection);
-    expect_success(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
 }
 
 #[test]
@@ -1478,12 +1830,14 @@ fn a_partial_tree_copy_is_reported_unknown_and_retires_the_pair() {
         connection.ping().unwrap_err().kind(),
         io::ErrorKind::BrokenPipe
     );
+    assert!(!rig.binding.may_recover());
+    rig.binding.revoke();
     drop(connection);
-    expect_success(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
 }
 
 #[test]
-fn clean_eof_is_success_and_a_truncated_record_is_not() {
+fn orderly_shutdown_exits_and_a_truncated_record_requires_a_fresh_pair() {
     let rig = rig();
 
     // Clean EOF: the server closes an idle admitted connection.
@@ -1492,7 +1846,7 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     drop(connection);
     expect_success(&mut child);
 
-    // A truncated record mid-stream is a protocol failure, not an idle EOF.
+    // A truncated record cannot be recovered on the old byte stream.
     let fresh = rig_with(BTreeSet::from([Capability::Connection]));
     let mut child = spawn_client(&fresh);
     let stream = accept(&fresh, &mut child);
@@ -1501,9 +1855,14 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     // Promise a record body that never arrives.
     raw.write_all(&10_u32.to_be_bytes()).unwrap();
     raw.write_all(b"{\"pi").unwrap();
-    drop(raw);
+    raw.shutdown(std::net::Shutdown::Write).unwrap();
+    fresh.binding.disconnect(connection.connection_id());
+    let mut recovered = admit_pair(&fresh, &mut child);
+    assert_ne!(recovered.connection_id(), connection.connection_id());
+    recovered.ping().unwrap();
     drop(connection);
-    assert!(!child.wait().unwrap().success());
+    drop(recovered);
+    expect_success(&mut child);
 }
 
 /// A bounded `wait`: the handshake deadline plus slack, then a kill so a
@@ -1768,7 +2127,7 @@ fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     drop(connection);
-    expect_success(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
     let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -1823,10 +2182,18 @@ fn client_applied_control_wins_before_file_publication() {
                 commit_count.set(commit_count.get() + 1);
             })
             .unwrap_err();
-        assert_eq!(commit_count.get(), 1);
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-        let receipt = error.get_ref().expect("typed cancellation receipt");
-        assert!(receipt.is::<rustx_execution_server::CommitCancelled>());
+        if revoke {
+            assert_eq!(commit_count.get(), 0, "closed admission sends no commit");
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::NotConnected
+            ));
+        } else {
+            assert_eq!(commit_count.get(), 1);
+            assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+            let receipt = error.get_ref().expect("typed cancellation receipt");
+            assert!(receipt.is::<rustx_execution_server::CommitCancelled>());
+        }
         assert!(fs::read_dir(&rig.workspace_path).unwrap().next().is_none());
 
         connection.close();
@@ -2238,83 +2605,316 @@ fn a_malformed_edit_request_is_an_error_not_a_stage() {
     expect_success(&mut child);
 }
 
-/// The real Client does not offer managed output: a save `Begin` on the
-/// admitted pair is declined with a typed `Unavailable`, the workspace is left
-/// exactly as it was, and the same connection keeps answering `Ping`.
 #[test]
-fn save_is_declined_as_unavailable_without_touching_the_workspace() {
-    use rustx_execution_protocol::process::{OperationId, ServerIncarnation};
+#[allow(
+    clippy::too_many_lines,
+    reason = "one real paired-Client protocol transcript"
+)]
+fn admitted_client_saves_and_reads_normalized_output_outside_the_workspace() {
+    use base64::Engine as _;
+    use rustx_execution_protocol::process::OperationId;
     use rustx_execution_protocol::save::{
-        ContentFormat, ConversationId, SaveCode, SaveOwner, SaveReply, SaveRequest,
+        Cleanup, ContentFormat, ConversationId, Readability, SaveCode, SaveExtent, SaveOwner,
+        SaveReply, SaveRequest, Sha256Hex,
     };
-    use rustx_execution_protocol::{Generation, SessionId};
+    use rustx_execution_server::ContinuationPage;
 
-    let rig = rig();
-    fs::write(rig.workspace_path.join("kept"), "before").unwrap();
-    let before = workspace_listing(&rig.workspace_path);
-
-    let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut peer = stream.try_clone().unwrap();
-    let connection = admit_pair_stream(&rig, &mut child, stream);
-
-    let owner = SaveOwner {
-        incarnation: ServerIncarnation::generate(),
-        session: SessionId::new("session-1"),
-        instance: ClientInstanceId::new("instance-1"),
-        generation: Generation::new(NonZeroU64::new(1).unwrap()),
-        conversation: ConversationId::parse("conv-1").unwrap(),
-        operation: OperationId::new(),
-    };
-    write_record(
-        &mut peer,
-        &ClientRequest::Save(SaveRequest::Begin {
-            owner,
-            content_format: ContentFormat::NormalizedUtf8V1,
-        }),
-    )
-    .unwrap();
-    let reply: ClientReply = read_record(&mut peer).unwrap();
-    assert_eq!(
-        reply,
-        ClientReply::Save(SaveReply::Unavailable {
-            code: SaveCode::CapabilityUnavailable
-        })
-    );
-    assert_eq!(
-        workspace_listing(&rig.workspace_path),
-        before,
-        "a declined save never stages anything in the workspace"
-    );
-    write_record(&mut peer, &ClientRequest::Ping).unwrap();
-    assert_eq!(
-        read_record::<ClientReply>(&mut peer).unwrap(),
-        ClientReply::Pong
-    );
-
-    drop(peer);
-    drop(connection);
-    expect_success(&mut child);
-}
-
-/// A reservation demanding managed output cannot be satisfied by the real
-/// Client, which does not advertise that capability: the handshake is rejected
-/// for missing capabilities, never admitted.
-#[test]
-fn a_reservation_requiring_managed_output_is_rejected_by_the_real_client() {
     let rig = rig_with(BTreeSet::from([
         Capability::Connection,
         Capability::ManagedOutput,
     ]));
+    fs::write(rig.workspace_path.join("kept"), "before").unwrap();
+    let before = workspace_listing(&rig.workspace_path);
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let outcome = rig.binding.accept_local(stream).unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
+    assert!(connection.supports(Capability::ManagedOutput));
+    let admission = connection.admission();
+    let owner = SaveOwner {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        conversation: ConversationId::parse("conv-1").unwrap(),
+        operation: OperationId::new(),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let begin = |owner| SaveRequest::Begin {
+        owner,
+        content_format: ContentFormat::NormalizedUtf8V1,
+    };
+    let wrong = SaveOwner {
+        conversation: owner.conversation.clone(),
+        session: rustx_execution_protocol::SessionId::new("another-session"),
+        ..owner.clone()
+    };
+    assert_eq!(
+        connection
+            .save_by(&begin(wrong), deadline, || Ok(()))
+            .unwrap(),
+        SaveReply::Refused {
+            code: SaveCode::StaleOwner
+        },
+    );
+    let request = begin(owner.clone());
+    let SaveReply::Begun { key } = connection.save_by(&request, deadline, || Ok(())).unwrap()
+    else {
+        panic!("candidate admitted");
+    };
+    assert_eq!(key.owner, owner);
+    assert_eq!(
+        connection.save_by(&request, deadline, || Ok(())).unwrap(),
+        SaveReply::Begun { key: key.clone() }
+    );
+    let data = b"prefix\nmiddle needle\ntail";
+    let sha256 = Sha256Hex::of(data);
+    let chunk = SaveRequest::Chunk {
+        key: key.clone(),
+        sequence: 1.into(),
+        offset: 0.into(),
+        sha256,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(data),
+    };
+    let length = (data.len() as u64).into();
+    for duplicate in [false, true] {
+        assert_eq!(
+            connection.save_by(&chunk, deadline, || Ok(())).unwrap(),
+            SaveReply::Chunked {
+                key: key.clone(),
+                sequence: 1.into(),
+                next_offset: length,
+                duplicate
+            },
+        );
+    }
+    let extent = SaveExtent::Complete;
     assert!(matches!(
-        outcome,
-        rustx_execution_server::ChannelAccept::Rejected(Reject::MissingCapabilities)
+        connection
+            .save_by(
+                &SaveRequest::Seal {
+                    key: key.clone(),
+                    length,
+                    sha256,
+                    extent,
+                },
+                deadline,
+                || Ok(())
+            )
+            .unwrap(),
+        SaveReply::Sealed { .. }
     ));
-    assert!(!child.wait().unwrap().success());
-    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
+    let SaveReply::Published { locator, .. } = connection
+        .save_by(
+            &SaveRequest::Publish {
+                key: key.clone(),
+                length,
+                sha256,
+                extent,
+            },
+            deadline,
+            || Ok(()),
+        )
+        .unwrap()
+    else {
+        panic!("physical publication");
+    };
+    assert!(matches!(
+        connection
+            .save_by(&SaveRequest::Probe { key }, deadline, || Ok(()))
+            .unwrap(),
+        SaveReply::Readability {
+            outcome: Readability::Readable,
+            ..
+        },
+    ));
+    let read = |conversation| ClientRequest::ReadSavedOutput {
+        conversation,
+        locator: locator.clone(),
+        offset: 1.into(),
+        limit: None,
+    };
+    assert!(matches!(
+        connection.inspect_output(&read(owner.conversation.clone()), deadline, || Ok(())).unwrap(),
+        ContinuationPage::Lines(page) if page.text.as_bytes() == data,
+    ));
+    assert_eq!(
+        connection
+            .inspect_output(
+                &read(ConversationId::parse("conv-2").unwrap()),
+                deadline,
+                || Ok(())
+            )
+            .err()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::NotFound,
+    );
+    let range = |conversation| ClientRequest::ReadSavedOutputRange {
+        conversation,
+        locator: locator.clone(),
+        offset: 7.into(),
+    };
+    assert!(matches!(
+        connection.inspect_output(&range(owner.conversation.clone()), deadline, || Ok(())).unwrap(),
+        ContinuationPage::Range(page) if page.bytes == data[7..] && page.next_offset.is_none(),
+    ));
+    assert_eq!(
+        connection
+            .inspect_output(
+                &range(ConversationId::parse("conv-2").unwrap()),
+                deadline,
+                || Ok(())
+            )
+            .err()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::NotFound,
+    );
+    let name = locator.file_name().to_owned();
+    let grep = ClientRequest::SearchSavedOutput {
+        conversation: owner.conversation.clone(),
+        locator,
+        spec: rustx_execution_protocol::SearchSpec::Grep {
+            literal: true,
+            ignore_case: false,
+            context: 0,
+            limit: 1.into(),
+            pattern: "needle".into(),
+            glob: Some(name.clone()),
+        },
+    };
+    assert!(matches!(
+        connection.inspect_output(&grep, deadline, || Ok(())).unwrap(),
+        ContinuationPage::Search(page)
+            if page.matches == 1 && page.body == format!("{name}:2: middle needle"),
+    ));
+
+    let SaveReply::Begun { key } = connection
+        .save_by(
+            &begin(SaveOwner {
+                operation: OperationId::new(),
+                ..owner
+            }),
+            deadline,
+            || Ok(()),
+        )
+        .unwrap()
+    else {
+        panic!("another candidate");
+    };
+    for cleanup in [Cleanup::Removed, Cleanup::AlreadyRemoved] {
+        assert_eq!(
+            connection
+                .save_by(
+                    &SaveRequest::Abort { key: key.clone() },
+                    deadline,
+                    || Ok(())
+                )
+                .unwrap(),
+            SaveReply::Aborted {
+                key: key.clone(),
+                cleanup
+            },
+        );
+    }
+    assert_eq!(workspace_listing(&rig.workspace_path), before);
+    connection.ping().unwrap();
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn a_replacement_client_refuses_the_retired_generation_save_identity() {
+    use base64::Engine as _;
+    use rustx_execution_protocol::process::OperationId;
+    use rustx_execution_protocol::save::{
+        ContentFormat, ConversationId, SaveCode, SaveExtent, SaveOwner, SaveReply, SaveRequest,
+        Sha256Hex,
+    };
+
+    let mut rig = rig();
+    let mut child = spawn_client(&rig);
+    let mut original = admit_pair(&rig, &mut child);
+    let owner = |admission: &rustx_execution_protocol::Admission, operation| SaveOwner {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        conversation: ConversationId::parse("unchanged-conversation").unwrap(),
+        operation,
+    };
+    let operation = OperationId::new();
+    let begin = |owner| SaveRequest::Begin {
+        owner,
+        content_format: ContentFormat::NormalizedUtf8V1,
+    };
+    let chunk = |key| SaveRequest::Chunk {
+        key,
+        sequence: 1.into(),
+        offset: 0.into(),
+        sha256: Sha256Hex::of(b"retired bytes"),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(b"retired bytes"),
+    };
+    let original_begin = begin(owner(original.admission(), operation));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let SaveReply::Begun { key: old_key } = original
+        .save_by(&original_begin, deadline, || Ok(()))
+        .unwrap()
+    else {
+        panic!("one old physical candidate");
+    };
+    assert!(matches!(
+        original.save_by(&chunk(old_key.clone()), deadline, || Ok(())).unwrap(),
+        SaveReply::Chunked { key, next_offset, duplicate: false, .. }
+            if key == old_key && next_offset == 13.into()
+    ));
+    drop(original);
+    expect_success(&mut child);
+
+    let mut next = reservation(&rig.workspace_path);
+    next.generation = Generation::new(NonZeroU64::new(2).unwrap());
+    next.instance = ClientInstanceId::new("instance-2");
+    let private = rig.private.path().canonicalize().unwrap();
+    rig.bundle = private.join("bootstrap-2");
+    (rig.binding, rig.listener, _) =
+        Binding::reserve_local(next, &private.join("client-2.sock"), &rig.bundle).unwrap();
+    let mut child = spawn_client(&rig);
+    let mut replacement = admit_pair(&rig, &mut child);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let new_begin = begin(owner(replacement.admission(), operation));
+    let SaveReply::Begun { key: new_key } = replacement
+        .save_by(&new_begin, deadline, || Ok(()))
+        .unwrap()
+    else {
+        panic!("one fresh candidate even with the deliberately reused operation bytes");
+    };
+    assert_ne!(old_key, new_key);
+    for stale in [
+        original_begin,
+        chunk(old_key.clone()),
+        SaveRequest::Publish {
+            key: old_key.clone(),
+            length: 13.into(),
+            sha256: Sha256Hex::of(b"retired bytes"),
+            extent: SaveExtent::Complete,
+        },
+        SaveRequest::Abort { key: old_key },
+    ] {
+        assert_eq!(
+            replacement.save_by(&stale, deadline, || Ok(())).unwrap(),
+            SaveReply::Refused {
+                code: SaveCode::StaleOwner
+            },
+        );
+    }
+    // The new candidate still accepts its first byte at offset zero.
+    assert!(matches!(
+        replacement.save_by(&chunk(new_key.clone()), deadline, || Ok(())).unwrap(),
+        SaveReply::Chunked { key, next_offset, duplicate: false, .. }
+            if key == new_key && next_offset == 13.into()
+    ));
+    replacement.ping().unwrap();
+    drop(replacement);
+    expect_success(&mut child);
 }
 
 fn workspace_listing(workspace: &Path) -> Vec<String> {

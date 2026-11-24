@@ -42,28 +42,7 @@ pub(super) fn capture(
     crate::package_io::check_cancelled(signal).map_err(|error| error.to_string())?;
     let mut hash = Sha256::new();
     hash.update(b"rustx-accepted-resource-domain-v1\n");
-    let python = super::super::managed_python_resources::discover_controlled(None, root, signal)
-        .map_err(|error| error.to_string())?;
-    include(&mut hash, &python.locations)?;
-    include_diagnostics(&mut hash, &python.discovery_diagnostics)?;
-    for (id, package) in python.packages() {
-        include(
-            &mut hash,
-            &(
-                id,
-                package
-                    .as_ref()
-                    .map(|package| {
-                        (
-                            package.source_digest(),
-                            package.permissions(),
-                            package.tool_permissions(),
-                        )
-                    })
-                    .map_err(ToString::to_string),
-            ),
-        )?;
-    }
+    include_python(&mut hash, root, signal)?;
     let workspace = (scope == crate::runtime::resources::SourceScope::Workspace)
         .then(|| root.parent())
         .flatten();
@@ -116,6 +95,36 @@ pub(super) fn capture(
     )?;
     crate::package_io::check_cancelled(signal).map_err(|error| error.to_string())?;
     Ok(format!("accepted-{:x}", hash.finalize()))
+}
+
+pub(super) fn include_python(
+    hash: &mut Sha256,
+    root: &Path,
+    signal: &CancellationSignal,
+) -> Result<(), String> {
+    let python = super::super::managed_python_resources::discover_controlled(None, root, signal)
+        .map_err(|error| error.to_string())?;
+    include(hash, &python.locations)?;
+    include_diagnostics(hash, &python.discovery_diagnostics)?;
+    for (id, package) in python.packages() {
+        include(
+            hash,
+            &(
+                id,
+                package
+                    .as_ref()
+                    .map(|package| {
+                        (
+                            package.source_digest(),
+                            package.permissions(),
+                            package.tool_permissions(),
+                        )
+                    })
+                    .map_err(ToString::to_string),
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 fn include_source(hash: &mut Sha256, root: &Path, path: &Path, limit: u64) -> Result<(), String> {

@@ -517,9 +517,9 @@ impl UserConfigManager {
     }
 
     fn discover_skill_scope(&self, target: &SourceTarget, root: &Path) -> SkillDiscoveryOutcome {
-        let source = match target.scope() {
-            SourceScope::User => SkillSource::User,
-            SourceScope::Workspace => SkillSource::Workspace,
+        let source = match target {
+            SourceTarget::User => SkillSource::User,
+            SourceTarget::Workspace { .. } => SkillSource::Workspace,
         };
         SkillDiscovery::with_config(SkillDiscoveryConfig {
             automatic: vec![AutomaticSkillRoot {

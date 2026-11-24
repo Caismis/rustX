@@ -85,6 +85,7 @@ impl rustx_process_supervisor::process_runner::SupervisedProcessRunner for Recor
         }
         let result = if spec.command.contains(" lock ") && self.fail_lock.load(Ordering::Acquire) {
             rustx_process_supervisor::process_runner::CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(1),
                 intent: rustx_process_supervisor::process_runner::ProcessOutcomeIntent::Completed,
                 stdout: Vec::new(),
@@ -99,6 +100,7 @@ impl rustx_process_supervisor::process_runner::SupervisedProcessRunner for Recor
                 Vec::new()
             };
             rustx_process_supervisor::process_runner::CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(0),
                 intent: rustx_process_supervisor::process_runner::ProcessOutcomeIntent::Completed,
                 stdout,

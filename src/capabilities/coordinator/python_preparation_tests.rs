@@ -133,6 +133,7 @@ impl SupervisedProcessRunner for BuildRunner {
                 Vec::new()
             };
             Ok(CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(0),
                 intent,
                 stdout,

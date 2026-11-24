@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { SourceScope, SourceSettings, SourceToolSelection } from '../../../../../protocol/app-server/v80';
+import type { SourceScope, SourceSettings, SourceToolSelection } from '../../../../../protocol/app-server/v81';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
@@ -7,13 +7,13 @@ import { useSkillCatalog } from '../skills/useSkillCatalog';
 import { ResourceChoices, ScopedChoices, resourceScopes } from './ScopedChoices';
 import css from './Subagents.module.css';
 
-export function AgentSkillFields({ client, source, scope, active, value, change }: {
-  client?: AppServerClient; source: SourceSettings; scope: SourceScope; active: boolean;
+export function AgentSkillFields({ client, source, scope, active, executionSession, value, change }: {
+  client?: AppServerClient; source: SourceSettings; scope: SourceScope; active: boolean; executionSession?: string;
   value: SourceToolSelection; change: (next: SourceToolSelection) => void;
 }) {
   const tx = useTranslation();
   const heading = useId();
-  const catalog = useSkillCatalog(client, source, active, scope);
+  const catalog = useSkillCatalog(client, source, active, scope, 0, executionSession);
   const scopes = resourceScopes(scope);
   const skills = (catalog?.skills ?? []).filter(skill => !skill.disable_model_invocation && scopes.includes(skill.provenance.source));
   const selected = value === 'all' ? skills.filter(skill => skill.enabled_by_default).map(skill => skill.catalog.name) : value;

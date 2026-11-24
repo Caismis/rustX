@@ -7,6 +7,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,6 +49,9 @@ impl Owner {
             #[cfg(test)]
             schedules: true,
             probe: production_probe(),
+            probes_settled: Arc::new(AtomicBool::new(true)),
+            #[cfg(any(test, feature = "test-support"))]
+            probe_control: Mutex::new(None),
             host_override: None,
             state_override: None,
             #[cfg(test)]
@@ -648,6 +652,9 @@ impl Owner {
             env: host::bootstrap_environment(host),
             timeout,
             cancellation: self.shutdown.child(),
+            responses_settled: self.probes_settled.clone(),
+            #[cfg(any(test, feature = "test-support"))]
+            control: self.probe_control.lock().expect("probe control").take(),
         }
     }
 
@@ -658,6 +665,9 @@ impl Owner {
     ) -> Result<ProgramOutput, String> {
         #[cfg(test)]
         pass_gate(&self.before_signal).await;
+        if !self.probes_settled.load(Ordering::Acquire) {
+            return Err("Workspace Python probe settlement is unconfirmed".to_owned());
+        }
         self.probe.run(request).await
     }
 
@@ -807,9 +817,24 @@ impl ProgramProbe for SupervisedProbe {
                 timeout: Some(request.timeout),
                 cancellation: request.cancellation,
             };
-            let result =
-                rustx_process_supervisor::process_runner::run_supervised_program(spec, invocation)
-                    .await?;
+            #[cfg(any(test, feature = "test-support"))]
+            let control = request.control;
+            #[cfg(not(any(test, feature = "test-support")))]
+            let control = None;
+            let result = rustx_process_supervisor::process_runner::run_supervised_program(
+                spec,
+                invocation,
+                control,
+                move |confirmed| {
+                    if !confirmed {
+                        request.responses_settled.store(false, Ordering::Release);
+                    }
+                },
+            )
+            .await?;
+            if !result.physical_settlement_proven {
+                return Err("Workspace Python probe settlement is unconfirmed".to_owned());
+            }
             let status = result
                 .exit_code
                 .ok_or_else(|| "the workspace python program did not exit normally".to_owned())?;

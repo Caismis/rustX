@@ -381,7 +381,7 @@ pub(crate) struct Operations {
 }
 
 #[cfg(test)]
-type CaptureHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+pub(crate) type CaptureHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
 
 // Keep the capture ahead of its worker guard in the drop order, including
 // when the runtime discards the START future before polling it.
@@ -488,6 +488,18 @@ impl Operations {
         &self,
         future: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> bool {
+        self.start_auxiliary_owned(move |mut guard| async move {
+            guard.physical_settlement(false);
+            future.await;
+            guard.physical_settlement(true);
+        })
+    }
+
+    pub(crate) fn start_auxiliary_owned<F, Fut>(&self, run: F) -> bool
+    where
+        F: FnOnce(WorkerGuard) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         let runtime = self.runtime.lock().expect("Client runtime");
         let Some(runtime) = runtime.as_ref() else {
             return false;
@@ -495,10 +507,7 @@ impl Operations {
         let Some(guard) = self.admit_auxiliary() else {
             return false;
         };
-        runtime.spawn(async move {
-            let _guard = guard;
-            future.await;
-        });
+        runtime.spawn(async move { run(guard).await });
         true
     }
 
@@ -531,9 +540,10 @@ impl Operations {
             return true;
         };
         let python = self.python.clone();
-        self.start_auxiliary(async move {
+        self.start_auxiliary_owned(move |mut worker| async move {
             let _permit = permit;
-            python.prepare().await;
+            worker.physical_settlement(false);
+            worker.physical_settlement(python.prepare().await);
         })
     }
 
@@ -1281,11 +1291,15 @@ impl Operations {
 
     #[cfg(test)]
     fn hold_capture(&self, key: &ProcessOperationKey) {
-        let hold = self.capture_holds.lock().unwrap().remove(&key.operation);
-        if let Some((entered, resume)) = hold {
+        if let Some((entered, resume)) = self.take_capture_hold(key.operation) {
             entered.send(()).unwrap();
             resume.recv().unwrap();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_capture_hold(&self, id: OperationId) -> Option<CaptureHold> {
+        self.capture_holds.lock().unwrap().remove(&id)
     }
 
     fn bash_capture(&self, key: ProcessOperationKey) -> ProcessReply {
@@ -1498,6 +1512,12 @@ impl Drop for Operations {
 pub(crate) struct WorkerGuard {
     workers: Arc<WorkerCount>,
     unconfirmed: bool,
+}
+
+impl WorkerGuard {
+    pub(crate) fn physical_settlement(&mut self, proven: bool) {
+        self.unconfirmed = !proven;
+    }
 }
 
 impl Drop for WorkerGuard {
@@ -1772,6 +1792,7 @@ async fn run_operation(
             }
         }
         tokio::select! {
+            () = witness.changed(), if !exit_published => {}
             result = &mut settlement, if termination.is_none() => {
                 termination = result.ok();
                 let Some(proof) = &termination else {
@@ -2145,6 +2166,125 @@ mod tests {
 
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "fixture child and its independent guardian share the exact gate"
+    )]
+    fn client_death_after_supervisor_handoff_cannot_start_business() {
+        const FIXTURE: &str = "RUSTX_TEST_CLIENT_HANDOFF_DIRECTORY";
+        const TEST: &str =
+            "process::tests::client_death_after_supervisor_handoff_cannot_start_business";
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            let root = PathBuf::from(root);
+            let admission = admission(&root.join("workspace"));
+            let operations = Arc::new(Operations::new(admission.clone()).unwrap());
+            let key = fresh_key(&admission);
+            let invocation = spec(&["/bin/sh", "-c", "printf 'unexpected start' > started"]);
+            assert_eq!(
+                register(&operations, &key, &invocation),
+                ProcessReply::Registered { key: key.clone() }
+            );
+            let hold = arm_start_hold(&operations, &key);
+            operations.dispatch(ProcessRequest::Start { key });
+            runtime.block_on(async {
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+                hold.await_entered().await;
+                assert!(!admission.workspace.join("started").exists());
+                let mut peer = tokio::net::UnixStream::connect(root.join("witness"))
+                    .await
+                    .unwrap();
+                peer.write_all(b"handoff").await.unwrap();
+                peer.read_exact(&mut [0_u8]).await.unwrap();
+                panic!("the original Client must be killed with the START gate still held");
+            });
+            return;
+        }
+
+        assert!(supervisor_staged());
+        runtime.block_on(async {
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+            use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+            use tokio::io::{
+                AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader,
+            };
+
+            let executable = std::env::current_exe().unwrap();
+            let supervisor = executable.with_file_name("interactive-supervisor");
+            assert!(
+                supervisor.is_file(),
+                "the native test helper stages the guardian"
+            );
+            let root = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir_in("/tmp")
+                .unwrap();
+            std::fs::create_dir(root.path().join("workspace")).unwrap();
+            let authority = root.path().join("authority");
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&authority)
+                .unwrap();
+            let proof = authority.join("domain.proof");
+            std::fs::write(proof.with_extension("authority"), b"private test authority").unwrap();
+            let witness = tokio::net::UnixListener::bind(root.path().join("witness")).unwrap();
+            let mut expected = tokio::process::Command::new(supervisor)
+                .arg("client-domain")
+                .arg(&proof)
+                .arg(executable)
+                .args(["--exact", TEST, "--nocapture"])
+                .env(FIXTURE, root.path())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut lease = expected.stdin.take().unwrap();
+            let mut custody = BufReader::new(expected.stdout.take().unwrap()).lines();
+            let token = [83_u8; 32];
+            let proof = &proof;
+            tokio::time::timeout(Duration::from_secs(20), async {
+                lease.write_all(&token).await.unwrap();
+                let identity = custody.next_line().await.unwrap().unwrap();
+                let pid = Pid::from_raw(identity.strip_prefix("ready ").unwrap().parse().unwrap());
+                assert!(!proof.exists());
+                lease.write_all(b"G").await.unwrap();
+                let (mut connection, _) = witness.accept().await.unwrap();
+                let mut observed = [0; 7];
+                connection.read_exact(&mut observed).await.unwrap();
+                assert_eq!(&observed, b"handoff");
+                assert!(!root.path().join("workspace/started").exists());
+                assert!(!proof.exists());
+                kill(pid, Signal::SIGKILL).unwrap();
+                assert_eq!(connection.read(&mut [0]).await.unwrap(), 0);
+                loop {
+                    let record = custody
+                        .next_line()
+                        .await
+                        .unwrap()
+                        .expect("guardian custody receipt");
+                    if record.starts_with("settled ") {
+                        assert_eq!(record, "settled 137");
+                        break;
+                    }
+                }
+                assert!(expected.wait().await.unwrap().success());
+                assert_eq!(std::fs::read(proof).unwrap(), token);
+                assert!(!root.path().join("workspace/started").exists());
+            })
+            .await
+            .expect("the guardian reaps a Client killed after supervisor handoff");
+        });
+    }
+
     /// Whether the physical `bash-supervisor` sibling is staged beside
     /// this test binary — the tests exercise real spawn, so they require
     /// the prepared staging.
@@ -2516,6 +2656,124 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_future_keeps_revocation_open_until_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        let ops = Operations::new(admission(directory.path())).unwrap();
+        let (entered, started) = std::sync::mpsc::channel();
+        let (release, parked) = tokio::sync::oneshot::channel();
+        assert!(ops.start_auxiliary(async move {
+            entered.send(()).unwrap();
+            parked.await.unwrap();
+        }));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        ops.revoke();
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        assert!(!ops.start_auxiliary(async {}));
+        release.send(()).unwrap();
+        assert_eq!(ops.settle(Duration::from_secs(5)), 0);
+        ops.shutdown().unwrap();
+    }
+
+    #[test]
+    fn python_source_capture_keeps_revocation_open_before_first_chunk() {
+        use rustx_execution_protocol::mcp::{
+            PythonSourceReply, PythonSourceRequest, PythonSourceScope,
+        };
+
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(directory.path()).unwrap();
+        let package = workspace.join(".agents/tools/fixture");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("server.py"),
+            b"# capture a real source chunk\n",
+        )
+        .unwrap();
+        std::fs::write(package.join("requirements.txt"), b"# no packages\n").unwrap();
+        let admission = admission(&workspace);
+        let key = fresh_key(&admission);
+        let operations = Arc::new(Operations::new(admission).unwrap());
+        let mut catalog = crate::managed_python::Catalog::new(&workspace);
+        let cleanup = catalog.cleanup();
+        let (entered, started) = std::sync::mpsc::channel();
+        let (release, parked) = std::sync::mpsc::channel();
+        operations
+            .capture_holds
+            .lock()
+            .unwrap()
+            .insert(key.operation, (entered, parked));
+        assert!(matches!(
+            catalog.exchange(
+                PythonSourceRequest::Capture {
+                    key,
+                    scope: PythonSourceScope::Workspace,
+                    name: "fixture".into(),
+                },
+                &operations,
+            ),
+            PythonSourceReply::Capturing
+        ));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let readable = RecordChannel::unix(server.try_clone().unwrap())
+            .shutdown_handle()
+            .unwrap();
+        let (data, _server_data) = UnixStream::pair().unwrap();
+        let worker = crate::client_control_worker(
+            RecordChannel::unix(client),
+            Arc::new(crate::mutation::Arbitration::new()),
+            RecordChannel::unix(data).shutdown_handle().unwrap(),
+            operations.clone(),
+            Arc::new(crate::watch::Watches::new()),
+            Arc::new(Mutex::new(crate::saves::Saves::new(
+                operations.admission.clone(),
+            ))),
+            cleanup.clone(),
+            Arc::default(),
+        );
+        let respond = |server: &mut UnixStream, poll: ControlPoll, request| {
+            let turn = ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request,
+            };
+            write_record(server, &turn).unwrap();
+        };
+        let poll = read_record(&mut server).unwrap();
+        respond(&mut server, poll, Some(ControlRequest::Revoke));
+        let wait = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        wait.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), operations.revoke.cancelled())
+                .await
+                .unwrap();
+        });
+        assert_eq!(operations.settle(Duration::ZERO), 1);
+        assert!(cleanup.close(), "the capture has reserved no bytes yet");
+        assert!(
+            !readable.readable_now().unwrap(),
+            "Revoke has no terminal poll while capture holds the guard"
+        );
+        release.send(()).unwrap();
+        let poll: ControlPoll = read_record(&mut server).unwrap();
+        assert_eq!(poll.receipt, Some(ControlReply::Revoked));
+        respond(&mut server, poll, None);
+        assert!(worker.stop() == crate::ControlEnd::Revoked);
+        assert!(cleanup.close());
+        operations.shutdown().unwrap();
+    }
+
+    #[test]
     fn dropping_a_worker_without_physical_proof_keeps_revoke_unconfirmed() {
         let directory = tempfile::tempdir().unwrap();
         let ops = Operations::new(admission(directory.path())).unwrap();
@@ -2524,6 +2782,52 @@ mod tests {
         ops.revoke();
         assert_eq!(ops.settle(Duration::ZERO), 1);
         drop(worker);
+        assert_eq!(ops.settle(Duration::ZERO), 1);
+        assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn workspace_python_probe_wait_failure_keeps_revoke_unconfirmed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert!(
+            supervisor_staged(),
+            "run test-support/prepare_native_tests.py"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join(".venv/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("python");
+        std::fs::write(
+            &script,
+            b"#!/bin/sh\nprintf 'started\\n' >> probe-started\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::hard_link(&script, bin.join("python3")).unwrap();
+        let ops = Operations::new(admission(directory.path())).unwrap();
+        let mut control = rustx_process_supervisor::process_runner::RunnerTestControl::new();
+        control.fail_direct_wait_after_exit = true;
+        ops.python.probe_control_for_test(control);
+        assert!(ops.schedule_workspace_python());
+        assert_eq!(ops.settle(Duration::from_secs(5)), 1);
+        assert_eq!(ops.workers.state.lock().unwrap().live, 0);
+        assert_eq!(
+            std::fs::read(directory.path().join("probe-started")).unwrap(),
+            b"started\n"
+        );
+        assert_eq!(
+            ops.workspace_python_status(),
+            rustx_execution_protocol::WorkspacePythonStatus::Unavailable
+        );
+        std::fs::rename(
+            directory.path().join(".venv"),
+            directory.path().join("old-venv"),
+        )
+        .unwrap();
+        assert!(ops.python.prepare_permit().is_none());
+        ops.revoke();
         assert_eq!(ops.settle(Duration::ZERO), 1);
         assert_eq!(ops.shutdown().unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
@@ -3830,6 +4134,9 @@ mod tests {
                 RecordChannel::unix(data).shutdown_handle().unwrap(),
                 ops.clone(),
                 Arc::new(crate::watch::Watches::new()),
+                Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
+                crate::managed_python::SourceCleanup::default(),
+                Arc::default(),
             );
             server
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -3996,6 +4303,9 @@ mod tests {
             RecordChannel::unix(data).shutdown_handle().unwrap(),
             ops.clone(),
             Arc::new(crate::watch::Watches::new()),
+            Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
+            crate::managed_python::SourceCleanup::default(),
+            Arc::default(),
         );
         server
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -4058,6 +4368,7 @@ mod tests {
         ops.shutdown().unwrap();
     }
 
+    #[allow(clippy::too_many_lines)] // Keep the capture gate and physical receipt in the same scenario.
     fn revoke_during_capture_handoff(discard: bool) {
         use rustx_execution_protocol::transport::{read_record, write_record};
         use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
@@ -4122,6 +4433,9 @@ mod tests {
             data_client.shutdown_handle().unwrap(),
             ops.clone(),
             Arc::new(crate::watch::Watches::new()),
+            Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
+            crate::managed_python::SourceCleanup::default(),
+            Arc::default(),
         );
         control_server
             .set_read_timeout(Some(Duration::from_secs(5)))

@@ -276,7 +276,7 @@ async fn session_creation_repairs_both_sources_before_resolution() {
         let MethodResult::SessionTransition { .. } = call(
             &creator,
             1,
-            Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                     f.workspaces[0].clone(),
                 )),
@@ -462,6 +462,7 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(1),
                 call: Method::SessionCreate {
+                    input_references: None,
                     dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
@@ -794,6 +795,7 @@ async fn session_creation_admits_the_selected_workspace_before_any_repair() {
                     jsonrpc: JsonRpcVersion::V2,
                     id: RequestId::Integer(2),
                     call: Method::SessionCreate {
+                        input_references: None,
                         dynamic_tools: Vec::new(),
                         submission: None,
                         settings: SessionPersistentState::from_input(&SessionConfigInput::new(
@@ -900,6 +902,7 @@ async fn a_valid_selected_workspace_repairs_both_sources_independently() {
             &connection,
             2,
             Method::SessionCreate {
+                input_references: None,
                 dynamic_tools: Vec::new(),
                 submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(
@@ -983,6 +986,7 @@ async fn an_unresolvable_session_workspace_repairs_no_source() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(1),
                 call: Method::SessionCreate {
+                    input_references: None,
                     dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(missing)),
@@ -1049,6 +1053,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(2),
                 call: Method::SessionCreate {
+                    input_references: None,
                     dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(

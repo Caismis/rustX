@@ -455,6 +455,9 @@ impl AgentProfileLayer {
         // Workspace, and a Workspace adds its own.
         if let Some(ids) = layer.workflows {
             let target = self.workflows.get_or_insert_default();
+            if matches!(origin, Origin::Session { .. }) {
+                target.clear();
+            }
             // Only identities a lower scope enabled merge; a repeat within
             // one document stays for validation to reject.
             let lower = target.len();

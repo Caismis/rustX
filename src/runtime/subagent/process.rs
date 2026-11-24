@@ -713,9 +713,15 @@ pub(crate) async fn spawn_staged(
         Some(scope) => {
             let workspace = spec.workspace.clone();
             let conversation = spec.child_conversation_id.clone();
-            let tools = spec.resolved.tools.clone();
+            let resolved = spec.resolved.clone();
             let created = tokio::task::spawn_blocking(move || {
-                ChildExecutionRelay::create(&scope, &workspace, &conversation, &tools)
+                ChildExecutionRelay::create(
+                    &scope,
+                    &workspace,
+                    &conversation,
+                    &resolved.tools,
+                    Some(&resolved),
+                )
             })
             .await
             .map_err(std::io::Error::other)

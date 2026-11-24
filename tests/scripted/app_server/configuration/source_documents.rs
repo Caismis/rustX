@@ -486,7 +486,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         // A new Session resolves the authored selection end to end.
         let created = fixture
             .manager
-            .create_session(SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: None })
+            .create_session(SessionPersistentState { session_config: None, session_resources: None, cwd: fixture.workspaces[0].clone(), model: None })
             .await
             .unwrap();
         fixture.manager.load(&created.session.id, None).await.unwrap();
@@ -686,6 +686,8 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         let created = fixture
             .manager
             .create_session(SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             })

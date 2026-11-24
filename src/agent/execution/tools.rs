@@ -1430,29 +1430,34 @@ impl AgentExecution<'_> {
         invocation: &ToolInvocation,
         environment: ToolEnvironment,
     ) -> ToolExecutionResult {
-        let executor = self.tool_registry().executor(&invocation.tool_id);
-        // Native Bash retains the environment frozen before approval; other
-        // tools retain the admitted capability snapshot's environment.
+        // Bash retains the environment frozen before approval.
         let Some(mcp_leases) = self.capability.mcp_leases() else {
             return failed_result("the admitted MCP generation is already physically retired");
         };
         let registry = self.tool_runtime.background();
-        let prepared = if invocation.tool_id.as_str() == "tool-bash" {
-            registry
-                .prepare_native_bash_with_leases(
+        let prepared = match invocation.tool_id.as_str() {
+            "tool-bash" => {
+                registry
+                    .prepare_native_bash_with_leases(
+                        invocation,
+                        environment,
+                        mcp_leases,
+                        &self.cancellation.execution_cancellation(),
+                    )
+                    .await
+            }
+            #[cfg(test)]
+            _ => {
+                let executor = self.tool_registry().executor(&invocation.tool_id);
+                registry.prepare_dispatch_with_mcp_leases(
                     invocation,
+                    &executor,
                     environment,
                     mcp_leases,
-                    &self.cancellation.execution_cancellation(),
                 )
-                .await
-        } else {
-            registry.prepare_dispatch_with_mcp_leases(
-                invocation,
-                &executor,
-                environment,
-                mcp_leases,
-            )
+            }
+            #[cfg(not(test))]
+            _ => return failed_result("only native Bash can run as a background job"),
         };
         match prepared {
             Ok(prepared) => {

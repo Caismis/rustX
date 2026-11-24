@@ -206,7 +206,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
-use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
+#[cfg(any(test, feature = "test-support"))]
+use crate::tools::executor::ToolExecutor;
+use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
 use crate::tools::limits::bound_tool_progress;
 use crate::tools::mcp::McpRuntimeLeaseSet;
 use crate::tools::native::BashCaptureOwner;
@@ -939,6 +941,7 @@ struct PreparedRecord {
 }
 
 enum BackgroundExecutor {
+    #[cfg(any(test, feature = "test-support"))]
     Tool(Arc<dyn ToolExecutor>),
     Bash(Arc<crate::tools::native::PreparedBash>),
 }
@@ -950,10 +953,14 @@ impl BackgroundExecutor {
         context: ToolExecutionContext<'a>,
     ) -> crate::tools::executor::ToolExecutionHandle<'a> {
         match self {
+            #[cfg(any(test, feature = "test-support"))]
             Self::Tool(executor) => {
                 crate::tools::executor::start_tool_execution(&**executor, invocation, context)
             }
-            Self::Bash(bash) => bash.start(context),
+            Self::Bash(bash) => {
+                drop(invocation);
+                bash.start(context)
+            }
         }
     }
 }
@@ -1301,7 +1308,10 @@ impl ConversationBackgroundRegistry {
                 _ => Err(std::io::Error::other("live Bash output is unavailable")),
             };
         }
-        self.resources.tool_output.live_tail(id)
+        #[cfg(any(test, feature = "test-support"))]
+        return self.resources.tool_output.live_tail(id);
+        #[cfg(not(any(test, feature = "test-support")))]
+        Err(std::io::Error::other("live Bash output is unavailable"))
     }
 
     /// The conversation resources shared with detached runners.
@@ -1325,6 +1335,7 @@ impl ConversationBackgroundRegistry {
     /// foreground invocation, or [`BackgroundDispatchError::GoalAdmissionInProgress`]
     /// when a Goal owns the idle frontier. Identity collisions and output
     /// allocation failures refuse preparation without overwriting a locator.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn prepare_dispatch(
         &self,
         invocation: &ToolInvocation,
@@ -1343,6 +1354,7 @@ impl ConversationBackgroundRegistry {
     /// generation leases from the originating attempt. The leases are owned
     /// by the detached runner after the dispatch commit and are released only
     /// when that runner settles or is rolled back.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn prepare_dispatch_with_mcp_leases(
         &self,
         invocation: &ToolInvocation,
@@ -1459,18 +1471,17 @@ impl ConversationBackgroundRegistry {
                 Some(prepared.output().to_path_buf()),
                 Some(prepared.capture_owner().clone()),
             ),
-            BackgroundExecutor::Tool(_) => (None, None),
+            #[cfg(any(test, feature = "test-support"))]
+            BackgroundExecutor::Tool(_) => {
+                self.resources
+                    .tool_output
+                    .allocate_background_output(&execution_id)
+                    .map_err(|error| BackgroundDispatchError::Output {
+                        detail: error.to_string(),
+                    })?;
+                (None, None)
+            }
         };
-        // create_new reserves the locator before acceptance. Any collision
-        // refuses admission and leaves the existing execution/output untouched.
-        if client_output.is_none() {
-            self.resources
-                .tool_output
-                .allocate_background_output(&execution_id)
-                .map_err(|error| BackgroundDispatchError::Output {
-                    detail: error.to_string(),
-                })?;
-        }
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
         // The effective attempt environment is captured here, at prepare
@@ -1539,6 +1550,8 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn abort_prepared_for_drain(&self) {
         let mut state = self.state();
         state.prepared.retain(|execution_id, prepared| {
+            #[cfg(not(any(test, feature = "test-support")))]
+            let _ = execution_id;
             if let Some(owner) = &prepared.private_owner {
                 prepared.record.cancel_reason.get_or_insert_with(|| {
                     if owner.is_cancelled() {
@@ -1551,6 +1564,7 @@ impl ConversationBackgroundRegistry {
                 return true;
             }
             prepared.runner.abort();
+            #[cfg(any(test, feature = "test-support"))]
             self.resources
                 .tool_output
                 .discard_background_output(execution_id);
@@ -1812,9 +1826,13 @@ impl ConversationBackgroundRegistry {
                 .client_output
                 .clone()
                 .unwrap_or_else(|| {
-                    self.resources
+                    #[cfg(any(test, feature = "test-support"))]
+                    return self
+                        .resources
                         .tool_output
-                        .background_output_path(execution_id)
+                        .background_output_path(execution_id);
+                    #[cfg(not(any(test, feature = "test-support")))]
+                    unreachable!("an accepted Bash job owns one Client capture");
                 });
             let result = accepted_result(execution_id, &prepared_record.record.tool_name, &output);
             let execution_id = execution_id.clone();
@@ -1879,7 +1897,6 @@ impl ConversationBackgroundRegistry {
     /// and no terminal inbound. [`PrivateBashStage::adopt`] is the only path
     /// that publishes the job, and only while the process is still running.
     #[cfg(test)]
-    #[cfg(test)]
     pub(crate) fn stage_private(
         &self,
         invocation: &ToolInvocation,
@@ -1924,6 +1941,7 @@ impl ConversationBackgroundRegistry {
     ) -> Result<PrivateBashStage, BackgroundDispatchError> {
         let bash = match &executor {
             BackgroundExecutor::Bash(bash) => Some(bash.clone()),
+            #[cfg(any(test, feature = "test-support"))]
             BackgroundExecutor::Tool(_) => None,
         };
         let bash_capture = bash.as_ref().map(|bash| bash.capture_owner().clone());
@@ -1962,28 +1980,35 @@ impl ConversationBackgroundRegistry {
         })
     }
 
+    // The direct diagnostic fixtures use this same transition's owner.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(clippy::unused_self))]
     fn finish_private_output(
         &self,
         id: &ToolExecutionId,
         result: ToolExecutionResult,
         bash_capture: Option<&BashCaptureOwner>,
     ) -> ToolExecutionResult {
-        let storage = &self.resources.tool_output;
-        if result
-            .truncation
-            .as_ref()
-            .is_some_and(|state| state.truncated)
-            || matches!(
-                result.managed_output.as_deref(),
-                Some(
-                    crate::tools::types::ManagedOutputContinuation::Partial { .. }
-                        | crate::tools::types::ManagedOutputContinuation::Unavailable { .. }
-                )
-            )
+        #[cfg(not(any(test, feature = "test-support")))]
+        let _ = id;
+        #[cfg(any(test, feature = "test-support"))]
         {
-            storage.settle_background_output(id);
-        } else {
-            storage.discard_background_output(id);
+            let storage = &self.resources.tool_output;
+            if result
+                .truncation
+                .as_ref()
+                .is_some_and(|state| state.truncated)
+                || matches!(
+                    result.managed_output.as_deref(),
+                    Some(
+                        crate::tools::types::ManagedOutputContinuation::Partial { .. }
+                            | crate::tools::types::ManagedOutputContinuation::Unavailable { .. }
+                    )
+                )
+            {
+                storage.settle_background_output(id);
+            } else {
+                storage.discard_background_output(id);
+            }
         }
         Self::finish_unpromoted_bash(result, bash_capture)
     }
@@ -2527,6 +2552,7 @@ impl ConversationBackgroundRegistry {
     /// owner's settlement — becomes observable only once that callback has
     /// returned and no conversation callback authority remains.
     fn settle_terminal(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+        #[cfg(any(test, feature = "test-support"))]
         self.resources
             .tool_output
             .settle_background_output(execution_id);
@@ -2991,6 +3017,8 @@ impl ConversationBackgroundRegistry {
     /// The shared prepared-dispatch rollback under the held registry lock:
     /// aborts the parked runner and discards its allocated live-output
     /// file.
+    // The direct diagnostic fixtures use this same transition's owner.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(clippy::unused_self))]
     fn discard_prepared_record(
         &self,
         state: &mut BackgroundRegistryState,
@@ -3008,6 +3036,7 @@ impl ConversationBackgroundRegistry {
         }
         if let Some(prepared) = state.prepared.remove(execution_id) {
             prepared.runner.abort();
+            #[cfg(any(test, feature = "test-support"))]
             self.resources
                 .tool_output
                 .discard_background_output(execution_id);
@@ -3183,6 +3212,7 @@ impl ConversationBackgroundRegistry {
                 prepared.private_result = Some(result);
             } else {
                 state.prepared.remove(execution_id);
+                #[cfg(any(test, feature = "test-support"))]
                 self.resources
                     .tool_output
                     .discard_background_output(execution_id);

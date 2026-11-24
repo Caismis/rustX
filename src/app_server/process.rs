@@ -83,7 +83,11 @@ pub(crate) struct AppServerArgs {
     /// Client; its parent is created or must already be owner-only 0700.
     #[arg(long)]
     execution_bootstrap_out: Option<PathBuf>,
-    /// The public `wss://…/execution/v2` ingress endpoint published in
+    /// A separate owner-only grant for the trusted remote lifecycle host.
+    /// Deliver it out of band and keep it outside the Client environment.
+    #[arg(long, requires = "execution_bootstrap_out")]
+    execution_settlement_grant_out: Option<PathBuf>,
+    /// The public `wss://…/execution/v8` ingress endpoint published in
     /// the bundle instead of the loopback address.
     #[arg(long, requires = "execution_ws_listen")]
     execution_public_url: Option<String>,
@@ -107,6 +111,7 @@ impl AppServerArgs {
             execution_workspace: self.execution_workspace,
             execution_ws_listen: self.execution_ws_listen,
             execution_bootstrap_out: self.execution_bootstrap_out,
+            execution_settlement_grant_out: self.execution_settlement_grant_out,
             execution_public_url: self.execution_public_url,
         }
     }
@@ -131,6 +136,7 @@ pub struct Request {
     execution_workspace: Option<PathBuf>,
     execution_ws_listen: Option<std::net::SocketAddr>,
     execution_bootstrap_out: Option<PathBuf>,
+    execution_settlement_grant_out: Option<PathBuf>,
     execution_public_url: Option<String>,
 }
 
@@ -401,7 +407,7 @@ async fn run(options: Request) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let shutdown = CancellationToken::new();
     let manager = host.manager();
-    let mut local_client = match (
+    let local_client = match (
         options.local_execution_session.as_deref(),
         options.local_execution_workspace.as_deref(),
     ) {
@@ -441,6 +447,7 @@ async fn run(options: Request) -> Result<(), String> {
                     listen,
                     bootstrap.clone(),
                     public_url.clone(),
+                    options.execution_settlement_grant_out.clone(),
                     remote_stop.clone(),
                 )
                 .await?,
@@ -460,10 +467,20 @@ async fn run(options: Request) -> Result<(), String> {
     let mut serving = tokio::spawn(serve_transport(options, transport_host, transport_stop));
     let reaper_host = host.clone();
     let reaper_stop = CancellationToken::new();
+    #[cfg(target_os = "linux")]
+    let mut local_owner = local_client.map(|client| {
+        tokio::spawn(local_execution::maintain(
+            host.manager().clone(),
+            client,
+            reaper_stop.clone(),
+        ))
+    });
+    #[cfg(not(target_os = "linux"))]
+    let mut local_client = local_client;
     let stop = reaper_stop.clone();
     let reaper = tokio::spawn(async move { reaper_host.manager().run_idle_reaper(stop).await });
-    // External edits of supported sources enter native application without a
-    // client; the watcher stops with the reaper at drain.
+    // User and admitted Workspace source hints enter native application.
+    // Both observation owners stop with the reaper at drain.
     let watch_manager = host.manager().clone();
     let watch_stop = reaper_stop.clone();
     let source_watch = tokio::spawn(async move {
@@ -507,13 +524,22 @@ async fn run(options: Request) -> Result<(), String> {
     let deadline = tokio::time::Instant::from_std(shutdown_deadline);
     host.begin_drain_by(shutdown_deadline);
     reaper_stop.cancel();
-    remote_stop.cancel();
     eprintln!("rustx app-server: Draining; new semantic admission closed");
     let graceful = async {
         let client_exit = async {
             // The binding has been fenced. Give the owned Client time to
             // reclaim process-private scratch before reaping it.
-            if let Some(mut child) = local_client.take() {
+            #[cfg(target_os = "linux")]
+            let local_client = match local_owner.take() {
+                Some(owner) => owner
+                    .await
+                    .map_err(|error| format!("local Client owner failed: {error}"))?,
+                None => None,
+            };
+            #[cfg(not(target_os = "linux"))]
+            let local_client = local_client.take();
+            if let Some(local_client) = local_client {
+                let mut child = local_client.child;
                 let _ = host.settle_execution().await;
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 let exit = tokio::time::timeout(remaining / 2, child.wait()).await;
@@ -526,15 +552,18 @@ async fn run(options: Request) -> Result<(), String> {
                         return Err(format!("local execution: Client reap failed: {error}"));
                     }
                     Err(_) => {
-                        child.kill().await.map_err(|error| {
+                        child.terminate().await.map_err(|error| {
                             format!("local execution: Client reap failed: {error}")
                         })?;
                         return Err("local execution: Client needed forced termination".into());
                     }
                 }
             }
-            // The accept loop stops on drain even when no Client connected.
+            // Keep the listener available for the already admitted Client's
+            // cleanup authentication until the binding settlement budget ends.
             if let Some(accept) = remote_accept.take() {
+                let _ = host.settle_execution().await;
+                remote_stop.cancel();
                 accept
                     .await
                     .map_err(|error| format!("execution listener drain failed: {error}"))?;

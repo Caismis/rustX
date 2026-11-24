@@ -3,6 +3,57 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+#[tokio::test]
+async fn hosted_uploads_share_the_normal_request_id_association() {
+    use crate::app_server::host_upload::{HostUploadRefusal, fixtures};
+
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let mut upload = fixtures().remove(0);
+        let mut notification = serde_json::to_value(&upload).unwrap();
+        notification.as_object_mut().unwrap().remove("id");
+        assert!(
+            connection
+                .handle_json(&notification.to_string())
+                .await
+                .is_none()
+        );
+        notification["id"] = serde_json::Value::Null;
+        let Some(Response::Failure(invalid_id)) =
+            connection.handle_json(&notification.to_string()).await
+        else {
+            panic!("null ID is an invalid request");
+        };
+        assert_eq!(invalid_id.error.code, -32600);
+        upload.id = RequestId::Integer(60);
+        let record = serde_json::to_string(&upload).unwrap();
+        let ordinary = connection.admitted_request_for_test(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: upload.id,
+            call: Method::ServerInfo {},
+        });
+        let Response::Failure(duplicate) = connection.handle_json(&record).await.unwrap() else {
+            panic!("duplicate request ID")
+        };
+        assert_eq!(duplicate.error.data, Some(ErrorData::DuplicateRequestId));
+        drop(ordinary.await);
+        let Response::Failure(late) = connection.handle_json(&record).await.unwrap() else {
+            panic!("upload for a resolved callback")
+        };
+        assert_eq!(
+            late.error.data,
+            Some(ErrorData::HostUploadRejected {
+                reason: HostUploadRefusal::Late
+            })
+        );
+        drop(connection);
+        fixture.close().await;
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn headless_interactions_broadcast_survive_disconnect_and_select_one_response() {
     bounded(async {
@@ -292,6 +343,9 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
 async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound_steer_stays_strict()
  {
     use crate::durable::{PendingInboundRef, PendingSteerScope};
+    use crate::runtime::conversation_runtime::Gate;
+    use std::sync::Arc;
+
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
@@ -355,6 +409,18 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
             ErrorData::InvalidState,
         );
 
+        // Keep the cancelled attempt in its slot until the non-steerable
+        // admission rules have been observed. An idle runtime can start a new turn.
+        let before_restore = Arc::new(Gate::default());
+        let release_restore = before_restore.arm_scoped();
+        f.load(0)
+            .await
+            .unwrap()
+            .unwrap()
+            .inspect_runtime()
+            .unwrap()
+            .install_before_restore_gate(before_restore.clone());
+
         // Start a real attempt, cancel it so it is no longer steerable, then verify:
         // - direct turn/steer returns SteerUnavailable without consuming input_id
         // - turn/start and inbound/steer keep returning InvalidState
@@ -375,15 +441,19 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
             panic!("started attempt")
         };
         f.gates[0].wait_entered().await;
-        call(
-            &connection,
-            803,
-            Method::TurnCancel {
-                target: target.clone(),
-                turn_id: active_turn.clone(),
-            },
-        )
-        .await;
+        assert!(matches!(
+            call(
+                &connection,
+                803,
+                Method::TurnCancel {
+                    target: target.clone(),
+                    turn_id: active_turn.clone(),
+                },
+            )
+            .await,
+            MethodResult::CancellationAccepted { attempt_id } if attempt_id == active_turn
+        ));
+        before_restore.wait_entered_async().await;
 
         let cancelled_steer_input_id = uuid::Uuid::new_v4().to_string();
         assert_eq!(
@@ -441,6 +511,7 @@ async fn direct_turn_steer_reports_steer_unavailable_non_admission_while_inbound
             .await,
             MethodResult::InboundAccepted { .. }
         ));
+        drop(release_restore);
         f.gates[0].release();
         f.close().await;
     })

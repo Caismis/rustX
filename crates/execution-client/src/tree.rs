@@ -185,15 +185,18 @@ fn atomic_write(
         Vec::new(),
         expected.map_or(Expectation::Absent, Expectation::Revision),
     )?;
-    let staged = target.stage(write)?;
-    let visible = staged.publish_with_gate(|cross| authority.commit(cross))?;
-    visible.finish_with(|directory| {
-        #[cfg(test)]
-        if FAIL_DIRECTORY_SYNC.replace(false) {
-            return Err(io::Error::other("injected directory sync failure"));
-        }
-        directory.sync_all()
-    })
+    let result = super::mutation::stage_mutation(target, write).and_then(|staged| {
+        let visible = staged.publish_with_gate(|cross| authority.commit(cross))?;
+        visible.finish_with(|directory| {
+            #[cfg(test)]
+            if FAIL_DIRECTORY_SYNC.replace(false) {
+                return Err(io::Error::other("injected directory sync failure"));
+            }
+            directory.sync_all()
+        })
+    });
+    let cleanup = super::mutation::release_staging();
+    result.and_then(|metadata| cleanup.map(|()| metadata))
 }
 #[cfg(test)]
 thread_local! {static FAIL_DIRECTORY_SYNC:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}

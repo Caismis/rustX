@@ -306,19 +306,16 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
         return 0;
     }
-    let inner_socket = std::env::temp_dir().join(format!(
-        "rustx-interactive-inner-{}-{}.sock",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
+    // The upstream socket lives in the driver's private control directory.
+    // Both lanes must use that directory in a restricted execution mount.
+    let inner_socket = std::path::Path::new(&socket).with_extension("i");
     let inner_listener = match std::os::unix::net::UnixListener::bind(&inner_socket) {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("interactive supervisor: cannot bind the inner control socket: {error}");
-            return 1;
+            return report_unstarted(
+                &mut upstream,
+                &format!("cannot bind inner control socket: {error}"),
+            );
         }
     };
     trace("outer", format_args!("inner control listener bound"));
@@ -326,28 +323,27 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     // a blocking one-shot accept: the inner control connection, the inner's
     // own exit, and upstream termination/control loss are all polled.
     if let Err(error) = inner_listener.set_nonblocking(true) {
-        eprintln!("interactive supervisor: cannot configure the inner control socket: {error}");
         let _ = std::fs::remove_file(&inner_socket);
-        return 1;
+        return report_unstarted(
+            &mut upstream,
+            &format!("cannot configure inner control socket: {error}"),
+        );
     }
     if let Err(error) = become_child_subreaper() {
         // No inner child exists yet, so "every pre-anchor child is gone" is
         // vacuously proven: this `NoOwnership` is proof-carrying with an
         // empty payload (no pid was reaped because none was created).
         let _ = std::fs::remove_file(&inner_socket);
-        let _ = write_frame(
-            &mut upstream,
-            MSG_PROCESS_CONTROL_FAILURE,
-            error.clone().as_bytes(),
-        );
-        let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
-        return 0;
+        return report_unstarted(&mut upstream, &error);
     }
     let current_exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
-            eprintln!("interactive supervisor: cannot locate itself: {error}");
-            return 1;
+            let _ = std::fs::remove_file(&inner_socket);
+            return report_unstarted(
+                &mut upstream,
+                &format!("cannot locate interactive supervisor: {error}"),
+            );
         }
     };
     let mut inner = Command::new(current_exe);
@@ -368,13 +364,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             // The spawn failed, so no pre-anchor child exists: an empty
             // proof-carrying `NoOwnership`.
             let _ = std::fs::remove_file(&inner_socket);
-            let _ = write_frame(
-                &mut upstream,
-                MSG_PROCESS_CONTROL_FAILURE,
-                error.to_string().as_bytes(),
-            );
-            let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
-            return 0;
+            return report_unstarted(&mut upstream, &error.to_string());
         }
     };
     // The inner-facing direction gets its own single reader, threaded
@@ -647,6 +637,12 @@ pub fn run_outer(arguments: &[String]) -> i32 {
 /// platform's independent terminal proof before releasing Host capacity.
 /// Live or lost ownership retains the input failure; containment signals do
 /// not use this function.
+fn report_unstarted(upstream: &mut std::os::unix::net::UnixStream, error: &str) -> i32 {
+    let _ = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
+    let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &[]);
+    0
+}
+
 fn retire_terminal_input_failure(inner_pid: i32, error: String) -> Result<(), String> {
     match waitid(
         Id::Pid(Pid::from_raw(inner_pid)),

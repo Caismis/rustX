@@ -175,7 +175,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -187,11 +187,23 @@ use rmcp::transport::streamable_http_client::{
     SseError, StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
 };
 use sse_stream::Sse;
+use tokio::sync::Semaphore;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 /// Remote session deletion is best effort, after local requests have stopped.
 /// Match Pi's cleanup bound without shortening any tool-call settlement proof.
 const REMOTE_SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+
+// All connections share the ordinary POST receive and JSON-decode budget.
+// Once the SDK returns an SSE stream, its separate per-event bound applies.
+const MAX_ORDINARY_POSTS: usize = 32;
+static ORDINARY_POST_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+// A real foreground batch can own 64 progress-bearing replies at once.
+// Leave another batch's capacity for unrelated HTTP work on the same Server.
+const MAX_SSE_POST_BODIES: usize = 128;
+const MAX_SSE_GET_BODIES: usize = 32;
+static SSE_POST_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+static SSE_GET_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 /// The Server-Sent Events stream shape of rmcp's Streamable HTTP client.
 type SseStream = BoxStream<'static, Result<Sse, SseError>>;
@@ -1088,15 +1100,18 @@ impl<S: Stream + Unpin> Stream for OwnedResponseStream<S> {
 
 /// The HTTP client rmcp's Streamable HTTP transport posts through.
 ///
-/// It is an ownership seam, not a policy layer: every request-carrying POST
-/// is registered with [`McpHttpRequestOwnership`] and nothing else about the
-/// exchange changes. Requests without a JSON-RPC id (notifications and
-/// responses) own no correlated local state a settlement could ever need to
-/// terminate, so they pass straight through.
+/// Each request-carrying POST owns local cancellation. A shared slot covers
+/// receipt and decoding, ending when JSON decoding completes or the SDK hands
+/// off an SSE stream. POST response streams and GET subscriptions/resumes
+/// use separate body slots, so an idle subscription cannot occupy a POST
+/// response slot. Control POSTs keep their own path.
 #[derive(Clone)]
 pub(crate) struct McpHttpClient {
     inner: reqwest::Client,
     ownership: Arc<McpHttpRequestOwnership>,
+    ordinary_posts: Arc<Semaphore>,
+    sse_posts: Arc<Semaphore>,
+    sse_gets: Arc<Semaphore>,
 }
 
 impl McpHttpClient {
@@ -1133,6 +1148,15 @@ impl McpHttpClient {
             Self {
                 inner,
                 ownership: Arc::clone(&ownership),
+                ordinary_posts: ORDINARY_POST_SLOTS
+                    .get_or_init(|| Arc::new(Semaphore::new(MAX_ORDINARY_POSTS)))
+                    .clone(),
+                sse_posts: SSE_POST_SLOTS
+                    .get_or_init(|| Arc::new(Semaphore::new(MAX_SSE_POST_BODIES)))
+                    .clone(),
+                sse_gets: SSE_GET_SLOTS
+                    .get_or_init(|| Arc::new(Semaphore::new(MAX_SSE_GET_BODIES)))
+                    .clone(),
             },
             ownership,
         ))
@@ -1162,6 +1186,18 @@ fn locally_terminated() -> StreamableHttpError<reqwest::Error> {
 }
 
 impl McpHttpClient {
+    fn bound_post_stream(
+        &self,
+        response: StreamableHttpPostResponse,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
+        match response {
+            StreamableHttpPostResponse::Sse(stream, session) => Ok(
+                StreamableHttpPostResponse::Sse(bound_sse(stream, &self.sse_posts)?, session),
+            ),
+            other => Ok(other),
+        }
+    }
+
     /// Runs one outbound POST under rustX's local request ownership.
     ///
     /// Requests without a JSON-RPC id (notifications and responses) own no
@@ -1175,7 +1211,7 @@ impl McpHttpClient {
         >,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
         let Some(id) = request_id(message) else {
-            return post.await;
+            return self.bound_post_stream(post.await?);
         };
         // Initialization has no tool-invocation admission. Own its HTTP
         // request here so cancelling a handshake can terminate rmcp's startup
@@ -1195,19 +1231,27 @@ impl McpHttpClient {
         self.ownership.note_http_request(&id, message);
         let guard = self.ownership.register(id);
         let terminate = guard.terminate.clone();
+        let receive = async {
+            let _slot = self
+                .ordinary_posts
+                .acquire()
+                .await
+                .expect("ordinary MCP HTTP budget remains open");
+            post.await
+        };
         let response = tokio::select! {
             biased;
-            // Local termination drops the POST future here, inside this
-            // scope, before the guard below is released.
+            // Termination drops the queued or active receive before releasing
+            // the request guard. The decoder and its slot end together.
             () = terminate.cancelled() => Err(locally_terminated()),
-            response = post => response,
+            response = receive => response,
         };
         // An SSE response keeps the HTTP response body open past this
         // function, so ownership travels into the stream rather than ending
         // here. Every other outcome leaves no local HTTP activity, and
         // dropping the guard at the end of this scope releases the latch.
-        match response {
-            Ok(StreamableHttpPostResponse::Sse(stream, session)) => {
+        match self.bound_post_stream(response?)? {
+            StreamableHttpPostResponse::Sse(stream, session) => {
                 Ok(StreamableHttpPostResponse::Sse(
                     OwnedResponseStream {
                         inner: Some(stream),
@@ -1218,9 +1262,28 @@ impl McpHttpClient {
                     session,
                 ))
             }
-            other => other,
+            other => Ok(other),
         }
     }
+}
+
+fn bound_sse(
+    stream: SseStream,
+    slots: &Arc<Semaphore>,
+) -> Result<SseStream, StreamableHttpError<reqwest::Error>> {
+    let permit = slots.clone().try_acquire_owned().map_err(|_| {
+        StreamableHttpError::Io(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "MCP HTTP SSE receive capacity is exhausted",
+        ))
+    })?;
+    Ok(
+        futures_util::stream::unfold((stream, permit), |(mut stream, permit)| async move {
+            stream.next().await.map(|event| (event, (stream, permit)))
+        })
+        .fuse()
+        .boxed(),
+    )
 }
 
 impl StreamableHttpClient for McpHttpClient {
@@ -1303,9 +1366,11 @@ impl StreamableHttpClient for McpHttpClient {
         auth_header: Option<String>,
         custom_headers: CustomHeaders,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
-        self.inner
+        let stream = self
+            .inner
             .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
-            .await
+            .await?;
+        bound_sse(stream, &self.sse_gets)
     }
 
     async fn get_stream_with_max_sse_event_size(
@@ -1317,10 +1382,8 @@ impl StreamableHttpClient for McpHttpClient {
         custom_headers: CustomHeaders,
         max_sse_event_size: usize,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
-        // The server-initiated stream is not request-scoped: no JSON-RPC
-        // request id owns it, so no settlement ever terminates it and there
-        // is nothing here for this layer to own. It ends with the transport.
-        self.inner
+        let stream = self
+            .inner
             .get_stream_with_max_sse_event_size(
                 uri,
                 session_id,
@@ -1329,7 +1392,10 @@ impl StreamableHttpClient for McpHttpClient {
                 custom_headers,
                 max_sse_event_size,
             )
-            .await
+            .await?;
+        // The SDK checks the status and media type before it returns a lazy
+        // event parser. A 405 probe never consumes a body slot.
+        bound_sse(stream, &self.sse_gets)
     }
 }
 
@@ -1409,6 +1475,239 @@ mod tests {
         tokio::time::resume();
         assert!(
             matches!(outcome, Err(StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the same live HTTP peers prove JSON admission, cancellation and stream handoff"
+    )]
+    async fn independent_http_clients_share_decode_slots_and_release_on_sse_handoff() {
+        use axum::body::{Body, Bytes};
+        use axum::extract::State;
+        use axum::http::{StatusCode, header};
+        use axum::response::{IntoResponse as _, Response};
+        use futures_util::StreamExt as _;
+        use rmcp::model::ClientJsonRpcMessage;
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClient, StreamableHttpPostResponse,
+        };
+
+        #[derive(Clone)]
+        struct Peer {
+            observed: tokio::sync::mpsc::UnboundedSender<String>,
+            release_json: Arc<tokio::sync::Notify>,
+        }
+
+        async fn receive(
+            State(peer): State<Peer>,
+            axum::Json(message): axum::Json<serde_json::Value>,
+        ) -> Response {
+            let Some(id) = message["id"].as_i64() else {
+                peer.observed
+                    .send(message["method"].as_str().unwrap().to_owned())
+                    .unwrap();
+                return StatusCode::ACCEPTED.into_response();
+            };
+            peer.observed.send(id.to_string()).unwrap();
+            if id == 1 {
+                let partial = futures_util::stream::once(async {
+                    Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        br#"{"jsonrpc":"2.0","id":1,"result":"#,
+                    ))
+                });
+                let rest = futures_util::stream::once(async move {
+                    peer.release_json.notified().await;
+                    Ok(Bytes::from_static(b"{}}"))
+                });
+                return Response::builder()
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from_stream(partial.chain(rest)))
+                    .unwrap();
+            }
+            if id == 4 {
+                return axum::Json(serde_json::json!({
+                    "jsonrpc": "2.0", "id": id, "result": {},
+                }))
+                .into_response();
+            }
+            let stream = futures_util::stream::once(async {
+                Ok::<_, std::convert::Infallible>(Bytes::from_static(b"id: cut-3\ndata: live\n\n"))
+            });
+            Response::builder()
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(
+                    stream.chain(futures_util::stream::pending()),
+                ))
+                .unwrap()
+        }
+
+        async fn resume(State(peer): State<Peer>, headers: axum::http::HeaderMap) -> Response {
+            let last = headers.get("last-event-id").unwrap().to_str().unwrap();
+            peer.observed.send(format!("resume {last}")).unwrap();
+            if last == "unsupported" {
+                return StatusCode::METHOD_NOT_ALLOWED.into_response();
+            }
+            Response::builder()
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from("id: next-3\ndata: resumed\n\n"))
+                .unwrap()
+        }
+
+        let (seen, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let release_json = Arc::new(tokio::sync::Notify::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint: Arc<str> = format!("http://{}", listener.local_addr().unwrap()).into();
+        let app = axum::Router::new()
+            .route("/", axum::routing::post(receive).get(resume))
+            .with_state(Peer {
+                observed: seen,
+                release_json: release_json.clone(),
+            });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (mut first, _) = super::McpHttpClient::new().unwrap();
+        let (mut second, owner) = super::McpHttpClient::new().unwrap();
+        let slots = Arc::new(super::Semaphore::new(1));
+        first.ordinary_posts = slots.clone();
+        second.ordinary_posts = slots.clone();
+        let post_streams = Arc::new(super::Semaphore::new(1));
+        let get_streams = Arc::new(super::Semaphore::new(1));
+        first.sse_posts = post_streams.clone();
+        second.sse_posts = post_streams.clone();
+        first.sse_gets = get_streams.clone();
+        second.sse_gets = get_streams.clone();
+
+        let ping = |id| -> ClientJsonRpcMessage {
+            serde_json::from_value(serde_json::json!({
+                "jsonrpc": "2.0", "method": "ping", "id": id,
+            }))
+            .unwrap()
+        };
+        let empty_headers = std::collections::HashMap::new;
+        let first_endpoint = endpoint.clone();
+        let held = tokio::spawn(async move {
+            first
+                .post_message(first_endpoint, ping(1), None, None, empty_headers())
+                .await
+                .unwrap()
+        });
+        assert_eq!(calls.recv().await.as_deref(), Some("1"));
+        assert_eq!(slots.available_permits(), 0);
+        assert!(!held.is_finished());
+
+        let admission = owner.admit(&id(2));
+        let OutboundDispatch::Owned(_dispatch) = owner.begin_dispatch(&id(2)) else {
+            panic!("admit the second request");
+        };
+        let mut queued = std::pin::pin!(second.post_message(
+            endpoint.clone(),
+            ping(2),
+            None,
+            None,
+            empty_headers(),
+        ));
+        assert!(futures_util::poll!(&mut queued).is_pending());
+        assert_eq!(
+            calls.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+
+        let cancellation = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": 1, "reason": "fixture"},
+        }))
+        .unwrap();
+        let control = second
+            .post_message(endpoint.clone(), cancellation, None, None, empty_headers())
+            .await
+            .unwrap();
+        assert!(matches!(control, StreamableHttpPostResponse::Accepted));
+        assert_eq!(
+            calls.recv().await.as_deref(),
+            Some("notifications/cancelled")
+        );
+        assert!(admission.terminate().awaits_release());
+        assert!(queued.await.is_err());
+        admission.released().await;
+        assert_eq!(
+            calls.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+        assert_eq!(slots.available_permits(), 0);
+
+        let mut resumed = std::pin::pin!(second.post_message(
+            endpoint.clone(),
+            ping(3),
+            None,
+            None,
+            empty_headers()
+        ));
+        assert!(futures_util::poll!(&mut resumed).is_pending());
+        release_json.notify_one();
+        assert!(matches!(
+            held.await.unwrap(),
+            StreamableHttpPostResponse::Json(..)
+        ));
+        let StreamableHttpPostResponse::Sse(mut response, _) = resumed.await.unwrap() else {
+            panic!("open HTTP response stream");
+        };
+        assert_eq!(calls.recv().await.as_deref(), Some("3"));
+        assert!(response.next().await.unwrap().is_ok());
+        assert_eq!(
+            slots.available_permits(),
+            1,
+            "handoff returns the JSON decode slot"
+        );
+        assert_eq!(post_streams.available_permits(), 0);
+        let get_resume = |last_event_id: &str| {
+            second.get_stream_with_max_sse_event_size(
+                endpoint.clone(),
+                None,
+                Some(last_event_id.to_owned()),
+                None,
+                empty_headers(),
+                64 * 1024,
+            )
+        };
+        let mut resumed = get_resume("cut-3").await.unwrap();
+        assert_eq!(calls.recv().await.as_deref(), Some("resume cut-3"));
+        assert_eq!(get_streams.available_permits(), 0);
+        assert_eq!(post_streams.available_permits(), 0);
+        assert!(
+            matches!(get_resume("cut-3").await, Err(super::StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(calls.recv().await.as_deref(), Some("resume cut-3"));
+        assert!(matches!(
+            get_resume("unsupported").await,
+            Err(super::StreamableHttpError::ServerDoesNotSupportSse)
+        ));
+        assert_eq!(calls.recv().await.as_deref(), Some("resume unsupported"));
+        assert!(
+            matches!(second.post_message(endpoint.clone(), ping(5), None, None, empty_headers()).await,
+                Err(super::StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(calls.recv().await.as_deref(), Some("5"));
+        assert!(matches!(
+            second
+                .post_message(endpoint.clone(), ping(4), None, None, empty_headers())
+                .await
+                .unwrap(),
+            StreamableHttpPostResponse::Json(..)
+        ));
+        assert_eq!(calls.recv().await.as_deref(), Some("4"));
+        drop(response);
+        assert_eq!(post_streams.available_permits(), 1);
+        assert_eq!(get_streams.available_permits(), 0);
+        assert!(resumed.next().await.unwrap().is_ok());
+        assert!(resumed.next().await.is_none());
+        assert!(resumed.next().await.is_none());
+        assert_eq!(get_streams.available_permits(), 1);
+        assert_eq!(
+            calls.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         );
         server.abort();
         let _ = server.await;

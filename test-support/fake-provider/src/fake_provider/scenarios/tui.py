@@ -256,9 +256,9 @@ SESSION_A_PROMPT = "tui multi-session: session A long task"
 SESSION_B_PROMPT = "tui multi-session: session B quick task"
 
 
-def tui_multi_session(hold_b: bool = False) -> Scenario:
+def _gated_model_turns(name: str, second_model: str = INTEGRATION_MODEL, *, hold_b: bool = False) -> Scenario:
     return Scenario(
-        "app_server_replacement" if hold_b else "tui_multi_session",
+        name,
         Step(
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
@@ -275,7 +275,7 @@ def tui_multi_session(hold_b: bool = False) -> Scenario:
         Step(
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
-                model=INTEGRATION_MODEL,
+                model=second_model,
                 body_contains=(SESSION_B_PROMPT,),
             ),
             Stream(Text("B answered while A was still working"),
@@ -378,8 +378,9 @@ SCENARIOS = {
     "tui_subagent_inspection": tui_subagent_inspection,
     "app_server_lifecycle": app_server_lifecycle,
     "tui_integration": tui_integration,
-    "tui_multi_session": tui_multi_session,
-    "app_server_replacement": lambda: tui_multi_session(hold_b=True),
+    "tui_multi_session": lambda: _gated_model_turns("tui_multi_session"),
+    "app_server_replacement": lambda: _gated_model_turns("app_server_replacement", hold_b=True),
+    "live_model_switch": lambda: _gated_model_turns("live_model_switch", "second-model"),
     "tui_ask_user_questionnaire": tui_ask_user_questionnaire,
     "tui_before_start_cancellation": tui_before_start_cancellation,
     "tui_compaction": tui_compaction,

@@ -2,9 +2,10 @@
 
 Status: accepted. The current implementation includes binding arbitration,
 authenticated local and WebSocket bootstrap, bounded filesystem queries and
-mutations, watches, and supervised process execution. The
-[acceptance ledger](exec-01-evidence.md) records the evidence and open #576
-requirements for the current PR.
+mutations, watches, supervised process execution, bounded same-instance
+recovery, Client-owned storage and stdio MCP, and streamed Hosted reception.
+The [EXEC-01](exec-01-evidence.md), [EXEC-02](exec-02-evidence.md) and
+[EXEC-03](exec-03-evidence.md) ledgers record the evidence and verification gates.
 
 This ADR grounds its decisions in the verified server/client separation
 plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
@@ -15,9 +16,9 @@ and in these issues:
   <https://github.com/Caismis/rustX/issues/576>
 - Live-instance recovery and re-admission proof:
   <https://github.com/Caismis/rustX/issues/577>
-- Follow-on execution boundary work:
+- Hosted, configuration and MCP integration:
   <https://github.com/Caismis/rustX/issues/578>
-- Follow-on integration work:
+- Installed-product integration:
   <https://github.com/Caismis/rustX/issues/579>
 - Earlier Server/Client groundwork
   (<https://github.com/Caismis/rustX/issues/571>) is still open at this
@@ -27,14 +28,16 @@ Fixed reference commits from the plan (frozen snapshots, not
 "current HEAD" claims; only the plan hash above was re-verified): rustX
 `d82d7f9b8d9dd4f5064dba8d377103c8c6049d28`, Codex
 `ee344ca9458351a6ea102795fa73110ad3ede5dc`, Pi
-`22fc026b872b4a7df22ffa94e8fa00b873128054`. The actual implementation
-base of this branch is `f0cd4f59d`.
+`22fc026b872b4a7df22ffa94e8fa00b873128054`. EXEC-01 began on
+`f0cd4f59d`. The stacked EXEC-03 branch starts at
+`5ff54d8327917bca2cdbc9647d7da197afe8beed` on the EXEC-01 branch
+after it incorporated EXEC-02.
 
 ## Decision
 
 ### Crate and naming boundary
 
-The workspace has four execution members; the names are fixed.
+The execution boundary uses these workspace members.
 
 - `rustx-execution-protocol` (`crates/execution-protocol`): the single
   wire definition — identity newtypes, `Hello`, `Admission`, `Reject`,
@@ -42,6 +45,8 @@ The workspace has four execution members; the names are fixed.
   `Bootstrap`, the `Capability` vocabulary, the `transport` record
   framing, and the frozen resource bounds. Both sides serialize these
   exact DTOs; there is no duplicated contract type.
+- `rustx-execution-transport` (`crates/execution-transport`): paired
+  channel transport, TLS and frame deadlines, shared by both processes.
 - `rustx-execution-server` (`crates/execution-server`): a library for
   binding arbitration and local acceptance owned by the Agent Server.
   It is not a new Agent, not a binary, and not a transport deployment.
@@ -59,16 +64,16 @@ and directory-page readers —
   include the protocol and transport crates, descriptor-relative filesystem
   and document readers, and the physical process supervisor. The production
   dependency tree excludes the Agent Server, canonical store and model adapters.
-- The main Agent Server remains the existing `rustx` package; its
-  `package_io` module and environment file readers are thin wrappers
-  over `rustx-confined-fs`, preserving every existing semantic.
+- The main Agent Server remains the existing `rustx` package. Its
+  `package_io` module uses `rustx-confined-fs` for Server-owned files.
+  Physical queries on an admitted Workspace use the Client.
 
 The implemented Client supports authenticated local and WebSocket binding,
 bounded file queries and tree mutations, conditional writes and edits,
-supervised processes, workspace observation, file watches, and Workspace
-Python. Its negotiated capabilities name the individual services the Client
-provides. A connection does not grant the reserved umbrella
-`Files`, `Python`, `StdioMcp`, `ContentTransfer`, or `ManagedOutput` capabilities.
+supervised processes, workspace observation, file watches, Workspace
+Python, managed output, stdio MCP and Managed Python. The authenticated Hello advertises the
+individual services that this Client implements. The Server checks the
+specific capability before dispatch.
 
 ### Identities
 
@@ -111,9 +116,12 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client's first and only binding-opening message is protocol v2. Revision 2 requires
-`physical_settlement_proven` in every terminal process snapshot. A revision 1
-peer is rejected during bootstrap or Hello, before execution admission:
+The Client opens a pair with a revision 8 Hello. It retains
+`physical_settlement_proven` in terminal process snapshots and requires the
+same-instance recovery handshake after a transport loss. Managed Python
+source capture and generic stdio launch carry exact binding identity in
+this revision. Older revisions
+are rejected during bootstrap or Hello, before execution admission:
 
 ```rust
 pub struct Hello {
@@ -251,16 +259,121 @@ any phase, and `Live` always means a *committed pair* of lanes.
   stays `Live`.
 - While `Live` — or while a pending attempt is negotiating — a second
   data Hello gets `AlreadyConnected`: at most one data lane per
-  Session binding, ever.
+  Session binding at a time.
 - `disconnect(connection)` moves `Live → Detached` only for the current
   live pair, seizing both lanes' shutdown handles. Losing either lane
   detaches the pair identically — a stale or foreign disconnect is
   ignored.
-- `Detached` rejects every Hello with `RecoveryRequired`. EOF never
-  reopens the reservation, so even the fully valid reserved identity
-  cannot replay its own credential after EOF — the static bootstrap file
-  grants no second admission. Re-admission requires the live-instance
-  recovery proof of #577, which this layer deliberately does not fake.
+- A recoverable transport loss opens a 50-second Server admission window.
+  Re-admission requires the memory-only credential derived from the first
+  authenticated pairing challenge and launch credential. The new pair must
+  match the original reservation and admitted capabilities and gets fresh
+  lane identities. The launch bundle alone cannot reconnect. A revoked
+  owner, protocol violation or expired window cannot re-admit work.
+- The Client retains process records, output cursors, stdin receipts and
+  published output across this exchange. Per-lane mutation arbitration and
+  watcher registrations are retired before reattachment; ticket numbers
+  continue monotonically, and automatic Workspace watches register and
+  rescan on the recovered lane. Old-lane watch hints cannot publish.
+- The Client begins physical cleanup after at most 80 seconds from its
+  detection of the loss, or on earlier authenticated terminal refusal.
+  This timer does not prove cleanup. Existing operation deadlines may
+  finish work or shorten the period in which a caller can observe it.
+- An idle control poll runs every 100 ms and an ordinary control frame
+  expires after 2 seconds. Under bounded worker scheduling, one frame in
+  flight and the next poll with its frame deadline give a 4.1-second
+  detection-skew budget. Revoke continues to use its absolute command
+  deadline. Neither delayed polling nor a failed handshake renews recovery.
+- Logical Session deletion and Host drain close business admission
+  immediately. A transport loss before sending Revoke or before obtaining
+  its receipt keeps the same instance's cleanup admission under the fixed
+  recovery window. Host drain accepts cleanup only until its overall
+  shutdown deadline. Both pairing and the exact Revoke confirmation check
+  that deadline under the binding lock, including receipts from commands
+  already in flight when drain starts. The recovered Client returns its
+  previously proved physical settlement or finishes the remaining cleanup. The Server
+  acknowledges the final control poll before closing the pair.
+- The Session recovery owner is written to a bounded private staging file,
+  synced, published atomically without replacement and directory-synced
+  before first admission. Inventory readers only observe committed owners.
+  An interrupted publication leaves no partial owner for another Workspace
+  to read.
+
+### Independent Linux local settlement
+
+The `interactive-supervisor client-domain` role owns a Bubblewrap PID
+namespace for the local sibling Client. The same Client becomes PID 1.
+Before it executes, the trusted init transfers its own pidfd over a private
+socket. The host guardian retains that descriptor. Before the launch grant,
+a companion watcher acknowledges its own copy of the same descriptor and
+then monitors a private socket for guardian loss. The Server holds the only
+writer of a separate lifetime pipe. EOF on that pipe lets the guardian
+signal the pinned init. If the guardian dies, EOF on the private socket
+lets the watcher signal the same init. The Client inherits neither lifetime
+channel. Linux finishes teardown, including descendants in other process
+groups or sessions, before the pidfd reports exit. The watcher has no
+receipt authority. The per-operation supervisor and START and cancellation
+gates still run inside the namespace.
+
+The independent helper retains the original private scratch directory
+descriptor. After namespace exit it removes that exact directory and
+publishes a durable receipt. The receipt authenticates the persisted
+reservation including Server incarnation, Session, Client instance,
+generation and Workspace. The helper's exit, a kill request and signals
+to a numeric PID cannot authorize replacement. The binding fence consumes
+the proof once. Revoke accepted through the authenticated pair remains a
+separate physical settlement path.
+
+A local Client allocates its Managed Python and Workspace mutation staging
+directories through the independent watcher. The watcher authenticates the
+exact live namespace init and accepts an anchored parent descriptor. The
+Client verifies the returned device and inode before using the private
+directory. Python stages share the filesystem with the published Store.
+Workspace stages share it with the destination's existing parent. A single
+mutation stage serves synchronous data requests and is released after its
+commit or refusal. Only the existing filesystem publish gate can make
+Workspace bytes visible. A write that crosses the gate and loses its
+cleanup receipt reports CommitUnknown. Authenticated Revoke closes staging
+admission and confirms release once the physical workers settle. After
+namespace exit the watcher reclaims the exact outstanding directories before
+the guardian can publish settlement. Completed Workspace files and published
+Python fingerprints survive that release.
+
+A separately trusted remote deployment host can receive a one-time
+settlement grant through `--execution-settlement-grant-out`. The Server
+publishes the grant to a new owner-only file outside the Client bootstrap.
+Its receipt is valid only for the previous Session, incarnation, Client
+instance, generation and Workspace. The deployment owner must retain the
+grant outside the Client and its descendants. It may publish the receipt
+only after independently proving that its original physical domain and
+outstanding writers are settled or isolated. A deployment with no such
+owner remains fenced after unconfirmed death.
+
+The grant contains the exact Server `receipt_path` and a 32-byte capability
+encoded as `proof_base64`. The trusted host returns those bytes through an
+authenticated private transfer. An operator publishes them atomically at
+that path as an owner-only regular file. The Server validates the binding's
+original persisted verifier and consumes the receipt before replacement
+admission on restart. The grant never appears in protocol Hello, ordinary
+management authentication or the Client's launch bundle.
+
+The local App Server waits 1, 2 and 4 seconds before attempting successive
+replacements. It permits at most three attempts in a rolling 60 seconds,
+with backoff reset after five stable minutes. A failed replacement launch
+ends that owner. A replacement keeps the Session identity and advances its
+generation. A restarted Server establishes a fresh incarnation. Neither
+path reissues previous business input or reconstructs a missing outcome.
+
+A killed independent helper, a missing receipt or a scratch identity
+mismatch leaves the durable admission fence in place. The independent
+receipt covers the Linux process namespace and its private temporary output.
+It does not authorize deletion of arbitrary Workspace names or published
+Managed Python Store directories. Independently operated remote Clients and
+macOS local Clients still require authenticated settlement from their original
+owner. A remote provider cannot use a local domain receipt to clear its fence.
+
+### Binding status and bootstrap
+
 - `revoke()` is immediate and terminal; a revoked binding rejects every
   Hello and is never dispatchable again.
 - `status()` is observation only. Nothing may dispatch on a snapshot —
@@ -391,7 +504,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v2` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v8` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -415,14 +528,13 @@ second Client.
 `admit_websocket_stream_deadline` runs the identical Hello/admission
 arbitration on an accepted TCP stream: credential first, then protocol
 version and identity, one absolute deadline from upgrade through
-admission, one live connection at most, `Detached`/`Revoked` terminals
-unchanged. The App Server's remote accept loop is bounded
+admission, and one live connection at most. The App Server's remote accept loop is bounded
 (at most four concurrent upgrades) and keeps accepting after failed or
-malformed upgrades until first admission or drain — each accepted peer
+malformed upgrades until drain. Each accepted peer
 carries the absolute deadline armed at accept time, so a flood of
 queued upgrades cannot outlive it, and the loop settles in-flight
-workers under a bounded wait rather than admitting past drain. After
-EOF there is no replacement without the recovery proof of #577.
+workers under a bounded wait. A reconnect uses the existing binding and
+never creates a replacement Client instance.
 Revocation shuts a duplicated raw `TcpStream` — independent of any
 writer lock — which wakes a blocked WebSocket read exactly the way the
 Unix `shutdown` does. Close semantics mirror the Unix contract:
@@ -446,7 +558,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v2]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v8]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -508,13 +620,14 @@ pairs the `FileStamp` descriptor with an explicit `EntryKind`
 `fstatat` with `AT_SYMLINK_NOFOLLOW` through the retained
 `PackageDirectory` so a leaf symlink reports itself, never its target.
 `ClientRequest::ReadDirectory { relative_path, offset: u32,
-limit: u32, expected_revision }` is answered by `ClientReply::Directory
-{ revision, entries, next_offset }`: at most `limit` (never more than
+limit: u32, expected_revision, skip_hidden }` is answered by
+`ClientReply::Directory { revision, entries, next_offset, skipped }`: at most `limit` (never more than
 `MAX_DIRECTORY_PAGE_ENTRIES`, 128) `PageEntry` records carrying a
 sorted name plus its own `EntryStamp`, a directory `FileStamp`
 revision for the expected-revision check, and a continuation cursor
-that is exactly `offset + entries.len()` while a full page is
-delivered. For both, an empty `relative_path` names the workspace root
+that is exactly `offset + entries.len() + skipped` while a full page is
+consumed. Only Skill discovery may request hidden names be skipped. Those
+names still count toward both the cursor and the physical listing budget. For both, an empty `relative_path` names the workspace root
 itself — the only path that may; every other path is validated to
 normal components, intermediate symlinks are refused, and the Server
 side applies the same name discipline on the reply: strictly
@@ -527,6 +640,13 @@ the wire shape cannot honestly carry — a non-UTF-8 member — is
 reported `invalid` by the Client rather than emitted. Malformed replies — wrong cursor,
 unordered or illegal names, bad stamps — retire the stream and detach
 the binding exactly like a malformed `Range`.
+
+`ResolveResourceEntry` is used by Workspace Skill discovery. The Client
+resolves at most 32 links under the admitted directory using descriptor-relative
+metadata and link reads. Broken, cyclic and external targets are treated as
+missing. The reply carries the verified physical path relative to the
+admitted Workspace, its entry stamp and whether resolution crossed a link.
+Ordinary environment queries and file tools use their no-follow operations.
 
 ### Logical text pages (implemented)
 
@@ -896,7 +1016,11 @@ Server-created incarnation and checks the native source identity before
 and after attaching. `Watch::Poll` returns a coalesced, source-relative
 delta of at most 16 paths and 16 KiB of escaped path bytes. Each Client
 binding holds at most 32 observers. An unavailable or changed identity
-retires the observer with an empty resync hint.
+starts retirement. A poll that has yet to obtain native cleanup proof
+returns `Retiring` for the exact watch identity. The Client retains its
+slot while native cleanup is pending. A bound configuration observer
+resyncs on the first retirement notice and periodically while coverage
+remains incomplete. The final retired resync hint confirms slot release.
 
 `StopWatch` uses the independent control lane. Its exact keyed receipt
 distinguishes physical cleanup from an unknown result. A detached or
@@ -955,10 +1079,10 @@ connection. The 5-second save deadline is an independent finite budget for
 one optional save; it never extends the calling operation's remaining
 deadline and never re-arms on slow writes.
 
-## Frozen pending contracts
+## Operation and publication contracts
 
-These are normative shapes frozen by this ADR. They are not implemented in
-this layer, and code must not fake them.
+The Server and Client implement the following contracts on the negotiated
+execution binding.
 
 ### START: pre-execution atomic registration
 
@@ -984,6 +1108,64 @@ registration.
 
 ### Server → Client optional save
 
+The Client negotiates `ManagedOutput` and admits at most 16 candidates,
+17 MiB per file and 4,096 identities per binding. It appends validated,
+contiguous new bytes. Seal fixes the raw length and SHA-256. Publish
+makes the opaque locator readable only by the owning Conversation. Abort
+and expiry hold the file and quota until unlink is proved. Graceful data
+teardown and Revoke attempt cleanup. Offline cleanup after Client death
+requires physical-domain attestation. See the Hosted reception contract
+and [EXEC-03 evidence](exec-03-evidence.md).
+
+Both ordinary Hosted replies and validated uploads use the same result
+projection. The claimed business response fixes success or failure before
+Save is attempted. Text items are joined with one newline on the bounded
+preview and complete-output path, including empty items. A result exceeding
+the preview limit retains the exact Client locator if publication succeeds,
+or an unavailable continuation with the business result intact.
+
+### Client-owned stdio MCP
+
+The Server admits the configured source and freezes its credential resolution.
+An `Open` names one operation and its canonical source identity on the
+exact authenticated Session binding, then supplies the selected Client
+program, Workspace-relative cwd, explicit environment and allowed protocol
+versions. The parent validates the exact frozen SourceId grant of a
+delegated Open and uses that grant for tools, resources and replay checks. The Client validates the cwd in
+its Workspace, supervises the physical process and negotiates the physical MCP
+session. The control directory for both supervision sockets is private to the
+Client. Cancellation and the business START frame share the process gate.
+The Server receives the negotiated peer metadata and next unused request ID,
+then uses the existing ToolCall, Tasks and interaction owners. A process close
+is acknowledged only after supervision proves physical settlement. A transport
+failure after dispatch leaves the effect unknown and does not replay the call.
+A Receive that was refused before dispatch retains its existing sequence and
+offset. A delegated relay has a separate bounded reply budget to report such
+refusals after the physical dispatch budget expires.
+
+One effective capability generation admits up to eight Client-owned stdio
+sources, including Managed Python. A binding retains at most sixteen physical
+sessions and 4,096 stdio identities. This fits a complete candidate alongside
+its predecessor and lets admitted old leases finish before physical close.
+Retiring sessions and other callers still consume physical slots. A candidate
+that exceeds remaining physical capacity cannot displace a last-good source.
+A session has four queued outbound records of at most 512 KiB, one send in flight
+and a five-second physical send bound. The Client limits each inbound JSON
+record to 16 MiB before parsing. It retains one incoming queue entry, one
+pending record and one paged record. The Server assembles at most one 16 MiB
+record per receiving task, with a single item in the SDK input queue. Each
+execution page carries at most 64 KiB with checked sequence and offset. The
+wire encoding, parse allocations and transient serialization add to these
+payload budgets. Negotiation has a 20-second physical deadline and admission
+metadata is capped at 64 KiB. Startup failures can carry up to 64 KiB of
+complete UTF-8 stderr from the correlated process after physical settlement.
+Incomplete captures carry an explicit marker and no preview bytes. The
+Server redacts the complete text with the frozen source credentials before
+trimming or applying the final diagnostic bound. An absent binding provides
+no stdio capability.
+HTTP requests, their credentials and their network connection remain on the
+Server.
+
 Complete HTTP MCP and winning Host results may be saved into a
 Client-owned unpublished staging object under the owning namespace —
 never a Server/Host-chosen path. Chunks carry deterministic offsets;
@@ -1002,25 +1184,55 @@ never reopens.
 
 ### Host chunked results
 
-Four message semantics — `Begin`, `Chunk`, `End`, `Abort` — share the
-existing response arbitration with ordinary single-message results and
-errors. A candidate identity binds the Server incarnation, the original
-callback request/invocation, the Host connection/subscription
-incarnation, and an `UploadId`. `Begin` registers a bounded receiving
-state and never claims the response, never blocks other eligible Hosts.
-`Chunk` carries candidate identity, content item/order, exact offset, and
-bytes; it updates incremental length/digest/bounded preview and may flow
-into unpublished Client staging — it never aggregates the full text on
-the Server, never writes a Server file, never commits per-chunk
-canonical facts. `End` verifies envelope completeness, contiguous range,
-declared length, and the incremental digest, then performs exactly one
-claim attempt in the original lifecycle/correlation gate; the first
-complete valid result (or a contract-conformant complete JSON-RPC error)
-wins. `Abort` retires the candidate without a result. Winner-only
-publication; losers' uploads and staging are cancelled and cleaned by
-ownership, and losing paths are never published. Transport/integrity
-verification precedes claim; business-domain validation keeps its
-original post-claim order.
+App Server v81 includes `uploadScope` on each delivered `item/tool/call`.
+A Host combines that scope with the callback request ID, thread, turn, tool
+call and its own `UploadId` to address a candidate. Scope is specific to the
+receiving connection and subscription. Resubscription produces a new scope
+and invalidates the old one.
+
+`Begin` reserves receiver state. `Chunk` validates and appends bounded
+metadata, a digest and text preview. Identical replay of the last accepted
+chunk returns `duplicate: true` and leaves both counters and deadlines
+unchanged. `Abort` discards that receiver state. Each request gets a
+correlated `host_upload_accepted` acknowledgement or a typed
+`host_upload_rejected` error. Acknowledging a frame does not commit a
+canonical ToolResult.
+
+`End` verifies continuity, UTF-8, immutable descriptors, byte counts and
+digest before competing with ordinary JSON-RPC replies and errors at the
+original callback claim. The first eligible complete response wins. The
+normal tool runtime still validates and commits the result. A complete
+response that fails business validation keeps its original claim. As with
+ordinary replies, multiple Hosts may already have performed external work.
+
+The broker allows 32 live receive or handoff buffers, four active candidates
+per Host connection and eight per conversation and per Session. Each pending callback has
+up to eight recipient slots, including retired candidates. A new UploadId
+cannot reopen a slot under the same subscription. Admission stops at the
+first capacity limit. The receiver deadline is the earlier of 60 seconds
+from Begin and the invocation's fixed hard deadline. The idle budget is
+10 seconds from the last accepted new chunk. A frame for an expired
+candidate retires it. New Begin admission reaps expired candidates before
+checking active capacity. Detach, cancellation and callback resolution
+release their receiver state. The native invocation continues to own its own
+deadline and cancellation.
+
+The model receives at most 16 KiB of text. The preview keeps native newlines
+between items, including empty items. The digest and original-byte count use
+the unchanged wire items.
+
+Above the preview threshold the Server selects the Session's live
+`ManagedOutput` binding once. Four queued fragments per writer and a
+process-wide limit of sixteen writers bound the save transport. The save
+deadline is the earlier of five seconds from binding selection and the
+invocation hard deadline. It covers the prefix, continuation chunks, seal and
+publish. A full
+writer window abandons saving while the Host continues to send and verify
+its result. The native cancellation signal can cut both timelines earlier.
+Only the winner requests publication, and a confirmed reply allows Read and
+Grep through `/.rustx-output/import/` for the owning Conversation. Without
+confirmed publication the bounded preview carries `Unavailable`. The receiver
+creates no Server files and commits no durable record per chunk.
 
 ### Canonical byte layout and metadata
 
@@ -1041,54 +1253,26 @@ text, the only defined tag); `0x0000` is reserved and refused; every other
 tag is refused as unknown. Item order is significant and preserved; a
 zero-length item carries a header and no bytes. Independent upload-record
 budgets (not the transport frame limit, not the management limit): at most
-1024 items per result, 64 KiB raw per chunk, 1 MiB total per result. Immutable result
+1024 items per result, 64 KiB raw per chunk, 16 MiB raw total per result. The
+1 MiB fully encoded message limit still applies to every frame. Immutable result
 metadata — content-item count, per-item type and declared length — is
 fixed at `Begin`, verified again at `End`, and bounded. Chunk bytes
 append to the incremental digest; re-derived metadata never mutates the
 envelope.
 
-## Explicitly not claimed
+## Production routing and settlement
 
-- Host upload (EXEC-01, `item/tool/result/{begin,chunk,end,abort}`) is a
-  generated contract and fixtures only. `src/app_server/host_upload.rs`
-  defines the closed envelopes and a pure verifier; they are registered in
-  the public schema as unreachable definitions and the protocol parser does
-  not accept them. There is no receiver, no callback claim wiring, no
-  winner/loser arbitration, and no Host content storage (#578).
-
-- The remote transport is a real authenticated WebSocket channel with
-  identical record/Session semantics as the Unix socket, bound to
-  a loopback `wss` listener with a per-reservation pinned certificate or
-  an operator-provisioned `wss` ingress with a trusted local forwarding
-  hop. Recovery stays #577. The paired control lane —
-  health, `CancelMutation`, `Revoke` on an independent channel — is
-  implemented and exercised at member and endpoint level including
-  real physical congestion proofs; what remains open under T11 is
-  end-to-end proof at the product Agent-flow level (a real mid-commit
-  cancel raced against a live composed Client), not the mechanism.
-- Optional save (EXEC-01) is contract and fixtures only: `protocol::save`
-  defines `SaveRequest`/`SaveReply` on `ClientRequest::Save`/`ClientReply::Save`,
-  with a pure reference state machine and checked-in envelope fixtures
-  (`crates/execution-protocol/fixtures/save-envelopes.json`). The real Client
-  does not advertise managed output and answers every save message with
-  `Unavailable { code: capability-unavailable }`, touching no path,
-  allocation, or queue. No Host path or optional-save storage is
-  implemented here.
-- No MCP session, Python, managed output, or any file
-  operation beyond the range read, the two query operations, the
-  two-phase conditional write, the conditional edit, the two
-  logical-text page
-  operations, the bounded search, and the typed process-operation
-  family (`Register`/`Start`/`Query`/`OutputPage`/`WriteStdin`/
-  `CloseStdin`/`Resize`/`InputReceipt`/`ReleaseOutput` on
-  `ClientRequest::Process`, with `ControlRequest::CancelProcess` on
-  the control lane) exists
-  behind `Admission`;
-  `Binding::status()` is observation only, and a `Live` phase is a
-  connection fact, not an integration claim. `Capability::Files` and
-  everything it implies stay unadvertised until that capability lands.
-  The process family is consumed by exactly one product path —
-  the App Server's `command/exec` group — which registers one
+- The authenticated WebSocket and Unix socket transports use the same
+  Session, operation and recovery contracts. An independent control lane
+  carries health, process and mutation cancellation, and Revoke. The
+  Linux UI-detach test holds a data reply, occupies all four control slots
+  and verifies Client settlement and exact output release. The Client
+  file-publication test verifies the physical mutation cancellation cut.
+  The Hosted saturation test holds a Save reply while receiving Host
+  chunks and completing Client Health.
+- `Binding::status()` observes the connection. Dispatch depends on the
+  individual negotiated capability and the readiness of the named service.
+  App Server's `command/exec` registers one
   operation per UI `processId` on the Session's admitted endpoint,
   drives it through the typed exchanges on the data lane, and cancels
   it on the control lane; there is no Server-local spawn, PTY, or
@@ -1199,13 +1383,14 @@ envelope.
 - An authenticated connection has no implied configuration, MCP, or
   interpreter readiness. `WorkspacePythonStatus` reports only the Client's
   interpreter readiness under the separate `WorkspacePython` capability.
-- No Client instance replacement, generation increment, or death-cleanup
-  evidence path exists; a detached binding rejects every Hello with
-  `RecoveryRequired` until #577 lands.
+- Independent replacement after Client death or Server restart requires
+  physical-domain evidence beyond same-instance proof. An unresolved old
+  binding continues to exclude replacement admission.
 - The App Server reserves one endpoint from the Session catalog under the
   residency owner. The explicitly local Agent entry and the App Server's
   local execution option launch the trusted sibling over that same paired
-  Unix protocol. They pass an empty environment and seal standard I/O.
+  Unix protocol. They pass an allowlist for runtime discovery and seal
+  standard I/O.
   Normal shutdown confirms Client-side revocation, closes the data transport
   and reaps an owned sibling. A busy data exchange is interrupted by the
   binding fence.
@@ -1222,28 +1407,50 @@ envelope.
   allocating a binding. Authorized browsing works after Client admission
   even when Workspace configuration is invalid and Agent runtime attach
   fails. A missing current binding reports `ExecutionUnavailable`.
+- Session-authored inputs are optional `session_config` and
+  `session_resources` fields on `thread/start`. `session/inputsWrite`
+  uses the current Session settings revision to validate and persist either
+  or both fields as one candidate. Omitted fields retain their values.
+  Clearing a field reveals its lower sources. Activation follows the safe
+  configuration application boundary. Session-authored Workflows require
+  an explicit Session grant even when a lower definition had permission.
+  The settings read projection discloses presence only. Each field can
+  reference the saved input of an existing Session at its exact settings
+  revision in the same Workspace. Creation and editing resolve those
+  references as part of candidate capture, then validate the copied input
+  against the target Session.
+
 - Fresh App Server configuration capture for a reserved Session reads
-  `rustx.toml` through the authenticated Client. The Server uses the proven
+  `rustx.toml` and Workspace `AGENTS.md` through the authenticated
+  Client. The Server uses the proven
   root identity, a one-MiB whole-document limit, a five-second wire budget
   per capture, and the same stamped `ReadRange` chunks as other files. It
   verifies the document again before admission. The initial read alone
   can report absence. A disappearance mid-read is a conflict. Binding
   authority supplies the Workspace path without a Server-side Workspace
-  probe for that document. Capture waits for data admission within the
+  probe for either document. Capture waits for data admission within the
   same wire budget and runs outside the configuration publication lock.
   Publication rechecks the current binding and source generations.
   The Server parses and authorizes the document, combines it with User
-  policy, and applies native units. The path-keyed Session-creation
-  catalog, authored resource discovery, and automatic source watching
-  still use Server-authored inputs. Cold loading and explicit Workspace
-  reconciliation can use an authenticated binding when its logical path
-  is absent on the Server. Workspace-authored resources remain a separate
-  discovery source. Once admitted, its directory identity stays part of
-  the Session's authority. Loss or replacement fails resource adoption
-  while independent policy can still apply. Explicit unavailable resource
-  selections have their own diagnostics, and reconciliation tracks each Client capture in its
-  own Session scope. Host resource snapshots and remote
-  resource discovery are tracked in [#578](https://github.com/Caismis/rustX/issues/578).
+  policy, and applies native units. Bound runtime capture reads Workspace
+  MCP declarations, Agent TOML, Workflow YAML, and Skill discovery inputs
+  through that same Client. Agent and Workflow collections use stamped
+  directory pages and bounded file reads. The Server rechecks each
+  collection before publication and retains the adopted generation when a
+  definition changes during capture. Cold loading and explicit Workspace
+  reconciliation can succeed with no corresponding directory on the Server.
+  After Server restart, the durable physical claim still controls Workspace
+  authority. While it awaits settlement, cold attach and Session input
+  validation report the source unavailable. Standalone submission applies
+  the same physical fence before composing a live runtime. Cold history
+  and settings reads continue to use Server-owned records.
+  The Server still owns its User sources and the path-keyed Session-creation
+  catalog. Bound Workspace observation uses Client descriptor watches
+  with a separate 128-slot budget. The observed paths come from the
+  configuration layout and Skill discovery. Coalesced hints and coverage
+  loss cause a fresh capture fenced by the endpoint and application ticket.
+  [EXEC-02](exec-02-evidence.md) records Client-owned Managed Python source
+  discovery and same-instance reconnection.
 - Agent tools resolve the binding through a non-owning
   `SessionExecutionScope`. The physical side performs bounded line,
   search and document work and returns the verified projection. Artifact
@@ -1251,6 +1458,70 @@ envelope.
   Data exchanges share the endpoint's finite permits and absolute deadline.
   Malformed or lost replies retire the pair when framing or ownership
   becomes uncertain.
+
+### Managed Python sources and stdio
+
+Execution revision 4 adds a typed `PythonSource` data exchange and an
+optional exact source key on the existing stdio MCP launch. Revision 3
+peers are rejected before paired admission or business dispatch. The
+Server can list logical names, capture an authored package, observe and
+prepare its frozen identity, and release that capture. Package contents,
+interpreter paths, uv output and the Store stay on Client. The capture
+reply returns only a content digest and bounded authorization TOML. Missing
+collections, observed invalid shapes and transport failures remain distinct.
+
+Execution revision 5 adds `ReadSavedOutputRange`. It checks the same
+Conversation and published locator as the line and Grep requests. Reusing
+the verified range reply caps each fetch at 50 KiB. Native Read exposes
+`byte_offset` for saved outputs and resumes at a complete UTF-8 boundary.
+Revision 4 peers are refused before either lane admits business work.
+
+Execution revision 6 returns the contained symlink paths verified during
+resource resolution. Each reply carries at most 32 hops of up to 4,096
+UTF-8 bytes each. An unresolved resource can also name the first absent or
+obstructed component beneath a verified Workspace directory. Configuration
+watches cover these paths, the intermediate links, and the resolved ignore-file
+target.
+
+Execution revision 7 adds source IDs to stdio MCP Open, typed watch
+retirement, and bounded directory dependencies to Python capture receipts.
+Client package coverage includes the package root and all observed nested
+directories up to 128 paths and 16 KiB of escaped path bytes. If full
+coverage cannot be registered, the configuration observer periodically
+recaptures.
+
+Execution revision 8 adds typed startup stderr evidence to stdio MCP.
+Both lanes reject revision 7 before dispatch.
+
+Each capture key includes the original Session binding identity. The Client
+allows at most 128 names per authored scope, 256 retained capture identities,
+four capture workers and four preparation workers per binding. A capture is
+limited to 512 MiB and the binding to 1 GiB of frozen inputs. A stdio launch
+can name a prepared identity and its negotiation versions. An exact managed
+launch supplies no caller program, cwd, environment or argv. The Client runs
+FastMCP in the bound Workspace cwd with its own prepared venv and sealed
+source path. The same stdio connection and cleanup protocol handles the
+process. A delegated child receives a source key for the parent's frozen
+launch and its authorized tool names. The parent relay owns the physical
+stdio session and validates the child launch bytes.
+
+The Client environment Store is under its trusted `XDG_DATA_HOME` or
+`HOME/.local/share` and disjoint from the Workspace and Client scratch. Its
+fingerprint includes package identity, selected relative paths and exact
+bytes, Client Python and uv path/version, pinned FastMCP and OS/architecture.
+Permissions stay attached to the current candidate and outside the fingerprint.
+The Store verifies the manifest, source bytes and launch interpreter before
+reuse. Within one Client, overlapping builds of one fingerprint attach to
+a stable coordinator. Independent Clients share only the on-disk result and
+publish with an exclusive rename under the cancellation grant. Losing
+staging directories are owned by the preparing Client. Published environments
+outlive Session deletion. Revocation waits for the actual physical workers,
+source cleanup and stdio settlement before confirming the binding.
+
+Workflow tool catalogs can name the exact admitted Session for physical
+listing. A Workspace catalog checks its authored target against that Session's
+authorized logical Workspace before reading declarations or listing tools.
+The authoring catalog can still show inert names without a binding.
 
 ### Root, Subagent and Workflow dispatch
 
@@ -1480,26 +1751,38 @@ Optional O-SUM (only if explicitly selected; not a release gate):
 
 ## Verification
 
-Commands for this layer (run from the repository root):
+Workspace verification commands from the repository root. Prepare matching
+native test artifacts as described in the [test guide](../tests/README.md).
+The native preparation wrapper takes a single Cargo package per invocation.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy -p rustx-execution-client -p rustx-execution-server -p rustx-execution-protocol -p rustx-confined-fs --all-targets --locked -- -D warnings
-cargo test -p rustx-execution-client -p rustx-execution-server -p rustx-execution-protocol -p rustx-confined-fs --locked
-cargo check -p rustx --all-targets --all-features --locked
-cargo tree -p rustx-execution-client -e normal --locked
-cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
+cargo check --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+cargo test --workspace --all-features --doc --locked
+cargo build --workspace --bins --release --locked
+pnpm --dir protocol/app-server check
+pnpm --dir protocol/app-server typecheck
 ```
 
-Distinct mount-view evidence (Linux, opt-in, requires bubblewrap — a
-read-only T02 fragment, not a CI gate). One script runs both proofs:
-the boundary-layer RPC and the product-entrance composition:
+The independent builds use `cargo build -p rustx --bin rustx --release
+--locked` and `cargo build -p rustx-execution-client --bin
+rustx-execution-client --release --locked`. Compare their production
+dependencies with `cargo tree -p rustx --edges normal --locked` and
+`cargo tree -p rustx-execution-client --edges normal --locked`.
+The repository's [test guide](../tests/README.md) describes the actual
+FULL jobs and Merge verification.
+
+The opt-in Linux mount script requires Bubblewrap. It runs the standalone
+Client proof and the App Server composition, including native Read,
+Write, Bash, Managed Python, stdio MCP, configuration and child routing.
 
 ```sh
 test-support/prove_execution_mount_view.sh
 ```
 
-Landed evidence: canonical generation parsing; exact credential wire
+Initial EXEC-01 evidence: canonical generation parsing; exact credential wire
 form with redaction and no echo in errors; workspace normalization; the
 credential verifier checked before any field probe; literal `OsStr`
 workspace comparison rejecting `/work//root`; wrong-field rejection
@@ -1574,7 +1857,7 @@ stdin bytes and close, resize, cap/timeout, output-before-final
 ordering, UI detach cancelling only the issuing connection's
 operation, host drain cancelling commands before waiting for request
 settlement, and `revocation_before_native_start` — the Server-side
-dispatch hold plus the supervisor's own diagnostics trace proving
+dispatch hold plus the business process's own marker and PID proving
 zero business spawn when revocation wins and exactly one when START
 does. This is a T05 fragment (cancel before dispatch → zero
 execution) and the first T29 implementation evidence (UI-direct
@@ -1582,12 +1865,10 @@ commands create no Attempt; disconnect cleans only the issuing
 connection's operations); the process kernel's independent build and
 the supervisor-helper staging are a further T24 fragment, with Agent
 Server retains canonical Bash settlement and projection.
-T03/T24/T28's connection-singularity,
-dependency-boundary, and cross-instance rejection portions and T42's
-bounded-read portion have their first coverage here; the remainder of
-the matrix is pending in its owning layer. The process-owned Session
-claim adds a further limited T03/T28 fragment — registry-level proof
+These cases establish initial T03/T24/T28 connection-singularity,
+dependency-boundary and cross-instance rejection proofs, and T42
+bounded-read evidence. The process-owned Session claim adds registry proof
 that one claimant wins preparation, that a dropped waiter never strands
 the claim, that two Sessions never share binding material, and that
-delete/drain revokes — but it dispatches no work and proves no recovery,
-so the full contracts stay pending in their owning layers.
+delete and drain revoke. The three evidence ledgers above record the
+product execution and recovery proofs and the verification results.

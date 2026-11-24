@@ -4,7 +4,7 @@ This is the implementation contract for issue #532. The implementation base is
 `4ecd28b8834d91566404ccc24a601ba7cf2e9b7d`. The reference is OpenAI Codex
 `rust-v0.166.0`, resolved to immutable commit
 `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
-The public protocol is App Server v80, with Runtime Client v87, Session catalog
+The public protocol is App Server v81, with Runtime Client v87, Session catalog
 v20, SQLite v114 and Runtime Manifest v5. Earlier protocols and storage layouts
 are rejected; there is no compatibility reader or alternate gateway.
 
@@ -68,7 +68,7 @@ network credential flags are rejected for stdio. Initialize does not authenticat
   `now >= nbf - skew`. Additional role/scope/Thread claims grant no permission tier.
 
 A native client sends `Authorization: Bearer <credential>`. A browser offers
-`rustx.app-server.v80` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
+`rustx.app-server.v81` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
 with RFC 4648 URL-safe Base64 and omit padding; native Authorization sends the
 original bytes. There is no raw-token subprotocol alternative. Both reach the same verifier.
 The server selects only the normal protocol, never echoes the secret, and rejects
@@ -189,6 +189,13 @@ retires RPC correlation; native recovery records interrupted external effects as
 unknown, without replaying a Host invocation or automatically resending a model
 request. Restart recovery and live pending-request replay are different operations.
 
+An application can also submit a large UTF-8 result with
+`item/tool/result/{begin,chunk,end,abort}` using the `uploadScope` in
+its copy of `item/tool/call`. A verified End competes in the same
+complete-response arbitration as a single-message reply or error.
+
+See [chunked result identity, limits and preview behavior](../execution-protocol.md#host-chunked-results).
+
 ## Existing clients and standalone example
 
 WebUI and TUI retain their existing controls, draft/focus ownership and layouts.
@@ -206,8 +213,8 @@ cargo run --all-features --bin rustx -- app-server --listen ws://127.0.0.1:8787 
 node examples/app-server/connect.mjs ws://127.0.0.1:8787/ /absolute/socket-token
 ```
 
-It connects, initializes v80 and prints the read-only `server/info` result. It is
-not an SDK or a second demo application. Rust-derived `v80.schema.json`, `v80.ts`
+It connects, initializes v81 and prints the read-only `server/info` result. It is
+not an SDK or a second demo application. Rust-derived `v81.schema.json`, `v81.ts`
 and fixtures are generated together; product clients validate server output apart
 from the generic client-response envelope so arbitrary callback results cannot
 weaken native server-response validation.

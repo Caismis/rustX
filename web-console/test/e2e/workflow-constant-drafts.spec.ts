@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { payloadCatalog } from './workflow-mcp-catalog';
 import { parse } from 'yaml';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -65,8 +65,8 @@ for (const kind of ['object', 'literal'] as const) test(`catalog JSON payloads u
     const directory = join(fixture.workspaceA, '.agents/workflows');
     mkdirSync(directory, { recursive: true });
     const file = join(directory, 'json_payload.yaml');
-    const server = fileURLToPath(new URL('./workflow-json-mcp.py', import.meta.url));
-    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.json_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(server)}]\n`);
+    const url = await fixture.serveMcpCatalog(payloadCatalog);
+    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.json_fixture]\nurl = "${url}"\n`);
     writeFileSync(file, JSON.stringify({ description: 'Catalog payload projection', block: {
       input: { type: 'object', properties: {}, additionalProperties: false },
       nodes: { start: { type: 'start' }, payload: { type: 'tool', selector: { origin: 'source', source_id: 'json_fixture', name: 'accept_payload' },
@@ -111,8 +111,8 @@ test('a resolved catalog preserves constructed object and array parameters with 
     const ref = { type: 'reference', path: ['args', 'token'] };
     const metadata = { type: 'object', fields: { x: ref, values: { type: 'array', items: [ref] } } };
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
-    const server = fileURLToPath(new URL('./workflow-json-mcp.py', import.meta.url));
-    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.json_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(server)}]\n`);
+    const url = await fixture.serveMcpCatalog(payloadCatalog);
+    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.json_fixture]\nurl = "${url}"\n`);
     const file = join(directory, 'constructed_params.yaml');
     writeFileSync(file, JSON.stringify({ description: 'Constructed Tool parameters', block: {
       input: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'], additionalProperties: false },

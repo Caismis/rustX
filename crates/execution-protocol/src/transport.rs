@@ -11,6 +11,21 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
+/// Returns whether lane I/O failure can be reconciled by a fresh authenticated
+/// pair. Malformed records and explicit protocol refusals are terminal.
+#[must_use]
+pub fn recoverable_lane_loss(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+    )
+}
+
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(unix)]
@@ -37,7 +52,7 @@ pub const LOCAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// carrying a receipt or following a delivered request polls
 /// immediately — the period only paces idle traffic, so it is never a
 /// busy-loop and never blocks commands behind a sleep.
-pub const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The normal control-frame deadline, including idle Client polling.
 /// An in-flight Revoke uses its absolute command deadline for the

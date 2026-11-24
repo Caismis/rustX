@@ -23,8 +23,10 @@
 //! supervisor helpers with instrumentation. The product tool registration
 //! has no branch selecting those fixtures.
 
+#[cfg(any(test, feature = "test-support"))]
 mod capture;
 mod executor;
+#[cfg(any(test, feature = "test-support"))]
 mod fixture;
 pub(crate) mod handoff;
 mod input;
@@ -66,6 +68,7 @@ pub(super) fn output_schema() -> serde_json::Value {
 /// Constructs the explicitly trusted executor used by external regression
 /// fixtures. The `BashTool` wiring stays root-owned; the fixture control
 /// itself is the supervisor package's physical diagnostics contract.
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[must_use]
 pub fn fixture_executor(

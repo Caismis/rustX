@@ -488,7 +488,7 @@ impl ProcessSpec {
 }
 
 /// The publishable lifecycle state of one operation. `Running` may be
-/// published only after physical START (or a stronger actual witness);
+/// published only after the Client's physical START grant has crossed;
 /// `Exited` comes only from an actual process event — a terminal state is
 /// never claimed early.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,7 +498,7 @@ pub enum OperationState {
     Registered,
     /// START admitted at the Server; physical spawn not yet witnessed.
     Starting,
-    /// Physical START observed — the actual spawn witness.
+    /// The supervisor received the complete physical START grant.
     Running,
     /// The process exited; drain/reap not yet settled.
     Exited {

@@ -535,7 +535,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v2"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v8"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -688,14 +688,14 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 }
 
 #[test]
-fn revision_one_cannot_admit_either_lane_in_revision_two() {
+fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 8);
     let (binding, credential) = Binding::reserve(reservation()).unwrap();
     let hello = valid_hello(&credential);
     let mut old = hello.clone();
-    old.version = 1;
+    old.version = 7;
     let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
     write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
     write_record(
@@ -742,9 +742,9 @@ fn revision_one_cannot_admit_either_lane_in_revision_two() {
         Err(Reject::UnsupportedVersion)
     );
     assert_eq!(binding.status().phase, BindingPhase::Reserved);
-    // Only a matched revision-two pair can yield a business dispatch lane.
+    // Only a matched pair on the current revision can admit business work.
     let connection = pair_control_half(&binding, &hello, &challenge);
-    assert_eq!(connection.admission().version, 2);
+    assert_eq!(connection.admission().version, PROTOCOL_VERSION);
     assert_eq!(binding.status().phase, BindingPhase::Live);
 }
 
@@ -1046,7 +1046,7 @@ fn pairing_commit_refuses_data_eof_before_the_watchdog_can_run() {
     let (binding, hello) = reserved(required());
     let (data_peer, data_stream) = UnixStream::pair().unwrap();
     let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    let (challenge, attempt, _) = binding
+    let (challenge, attempt, _, _) = binding
         .allocate_pending(&hello, ConnectionId::new("pending"), deadline)
         .unwrap()
         .unwrap();
@@ -1232,6 +1232,57 @@ fn a_prewire_invalid_output_bound_leaves_the_pair_healthy() {
 }
 
 #[test]
+fn a_pending_watch_retirement_keeps_the_data_lane_open() {
+    let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+    let (mut connection, mut peer) = live(&binding, &hello);
+    let leaf = WatchId::new(NonZeroU64::MIN);
+    let directory = WatchId::new(NonZeroU64::new(2).unwrap());
+    let retired = WatchChange {
+        id: leaf,
+        changed_paths: Vec::new(),
+        resync_required: true,
+        retired: true,
+    };
+    let active = WatchChange {
+        id: directory,
+        changed_paths: vec!["directory/new".into()],
+        resync_required: false,
+        retired: false,
+    };
+    let expected = [
+        (leaf, WatchReply::Retiring { id: leaf }),
+        (directory, WatchReply::Changed(active.clone())),
+        (leaf, WatchReply::Changed(retired.clone())),
+    ];
+    let answers = thread::spawn(move || {
+        for (id, reply) in expected {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Watch(WatchRequest::Poll { id }));
+            write_record(&mut peer, &ClientReply::Watch(reply)).unwrap();
+        }
+        let request: ClientRequest = read_record(&mut peer).unwrap();
+        assert_eq!(request, ClientRequest::Ping);
+        write_record(&mut peer, &ClientReply::Pong).unwrap();
+    });
+    let retiring = connection.poll_watch(leaf, Path::new("leaf")).unwrap_err();
+    assert_eq!(retiring.kind(), io::ErrorKind::WouldBlock);
+    assert!(retiring.get_ref().unwrap().is::<crate::WatchRetiring>());
+    assert_eq!(
+        connection
+            .poll_watch(directory, Path::new("directory"))
+            .unwrap(),
+        active
+    );
+    assert_eq!(
+        connection.poll_watch(leaf, Path::new("leaf")).unwrap(),
+        retired
+    );
+    connection.ping().unwrap();
+    answers.join().unwrap();
+    assert_eq!(binding.status().phase, BindingPhase::Live);
+}
+
+#[test]
 fn a_size_contradiction_retires_the_stream_and_detaches_the_binding() {
     let (binding, hello) = reserved(BTreeSet::from([
         Capability::Connection,
@@ -1341,6 +1392,7 @@ fn an_out_of_order_directory_reply_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("b"), entry("a")],
                 next_offset: None,
@@ -1376,6 +1428,7 @@ fn a_directory_reply_with_a_wrong_cursor_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a"), entry("b")],
                 next_offset: Some(offset + 99),
@@ -1411,6 +1464,7 @@ fn a_nul_directory_name_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a\0b"), entry("a\u{1f}")],
                 next_offset: None,
@@ -1449,6 +1503,7 @@ fn a_directory_reply_past_the_name_cap_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a")],
                 next_offset: Some(cap),
@@ -1482,6 +1537,7 @@ fn a_directory_reply_past_the_name_cap_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a")],
                 next_offset: None,
@@ -1518,6 +1574,7 @@ fn a_directory_page_ending_exactly_at_the_name_cap_is_legitimate() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("a"), entry("b")],
                 next_offset: None,
@@ -1550,6 +1607,7 @@ fn a_dot_segment_directory_name_retires_the_stream() {
         write_record(
             &mut peer,
             &ClientReply::Directory {
+                skipped: 0,
                 revision: "a".repeat(64),
                 entries: vec![entry("..")],
                 next_offset: None,
@@ -3232,7 +3290,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v2"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v8"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {
@@ -3628,7 +3686,7 @@ fn a_replayed_or_crossed_pairing_nonce_never_pairs() {
 fn a_verified_control_hello_waits_for_the_in_flight_channel_store() {
     let (binding, hello) = reserved(required());
     let deadline = Instant::now() + Duration::from_secs(10);
-    let (nonce, attempt, _admission) = binding
+    let (nonce, attempt, _admission, _) = binding
         .allocate_pending(&hello, ConnectionId::new("data-1"), deadline)
         .unwrap()
         .expect("the honest data Hello opens an attempt");
@@ -3805,4 +3863,373 @@ fn a_lost_control_lane_detaches_the_pair_and_blocks_new_dispatch() {
     assert_eq!(binding.status().phase, BindingPhase::Detached);
     assert!(connection.ping().is_err() || binding.control().is_none());
     drop(connection);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Keep all three cuts on the same authenticated recovery path.
+fn revoke_lane_cuts_keep_only_the_original_cleanup_authority() {
+    enum Cut {
+        Queued,
+        Selected,
+        Sent,
+    }
+
+    fn admit(
+        binding: &Binding,
+        hello: &Hello,
+    ) -> (LocalConnection, UnixStream, UnixStream, PairingNonce) {
+        let (mut data, data_server) = UnixStream::pair().unwrap();
+        write_record(&mut data, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(data_server).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let challenge = read_record::<DataHelloReply>(&mut data)
+            .unwrap()
+            .unwrap()
+            .challenge;
+        let (mut control, control_server) = UnixStream::pair().unwrap();
+        control
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write_record(&mut control, &control_hello(hello, challenge.clone())).unwrap();
+        let ChannelAccept::Live(connection) = binding.accept_local(control_server).unwrap() else {
+            panic!("admit both authenticated lanes");
+        };
+        read_record::<ControlHelloReply>(&mut control)
+            .unwrap()
+            .unwrap();
+        (connection, data, control, challenge)
+    }
+
+    for cut in [Cut::Queued, Cut::Selected, Cut::Sent] {
+        let (binding, launch) = reserved(BTreeSet::from([Capability::Connection]));
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let fence = binding.retain_recovery_fence(&root).unwrap();
+        let (mut old, _data, mut control, challenge) = admit(&binding, &launch);
+        let handle = binding.control().unwrap();
+        let mut recovery = launch.clone();
+        recovery.credential = launch.credential.recovery_credential(&challenge);
+        binding.begin_revocation();
+        assert_eq!(
+            old.ping().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let limit = Instant::now() + Duration::from_secs(5);
+        thread::scope(|scope| {
+            let revoked = scope.spawn(|| binding.settle_revocation_by(limit));
+            while handle.shared.lock().queue.is_empty() {
+                assert!(Instant::now() < limit);
+                thread::yield_now();
+            }
+            if matches!(cut, Cut::Queued) {
+                drop(control);
+            } else {
+                let (enter, selected) = mpsc::channel();
+                let (resume, release) = mpsc::channel();
+                if matches!(cut, Cut::Selected) {
+                    *handle.shared.before_revoke_send.lock().unwrap() = Some((enter, release));
+                }
+                write_record(
+                    &mut control,
+                    &ControlPoll {
+                        sequence: 1.into(),
+                        receipt: None,
+                        health: 91.into(),
+                    },
+                )
+                .unwrap();
+                if matches!(cut, Cut::Selected) {
+                    selected.recv_timeout(Duration::from_secs(3)).unwrap();
+                    drop(control);
+                    resume.send(()).unwrap();
+                } else {
+                    let turn: ControlTurn = read_record(&mut control).unwrap();
+                    assert_eq!(turn.request, Some(ControlRequest::Revoke));
+                    drop(control);
+                }
+            }
+            assert!(revoked.join().unwrap().is_err());
+        });
+        assert!(binding.may_recover());
+        assert!(binding.awaiting_revocation_recovery());
+        assert!(!binding.revocation_confirmed());
+        assert!(binding.release_recovery_fence(&fence).is_err());
+
+        let (mut current, _data, control, _) = admit(&binding, &recovery);
+        assert_ne!(old.connection_id(), current.connection_id());
+        assert_eq!(
+            current.ping().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        thread::scope(|scope| {
+            scope.spawn(move || control_peer_loop(&mut RecordChannel::unix(control)));
+            binding
+                .settle_revocation_by(Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            binding.fence().shutdown();
+        });
+        assert!(binding.revocation_confirmed());
+        assert!(!binding.awaiting_revocation_recovery());
+        binding.release_recovery_fence(&fence).unwrap();
+    }
+}
+
+#[test]
+fn recovery_marker_requires_the_exact_settled_binding_owner() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (original, _) = Binding::reserve(reservation()).unwrap();
+    let fence = original.retain_recovery_fence(&root).unwrap();
+    assert!(original.release_recovery_fence(&fence).is_err());
+
+    let (impostor, _) = Binding::reserve(reservation()).unwrap();
+    impostor.settle_revocation_by(Instant::now()).unwrap();
+    assert!(impostor.release_recovery_fence(&fence).is_err());
+    assert_eq!(
+        impostor.retain_recovery_fence(&root).err().unwrap().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+
+    original.settle_revocation_by(Instant::now()).unwrap();
+    original.release_recovery_fence(&fence).unwrap();
+    assert!(impostor.retain_recovery_fence(&root).is_ok());
+}
+
+#[test]
+fn lost_live_binding_does_not_release_its_durable_recovery_marker() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (original, credential) = Binding::reserve(reservation()).unwrap();
+    let fence = original.retain_recovery_fence(&root).unwrap();
+    original
+        .connect(&valid_hello(&credential), ConnectionId::new("original"))
+        .unwrap();
+    assert!(original.settle_revocation_by(Instant::now()).is_err());
+    original.revoke();
+    assert!(original.release_recovery_fence(&fence).is_err());
+    drop((original, fence));
+    let (new, _) = Binding::reserve(reservation()).unwrap();
+    assert_eq!(
+        new.retain_recovery_fence(&root).err().unwrap().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn independent_domain_receipt_retires_only_the_original_session_incarnation() {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    fn place_receipt(path: &Path, token: &[u8; 32]) {
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+            .write_all(token)
+            .unwrap();
+    }
+
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().canonicalize().unwrap();
+    let original = reservation();
+    let session = original.session.clone();
+    let (owner, _) = Binding::reserve(original).unwrap();
+    assert!(!RecoveryFence::session_pending(&root, &session).unwrap());
+    let retained = owner.retain_recovery_fence(&root).unwrap();
+    let grant = retained.arm_local_domain().unwrap();
+    let mut replacement = reservation();
+    replacement.instance = ClientInstanceId::new("replacement");
+    replacement.generation = Generation::new(NonZeroU64::new(2).unwrap());
+    let (next, _) = Binding::reserve(replacement).unwrap();
+    assert_erred_on_unconfirmed(&next, &root);
+
+    place_receipt(grant.receipt(), &[0; 32]);
+    assert_erred_on_unconfirmed(&next, &root);
+    std::fs::remove_file(grant.receipt()).unwrap();
+    place_receipt(grant.receipt(), grant.token());
+    assert!(RecoveryFence::session_pending(&root, &session).unwrap());
+    assert!(
+        grant.receipt().exists(),
+        "observation must not consume a receipt"
+    );
+    RecoveryFence::require_session_settled(&root, &session).unwrap();
+    assert!(!grant.receipt().exists());
+    assert!(!RecoveryFence::session_pending(&root, &session).unwrap());
+    let next_fence = next.retain_recovery_fence(&root).unwrap();
+    let next_grant = next_fence.arm_local_domain().unwrap();
+    place_receipt(next_grant.receipt(), grant.token());
+    assert_eq!(
+        RecoveryFence::require_session_settled(&root, &session)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn assert_erred_on_unconfirmed(next: &Binding, root: &Path) {
+    match next.retain_recovery_fence(root) {
+        Ok(_) => panic!("an unconfirmed binding admitted a replacement"),
+        Err(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
+    }
+}
+
+#[test]
+fn host_cutoff_rejects_an_already_delivered_revoke_receipt() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (binding, launch) = reserved(BTreeSet::from([Capability::Connection]));
+    let fence = binding.retain_recovery_fence(&root).unwrap();
+    let (mut data, data_server) = UnixStream::pair().unwrap();
+    write_record(&mut data, &PeerHello::Data(launch.clone())).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_server).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let challenge = read_record::<DataHelloReply>(&mut data)
+        .unwrap()
+        .unwrap()
+        .challenge;
+    let (mut control, control_server) = UnixStream::pair().unwrap();
+    control
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write_record(&mut control, &control_hello(&launch, challenge)).unwrap();
+    let ChannelAccept::Live(_connection) = binding.accept_local(control_server).unwrap() else {
+        panic!("admit both lanes");
+    };
+    read_record::<ControlHelloReply>(&mut control)
+        .unwrap()
+        .unwrap();
+    let handle = binding.control().unwrap();
+    let (entered, confirmation_pending) = mpsc::channel();
+    let (resume, proceed) = mpsc::channel();
+    *handle.shared.before_revoke_confirmation.lock().unwrap() = Some((entered, proceed));
+    let command_deadline = Instant::now() + Duration::from_secs(5);
+    thread::scope(|scope| {
+        let settling = scope.spawn(|| binding.settle_revocation_by(command_deadline));
+        while handle.shared.lock().queue.is_empty() {
+            assert!(Instant::now() < command_deadline, "Revoke was not queued");
+            thread::yield_now();
+        }
+        write_record(
+            &mut control,
+            &ControlPoll {
+                sequence: 1.into(),
+                receipt: None,
+                health: 11.into(),
+            },
+        )
+        .unwrap();
+        let turn: ControlTurn = read_record(&mut control).unwrap();
+        assert_eq!(turn.request, Some(ControlRequest::Revoke));
+        write_record(
+            &mut control,
+            &ControlPoll {
+                sequence: 2.into(),
+                receipt: Some(ControlReply::Revoked),
+                health: 12.into(),
+            },
+        )
+        .unwrap();
+        let pending = confirmation_pending
+            .recv_timeout(command_deadline.saturating_duration_since(Instant::now()));
+        binding.begin_revocation_by(Instant::now());
+        let _ = resume.send(());
+        pending.expect("the worker parsed the original Revoked receipt");
+        assert!(
+            Instant::now() < command_deadline,
+            "the old command deadline is still open"
+        );
+        assert_eq!(
+            settling.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+    });
+    assert!(!binding.revocation_confirmed());
+    binding.revoke();
+    assert!(binding.release_recovery_fence(&fence).is_err());
+    assert!(RecoveryFence::session_pending(&root, &launch.session).unwrap());
+}
+
+#[test]
+fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (binding, launch) = reserved(BTreeSet::from([Capability::Connection]));
+    let fence = binding.retain_recovery_fence(&root).unwrap();
+
+    let (data_1, data_server_1) = UnixStream::pair().unwrap();
+    let mut data_1 = RecordChannel::unix(data_1);
+    let encoded = encode_record(&PeerHello::Data(launch.clone())).unwrap();
+    data_1.send(&encoded, None).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_server_1).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let DataHelloReply::Ok(admission) = data_1.receive(None).unwrap() else {
+        panic!("expected data admission");
+    };
+    let mut recovery = launch.clone();
+    recovery.credential = launch.credential.recovery_credential(&admission.challenge);
+
+    let (ctrl_1, ctrl_server_1) = UnixStream::pair().unwrap();
+    let mut ctrl_1 = RecordChannel::unix(ctrl_1);
+    let encoded = encode_record(&control_hello(&launch, admission.challenge)).unwrap();
+    ctrl_1.send(&encoded, None).unwrap();
+    let ChannelAccept::Live(_conn_1) = binding.accept_local(ctrl_server_1).unwrap() else {
+        panic!("expected live pair");
+    };
+    let ControlHelloReply::Ok(_) = ctrl_1.receive(None).unwrap() else {
+        panic!("expected control admission");
+    };
+
+    // Lose the pair cleanly; the instance recovery window is still open.
+    drop((data_1, ctrl_1));
+    let wait_detach = Instant::now() + Duration::from_secs(5);
+    while binding.status().phase == BindingPhase::Live {
+        assert!(Instant::now() < wait_detach, "pair did not detach");
+        thread::yield_now();
+    }
+    binding.begin_revocation();
+    assert!(binding.may_recover());
+    assert!(binding.awaiting_revocation_recovery());
+
+    // First half of recovery pairing arrives BEFORE the cutoff.
+    let (mut data_2, data_server_2) = UnixStream::pair().unwrap();
+    write_record(&mut data_2, &PeerHello::Data(recovery.clone())).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_server_2).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let DataHelloReply::Ok(recovery_admission) = read_record(&mut data_2).unwrap() else {
+        panic!("expected recovery data admission before cutoff");
+    };
+
+    // Tighten the Host cutoff only after the data half is admitted.
+    binding.begin_revocation_by(Instant::now());
+    let (mut ctrl_2, ctrl_server_2) = UnixStream::pair().unwrap();
+    write_record(
+        &mut ctrl_2,
+        &control_hello(&recovery, recovery_admission.challenge),
+    )
+    .unwrap();
+    assert!(matches!(
+        binding.accept_local(ctrl_server_2).unwrap(),
+        ChannelAccept::Rejected(Reject::Revoked)
+    ));
+    let reply: ControlHelloReply = read_record(&mut ctrl_2).unwrap();
+    assert_eq!(reply, ControlHelloReply::Err(Reject::Revoked));
+    assert!(!binding.may_recover());
+    assert!(!binding.awaiting_revocation_recovery());
+    assert!(binding.release_recovery_fence(&fence).is_err());
+    assert!(
+        RecoveryFence::session_pending(&root, &reservation().session).unwrap(),
+        "durable recovery fence stays on disk when cutoff expires unconfirmed"
+    );
 }

@@ -636,15 +636,31 @@ async fn exchange_until(
     request: ProcessRequest,
     deadline: std::time::Instant,
 ) -> Exchange {
-    let endpoint = endpoint.clone();
-    let result = tokio::task::spawn_blocking(move || match request {
-        ProcessRequest::InputReceipt {
-            abandon_pending: true,
-            ..
-        } => endpoint.finish_input_receipt_by(&request, deadline),
-        _ => endpoint.process_until(&request, deadline),
-    })
-    .await;
+    let request = Arc::new(request);
+    let result = loop {
+        let wire_endpoint = endpoint.clone();
+        let wire_request = request.clone();
+        let outcome = tokio::task::spawn_blocking(move || match wire_request.as_ref() {
+            ProcessRequest::InputReceipt {
+                abandon_pending: true,
+                ..
+            } => wire_endpoint.finish_input_receipt_by(&wire_request, deadline),
+            _ => wire_endpoint.process_until(&wire_request, deadline),
+        })
+        .await;
+        if !matches!(request.as_ref(), ProcessRequest::Start { .. })
+            && outcome.as_ref().is_ok_and(|reply| {
+                reply
+                    .as_ref()
+                    .is_err_and(|error| endpoint.retry_process_after_lane_loss(&request, error))
+            })
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(OPERATION_POLL).await;
+            continue;
+        }
+        break outcome;
+    };
     match result {
         Ok(Ok(reply)) => Exchange::Reply(reply),
         Ok(Err(error)) if ProcessOutcomeUnknown::is(&error) => {
@@ -791,7 +807,7 @@ async fn run(
     }
 
     #[cfg(test)]
-    pause_start(&process_id, &key, false).await;
+    pause_start(&process_id, &key, StartCut::CheckingCancellation).await;
 
     let start_state = loop {
         if cancellation.is_cancelled()
@@ -804,11 +820,11 @@ async fn run(
             return Err(domain(ErrorData::ConnectionClosed));
         }
         #[cfg(test)]
-        pause_start(&process_id, &key, true).await;
+        pause_start(&process_id, &key, StartCut::Dispatching).await;
         match exchange(&endpoint, ProcessRequest::Start { key: key.clone() }).await {
             Exchange::Reply(ProcessReply::State { state, .. }) => break state,
             Exchange::Reply(ProcessReply::Unknown { .. }) => {
-                return Err(domain(ErrorData::OperationFailed));
+                return Err(domain(ErrorData::OutcomeUnknown));
             }
             Exchange::Reply(ProcessReply::Conflict { .. }) => {
                 return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
@@ -826,6 +842,8 @@ async fn run(
     if accounting.observe(&start_state).is_err() {
         return Err(contradicted(&endpoint).await);
     }
+    #[cfg(test)]
+    pause_start(&process_id, &key, StartCut::Observing).await;
     let mut settled = if let OperationState::Settled(snapshot) = start_state {
         entry.reconciled.store(
             snapshot.physical_settlement_proven,
@@ -1023,7 +1041,9 @@ async fn run(
                     drained = true;
                 }
                 Exchange::Reply(_) => return Err(contradicted(&endpoint).await),
-                Exchange::Failed(error) => return Err(error),
+                // Refusal of a later observation cannot undo the original
+                // START or establish the output that has yet to be read.
+                Exchange::Failed(_) => return Err(domain(ErrorData::OutcomeUnknown)),
             }
         }
         if settled.is_none() {
@@ -1042,7 +1062,7 @@ async fn run(
                 }
                 Exchange::Busy => {}
                 Exchange::Reply(_) => return Err(contradicted(&endpoint).await),
-                Exchange::Failed(error) => return Err(error),
+                Exchange::Failed(_) => return Err(domain(ErrorData::OutcomeUnknown)),
             }
         }
         if settled.is_some() && (detached || (finished && drained && outbox.is_empty())) {
@@ -1141,16 +1161,24 @@ async fn release_output(
     }
 }
 
-/// Server-side START-dispatch hold for scripted START-race tests: the
+/// Server-side START holds for scripted START-race tests. The
 /// physical START gate itself lives in the Execution Client (its own
 /// in-crate races hold it); this seam proves revocation fences a pending
 /// dispatch on the Server side. Holds are keyed by the operation's
 /// `process_id`: a parallel test's `command/exec` never claims a hold
 /// installed for another operation.
 #[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartCut {
+    CheckingCancellation,
+    Dispatching,
+    Observing,
+}
+
+#[cfg(test)]
 struct PendingStartHold {
     process_id: String,
-    after_gate: bool,
+    cut: StartCut,
     entered: tokio::sync::watch::Sender<Option<ProcessOperationKey>>,
     released: tokio::sync::watch::Sender<bool>,
 }
@@ -1159,12 +1187,12 @@ struct PendingStartHold {
 static START_HOLDS: std::sync::Mutex<Vec<PendingStartHold>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-async fn pause_start(process_id: &str, key: &ProcessOperationKey, after_gate: bool) {
+async fn pause_start(process_id: &str, key: &ProcessOperationKey, cut: StartCut) {
     let hold = {
         let mut pending = START_HOLDS.lock().expect("start hold");
         pending
             .iter()
-            .position(|item| item.process_id == process_id && item.after_gate == after_gate)
+            .position(|item| item.process_id == process_id && item.cut == cut)
             .map(|index| pending.remove(index))
     };
     if let Some(hold) = hold {
@@ -1218,16 +1246,22 @@ impl Drop for StartHold {
 
 #[cfg(test)]
 pub(crate) fn hold_start(process_id: &str) -> StartHold {
-    install_start_hold(process_id, false)
+    install_start_hold(process_id, StartCut::CheckingCancellation)
 }
 
 #[cfg(test)]
 pub(crate) fn hold_start_after_gate(process_id: &str) -> StartHold {
-    install_start_hold(process_id, true)
+    install_start_hold(process_id, StartCut::Dispatching)
 }
 
 #[cfg(test)]
-fn install_start_hold(process_id: &str, after_gate: bool) -> StartHold {
+#[cfg(target_os = "linux")]
+pub(crate) fn hold_start_before_observation(process_id: &str) -> StartHold {
+    install_start_hold(process_id, StartCut::Observing)
+}
+
+#[cfg(test)]
+fn install_start_hold(process_id: &str, cut: StartCut) -> StartHold {
     let (entered_tx, entered_rx) = tokio::sync::watch::channel(None);
     let (released_tx, _released_rx) = tokio::sync::watch::channel(false);
     START_HOLDS
@@ -1235,7 +1269,7 @@ fn install_start_hold(process_id: &str, after_gate: bool) -> StartHold {
         .expect("start hold")
         .push(PendingStartHold {
             process_id: process_id.to_string(),
-            after_gate,
+            cut,
             entered: entered_tx,
             released: released_tx.clone(),
         });

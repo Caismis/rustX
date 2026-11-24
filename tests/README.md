@@ -305,13 +305,15 @@ For the Linux Execution Client mount proof, run
 `test-support/prove_execution_mount_view.sh`. It stages the Server and Client
 test artifacts, runs the separate mount cases for App Server commands and
 Client filesystem operations, and exercises live Agent Bash Read/Grep,
-Workspace Python, and delegated Subagent Write/Edit/Read/Bash. The
-Subagent case keeps the authored role fixture available to the Server and
-overlays the execution directory only on the Client. It verifies that the
-physical output appears exclusively in that overlay and that Session drain
-reaps the supervision probe. The Client-only configuration case covers cold
-Session load and explicit Workspace reconciliation. The Server has no
-directory at the reserved path during either operation.
+Workspace Python, Managed Python and stdio MCP. The shared-binding case
+puts the authored Agent and Workflow definitions in the Client overlay.
+Root and Workflow reads see its markers, and the delegated Subagent writes,
+edits, reads and runs Bash through the same binding. Session drain observes
+the supervision socket close and reaps the Client. The configuration cases
+cover cold Session load, explicit reconciliation and automatic watch updates.
+They exercise both a missing Server path and a separate Server decoy and
+check that an invalid Client-side collection retains the last admitted
+definition.
 
 Browser scenarios driving native tools create and enroll the exact testing
 Session before connecting the browser. The ordinary browser connection and
@@ -757,6 +759,12 @@ skip:
   `RUSTX_REQUIRE_PROVIDER_EMULATOR` set a missing uv fails. CI sets it on
   every step that runs such a boundary. The TUI integration suite applies
   the same variable to uv and to the built `rustx` binary.
+  Managed Python acceptance can also use
+  `RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE` with a pre-seeded uv cache for the
+  test interpreter. Seed both `fastmcp==4.0.3` and
+  `fastmcp-tasks==4.0.3` for the full boundary suite. The real Client
+  fixtures copy the cache into each private Store and run actual offline
+  resolution and installation before the MCP assertions.
 - **`python3` on the supervised PATH** — required, never skipped, by the
   Linux process-containment escape regressions.
 - **Container engine** — `pnpm test:e2e` requires Docker or Podman

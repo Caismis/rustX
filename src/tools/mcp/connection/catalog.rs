@@ -1,6 +1,7 @@
 //! Live catalog validation belongs to one stable, conversation-owned connection.
 
 use super::{McpConnection, McpConnectionGeneration};
+use crate::tools::mcp::declaration_cache;
 use crate::tools::mcp::{CanonicalMcpTool, McpDiscoveryOutcome, McpError};
 use std::sync::{Arc, Mutex};
 
@@ -166,6 +167,10 @@ impl McpConnection {
                 })
                 .map_err(McpError::Discovery);
         }
+        let observation = self
+            .declaration_key
+            .get()
+            .map(|key| (*key, declaration_cache::begin(*key)));
         let result = self.fetch_catalog(&transport, context).await;
         let unavailable = transport.runtime().reject_unusable_transport().await;
         let result = result.and_then(|tools| {
@@ -183,6 +188,20 @@ impl McpConnection {
             }
             Ok(tools)
         });
+        // Only the newest validation may publish, and a notification clears
+        // its in-flight stamp as well as any previously cached declaration.
+        if let Some((key, stamp)) = observation
+            && !context.is_some_and(|context| context.cancellation.is_cancelled())
+        {
+            declaration_cache::complete(
+                key,
+                stamp,
+                result
+                    .as_ref()
+                    .ok()
+                    .map(|catalog| (catalog, &transport.runtime().credentials)),
+            );
+        }
         // One invocation's cancellation is not a terminal directory outcome
         // for other callers. Server outcomes remain authoritative for this
         // epoch until invalidation, replacement, or an explicit fresh candidate.

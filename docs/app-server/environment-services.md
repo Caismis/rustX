@@ -51,7 +51,7 @@ Downloads retain their existing native source identities and publication owners.
 
 | Method/event | Contract |
 | --- | --- |
-| `command/exec` | Direct argv execution; no shell interpretation, model, Thread, Attempt or canonical ToolCall. The final response follows native process-tree settlement and all emitted output. |
+| `command/exec` | Direct argv execution; no shell interpretation, model, Thread, Attempt or canonical ToolCall. The final response follows native process-tree settlement and all emitted output. After START admission, losing the terminal or output observation returns `outcome_unknown` even when the failed observation never reached the Client. |
 | `command/exec/write` | Base64 stdin bytes, EOF, or both for this connection's process. The receipt covers this input operation. Reads continue while a bounded input batch is backpressured. A missing admission reply after possible delivery, a missing final receipt, or a write failure with possible partial effects returns `outcome_unknown`. |
 | `command/exec/resize` | Validate and apply a PTY size for this connection's process. |
 | `command/exec/terminate` | Request native cancellation. Receipt does not prove termination. |
@@ -259,12 +259,28 @@ identity/size/timestamp evidence used by native file reads. Large Skill bodies
 remain valid and are never loaded in full. Continue with `expected_revision`;
 source replacement/mutation requires an authoritative reread. Native blocking
 jobs retain host admission through completion after a waiter disconnects.
+To browse the Workspace as seen by a selected Session, pass its
+`execution_session` on both reads. The Session must own that exact Workspace.
+Discovery and instruction pages come from its authenticated Client. User Skills
+continue to use their authored source. A missing or detached binding reports
+`execution_unavailable`. Live Workspace descriptors omit authoring operation
+revisions and optional display files. The explicit source-authoring view keeps
+its separate document roots.
 
 MCP management follows up to 32 bounded remote continuations on the same native
 connection, including an empty opaque token. Cycles, more than 128 total
 descriptors, or an inventory above 64 KiB fail as `list_failed`; partial catalogs
 are never labeled complete. Tool, resource and template descriptions are
 credential-redacted, and business invocation is unavailable through this API.
+`mcp/catalog` and `mcp/probe` accept an `execution_session` for the exact
+Workspace. Until the Workspace is reserved, HTTP diagnostics can read its
+authored document, including when the selected Session has no binding.
+Once reserved, the exact Session's Client verifies the source document
+revision. A reservation during an authored diagnostic invalidates its
+result. Stdio requires an admitted Client and retains that binding through
+physical close. HTTP connects from the Server, including when the definition
+was read through the Client. User-authored HTTP probing works independently
+of Execution Client readiness.
 The native connection owner includes every accepted literal environment/header
 value and every resolved sensitive reference in one private redaction set.
 Authorization and Proxy-Authorization Bearer inputs contribute both the complete

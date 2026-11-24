@@ -8,9 +8,275 @@ use crate::runtime::resources::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Captures the User root and the explicitly supplied Workspace, shadowing before parsing.
-/// With no Workspace, discovery reads only User resources; it never infers a cwd.
-/// This operation reads package bytes but never imports code or prepares Python.
+/// Captures package metadata and exact source identities through the admitted Client.
+///
+/// # Errors
+/// Returns the typed source observation or authority failure.
+#[doc(hidden)]
+pub fn discover_bound(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    user_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    discover_bound_for(endpoint, user_root, true, cancellation)
+}
+
+pub(super) fn discover_bound_for(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    user_root: &Path,
+    include_workspace: bool,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    use crate::runtime::resources::ResourceLocation;
+    use rustx_execution_protocol::mcp::{
+        PythonSourceReply as Reply, PythonSourceRequest as Request, PythonSourceScope,
+    };
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut candidates = BTreeMap::new();
+    let mut locations = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for (scope, physical, root) in [
+        (
+            SourceScope::User,
+            PythonSourceScope::User,
+            user_root.join("tools"),
+        ),
+        (
+            SourceScope::Workspace,
+            PythonSourceScope::Workspace,
+            endpoint.workspace().join(".agents/tools"),
+        ),
+    ] {
+        if scope == SourceScope::Workspace && !include_workspace {
+            continue;
+        }
+        let names =
+            match endpoint.managed_python_source(&Request::List { scope: physical }, deadline) {
+                Ok(Reply::Names(names)) if names.len() <= 128 => names,
+                Ok(Reply::CollectionInvalid) => {
+                    candidates.clear();
+                    locations.clear();
+                    diagnostics.push(
+                        RuntimeResourceLoadError::new(
+                            "Client Managed Python collection must be a directory",
+                        )
+                        .at(&root, "tools"),
+                    );
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+                    return Ok(ManagedPythonCatalog::default());
+                }
+                Ok(_) | Err(_) => {
+                    return Err(RuntimeResourceLoadError::new(
+                        "cannot observe Client Managed Python sources",
+                    )
+                    .at(&root, "tools"));
+                }
+            };
+        for name in names {
+            if name.len() > 128 || crate::tools::python::validate_identifier(&name).is_err() {
+                return Err(RuntimeResourceLoadError::new(
+                    "invalid Client Managed Python identity",
+                )
+                .at(&root, "tools"));
+            }
+            let source = ToolSourceId::ManagedPython(name.clone());
+            let path = root.join(&name);
+            let shadowed = locations
+                .remove(&source)
+                .map(|owner: ResourceLocation| owner.path);
+            locations.insert(
+                source.clone(),
+                ResourceLocation {
+                    scope,
+                    path: path.clone(),
+                    shadowed,
+                },
+            );
+            candidates.insert(source, (name, physical, path));
+        }
+    }
+    if candidates.len() > 128 {
+        return Err(
+            RuntimeResourceLoadError::new("Managed Python catalog exceeds 128 packages")
+                .at(user_root, "tools"),
+        );
+    }
+    let packages = candidates
+        .into_iter()
+        .map(|(source, (name, physical, path))| {
+            let result =
+                capture_bound_package(endpoint, physical, name, path, deadline, cancellation);
+            (source, result)
+        })
+        .collect();
+    let mut catalog = ManagedPythonCatalog::new(packages);
+    catalog.locations = locations;
+    catalog.discovery_diagnostics = diagnostics;
+    Ok(catalog)
+}
+
+/// Re-captures only workspace packages missing watch coverage, reusing healthy siblings unchanged.
+pub(super) fn recapture_bound_subset(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    retained: &ManagedPythonCatalog,
+    targets: &std::collections::BTreeSet<ToolSourceId>,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Option<ManagedPythonCatalog> {
+    use rustx_execution_protocol::mcp::PythonSourceScope;
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut updated = None;
+    for source in targets {
+        let Some(location) = retained.locations.get(source) else {
+            continue;
+        };
+        if location.scope != SourceScope::Workspace {
+            continue;
+        }
+        let ToolSourceId::ManagedPython(name) = source else {
+            continue;
+        };
+        let next = capture_bound_package(
+            endpoint,
+            PythonSourceScope::Workspace,
+            name.clone(),
+            location.path.clone(),
+            deadline,
+            cancellation,
+        );
+        if retained.packages().get(source) != Some(&next) {
+            updated
+                .get_or_insert_with(|| retained.packages().clone())
+                .insert(source.clone(), next);
+        }
+    }
+    updated.map(|packages| {
+        let mut catalog = ManagedPythonCatalog::new(packages);
+        catalog.locations = retained.locations.clone();
+        catalog
+            .discovery_diagnostics
+            .clone_from(&retained.discovery_diagnostics);
+        catalog
+    })
+}
+
+fn capture_bound_package(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    scope: rustx_execution_protocol::mcp::PythonSourceScope,
+    name: String,
+    path: std::path::PathBuf,
+    deadline: std::time::Instant,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<crate::tools::python::PythonToolPackage, crate::tools::python::PythonToolError> {
+    use crate::tools::python::{ClientSource, PythonToolError, PythonToolPackage};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use rustx_execution_protocol::{
+        mcp::{PythonSourceReply as Reply, PythonSourceRequest as Request},
+        process::OperationId,
+    };
+    let unavailable =
+        || PythonToolError::Storage("the admitted Client could not capture the package".into());
+    let key = endpoint
+        .process_key(OperationId::new())
+        .map_err(|_| unavailable())?;
+    let owner = std::sync::Arc::new(ClientSource {
+        runtime: tokio::runtime::Handle::try_current().map_err(|_| unavailable())?,
+        endpoint: endpoint.clone(),
+        key: key.clone(),
+    });
+    let mut request = Request::Capture {
+        key: key.clone(),
+        scope,
+        name: name.clone(),
+    };
+    loop {
+        if cancellation.is_cancelled() || std::time::Instant::now() >= deadline {
+            return Err(unavailable());
+        }
+        match endpoint
+            .managed_python_source(&request, deadline)
+            .map_err(|_| unavailable())?
+        {
+            Reply::Capturing => {
+                request = Request::State { key: key.clone() };
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Reply::Captured {
+                digest,
+                permissions_base64,
+                watch_directories,
+            } => {
+                let valid = digest.strip_prefix("sha256:").is_some_and(|hash| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                });
+                if !valid || !valid_watch_directories(watch_directories.as_deref()) {
+                    return Err(unavailable());
+                }
+                let permissions = permissions_base64
+                    .as_deref()
+                    .map(|encoded| STANDARD.decode(encoded))
+                    .transpose()
+                    .map_err(|_| unavailable())?;
+                if permissions
+                    .as_ref()
+                    .is_some_and(|bytes| bytes.len() > 512 * 1024)
+                {
+                    return Err(unavailable());
+                }
+                return PythonToolPackage::from_client(
+                    name,
+                    path,
+                    digest,
+                    permissions.as_deref(),
+                    owner,
+                    watch_directories,
+                );
+            }
+            Reply::Refused(rustx_execution_protocol::ReadError::Invalid) => {
+                return Err(PythonToolError::InvalidPackage(format!(
+                    "the admitted Client rejected package {name:?}"
+                )));
+            }
+            _ => return Err(unavailable()),
+        }
+    }
+}
+
+fn valid_watch_directories(directories: Option<&[std::path::PathBuf]>) -> bool {
+    use rustx_execution_protocol::mcp::{MAX_SOURCE_WATCH_BYTES, MAX_SOURCE_WATCH_DIRECTORIES};
+    directories.is_none_or(|paths| {
+        paths
+            .first()
+            .is_some_and(|root| root.as_os_str().is_empty())
+            && paths.len() <= MAX_SOURCE_WATCH_DIRECTORIES
+            && paths.windows(2).all(|pair| pair[0] < pair[1])
+            && paths.iter().all(|path| {
+                path.to_str().is_some_and(|value| {
+                    value.is_empty() || {
+                        !value.contains('\0')
+                            && value
+                                .split('/')
+                                .all(|part| !matches!(part, "" | "." | ".."))
+                    }
+                })
+            })
+            && paths
+                .iter()
+                .map(|path| path.as_os_str().len().saturating_mul(6) + 8)
+                .sum::<usize>()
+                <= MAX_SOURCE_WATCH_BYTES
+    })
+}
+
+/// Discovers the declarations of the selected scopes without starting Python.
 ///
 /// # Errors
 /// Returns a bounded resource error when discovery cannot produce a catalog.
@@ -18,17 +284,39 @@ pub fn discover(
     workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
-    discover_controlled(
-        workspace,
-        user_root,
-        &crate::runtime::CancellationSignal::new(),
-    )
+    let cancellation = crate::runtime::CancellationSignal::new();
+    #[cfg(any(test, feature = "test-support"))]
+    return discover_authoring(workspace, user_root, &cancellation, |path, name| {
+        crate::tools::python::discover_package(path, name, &cancellation)
+    });
+    #[cfg(not(any(test, feature = "test-support")))]
+    discover_controlled(workspace, user_root, &cancellation)
 }
 
 pub(crate) fn discover_controlled(
     workspace: Option<&Path>,
     user_root: &Path,
     cancellation: &crate::runtime::CancellationSignal,
+) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
+    #[cfg(test)]
+    let read =
+        |path: &Path, name: &str| crate::tools::python::discover_package(path, name, cancellation);
+    #[cfg(not(test))]
+    let read = crate::tools::python::PythonToolPackage::inspect_authoring;
+    discover_authoring(workspace, user_root, cancellation, read)
+}
+
+fn discover_authoring(
+    workspace: Option<&Path>,
+    user_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+    read_package: impl Fn(
+        &Path,
+        &str,
+    ) -> Result<
+        crate::tools::python::PythonToolPackage,
+        crate::tools::python::PythonToolError,
+    >,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
     crate::package_io::check_cancelled(cancellation)
         .map_err(|error| RuntimeResourceLoadError::new(error.to_string()).at(user_root, "tools"))?;
@@ -109,7 +397,7 @@ pub(crate) fn discover_controlled(
                 .map_err(|error| {
                     crate::tools::python::PythonToolError::InvalidPackage(error.to_string())
                 })
-                .and_then(|()| crate::tools::python::discover_package(&path, &name, cancellation));
+                .and_then(|()| read_package(&path, &name));
             (ToolSourceId::ManagedPython(name), package)
         })
         .collect();

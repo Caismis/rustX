@@ -22,7 +22,7 @@ use super::outcome::{
     McpPhysicalOutcome, McpResponseOutcome, is_transport_loss, post_dispatch_cancellation_status,
 };
 use super::request::McpRequestOwnership;
-use super::result::{failed_mcp, mcp_empty_terminal, translate_result};
+use super::result::{failed_mcp, mcp_empty_terminal, translate_remote_result};
 use super::runtime::McpServerRuntime;
 #[cfg(test)]
 use super::test_sync;
@@ -152,7 +152,7 @@ impl McpServerRuntime {
     ) -> ToolExecutionResult {
         let started = Instant::now();
         let serde_json::Value::Object(arguments) = arguments else {
-            return failed_mcp("MCP tool arguments must be a JSON object", context, started);
+            return failed_mcp("MCP tool arguments must be a JSON object", started);
         };
         let mut continuation = mrtr::McpContinuation::default();
         // The initial call is round 1, so a server may drive at most
@@ -195,7 +195,6 @@ impl McpServerRuntime {
                         "the MCP server asked for more input after {round} tools/call rounds, \
                          which is the rustX multi-round-trip bound"
                     ),
-                    context,
                     started,
                 );
             }
@@ -211,7 +210,6 @@ impl McpServerRuntime {
         // the round above the bound. Kept total rather than panicking.
         failed_mcp(
             "the MCP multi-round-trip loop ended without a terminal result",
-            context,
             started,
         )
     }
@@ -243,9 +241,8 @@ impl McpServerRuntime {
         #[cfg(not(test))]
         let _ = remote_name;
 
-        let unsupported = |diagnostic: &str| {
-            MrtrRoundSettlement::Terminal(failed_mcp(diagnostic, context, started))
-        };
+        let unsupported =
+            |diagnostic: &str| MrtrRoundSettlement::Terminal(failed_mcp(diagnostic, started));
         // Cancellation observed before publication: no interaction is created
         // at all, so there is no pending prompt to settle and no waiter to
         // race.
@@ -255,7 +252,6 @@ impl McpServerRuntime {
                     reason: context.cancellation.reason(),
                     phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
                 },
-                context,
                 started,
             ));
         }
@@ -323,7 +319,6 @@ impl McpServerRuntime {
                         reason,
                         phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
                     },
-                    context,
                     started,
                 ));
             }
@@ -333,7 +328,6 @@ impl McpServerRuntime {
             Ok(InteractionOutcome::DeadlineExpired { kind: _ }) => {
                 return MrtrRoundSettlement::Terminal(mcp_empty_terminal(
                     ToolExecutionStatus::TimedOut,
-                    context,
                     started,
                 ));
             }
@@ -498,7 +492,6 @@ impl McpServerRuntime {
                         reason,
                         phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
                     },
-                    context,
                     started,
                 ))
             }
@@ -534,7 +527,6 @@ impl McpServerRuntime {
                                 reason: context.cancellation.reason(),
                                 phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
                             },
-                            context,
                             started,
                         ))
                     }
@@ -554,7 +546,6 @@ impl McpServerRuntime {
             McpPhysicalOutcome::CancelledPostFrontier { requested, .. } => {
                 McpRoundOutcome::terminal(mcp_empty_terminal(
                     post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
-                    context,
                     started,
                 ))
             }
@@ -599,7 +590,6 @@ impl McpServerRuntime {
                         ToolExecutionStatus::OutcomeUnknown {
                             detail: bound_error(&diagnostic),
                         },
-                        context,
                         started,
                     ));
                 }
@@ -612,15 +602,14 @@ impl McpServerRuntime {
                             self.generation_tag(generation)
                         )),
                     },
-                    context,
                     started,
                 ));
             }
         };
         match response {
-            Ok(ServerResult::CallToolResult(result)) => {
-                McpRoundOutcome::terminal(translate_result(result, context, started))
-            }
+            Ok(ServerResult::CallToolResult(result)) => McpRoundOutcome::terminal(
+                translate_remote_result(result, context, started, &self.credentials).await,
+            ),
             // The one intermediate state of the MRTR machine (Issue #242).
             // Whether it may be served at all is the driver's decision: this
             // classifier only reports what the peer answered.
@@ -633,11 +622,9 @@ impl McpServerRuntime {
             // the driver's decision, and this classifier only reports what
             // the peer answered.
             Ok(ServerResult::CreateTaskResult(result)) => McpRoundOutcome::Task(Box::new(result)),
-            Ok(_) => McpRoundOutcome::terminal(failed_mcp(
-                "unexpected MCP tools/call response",
-                context,
-                started,
-            )),
+            Ok(_) => {
+                McpRoundOutcome::terminal(failed_mcp("unexpected MCP tools/call response", started))
+            }
             // A JSON-RPC error answering this request id is a correlated
             // remote response: the remote produced a terminal outcome and it
             // is a known failure, not an ambiguity.
@@ -646,7 +633,6 @@ impl McpServerRuntime {
                     &bound_error(
                         &super::diagnostics::protocol_error(error, &self.credentials).to_string(),
                     ),
-                    context,
                     started,
                 ))
             }
@@ -666,7 +652,6 @@ impl McpServerRuntime {
                         ToolExecutionStatus::OutcomeUnknown {
                             detail: bound_error(&diagnostic),
                         },
-                        context,
                         started,
                     ));
                 }
@@ -679,7 +664,6 @@ impl McpServerRuntime {
                             super::diagnostics::service_error(&error, &self.credentials)
                         )),
                     },
-                    context,
                     started,
                 ))
             }

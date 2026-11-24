@@ -26,9 +26,11 @@
 //! There is no Agent, cancellation, store, or process dependency here — only
 //! files and directories.
 
+mod links;
 mod mutation;
 mod text;
 
+pub use links::{ResolvedEntry, ResourceResolution};
 pub use mutation::{CommitUnknown, Expectation, PublishedWrite, StagedWrite, WriteTarget};
 pub use text::{PageEnd, PageLimits, TextPage, validate_utf8};
 
@@ -376,6 +378,52 @@ impl PackageDirectory {
         name_cap: usize,
         page_cap: usize,
     ) -> io::Result<DirectoryPage> {
+        self.scan_directory(
+            relative,
+            offset..offset.saturating_add(limit),
+            expected,
+            name_cap,
+            page_cap,
+            false,
+        )
+        .map(|(page, _)| page)
+    }
+
+    /// Lists one page for Skill discovery. Hidden names consume the scan budget
+    /// but never cross the wire, including hidden names that are not UTF-8.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::directory_page`] for visible names.
+    pub fn skill_directory_page(
+        &self,
+        relative: &Path,
+        offset: usize,
+        limit: usize,
+        expected: Option<&str>,
+        name_cap: usize,
+        page_cap: usize,
+    ) -> io::Result<(DirectoryPage, usize)> {
+        self.scan_directory(
+            relative,
+            offset..offset.saturating_add(limit),
+            expected,
+            name_cap,
+            page_cap,
+            true,
+        )
+    }
+
+    fn scan_directory(
+        &self,
+        relative: &Path,
+        range: std::ops::Range<usize>,
+        expected: Option<&str>,
+        name_cap: usize,
+        page_cap: usize,
+        skip_hidden: bool,
+    ) -> io::Result<(DirectoryPage, usize)> {
+        let offset = range.start;
+        let limit = range.len();
         if !(1..=page_cap).contains(&limit) || offset > name_cap {
             return Err(invalid("invalid directory page"));
         }
@@ -389,7 +437,15 @@ impl PackageDirectory {
         }
         let names = directory.names(name_cap)?;
         let mut entries = Vec::new();
+        let mut scanned = 0;
         for name in names.iter().skip(offset).take(limit) {
+            scanned += 1;
+            if skip_hidden
+                && (name.as_os_str().as_bytes().starts_with(b".")
+                    || name == Path::new("node_modules"))
+            {
+                continue;
+            }
             let file_name = name
                 .to_str()
                 .ok_or_else(|| invalid("non-UTF-8 filename"))?
@@ -415,11 +471,15 @@ impl PackageDirectory {
         {
             return Err(conflict());
         }
-        Ok(DirectoryPage {
-            next_offset: (offset + entries.len() < names.len()).then_some(offset + entries.len()),
-            entries,
-            revision: before.revision,
-        })
+        let skipped = scanned - entries.len();
+        Ok((
+            DirectoryPage {
+                next_offset: (offset + scanned < names.len()).then_some(offset + scanned),
+                entries,
+                revision: before.revision,
+            },
+            skipped,
+        ))
     }
 }
 

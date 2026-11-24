@@ -64,7 +64,7 @@ fn ws_rig() -> Rig {
         None,
     )
     .unwrap();
-    let url = format!("wss://{}/execution/v2", listener.local_addr().unwrap());
+    let url = format!("wss://{}/execution/v8", listener.local_addr().unwrap());
     let mut file = fs::File::open(&bundle).unwrap();
     let published: Bootstrap = read_record(&mut file).unwrap();
     assert!(matches!(
@@ -195,13 +195,10 @@ fn expect_success(child: &mut Child) {
 
 /// Revocation tears the stream down abruptly — the client must still
 /// exit promptly, but non-zero: it never saw a clean close.
-fn expect_revoked_exit(child: &mut Child) {
-    let status = wait_bounded(child);
-    assert!(
-        !status.success(),
-        "a revoked client cannot report success: {}",
-        stderr_of(child)
-    );
+fn expect_terminal_refusal(rig: &Rig, child: &mut Child) {
+    assert_eq!(accept(rig, child).unwrap(), Err(Reject::Revoked));
+    expect_success(child);
+    assert!(!rig.binding.revocation_confirmed());
 }
 
 fn stderr_of(child: &mut Child) -> String {
@@ -364,11 +361,11 @@ fn websocket_plaintext_nonloopback_and_wrong_path_never_connect() {
     // before a byte leaves the process — the listener never accepts.
     let address = rig.listener.local_addr().unwrap();
     for url in [
-        format!("ws://192.0.2.10:{}/execution/v2", address.port()),
-        format!("ws://{address}/execution/v2"),
+        format!("ws://192.0.2.10:{}/execution/v8", address.port()),
+        format!("ws://{address}/execution/v8"),
         format!("wss://{address}/other"),
-        format!("wss://user@{address}/execution/v2"),
-        format!("wss://{address}/execution/v2?token=1"),
+        format!("wss://user@{address}/execution/v8"),
+        format!("wss://{address}/execution/v8?token=1"),
     ] {
         tamper_bundle(&rig, |bootstrap| {
             bootstrap.endpoint = BootstrapEndpoint::WebSocket {
@@ -420,7 +417,7 @@ fn websocket_plaintext_never_consumes_the_tls_reservation() {
     // A plaintext peer fails at the TLS handshake; the binding
     // stays Reserved and the real Client still wins afterwards.
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
-    raw.write_all(b"GET /execution/v2 HTTP/1.1\r\nHost: x\r\n\r\n")
+    raw.write_all(b"GET /execution/v8 HTTP/1.1\r\nHost: x\r\n\r\n")
         .unwrap();
     raw.flush().unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
@@ -447,7 +444,7 @@ fn websocket_slow_peer_shares_one_absolute_deadline() {
     // die on the armed deadline, not get a budget per fragment.
     let deadline = Instant::now() + Duration::from_millis(700);
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
-    raw.write_all(b"GET /execution/v2 HTTP/1.1\r\n").unwrap();
+    raw.write_all(b"GET /execution/v8 HTTP/1.1\r\n").unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
     let outcome = rustx_execution_transport::accept(stream, deadline);
     let elapsed = deadline.saturating_duration_since(Instant::now());
@@ -465,15 +462,35 @@ fn websocket_revocation_wakes_an_idle_client() {
     let mut child = spawn_client(&rig);
     let _connection = accept_connection(&rig, &mut child);
     assert_eq!(rig.binding.status().phase, BindingPhase::Live);
-    // Revocation shuts the raw TCP handle the binding stored at commit:
-    // the idle blocked client wakes promptly, but the abrupt teardown
-    // is no clean close so it cannot report success.
+    // Revocation interrupts the idle lane. The listener can provide an
+    // authenticated terminal refusal, but has no physical Revoke receipt.
     rig.binding.revoke();
-    expect_revoked_exit(&mut child);
+    expect_terminal_refusal(&rig, &mut child);
 }
 
 #[test]
-fn websocket_eof_never_allows_a_replacement() {
+fn websocket_recovery_reauthenticates_both_lanes_for_the_same_instance() {
+    let rig = ws_rig();
+    let mut child = spawn_client(&rig);
+    let mut first = accept_connection(&rig, &mut child);
+    first.ping().unwrap();
+    rig.binding.disconnect(first.connection_id());
+    assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
+
+    let mut resumed = accept_connection(&rig, &mut child);
+    assert_ne!(resumed.connection_id(), first.connection_id());
+    assert_eq!(resumed.admission(), first.admission());
+    assert!(first.ping().is_err());
+    drop(first);
+    resumed.ping().unwrap();
+    resumed.control().unwrap().health().unwrap();
+    resumed.control().unwrap().request_revoke().unwrap();
+    drop(resumed);
+    expect_success(&mut child);
+}
+
+#[test]
+fn websocket_duplicate_launch_never_allows_a_replacement() {
     let rig = ws_rig();
     let mut first = spawn_client(&rig);
     let _connection = accept_connection(&rig, &mut first);
@@ -485,7 +502,6 @@ fn websocket_eof_never_allows_a_replacement() {
         Err(Reject::AlreadyConnected)
     );
     assert!(!second.wait().unwrap().success());
-    // Revoked, not closed: the first client wakes but fails.
     rig.binding.revoke();
-    expect_revoked_exit(&mut first);
+    expect_terminal_refusal(&rig, &mut first);
 }

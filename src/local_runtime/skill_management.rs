@@ -1,11 +1,11 @@
 //! Native Skills discovery and paginated instruction reads, without model work.
 use super::configuration::observation::{digest, encode};
 use super::configuration::settings::{SettingsError, SourceTarget};
-use super::session_runtime_manager::SessionRuntimeManager;
+use super::session_runtime_manager::{LocalExecutionEndpoint, SessionRuntimeManager};
 use crate::skills::{SkillCatalogEntry, SkillDiagnostic, SkillProvenance};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 mod display;
 mod operations;
@@ -49,7 +49,7 @@ pub struct SkillContent {
 fn descriptor(
     package: &crate::skills::SkillPackage,
     provenance: &SkillProvenance,
-    collection: &Path,
+    authoring_collection: Option<&Path>,
 ) -> Result<Option<SkillDescriptor>, SettingsError> {
     let mut skill = SkillDescriptor {
         catalog: SkillCatalogEntry {
@@ -60,9 +60,10 @@ fn descriptor(
         provenance: provenance.clone(),
         disable_model_invocation: package.disable_model_invocation(),
         enabled_by_default: package.enabled_by_default(),
-        operation_revision: operations::operation_revision(package, collection),
+        operation_revision: authoring_collection
+            .and_then(|collection| operations::operation_revision(package, collection)),
         metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
-        display: read_display(package, collection),
+        display: authoring_collection.and_then(|collection| read_display(package, collection)),
     };
     // Leave room for the surrounding array so every projected descriptor can
     // be paged on its own. Only the WebUI preview is shortened.
@@ -89,19 +90,94 @@ fn skill_collection(
     configuration: &super::configuration::UserConfigManager,
     target: &SourceTarget,
     source: crate::skills::SkillSource,
-) -> std::path::PathBuf {
-    configuration
-        .resource_root(match source {
-            crate::skills::SkillSource::User => &SourceTarget::User,
-            crate::skills::SkillSource::Workspace => target,
+    bound: bool,
+) -> Option<std::path::PathBuf> {
+    let target = match source {
+        crate::skills::SkillSource::User => &SourceTarget::User,
+        crate::skills::SkillSource::Workspace if bound => return None,
+        crate::skills::SkillSource::Workspace => target,
+    };
+    Some(
+        configuration
+            .resource_root(target)
+            .join(crate::skills::SKILLS_ROOT),
+    )
+}
+
+fn discover(
+    configuration: &super::configuration::UserConfigManager,
+    target: &SourceTarget,
+    endpoint: Option<&LocalExecutionEndpoint>,
+) -> Result<crate::skills::SkillDiscoveryOutcome, SettingsError> {
+    if let Some(endpoint) = endpoint {
+        return crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
+            automatic: crate::skills::automatic_skill_roots(
+                Some(&configuration.sources.home_directory),
+                endpoint.workspace(),
+            ),
         })
-        .join(crate::skills::SKILLS_ROOT)
+        .with_cancellation(configuration.resource_io.clone())
+        .discover_bound(endpoint)
+        .map_err(|_| SettingsError::ExecutionUnavailable);
+    }
+    target.validate()?;
+    configuration
+        .discover_skills(target.workspace())
+        .ok_or(SettingsError::Invalid)
+}
+
+fn read_instructions(
+    endpoint: Option<&LocalExecutionEndpoint>,
+    path: &Path,
+    offset: u64,
+    max_bytes: usize,
+) -> Result<(String, Option<u64>, String), SettingsError> {
+    if let Some(endpoint) = endpoint {
+        let deadline =
+            std::time::Instant::now() + rustx_execution_protocol::transport::PAGE_REQUEST_TIMEOUT;
+        let chunk = endpoint
+            .read_workspace_source(path, deadline, |data, relative| {
+                data.read_range_admitted(
+                    relative,
+                    offset,
+                    u32::try_from(max_bytes).expect("bounded page"),
+                    None,
+                    deadline,
+                    || Ok(()),
+                    || (),
+                )
+            })
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        return Ok((
+            base64::engine::general_purpose::STANDARD.encode(chunk.bytes),
+            chunk.next_offset,
+            chunk.metadata.revision,
+        ));
+    }
+    let directory =
+        crate::package_io::PackageDirectory::open(path.parent().ok_or(SettingsError::Invalid)?)
+            .map_err(|_| SettingsError::Invalid)?;
+    let chunk = super::environment::files::read_range(
+        &directory,
+        Path::new(path.file_name().ok_or(SettingsError::Invalid)?),
+        offset,
+        max_bytes,
+        None,
+    )
+    .map_err(|_| SettingsError::Io)?;
+    Ok((
+        chunk.data_base64,
+        chunk.next_offset,
+        chunk.metadata.revision,
+    ))
 }
 
 impl SessionRuntimeManager {
+    #[allow(clippy::too_many_arguments)] // Native wire parameters and physical admission travel together.
     pub(crate) async fn skill_page(
         &self,
         target: SourceTarget,
+        endpoint: Option<Arc<LocalExecutionEndpoint>>,
         offset: usize,
         limit: usize,
         expected: Option<String>,
@@ -116,10 +192,7 @@ impl SessionRuntimeManager {
             let _owner = owner;
             #[cfg(test)]
             native_gate(&configuration.sources.config_path);
-            target.validate()?;
-            let discovered = configuration
-                .discover_skills(target.workspace())
-                .ok_or(SettingsError::Invalid)?;
+            let discovered = discover(&configuration, &target, endpoint.as_deref())?;
             let mut descriptors = Vec::new();
             let mut all_diagnostics = discovered.diagnostics;
             for package in &discovered.packages {
@@ -128,8 +201,13 @@ impl SessionRuntimeManager {
                     .iter()
                     .find(|entry| entry.name == package.name())
                     .ok_or(SettingsError::Invalid)?;
-                let collection = skill_collection(&configuration, &target, package.source());
-                match descriptor(package, provenance, &collection)? {
+                let collection = skill_collection(
+                    &configuration,
+                    &target,
+                    package.source(),
+                    endpoint.is_some(),
+                );
+                match descriptor(package, provenance, collection.as_deref())? {
                     Some(descriptor) => descriptors.push(descriptor),
                     None => all_diagnostics.push(SkillDiagnostic::PackageWarning {
                         source: provenance.source,
@@ -186,6 +264,7 @@ impl SessionRuntimeManager {
     pub(crate) async fn skill_read(
         &self,
         target: SourceTarget,
+        endpoint: Option<Arc<LocalExecutionEndpoint>>,
         name: String,
         kind: SkillContentKind,
         offset: u64,
@@ -202,10 +281,7 @@ impl SessionRuntimeManager {
             let _owner = owner;
             #[cfg(test)]
             native_gate(&configuration.sources.config_path);
-            target.validate()?;
-            let discovered = configuration
-                .discover_skills(target.workspace())
-                .ok_or(SettingsError::Invalid)?;
+            let discovered = discover(&configuration, &target, endpoint.as_deref())?;
             let package = discovered
                 .packages
                 .iter()
@@ -216,29 +292,20 @@ impl SessionRuntimeManager {
                 .iter()
                 .find(|provenance| provenance.name == name)
                 .ok_or(SettingsError::Invalid)?;
-            let collection = skill_collection(&configuration, &target, package.source());
-            let skill =
-                descriptor(package, provenance, &collection)?.ok_or(SettingsError::Invalid)?;
+            let collection = skill_collection(
+                &configuration,
+                &target,
+                package.source(),
+                endpoint.is_some(),
+            );
+            let skill = descriptor(package, provenance, collection.as_deref())?
+                .ok_or(SettingsError::Invalid)?;
             let (data_base64, next_offset, revision) = match kind {
                 SkillContentKind::Instructions => {
-                    let path = package.instruction_source();
-                    let directory = crate::package_io::PackageDirectory::open(
-                        path.parent().ok_or(SettingsError::Invalid)?,
-                    )
-                    .map_err(|_| SettingsError::Invalid)?;
-                    let chunk = super::environment::files::read_range(
-                        &directory,
-                        Path::new(path.file_name().ok_or(SettingsError::Invalid)?),
-                        offset,
-                        max_bytes,
-                        None,
-                    )
-                    .map_err(|_| SettingsError::Io)?;
-                    (
-                        chunk.data_base64,
-                        chunk.next_offset,
-                        chunk.metadata.revision,
-                    )
+                    let workspace = endpoint
+                        .as_deref()
+                        .filter(|_| package.source() == crate::skills::SkillSource::Workspace);
+                    read_instructions(workspace, package.instruction_source(), offset, max_bytes)?
                 }
                 SkillContentKind::Metadata => {
                     let (bytes, total) = encode(&package.definition(), offset, max_bytes)
@@ -254,9 +321,7 @@ impl SessionRuntimeManager {
                     )
                 }
             };
-            let current = configuration
-                .discover_skills(target.workspace())
-                .ok_or(SettingsError::Invalid)?;
+            let current = discover(&configuration, &target, endpoint.as_deref())?;
             if !current.packages.iter().any(|current| current == package)
                 || !current
                     .provenance

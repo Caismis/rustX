@@ -438,10 +438,10 @@ mod tests {
 
     /// A valid PNG larger than one 64 KiB wire chunk is assembled from
     /// bounded `ReadRange` exchanges on the real admitted Client and
-    /// committed byte-exact; the immutable snapshot outlives the source.
+    /// committed byte-exact; the immutable snapshot outlives the source and Client.
     #[tokio::test]
     async fn a_multichunk_png_commits_exact_artifact_bytes() {
-        let fixture = common::native_fixture_with_execution(Vec::new());
+        let mut fixture = common::native_fixture_with_execution(Vec::new());
         let model = invocation(true);
         let root = fixture.runtime.workspace().root();
         let mut bytes = Vec::new();
@@ -485,6 +485,16 @@ mod tests {
                 .unwrap(),
             bytes,
             "the committed artifact is immutable once the source is gone"
+        );
+        fixture.disconnect_execution();
+        assert_eq!(
+            fixture
+                .runtime
+                .artifacts()
+                .read_bounded(&reference.artifact_id)
+                .unwrap(),
+            bytes,
+            "the committed artifact is independent of the reaped Client"
         );
     }
 

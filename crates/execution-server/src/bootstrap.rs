@@ -63,6 +63,14 @@ pub(super) fn publish_bootstrap(
         workspace: reservation.workspace.clone(),
         credential,
     };
+    publish_private(parent, |file| write_record(file, &bootstrap))
+}
+
+/// Publish one secret to a new file beneath the already validated parent.
+pub(super) fn publish_private(
+    parent: &PrivateParent,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<PublishedBundle> {
     // The parent descriptor the returned proof will own is duplicated
     // before the file exists: a dup failure here fails cleanly, while a
     // late one could strand a published credential.
@@ -86,8 +94,9 @@ pub(super) fn publish_bootstrap(
         // Enforce the mode explicitly so the process umask cannot weaken
         // or strengthen it.
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        write_record(&mut file, &bootstrap)?;
-        file.sync_all()
+        write(&mut file)?;
+        file.sync_all()?;
+        parent.dir.sync_all()
     })();
     if let Err(error) = result {
         if let Ok(proof) = nix::sys::stat::fstat(&file) {

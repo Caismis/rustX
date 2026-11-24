@@ -425,7 +425,12 @@ impl SessionCatalog {
 
     pub(super) fn persist(&self, bytes: &[u8]) -> Result<(), SessionError> {
         #[cfg(test)]
-        let result = atomic_write(&self.path, bytes, &self.write_fault);
+        let result = atomic_write(
+            &self.path,
+            bytes,
+            &self.write_fault,
+            self.write_gate.as_deref(),
+        );
         #[cfg(not(test))]
         let result = atomic_write(&self.path, bytes);
         result.map_err(SessionError::from)
@@ -606,6 +611,7 @@ fn atomic_write(
     path: &Path,
     bytes: &[u8],
     #[cfg(test)] write_fault: &Arc<Mutex<Option<CatalogWriteFault>>>,
+    #[cfg(test)] write_gate: Option<&crate::runtime::conversation_runtime::Gate>,
 ) -> Result<(), CatalogCommitError> {
     let parent = path
         .parent()
@@ -639,6 +645,10 @@ fn atomic_write(
         detail: error.to_string(),
     })?;
     crate::runtime::local_storage::logical_operations::record_catalog_payload_write(bytes.len());
+    #[cfg(test)]
+    if let Some(gate) = write_gate {
+        gate.enter();
+    }
     crate::runtime::local_storage::logical_operations::record_catalog_file_sync();
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.file_fsync_ns,

@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 import { appendFileSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { mcpStartupGate, startupToolSchema, startupWait } from '../../../tui/test/support/mcp-startup-gate';
+import { startupToolSchema, startupWait } from '../../../tui/test/support/mcp-startup-gate';
+import { mcpHttpStartupGate } from './http-mcp-startup-gate';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { chooseWorkspace, connectRemote, connectionAction } from './shell-actions';
@@ -12,10 +13,10 @@ test('Workspace selection prepares live MCP and first Send joins the same discov
   const fixture = await startDogfood('mcp_startup');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
-  let ownedGate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let ownedGate: Awaited<ReturnType<typeof mcpHttpStartupGate>> | undefined;
   let passed = false;
   try {
-    const gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    const gate = await mcpHttpStartupGate(fixture.workspaceA, cancellation.signal);
     ownedGate = gate;
     const wire = await wireProbe(page);
     wire.holdNext('thread/start');
@@ -27,7 +28,7 @@ test('Workspace selection prepares live MCP and first Send joins the same discov
     expect(wire.requests.filter(row => row.method === 'thread/start')).toHaveLength(0);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
     await startupWait(() => gate.reached, cancellation.signal);
-    expect(gate.counts).toMatchObject({ processes: 1, initializations: 1, lists: 1 });
+    expect(gate.counts).toMatchObject({ sessions: 1, initializations: 1, lists: 1 });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
@@ -70,11 +71,11 @@ test('Workspace revocation after the first-Send receipt preserves creation and r
   const fixture = await startDogfood('mcp_submission_refused');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
-  let ownedGate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let ownedGate: Awaited<ReturnType<typeof mcpHttpStartupGate>> | undefined;
   let native: AppServerHost | undefined;
   let passed = false;
   try {
-    const gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    const gate = await mcpHttpStartupGate(fixture.workspaceA, cancellation.signal);
     ownedGate = gate;
     const wire = await wireProbe(page);
     wire.holdNext('thread/start');
@@ -85,7 +86,7 @@ test('Workspace revocation after the first-Send receipt preserves creation and r
     await connectRemote(page, fixture.endpoint, fixture.token);
     await chooseWorkspace(page, 'Workspace A');
     await startupWait(() => gate.reached, cancellation.signal);
-    expect(gate.counts).toMatchObject({ processes: 1, initializations: 1, lists: 1 });
+    expect(gate.counts).toMatchObject({ sessions: 1, initializations: 1, lists: 1 });
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('refused submission');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
@@ -124,11 +125,11 @@ for (const destination of ['existing', 'new'] as const) test(`first Send to ${de
   const fixture = await startDogfood(destination === 'new' ? 'mcp_startup' : 'mcp_startup_timeout');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
-  let ownedGate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let ownedGate: Awaited<ReturnType<typeof mcpHttpStartupGate>> | undefined;
   let native: AppServerHost | undefined;
   let passed = false;
   try {
-    const gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    const gate = await mcpHttpStartupGate(fixture.workspaceA, cancellation.signal);
     ownedGate = gate;
     if (destination === 'existing') appendFileSync(join(fixture.workspaceA, 'rustx.toml'), '\n[mcp_startup_policy]\nwait_timeout_ms = 1000\n');
     const activeNative = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
@@ -227,11 +228,11 @@ test('same-authority reconnect accepts first Send while its idle-evicted Session
   const fixture = await startDogfood('mcp_startup');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
-  let ownedGate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let ownedGate: Awaited<ReturnType<typeof mcpHttpStartupGate>> | undefined;
   let native: AppServerHost | undefined;
   let passed = false;
   try {
-    const gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    const gate = await mcpHttpStartupGate(fixture.workspaceA, cancellation.signal);
     ownedGate = gate;
     const activeNative = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     native = activeNative;

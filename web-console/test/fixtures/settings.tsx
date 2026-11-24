@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v80';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v81';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -166,7 +166,7 @@ if (variant.get('write') === 'held') {
 }
 server.handlers.set('skills/list', request => {
   if (request.method !== 'skills/list') throw new Error('Expected skill catalog');
-  return { type: 'skills', page: { data: [{
+  return { type: 'skills', authority: 'authoring', page: { data: [{
     catalog: { name: 'review', description: 'Review changes and report findings.', location: '/workspace/.agents/skills/review/SKILL.md' },
     provenance: { name: 'review', source: request.params.target.kind, location: '/workspace/.agents/skills/review/SKILL.md', shadowed: [] },
     metadata_revision: 'review-1', disable_model_invocation: false, enabled_by_default: true,

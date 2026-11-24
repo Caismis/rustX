@@ -11,6 +11,10 @@ pub(super) struct ControlShared {
     capacity: Condvar,
     #[cfg(test)]
     pub(super) before_capacity_wait: Mutex<Option<mpsc::Sender<()>>>,
+    #[cfg(test)]
+    pub(super) before_revoke_send: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    pub(super) before_revoke_confirmation: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 pub(super) struct ControlState {
@@ -50,6 +54,20 @@ impl ControlShared {
             capacity: Condvar::new(),
             #[cfg(test)]
             before_capacity_wait: Mutex::new(None),
+            #[cfg(test)]
+            before_revoke_send: Mutex::new(None),
+            #[cfg(test)]
+            before_revoke_confirmation: Mutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    fn pause_before_revocation_confirmation(&self, receipt: Option<&ControlReply>) {
+        if matches!(receipt, Some(ControlReply::Revoked))
+            && let Some((entered, resume)) = self.before_revoke_confirmation.lock().unwrap().take()
+        {
+            let _ = entered.send(());
+            let _ = resume.recv();
         }
     }
 
@@ -115,7 +133,7 @@ impl ControlShared {
     pub(super) fn resolve(
         &self,
         receipt: Option<ControlReply>,
-        confirm_revocation: impl FnOnce(),
+        confirm_revocation: impl FnOnce(Instant) -> bool,
     ) -> bool {
         let mut state = self.lock();
         let command = state.inflight.take();
@@ -126,15 +144,14 @@ impl ControlShared {
             (None, None) => true,
             (Some(command), Some(reply)) => {
                 if receipt_matches(&command.request, &reply) {
-                    if matches!(reply, ControlReply::Revoked) {
-                        if command
-                            .deadline
-                            .is_some_and(|deadline| Instant::now() >= deadline)
-                        {
-                            let _ = command.responder.send(Err(io::ErrorKind::TimedOut.into()));
-                            return false;
-                        }
-                        confirm_revocation();
+                    if matches!(reply, ControlReply::Revoked)
+                        && !command.deadline.is_some_and(confirm_revocation)
+                    {
+                        let _ = command.responder.send(Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "control command outlived its budget",
+                        )));
+                        return false;
                     }
                     let _ = command.responder.send(Ok(reply));
                     true
@@ -407,7 +424,14 @@ impl ControlHandle {
     ///
     /// A lost, late, or negative receipt leaves physical cleanup unconfirmed.
     pub fn stop_watch(&self, id: WatchId) -> io::Result<()> {
-        let deadline = Instant::now() + CONTROL_COMMAND_TIMEOUT;
+        self.stop_watch_by(id, Instant::now() + CONTROL_COMMAND_TIMEOUT)
+    }
+
+    /// Stops the watch under the caller's original control deadline.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::stop_watch`].
+    pub fn stop_watch_by(&self, id: WatchId, deadline: Instant) -> io::Result<()> {
         let receipt = self.enqueue_until(&ControlRequest::StopWatch { id }, deadline)?;
         match receipt.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok(ControlReply::WatchStopped {
@@ -459,6 +483,12 @@ impl ControlHandle {
         self.shared.lock().closed.is_none()
     }
 
+    /// Checks that two handles refer to exactly the same paired control lane.
+    #[must_use]
+    pub fn same_pair(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
     /// Orderly stop: waiters resolve closed and the worker's read wakes.
     /// The pair's teardown is the connection's.
     pub(super) fn stop(&self) {
@@ -499,61 +529,90 @@ impl ControlWorker {
             .name("execution-control".to_owned())
             .spawn(move || {
                 let mut next_sequence = 1u64;
-                loop {
+                let recoverable = loop {
                     let deadline = shared
                         .revoke_deadline()
                         .unwrap_or_else(|| Instant::now() + CONTROL_FRAME_TIMEOUT);
-                    let Ok(poll) = channel.receive::<ControlPoll>(Some(deadline)) else {
-                        if shared
-                            .revoke_deadline()
-                            .is_some_and(|limit| Instant::now() >= limit)
-                        {
-                            shared.reject(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                "control command outlived its budget",
-                            ));
+                    let deadline = worker_owner.clamp_revocation_cutoff(deadline);
+                    let poll = match channel.receive::<ControlPoll>(Some(deadline)) {
+                        Ok(poll) => poll,
+                        Err(error) => {
+                            if shared
+                                .revoke_deadline()
+                                .is_some_and(|limit| Instant::now() >= limit)
+                            {
+                                shared.reject(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "control command outlived its budget",
+                                ));
+                            }
+                            break rustx_execution_protocol::transport::recoverable_lane_loss(
+                                &error,
+                            );
                         }
-                        break;
                     };
                     // The client's own sequence must advance exactly:
                     // a skip or replay is a protocol violation, not a
                     // dropped frame to tolerate.
                     if poll.sequence.get() != next_sequence {
-                        break;
+                        break false;
                     }
                     next_sequence = next_sequence.saturating_add(1);
-                    if !shared.resolve(poll.receipt, || {
-                        worker_owner.confirm_revocation(&connection);
-                    }) {
-                        break;
-                    }
-                    let request = shared.next_command();
-                    let turn = ControlTurn {
+                    let mut turn = ControlTurn {
                         sequence: poll.sequence,
                         health: poll.health,
-                        request,
+                        request: None,
                     };
-                    let Ok(encoded) = encode_record(&turn) else {
-                        break;
-                    };
+                    #[cfg(test)]
+                    shared.pause_before_revocation_confirmation(poll.receipt.as_ref());
+                    let mut acknowledged = None;
+                    if !shared.resolve(poll.receipt, |command_deadline| {
+                        if !worker_owner.confirm_revocation(&connection, command_deadline) {
+                            return false;
+                        }
+                        let deadline = worker_owner.clamp_revocation_cutoff(
+                            deadline.min(Instant::now() + CONTROL_FRAME_TIMEOUT),
+                        );
+                        acknowledged = Some(send_turn(&mut channel, &turn, deadline).is_ok());
+                        true
+                    }) {
+                        break false;
+                    }
+                    match acknowledged {
+                        Some(true) => continue,
+                        Some(false) => break false,
+                        None => (),
+                    }
+                    turn.request = shared.next_command();
+                    #[cfg(test)]
+                    if matches!(&turn.request, Some(ControlRequest::Revoke))
+                        && let Some((entered, release)) =
+                            shared.before_revoke_send.lock().unwrap().take()
+                    {
+                        let _ = entered.send(());
+                        let _ = release.recv();
+                    }
                     let frame_deadline = Instant::now() + CONTROL_FRAME_TIMEOUT;
                     let send_deadline = shared
                         .revoke_deadline()
                         .map_or(frame_deadline, |limit| frame_deadline.min(limit));
-                    if channel.send(&encoded, Some(send_deadline)).is_err() {
-                        break;
+                    let send_deadline = worker_owner.clamp_revocation_cutoff(send_deadline);
+                    if let Err(error) = send_turn(&mut channel, &turn, send_deadline) {
+                        break rustx_execution_protocol::transport::recoverable_lane_loss(&error);
                     }
+                };
+                if !shared.stop_requested() {
+                    // A lane that ended without an orderly stop detaches
+                    // the pair: the seized data handle interrupts any
+                    // blocked exchange, and no dispatch starts again.
+                    worker_owner
+                        .detach_control(&connection, recoverable)
+                        .shutdown();
                 }
                 shared.terminate(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "control lane ended",
                 ));
-                if !shared.stop_requested() {
-                    // A lane that ended without an orderly stop detaches
-                    // the pair: the seized data handle interrupts any
-                    // blocked exchange, and no dispatch starts again.
-                    worker_owner.detach_control(&connection).shutdown();
-                }
             })
             .expect("the bounded control worker spawns");
         Self {
@@ -571,6 +630,10 @@ impl ControlWorker {
         self.handle.stop();
         let _ = self.join.join();
     }
+}
+
+fn send_turn(channel: &mut RecordChannel, turn: &ControlTurn, deadline: Instant) -> io::Result<()> {
+    channel.send(&encode_record(turn)?, Some(deadline))
 }
 
 /// Whether a poll receipt is the exact answer the in-flight request

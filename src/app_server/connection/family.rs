@@ -177,6 +177,7 @@ impl Family<'_> {
             | Method::SkillsList { .. }
             | Method::SkillsRead { .. }
             | Method::SourcesRead { .. }
+            | Method::McpSourceRead { .. }
             | Method::McpProbe { .. }
             | Method::ModelProbe { .. }
             | Method::SourcesPage { .. }
@@ -196,6 +197,7 @@ impl Family<'_> {
             | Method::WorkflowCheck { .. }
             | Method::WorkflowAnalyze { .. }
             | Method::SettingsRead { .. }
+            | Method::SessionInputsWrite { .. }
             | Method::SettingsValueRead { .. }
             | Method::ConfigurationReconcile { .. }
             | Method::SessionApplicationValueRead { .. }

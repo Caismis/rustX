@@ -64,6 +64,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 turn_id:crate::runtime::identity::AttemptId::new("native-attempt"),
                 call_id:crate::runtime::identity::ToolCallId::new("native-call"),
                 namespace:Some("business".into()),tool:"lookup".into(),arguments:serde_json::json!({"key":"invoice"}),
+                upload_scope: Some(Box::new(super::host_upload::HostUploadScope {
+                    callback_incarnation: "server-incarnation".into(),
+                    connection_incarnation: "connection-fixture".into(),
+                    subscription_incarnation: "subscription-fixture".into(),
+                })),
             }),
         })),
         ProtocolMessage::ClientReply(super::protocol::ClientReply::Success(super::protocol::ClientSuccess {
@@ -113,8 +118,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            call: Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
                         crate::model::catalog::ModelRef::parse("provider/selected").unwrap(),
@@ -125,13 +132,32 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
+            call: Method::SessionCreate { input_references: None, dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: "/workspace".into(),
                     model: None,
                 },
             },
         })),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("edit-session-inputs".into()),
+            call: Method::SessionInputsWrite {
+                session_id: target.session_id.clone(),
+                expected_revision: 2,
+                session_config: Some(crate::local_runtime::session_inputs::SessionInputChange::Replace(
+                    crate::local_runtime::session_inputs::SessionConfigContent("[agent]\nworkflows = []\n".into()),
+                )),
+                session_resources: Some(crate::local_runtime::session_inputs::SessionInputChange::Clear),
+            },
+        })),
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("edit-session-inputs".into()),
+            result: MethodResult::SessionInputsWritten { revision: 3 },
+        }))),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("prepare-workspace-draft".into()),
@@ -149,8 +175,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("submit-workspace-draft".into()),
             call: Method::SessionCreate {
+                input_references: None,
                 dynamic_tools: Vec::new(),
-                settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
+                settings: crate::local_runtime::session::SessionPersistentState { session_config: None, session_resources: None, cwd: "/workspace".into(), model: None },
                 submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
             },
         })),
@@ -1047,6 +1074,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     fixtures.push(request(
         "workflow-tool-catalog",
         Method::WorkflowToolCatalog {
+            execution_session: None,
             target: target.clone(),
             source: Some("github".into()),
             cursor: None,
@@ -1754,12 +1782,18 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         },
         Method::SkillsList {
             target: source.clone(),
+            execution_session: Some(crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            )),
             offset: 0,
             limit: 32,
             expected_revision: None,
         },
         Method::SkillsRead {
             target: source.clone(),
+            execution_session: Some(crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            )),
             name: "example".into(),
             kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
             offset: 0,
@@ -1768,6 +1802,9 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         },
         Method::McpCatalog {
             target: source,
+            execution_session: Some(crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            )),
             id: crate::runtime::identity::McpServerId::new("example"),
             expected_revision: "source-revision".into(),
             kind: crate::tools::mcp::catalog::CatalogKind::Resources,
@@ -2022,9 +2059,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v80.schema.json", "v80.ts"]);
+        assert_eq!(generations, ["v81.schema.json", "v81.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v80.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v81.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

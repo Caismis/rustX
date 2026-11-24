@@ -11,14 +11,15 @@ use super::{
     SourceScope, UserConfigManager, UserConfigSources, WorkspaceResourceAuthority,
     WorkspaceResourceIdentity, application, read_bounded, repair,
 };
+use crate::local_runtime::resource_directory::BoundDefinitions;
 use crate::local_runtime::session_runtime_manager::{
-    LocalExecutionEndpoint, WorkspaceConfiguration,
+    LocalExecutionEndpoint, WorkspaceDocumentSnapshot,
 };
 
 #[derive(Clone, Copy)]
-enum ResourceSource {
+enum ResourceSource<'a> {
     Authored,
-    Bound(Option<WorkspaceResourceIdentity>),
+    Bound(&'a std::sync::Arc<LocalExecutionEndpoint>),
 }
 
 enum WorkspaceDocument<'a> {
@@ -26,7 +27,7 @@ enum WorkspaceDocument<'a> {
     Bound {
         endpoint: &'a LocalExecutionEndpoint,
         path: PathBuf,
-        captured: WorkspaceConfiguration,
+        captured: WorkspaceDocumentSnapshot,
     },
 }
 
@@ -171,19 +172,12 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(request, credentials, None, || {})
-    }
-
-    pub(crate) fn capture_bound_application(
-        &self,
-        request: &SessionConfigInput,
-        credentials: &crate::credentials::CredentialSnapshot,
-        workspace: &LocalExecutionEndpoint,
-    ) -> Result<application::CapturedApplication, String> {
         self.capture_application_with_workspace(
             request,
-            Some(credentials),
-            Some((workspace, None)),
+            credentials,
+            None,
+            None,
+            &mut application::BoundSourceReads::default(),
             || {},
         )
     }
@@ -197,12 +191,33 @@ impl UserConfigManager {
         &self,
         input: &SessionConfigInput,
         credentials: &crate::credentials::CredentialSnapshot,
-        workspace: Option<(&LocalExecutionEndpoint, Option<WorkspaceResourceIdentity>)>,
+        workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
     ) -> Result<application::CapturedApplication, String> {
+        self.capture_session_application_with_python(
+            input,
+            credentials,
+            workspace,
+            None,
+            &mut application::BoundSourceReads::default(),
+        )
+    }
+
+    pub(crate) fn capture_session_application_with_python(
+        &self,
+        input: &SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
+        prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+        observed: &mut application::BoundSourceReads,
+    ) -> Result<application::CapturedApplication, String> {
+        let mut default = input.clone();
+        default.model = None;
         let mut captured = self.capture_application_with_workspace(
-            &SessionConfigInput::new(input.cwd.clone()),
+            &default,
             Some(credentials),
             workspace,
+            prefetched_python,
+            observed,
             || {},
         )?;
         if let Ok(context) = &mut captured.context {
@@ -218,18 +233,31 @@ impl UserConfigManager {
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(request, credentials, None, after_layers)
+        self.capture_application_with_workspace(
+            request,
+            credentials,
+            None,
+            None,
+            &mut application::BoundSourceReads::default(),
+            after_layers,
+        )
     }
 
     fn capture_application_with_workspace(
         &self,
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
-        workspace: Option<(&LocalExecutionEndpoint, Option<WorkspaceResourceIdentity>)>,
+        workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
+        prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+        observed: &mut application::BoundSourceReads,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
-            .capture_layers(request, workspace.map(|(endpoint, _)| endpoint))
+            .capture_layers(
+                request,
+                workspace.map(std::sync::Arc::as_ref),
+                &mut observed.documents,
+            )
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -248,24 +276,30 @@ impl UserConfigManager {
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
         let (context, read) = crate::bounded_file::recording_reads(|| {
-            self.resolve_captured_layers(layers, true, credentials)
-                .and_then(|capture| {
-                    capture
-                        .config
-                        .validate_resources()
-                        .map_err(|e| e.to_string())?;
-                    Ok(capture)
-                })
-                .and_then(|capture| {
-                    self.resolve_resources(
-                        request,
-                        capture,
-                        workspace.map_or(ResourceSource::Authored, |(_, retained)| {
-                            ResourceSource::Bound(retained)
-                        }),
-                    )
-                })
-                .map_err(|error| error.diagnostic.reason)
+            self.resolve_captured_layers(
+                layers,
+                true,
+                credentials,
+                workspace.map(std::sync::Arc::as_ref),
+                request.authoring.session_resources.as_ref(),
+            )
+            .and_then(|capture| {
+                capture
+                    .config
+                    .validate_resources()
+                    .map_err(|e| e.to_string())?;
+                Ok(capture)
+            })
+            .and_then(|capture| {
+                self.resolve_resources(
+                    request,
+                    capture,
+                    workspace.map_or(ResourceSource::Authored, ResourceSource::Bound),
+                    prefetched_python,
+                    observed,
+                )
+            })
+            .map_err(|error| error.diagnostic.reason)
         });
         self.verify_documents(&documents, &revisions)
             .map_err(|error| error.to_string())?;
@@ -297,10 +331,16 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        let (layers, documents) = self.capture_layers(request, None)?;
+        let (layers, documents) = self.capture_layers(request, None, &mut BTreeMap::new())?;
         let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
-        let prospective = self.resolve_resources(request, resolved, ResourceSource::Authored)?;
+        let prospective = self.resolve_resources(
+            request,
+            resolved,
+            ResourceSource::Authored,
+            None,
+            &mut application::BoundSourceReads::default(),
+        )?;
         self.verify_documents(&documents, &prospective.source_revisions)?;
         Ok(prospective)
     }
@@ -310,7 +350,13 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.resolve_captured_layers(layers, false, None)?;
+        let capture = self.resolve_captured_layers(
+            layers,
+            false,
+            None,
+            None,
+            request.authoring.session_resources.as_ref(),
+        )?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -355,7 +401,9 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         endpoint: Option<&'a LocalExecutionEndpoint>,
+        observed: &mut BTreeMap<PathBuf, String>,
     ) -> Result<(LayerCapture, ConfigurationDocuments<'a>), LaunchFailure> {
+        request.authoring.validate_bounds()?;
         let host = &self.sources;
         let (locations, identity) = if let Some(endpoint) = endpoint {
             if request.cwd.as_os_str() != endpoint.workspace().as_os_str() {
@@ -384,7 +432,7 @@ impl UserConfigManager {
         let workspace_document = match endpoint {
             None => WorkspaceDocument::Authored(admit_source(&project_path)?),
             Some(endpoint) => {
-                let captured = read_bound_workspace(endpoint, &project_path)?;
+                let captured = read_bound_document(endpoint, &project_path, "rustx.toml")?;
                 WorkspaceDocument::Bound {
                     endpoint,
                     path: project_path.clone(),
@@ -394,7 +442,6 @@ impl UserConfigManager {
         };
 
         let user_bytes = read_document(&user_document)?;
-        let user = layer_of(&user_path, user_bytes.as_deref(), false)?;
         let user_revision = super::super::settings::revision(user_bytes.as_deref());
         let authored;
         let project_bytes = match &workspace_document {
@@ -407,12 +454,14 @@ impl UserConfigManager {
                 .as_ref()
                 .map(|(bytes, _)| bytes.as_slice()),
         };
-        let project = layer_of(&project_path, project_bytes, true)?;
         let workspace_revision = super::super::settings::revision(project_bytes);
-        let revisions = BTreeMap::from([
+        let mut revisions = BTreeMap::from([
             (user_path.clone(), user_revision),
             (project_path.clone(), workspace_revision),
         ]);
+        observed.clone_from(&revisions);
+        let user = layer_of(&user_path, user_bytes.as_deref(), false)?;
+        let project = layer_of(&project_path, project_bytes, true)?;
         // Binding authoring remains strictly validated, but cannot rebind this manager.
 
         storage_disjoint(&locations.runtime_root, &locations.workspace)?;
@@ -445,6 +494,19 @@ impl UserConfigManager {
                 },
             ),
         ] {
+            merged.overlay(layer, &origin, &mut provenance);
+        }
+        if let Some(config) = &request.authoring.session_config {
+            let bytes = config.0.as_bytes();
+            let document = PathBuf::from(super::super::session_inputs::CONFIG_DOCUMENT);
+            let revision = super::super::settings::revision(Some(bytes));
+            observed.insert(document.clone(), revision.clone());
+            let layer = parse_layer(&document, bytes, true)?;
+            revisions.insert(document.clone(), revision);
+            let origin = Origin::Session {
+                document,
+                base: locations.workspace.clone(),
+            };
             merged.overlay(layer, &origin, &mut provenance);
         }
         Ok((
@@ -497,7 +559,18 @@ impl UserConfigManager {
                 path,
                 captured,
             } => {
-                if &read_bound_workspace(endpoint, path)? == captured {
+                let verified = read_bound_document(endpoint, path, "rustx.toml")?;
+                #[cfg(test)]
+                if self
+                    .test_hooks
+                    .fault("bound_workspace_verification_unavailable")
+                {
+                    return Err(unavailable(
+                        path,
+                        "Execution Client: physical operation unavailable".into(),
+                    ));
+                }
+                if &verified == captured {
                     Ok(())
                 } else {
                     Err("Workspace configuration changed during capture; rescan to retry".into())
@@ -512,6 +585,8 @@ impl UserConfigManager {
         capture: LayerCapture,
         allow_unselected: bool,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
+        workspace_endpoint: Option<&LocalExecutionEndpoint>,
+        session_resources: Option<&super::super::session_inputs::SessionResources>,
     ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
@@ -521,13 +596,16 @@ impl UserConfigManager {
             mut provenance,
             scoped_workflows,
         } = capture;
-        for (root, scope) in [
-            (
-                self.sources.home_directory.join("rustx/.agents"),
-                SourceScope::User,
-            ),
-            (locations.workspace.join(".agents"), SourceScope::Workspace),
-        ] {
+        for (root, scope) in [(
+            self.sources.home_directory.join("rustx/.agents"),
+            SourceScope::User,
+        )]
+        .into_iter()
+        .chain(
+            workspace_endpoint
+                .is_none()
+                .then(|| (locations.workspace.join(".agents"), SourceScope::Workspace)),
+        ) {
             revisions.insert(
                 root.clone(),
                 super::super::resource_directory::revision_with_cancellation(
@@ -654,10 +732,22 @@ impl UserConfigManager {
                 })
                 .transpose()?;
         }
-        let mcp = super::super::mcp_resources::load(
-            &self.sources.home_directory.join("rustx/.agents"),
+        let mut mcp = super::super::mcp_resources::load_with_workspace(
+            Some(&self.sources.home_directory.join("rustx/.agents")),
             Some(&locations.workspace),
+            |path| match workspace_endpoint {
+                Some(endpoint) => read_bound_mcp(endpoint).map_err(|error| {
+                    crate::runtime_client::types::RuntimeClientError::InvalidRequest {
+                        message: error.to_string(),
+                    }
+                }),
+                None => super::super::settings::read_document(path),
+            },
         );
+        if let Some(resources) = session_resources {
+            mcp.apply_session(resources, &locations.workspace)
+                .map_err(LaunchFailure::resource)?;
+        }
         let mut diagnostics: Vec<_> = mcp
             .invalid_scopes
             .iter()
@@ -751,7 +841,9 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         resolved: SourceCapture,
-        resource_source: ResourceSource,
+        resource_source: ResourceSource<'_>,
+        prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+        observed: &mut application::BoundSourceReads,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         crate::package_io::check_cancelled(&self.resource_io)
             .map_err(|error| LaunchFailure::from(error.to_string()))?;
@@ -768,41 +860,47 @@ impl UserConfigManager {
             scoped_workflows,
         } = resolved;
         let host = &self.sources;
-        // Capture authority once, including host path aliases and missing leaves.
-        // Configuration preparation retains this physical identity; validators must not rebind it.
-        // Authored resources are a separate Server-side source. A Client
-        // configuration document does not require a matching resource root.
-        let retained = match resource_source {
-            ResourceSource::Authored => None,
-            ResourceSource::Bound(retained) => retained,
-        };
-        let allow_absent = matches!(resource_source, ResourceSource::Bound(None));
-        let authored_identity = authored_workspace_identity(&locations.workspace, allow_absent)?;
-        if retained.is_some() && retained != authored_identity {
-            return Err(workspace_resource_failure(
-                &locations.workspace,
-                "directory identity changed",
-            ));
-        }
-        let authored_workspace = authored_identity.map(|_| locations.workspace.as_path());
-        if authored_workspace.is_none() && !scoped_workflows[1].is_empty() {
-            return Err(LaunchFailure::at(
+        let (workspace_endpoint, authored_identity) = match resource_source {
+            ResourceSource::Authored => (
                 None,
-                "agent.workflows",
-                "selected Workspace Workflows are unavailable through Server resource discovery",
-                "remove the unavailable Workflow selection",
-                locations.workspace.display().to_string(),
-            ));
-        }
+                Some(authored_workspace_identity(&locations.workspace)?),
+            ),
+            ResourceSource::Bound(endpoint) => (Some(endpoint), None),
+        };
+        let authored_workspace = authored_identity.map(|_| locations.workspace.as_path());
+        let bound_definitions = workspace_endpoint
+            .map(|endpoint| BoundDefinitions::capture(endpoint))
+            .transpose()
+            .map_err(LaunchFailure::resource)?;
+        let definitions_workspace =
+            workspace_endpoint.map_or(authored_workspace, |_| Some(locations.workspace.as_path()));
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
         let agent_root = normalize_missing(&user_resource_root.join("agents"))?;
-        let project_context_files = {
-            crate::runtime::load_project_context_files(authored_workspace, &user_resource_root)
-                .map_err(LaunchFailure::resource)?
+        let read_authored_instructions = || {
+            let workspace = if workspace_endpoint.is_some() {
+                None
+            } else {
+                authored_workspace
+            };
+            crate::runtime::load_project_context_files(workspace, &user_resource_root)
+                .map_err(LaunchFailure::resource)
         };
-        let (subagents, role_sources) =
-            super::super::agent_resources::load_authorized(authored_workspace, &agent_root)
-                .map_err(LaunchFailure::resource)?;
+        let mut project_context_files = read_authored_instructions()?;
+        let bound_instructions = workspace_endpoint
+            .map(|endpoint| BoundInstructions::read(endpoint, &locations.workspace))
+            .transpose()?;
+        let agents = super::super::agent_resources::load(
+            definitions_workspace,
+            &agent_root,
+            bound_definitions.as_ref(),
+        )
+        .map_err(LaunchFailure::resource)?;
+        let session_resources = request.authoring.session_resources.as_ref();
+        let (subagents, role_sources) = match session_resources {
+            Some(resources) => super::super::agent_resources::apply_session(agents, resources)
+                .map_err(LaunchFailure::resource)?,
+            None => agents,
+        };
         revisions.extend(
             role_sources
                 .values()
@@ -817,23 +915,43 @@ impl UserConfigManager {
         // An enabled Workflow that fails its check stays off: it is never
         // admitted, and never keeps a Session from starting.
         let mut workflows = {
-            super::super::workflow_resources::load(
-                authored_workspace,
+            super::super::workflow_resources::load_sources(
+                definitions_workspace,
                 &host.home_directory.join("rustx/.agents"),
+                bound_definitions.as_ref(),
             )
             .map_err(LaunchFailure::resource)?
         };
         // A scope enables only the files it owns: a Global entry never
         // enables the Workspace file that shadows it, nor the reverse.
+        if let Some(resources) = session_resources {
+            workflows = super::super::workflow_resources::apply_session(workflows, resources)
+                .map_err(LaunchFailure::resource)?;
+            let bytes = serde_json::to_vec(resources).map_err(|error| error.to_string())?;
+            revisions.insert(
+                super::super::session_inputs::RESOURCES_DOCUMENT.into(),
+                super::super::settings::revision(Some(&bytes)),
+            );
+        }
+        let session_workflows = matches!(
+            provenance.get("agent.workflows"),
+            Some(Origin::Session { .. })
+        )
+        .then(|| config.agent.workflows.clone());
+        if let Some(selection) = &session_workflows {
+            workflows.authorize_session_definitions(selection);
+        }
         config.agent.workflows.retain(|id| {
-            workflows.enabled_by_owning_scope(id, &scoped_workflows[0], &scoped_workflows[1])
+            workflows.enabled_by_owning_scope(
+                id,
+                &scoped_workflows[0],
+                &scoped_workflows[1],
+                session_workflows.as_deref(),
+            )
         });
-        let discover_skills = || {
-            self.discover_skills(authored_workspace)
-                .ok_or_else(|| LaunchFailure::from("cannot open Workspace for Skill discovery"))
-        };
-        let skill_discovery = discover_skills()?;
-        let skill_sources = authored_workspace.map_or_else(
+        let skill_workspace =
+            workspace_endpoint.map_or(authored_workspace, |_| Some(locations.workspace.as_path()));
+        let skill_sources = skill_workspace.map_or_else(
             || {
                 vec![crate::skills::AutomaticSkillRoot::user(
                     &host.home_directory,
@@ -841,6 +959,32 @@ impl UserConfigManager {
             },
             |root| crate::skills::automatic_skill_roots(Some(&host.home_directory), root),
         );
+        let mut discover_skills = || {
+            let discovery =
+                crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
+                    automatic: skill_sources.clone(),
+                })
+                .with_cancellation(self.resource_io.clone());
+            if let Some(endpoint) = workspace_endpoint {
+                discovery
+                    .discover_bound_observed(endpoint, &mut observed.skills)
+                    .map_err(|error| {
+                        LaunchFailure::at(
+                            Some(
+                                crate::skills::AutomaticSkillRoot::workspace(&locations.workspace)
+                                    .root,
+                            ),
+                            "agent.skills",
+                            "Workspace Skill discovery is unavailable from the Execution Client",
+                            "check the bound Workspace and Skill collection",
+                            error.to_string(),
+                        )
+                    })
+            } else {
+                Ok(discovery.discover())
+            }
+        };
+        let skill_discovery = discover_skills()?;
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
         {
@@ -872,12 +1016,44 @@ impl UserConfigManager {
             &subagents,
             &models,
         ));
-        let managed_python = super::super::managed_python_resources::discover_controlled(
-            authored_workspace,
-            &host.home_directory.join("rustx/.agents"),
-            &self.resource_io,
-        )
-        .map_err(LaunchFailure::resource)?;
+        let python_user = host.home_directory.join("rustx/.agents");
+        let managed_python = if let Some(catalog) = prefetched_python {
+            catalog
+        } else if let Some(endpoint) = workspace_endpoint {
+            super::super::managed_python_resources::discover_bound(
+                endpoint,
+                &python_user,
+                &self.resource_io,
+            )
+            .map_err(LaunchFailure::resource)?
+        } else {
+            super::super::managed_python_resources::discover_controlled(
+                authored_workspace,
+                &python_user,
+                &self.resource_io,
+            )
+            .map_err(LaunchFailure::resource)?
+        };
+        if workspace_endpoint.is_some() {
+            let mut manifest = Sha256::new();
+            for (source, outcome) in managed_python.packages() {
+                manifest.update(source.to_string().as_bytes());
+                if let Ok(package) = outcome {
+                    manifest.update(package.source_digest().as_bytes());
+                    manifest.update(
+                        serde_json::to_vec(&(
+                            package.permissions(),
+                            package.tool_permissions(),
+                            &package.watch_directories,
+                        ))
+                        .map_err(|error| error.to_string())?,
+                    );
+                }
+            }
+            let revision = format!("sha256:{:x}", manifest.finalize());
+            observed.python_manifest = Some(revision.clone());
+            revisions.insert(locations.workspace.join(".agents/tools"), revision);
+        }
         let MetadataAdmission {
             definitions,
             catalog: available_catalog,
@@ -948,10 +1124,10 @@ impl UserConfigManager {
                     family: ResourceFamily::Agent,
                     name: name.to_string(),
                     location: crate::runtime::resources::ResourceLocation {
-                        scope: if source.layer == "workspace" {
-                            SourceScope::Workspace
-                        } else {
-                            SourceScope::User
+                        scope: match source.layer {
+                            "workspace" => SourceScope::Workspace,
+                            "session" => SourceScope::Session,
+                            _ => SourceScope::User,
                         },
                         path: source.selected.clone(),
                         shadowed: source.overridden.clone(),
@@ -1004,9 +1180,15 @@ impl UserConfigManager {
         }
         #[cfg(test)]
         self.test_hooks.reach("before_resource_verification");
+        if let Some(definitions) = &bound_definitions {
+            definitions.verify().map_err(LaunchFailure::resource)?;
+            revisions.extend(definitions.revisions());
+        }
         for (root, scope) in
             std::iter::once((host.home_directory.join("rustx/.agents"), SourceScope::User)).chain(
-                authored_workspace.map(|root| (root.join(".agents"), SourceScope::Workspace)),
+                authored_workspace
+                    .filter(|_| workspace_endpoint.is_none())
+                    .map(|root| (root.join(".agents"), SourceScope::Workspace)),
             )
         {
             let actual = super::super::resource_directory::revision_with_cancellation(
@@ -1045,39 +1227,57 @@ impl UserConfigManager {
             // fenced through their admitted directories by the capture.
             if path == &host.home_directory.join("rustx/.agents")
                 || path == &locations.workspace.join(".agents")
+                || workspace_endpoint.is_some()
+                    && path == &locations.workspace.join(".agents/tools")
                 || path == &host.config_path
                 || path == &locations.workspace.join("rustx.toml")
+                || path == Path::new(super::super::session_inputs::CONFIG_DOCUMENT)
+                || path.starts_with(super::super::session_inputs::RESOURCES_DOCUMENT)
+                || bound_definitions
+                    .as_ref()
+                    .is_some_and(|definitions| definitions.owns_revision(path))
             {
                 continue;
             }
-            let bytes = match read_bounded(path) {
-                Ok(bytes) => Some(bytes),
-                Err(_) if !path.exists() => None,
-                Err(error) => return Err(error.into()),
+            let bytes = if let Some(endpoint) = workspace_endpoint
+                && path
+                    == &locations
+                        .workspace
+                        .join(super::super::mcp_resources::WORKSPACE_DOCUMENT)
+            {
+                read_bound_mcp(endpoint).map_err(|error| unavailable(path, error.to_string()))?
+            } else {
+                match read_bounded(path) {
+                    Ok(bytes) => Some(bytes),
+                    Err(_) if !path.exists() => None,
+                    Err(error) => return Err(error.into()),
+                }
             };
             if super::super::settings::revision(bytes.as_deref()) != *expected {
                 return Err("configuration inputs changed during capture; rescan to retry".into());
             }
         }
-        if crate::runtime::load_project_context_files(authored_workspace, &user_resource_root)
-            .map_err(LaunchFailure::resource)?
-            != project_context_files
-        {
+        if read_authored_instructions()? != project_context_files {
             return Err(
                 "project instruction discovery changed during capture; rescan to retry".into(),
             );
+        }
+        if let Some(instructions) = bound_instructions {
+            instructions.verify_and_append(&mut project_context_files, &mut revisions)?;
         }
         if discover_skills()? != skill_discovery {
             return Err("Skill definitions changed during capture; rescan to retry".into());
         }
         // The project Skill collection is the revision key of the complete
         // User and Workspace inventory.
-        let skill_scope = authored_workspace.map_or_else(
+        let skill_scope = skill_workspace.map_or_else(
             || crate::skills::AutomaticSkillRoot::user(&host.home_directory),
             crate::skills::AutomaticSkillRoot::workspace,
         );
         revisions.insert(skill_scope.root, skill_discovery.revision());
-        if authored_workspace_identity(&locations.workspace, allow_absent)? != authored_identity {
+        if let Some(identity) = authored_identity
+            && authored_workspace_identity(&locations.workspace)? != identity
+        {
             return Err(workspace_resource_failure(
                 &locations.workspace,
                 "directory changed during capture",
@@ -1113,12 +1313,10 @@ impl UserConfigManager {
             agent_root,
             role_sources,
             locations,
-            workspace_resources: match resource_source {
-                ResourceSource::Authored => WorkspaceResourceAuthority::Authored(
-                    authored_identity.expect("authored configuration requires a Workspace"),
-                ),
-                ResourceSource::Bound(_) => WorkspaceResourceAuthority::Bound(authored_identity),
-            },
+            workspace_resources: authored_identity.map_or(
+                WorkspaceResourceAuthority::Bound,
+                WorkspaceResourceAuthority::Authored,
+            ),
             config: std::sync::Arc::new(config),
             models,
             provenance,
@@ -1157,26 +1355,20 @@ pub(in crate::local_runtime) fn canonical_directory(path: &Path) -> Result<PathB
 
 pub(super) fn authored_workspace_identity(
     path: &Path,
-    allow_absent: bool,
-) -> Result<Option<WorkspaceResourceIdentity>, LaunchFailure> {
+) -> Result<WorkspaceResourceIdentity, LaunchFailure> {
     use std::os::unix::fs::MetadataExt as _;
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if allow_absent && error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(None);
-        }
-        Err(error) => return Err(workspace_resource_failure(path, error)),
-    };
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| workspace_resource_failure(path, error))?;
     if !metadata.is_dir() || !std::fs::canonicalize(path).is_ok_and(|canonical| canonical == path) {
         return Err(workspace_resource_failure(
             path,
             "Workspace directory was replaced or redirected",
         ));
     }
-    Ok(Some(WorkspaceResourceIdentity {
+    Ok(WorkspaceResourceIdentity {
         device: metadata.dev(),
         inode: metadata.ino(),
-    }))
+    })
 }
 
 fn workspace_resource_failure(path: &Path, detail: impl std::fmt::Display) -> LaunchFailure {
@@ -1245,13 +1437,98 @@ fn read_document(source: &AdmittedSource) -> Result<Option<Vec<u8>>, LaunchFailu
         .map_err(|error| unavailable(source.path(), client_detail(error)))
 }
 
-fn read_bound_workspace(
+fn read_bound_document(
     endpoint: &LocalExecutionEndpoint,
     path: &Path,
-) -> Result<WorkspaceConfiguration, LaunchFailure> {
+    name: &str,
+) -> Result<WorkspaceDocumentSnapshot, LaunchFailure> {
     endpoint
-        .workspace_configuration()
+        .workspace_document(Path::new(name))
         .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
+}
+
+pub(crate) fn read_bound_mcp(
+    endpoint: &LocalExecutionEndpoint,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let name = super::super::mcp_resources::WORKSPACE_DOCUMENT;
+    endpoint
+        .workspace_document(Path::new(name))
+        .map(|snapshot| snapshot.document.map(|(bytes, _)| bytes))
+}
+
+struct BoundInstructions<'a> {
+    endpoint: &'a LocalExecutionEndpoint,
+    path: PathBuf,
+    snapshot: WorkspaceDocumentSnapshot,
+}
+
+impl<'a> BoundInstructions<'a> {
+    const NAME: &str = crate::runtime::resources::PROJECT_CONTEXT_FILENAME;
+
+    fn read(endpoint: &'a LocalExecutionEndpoint, workspace: &Path) -> Result<Self, LaunchFailure> {
+        let path = workspace.join(Self::NAME);
+        let snapshot = Self::capture(endpoint, &path)?;
+        Ok(Self {
+            endpoint,
+            path,
+            snapshot,
+        })
+    }
+
+    fn capture(
+        endpoint: &LocalExecutionEndpoint,
+        path: &Path,
+    ) -> Result<WorkspaceDocumentSnapshot, LaunchFailure> {
+        endpoint
+            .workspace_document(Path::new(Self::NAME))
+            .map_err(|error| {
+                LaunchFailure::at(
+                    Some(path.into()),
+                    "projectInstructions",
+                    "Workspace instructions are unavailable from the Execution Client",
+                    "check the bound Workspace and instruction file",
+                    error.to_string(),
+                )
+            })
+    }
+
+    fn verify_and_append(
+        self,
+        files: &mut Vec<crate::runtime::ProjectContextFile>,
+        revisions: &mut BTreeMap<PathBuf, String>,
+    ) -> Result<(), LaunchFailure> {
+        if Self::capture(self.endpoint, &self.path)? != self.snapshot {
+            return Err(LaunchFailure::at(
+                Some(self.path),
+                "projectInstructions",
+                "Workspace instructions changed during capture",
+                "rescan after source edits settle",
+                "candidate discarded".into(),
+            ));
+        }
+        if let Some((bytes, _)) = self.snapshot.document {
+            let text = std::str::from_utf8(&bytes).map_err(|error| {
+                LaunchFailure::at(
+                    Some(self.path.clone()),
+                    "projectInstructions",
+                    "Workspace instruction text is not UTF-8",
+                    "save the instructions as UTF-8",
+                    error.to_string(),
+                )
+            })?;
+            let content = crate::runtime::resources::strip_instruction_bom(text).to_owned();
+            revisions.insert(
+                self.path.clone(),
+                super::super::settings::revision(Some(&bytes)),
+            );
+            files.retain(|file| file.path != self.path);
+            files.push(crate::runtime::ProjectContextFile {
+                path: self.path,
+                content,
+            });
+        }
+        Ok(())
+    }
 }
 
 /// A checked read of an admitted `rustx.toml` ([`AdmittedSource::reread`]).

@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type ChangeEvent } from 'react';
-import type { SkillDisplay, SkillDisplayWrite, SkillIconMediaType, SkillIconUpload } from '../../../../../protocol/app-server/v80';
+import type { SkillDisplay, SkillDisplayWrite, SkillIconMediaType, SkillIconUpload } from '../../../../../protocol/app-server/v81';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';

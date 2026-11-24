@@ -117,7 +117,17 @@ pub fn search(
     spec: &SearchSpec,
     deadline: Instant,
 ) -> ClientReply {
-    match run(root, relative_root, spec, deadline) {
+    search_as(root, relative_root, None, spec, deadline)
+}
+
+pub(crate) fn search_as(
+    root: &PackageDirectory,
+    relative_root: &Path,
+    display_name: Option<&str>,
+    spec: &SearchSpec,
+    deadline: Instant,
+) -> ClientReply {
+    match run(root, relative_root, display_name, spec, deadline) {
         Ok((body, matches, hit_limit, byte_limit, short_lines)) => ClientReply::SearchPage {
             body,
             matches: DecimalU64::new(matches),
@@ -132,6 +142,7 @@ pub fn search(
 fn run(
     root: &PackageDirectory,
     relative_root: &Path,
+    display_name: Option<&str>,
     spec: &SearchSpec,
     deadline: Instant,
 ) -> Result<(String, u64, bool, bool, bool), ReadError> {
@@ -191,7 +202,7 @@ fn run(
         retain_file(
             &mut universe,
             PathBuf::from(name),
-            name.to_string_lossy().into_owned(),
+            display_name.map_or_else(|| name.to_string_lossy().into_owned(), str::to_owned),
             metadata.clone(),
         )?;
     } else if metadata.is_directory {

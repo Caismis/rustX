@@ -170,6 +170,8 @@ pub struct CapturedProcessResult {
     pub exit_code: Option<i32>,
     /// The outcome intent owning the settlement.
     pub intent: ProcessOutcomeIntent,
+    /// Terminal physical ownership proof from the exact runner.
+    pub physical_settlement_proven: bool,
     /// The bounded captured stdout bytes.
     pub stdout: Vec<u8>,
     /// The bounded captured stderr bytes.
@@ -844,6 +846,7 @@ struct WitnessState {
     exited: std::sync::atomic::AtomicBool,
     /// -1 = no code observed (signal or unset), otherwise the exit code.
     exit_code: std::sync::atomic::AtomicI64,
+    progress: tokio::sync::Notify,
 }
 
 impl ProcessWitness {
@@ -865,11 +868,20 @@ impl ProcessWitness {
     /// platform reported no code.
     #[must_use]
     pub fn exit_code(&self) -> Option<i32> {
-        let code = self
-            .inner
-            .exit_code
-            .load(std::sync::atomic::Ordering::Acquire);
-        self.exited().then(|| i32::try_from(code).ok()).flatten()
+        self.exited()
+            .then(|| {
+                self.inner
+                    .exit_code
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            })
+            .and_then(|code| i32::try_from(code).ok())
+            .filter(|code| *code >= 0)
+    }
+
+    /// Wakes the lifecycle driver after a START or exit observation. The
+    /// driver reads both flags again since consecutive observations may merge.
+    pub async fn changed(&self) {
+        self.inner.progress.notified().await;
     }
 }
 
@@ -908,6 +920,7 @@ impl SupervisedCommandRunner {
                         .inner
                         .start_crossed
                         .store(true, std::sync::atomic::Ordering::Release);
+                    witness.inner.progress.notify_one();
                 }
                 written
             })
@@ -1237,6 +1250,7 @@ impl SupervisedCommandRunner {
                             .inner
                             .exited
                             .store(true, std::sync::atomic::Ordering::Release);
+                        self.witness.inner.progress.notify_one();
                         #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
                         if let Some(control) = self.control.as_ref()
                             && control.pause_at_shell_exit
@@ -1736,6 +1750,7 @@ pub async fn run_supervised_command(
     Ok(CapturedProcessResult {
         exit_code,
         intent: termination.intent,
+        physical_settlement_proven: termination.physical_settlement_proven,
         stdout,
         stderr,
     })
@@ -1751,15 +1766,18 @@ pub async fn run_supervised_command(
 pub async fn run_supervised_program(
     spec: SupervisedCommandSpec,
     program: ProgramInvocation,
+    control: Option<RunnerTestControl>,
+    observe_settlement: impl FnOnce(bool),
 ) -> Result<CapturedProcessResult, String> {
     #[cfg(any(test, feature = "test-support"))]
     crate::effects::observe_process();
     let (mut runner, stdout_pipe, stderr_pipe) =
-        SupervisedCommandRunner::spawn_program(&spec, None, Some(&program))
+        SupervisedCommandRunner::spawn_program(&spec, control, Some(&program))
             .map_err(|error| error.to_string())?;
     let stdout_task = stdout_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
     let stderr_task = stderr_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
     let termination = runner.settle().await;
+    observe_settlement(termination.physical_settlement_proven);
     let stdout = await_capture(stdout_task).await?;
     let stderr = await_capture(stderr_task).await?;
     let exit_code = match (&termination.intent, termination.exit_status) {
@@ -1776,6 +1794,7 @@ pub async fn run_supervised_program(
     Ok(CapturedProcessResult {
         exit_code,
         intent: termination.intent,
+        physical_settlement_proven: termination.physical_settlement_proven,
         stdout,
         stderr,
     })

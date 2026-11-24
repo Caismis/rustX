@@ -83,14 +83,14 @@ impl McpServerRuntime {
         // earlier call or while the connection was idle.
         if let Some(violation) = self.poisoned_protocol_violation().await {
             return McpPhysicalOutcome::Refused {
-                result: Box::new(failed_mcp(&violation, context, started)),
+                result: Box::new(failed_mcp(&violation, started)),
                 detail: violation,
             };
         }
         if self.closed.load(Ordering::Acquire) {
             const CLOSED: &str = "MCP server runtime is closed";
             return McpPhysicalOutcome::Refused {
-                result: Box::new(failed_mcp(CLOSED, context, started)),
+                result: Box::new(failed_mcp(CLOSED, started)),
                 detail: CLOSED.to_owned(),
             };
         }
@@ -140,7 +140,7 @@ impl McpServerRuntime {
         let Some(enqueued) = enqueued else {
             const STALE: &str = "MCP catalog changed before tools/call dispatch; refresh and adopt the validated catalog";
             return McpPhysicalOutcome::Refused {
-                result: Box::new(failed_mcp(STALE, context, started)),
+                result: Box::new(failed_mcp(STALE, started)),
                 detail: STALE.to_owned(),
             };
         };
@@ -164,7 +164,7 @@ impl McpServerRuntime {
                     super::diagnostics::service_error(&error, &self.credentials)
                 );
                 return McpPhysicalOutcome::Refused {
-                    result: Box::new(failed_mcp(&detail, context, started)),
+                    result: Box::new(failed_mcp(&detail, started)),
                     detail,
                 };
             }

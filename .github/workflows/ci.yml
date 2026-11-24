@@ -190,6 +190,8 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+
+      - uses: ./.github/actions/execution-domain-runtime
       # The rust-boundaries lineage: the same all-feature library, test
       # harness and integration-target dependency graph.
       - name: Cache Rust dependencies
@@ -337,6 +339,8 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+
+      - uses: ./.github/actions/execution-domain-runtime
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -439,6 +443,8 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+
+      - uses: ./.github/actions/execution-domain-runtime
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -536,6 +542,8 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+
+      - uses: ./.github/actions/execution-domain-runtime
       # The real-child integration suite drives the shared provider emulator,
       # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
       - name: Install Python 3.12

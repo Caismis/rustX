@@ -52,6 +52,10 @@ pub use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 
 mod binding;
 mod bootstrap;
+mod recovery;
+#[cfg(target_os = "linux")]
+pub use recovery::LocalDomainGrant;
+pub use recovery::RecoveryFence;
 mod connection;
 mod control;
 #[cfg(test)]
@@ -63,9 +67,10 @@ pub use binding::{
 };
 pub use bootstrap::PublishedBundle;
 pub use connection::{
-    BashOutputPage, CommitCancelled, DirectoryListing, DocumentPage, LinesPage, LocalConnection,
-    PhysicalError, PreparedMutation, ProcessOutcomeUnknown, RangeRead, RefusedEdit, SearchResult,
-    WatchOutcomeUnknown, WriteOutcomeUnknown,
+    CommitCancelled, ContinuationPage, DirectoryListing, DocumentPage, LinesPage, LocalConnection,
+    PhysicalError, PreparedMutation, ProcessOutcomeUnknown, RangeRead, RefusedEdit,
+    ResourceResolution, SearchResult, UnsentMcpExchange, WatchOutcomeUnknown, WatchRetiring,
+    WriteOutcomeUnknown,
 };
 pub use control::ControlHandle;
 

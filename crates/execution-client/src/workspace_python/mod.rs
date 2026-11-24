@@ -158,6 +158,9 @@ pub(crate) struct ProgramRequest {
     pub env: Vec<(String, String)>,
     pub timeout: Duration,
     pub cancellation: rustx_process_supervisor::signal::ProcessSignal,
+    responses_settled: Arc<AtomicBool>,
+    #[cfg(any(test, feature = "test-support"))]
+    control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
 }
 
 #[derive(Clone, Debug)]
@@ -199,6 +202,9 @@ struct Owner {
     #[cfg(test)]
     schedules: bool,
     probe: Arc<dyn ProgramProbe>,
+    probes_settled: Arc<AtomicBool>,
+    #[cfg(any(test, feature = "test-support"))]
+    probe_control: Mutex<Option<rustx_process_supervisor::process_runner::RunnerTestControl>>,
     host_override: Option<Arc<ExecutionHost>>,
     state_override: Option<PathBuf>,
     #[cfg(test)]
@@ -248,7 +254,9 @@ impl WorkspacePython {
     /// Acquires the one live preparation slot.
     pub fn prepare_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         let permit = self.permit.clone().try_acquire_owned().ok()?;
-        if self.owner.current_record(&self.root).is_some() {
+        if !self.owner.probes_settled.load(Ordering::Acquire)
+            || self.owner.current_record(&self.root).is_some()
+        {
             return None;
         }
         self.scheduled.store(true, Ordering::Release);
@@ -283,9 +291,23 @@ impl WorkspacePython {
         }
     }
 
-    /// Drives a Client preparation through physical settlement.
-    pub async fn prepare(&self) {
+    /// Drives one preparation while its permit is held. The return value
+    /// records physical settlement independently of interpreter readiness.
+    pub async fn prepare(&self) -> bool {
         self.owner.prepare(self.root.clone()).await;
+        self.owner.probes_settled.load(Ordering::Acquire)
+    }
+
+    /// Supplies the supervisor fault control for this test Workspace.
+    ///
+    /// # Panics
+    /// Panics if a test has poisoned the probe-control mutex.
+    #[cfg(feature = "test-support")]
+    pub fn probe_control_for_test(
+        &self,
+        control: rustx_process_supervisor::process_runner::RunnerTestControl,
+    ) {
+        *self.owner.probe_control.lock().expect("probe control") = Some(control);
     }
 
     /// Applies the verified Workspace interpreter or its guard.

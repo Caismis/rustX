@@ -172,6 +172,13 @@ impl ToolExecutor for McpToolExecutor {
         crate::tools::executor::ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 let started = Instant::now();
+                if invocation.mode == crate::tools::types::ToolInvocationMode::Background {
+                    return pre_dispatch_failure(
+                        "MCP tools require foreground execution",
+                        &context,
+                        started,
+                    );
+                }
                 let lease = self
                     .binding
                     .as_ref()
@@ -428,11 +435,10 @@ fn pre_dispatch_failure(
                 reason: context.cancellation.reason(),
                 phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
             },
-            context,
             started,
         )
     } else {
-        failed_mcp(message, context, started)
+        failed_mcp(message, started)
     }
 }
 

@@ -1129,10 +1129,11 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
     let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };
-    let MethodResult::Skills { page } = call(
+    let MethodResult::Skills { page, .. } = call(
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 0,
             limit: 32,
@@ -1157,6 +1158,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         &connection,
         2,
         Method::SkillsRead {
+            execution_session: None,
             target: target.clone(),
             name: "inspection".into(),
             kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1181,6 +1183,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             &connection,
             3,
             Method::SkillsRead {
+                execution_session: None,
                 target: target.clone(),
                 name: "inspection".into(),
                 kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1197,6 +1200,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             &connection,
             4,
             Method::SkillsRead {
+                execution_session: None,
                 target,
                 name: "../inspection".into(),
                 kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1340,11 +1344,11 @@ pub(crate) async fn host_drain_scenario() {
     match bounded(command).await.unwrap() {
         Response::Success(success) => assert!(matches!(success.result,
             MethodResult::CommandExec { result } if result.status == ExecStatus::Terminated)),
-        // A fenced endpoint mid-operation reports unavailability; a
-        // closed request context reports ConnectionClosed — both honest.
+        // START already won. Drain can reap the physical process without
+        // retaining the command's final reply on the request's data lane.
         Response::Failure(failure) => assert!(matches!(
             failure.error.data,
-            Some(ErrorData::ConnectionClosed | ErrorData::ExecutionUnavailable)
+            Some(ErrorData::ConnectionClosed | ErrorData::OutcomeUnknown)
         )),
     }
     execution.kill().await.unwrap();
@@ -1398,6 +1402,7 @@ pub(crate) async fn mcp_admission_scenario() {
         let request = tokio::spawn(async move {
             let call = if catalog {
                 Method::McpCatalog {
+                    execution_session: None,
                     target: SourceTarget::User,
                     id: crate::runtime::identity::McpServerId::new("held"),
                     expected_revision: revision,
@@ -1405,6 +1410,7 @@ pub(crate) async fn mcp_admission_scenario() {
                 }
             } else {
                 Method::McpProbe {
+                    execution_session: None,
                     target: SourceTarget::User,
                     id: crate::runtime::identity::McpServerId::new("held"),
                     expected_revision: revision,
@@ -1478,6 +1484,7 @@ pub(crate) async fn mcp_capacity_scenario() {
     }
     let revision = crate::local_runtime::settings::revision(Some(text.as_bytes()));
     let method = || Method::McpProbe {
+        execution_session: None,
         target: SourceTarget::User,
         id: crate::runtime::identity::McpServerId::new("held"),
         expected_revision: revision.clone(),
@@ -1587,12 +1594,14 @@ pub(crate) async fn skill_admission_scenario() {
     let fixture = Fixture::with_session_count(None, 0).await;
     for method in [
         Method::SkillsList {
+            execution_session: None,
             target: SourceTarget::User,
             offset: 0,
             limit: 1,
             expected_revision: None,
         },
         Method::SkillsRead {
+            execution_session: None,
             target: SourceTarget::User,
             name: "absent".into(),
             kind: SkillContentKind::Instructions,
@@ -1671,10 +1680,11 @@ pub(crate) async fn skill_large_resources_scenario() {
     let target = SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };
-    let MethodResult::Skills { page } = call(
+    let MethodResult::Skills { page, .. } = call(
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 0,
             limit: 1,
@@ -1691,10 +1701,11 @@ pub(crate) async fn skill_large_resources_scenario() {
     let preview = page.data[0].catalog.description.strip_suffix('…').unwrap();
     assert!(!preview.is_empty() && description.starts_with(preview));
     assert_eq!(page.next_offset, Some(1));
-    let MethodResult::Skills { page: last } = call(
+    let MethodResult::Skills { page: last, .. } = call(
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 1,
             limit: 32,
@@ -1715,6 +1726,7 @@ pub(crate) async fn skill_large_resources_scenario() {
             &connection,
             2,
             Method::SkillsRead {
+                execution_session: None,
                 target: target.clone(),
                 name: "large".into(),
                 kind: SkillContentKind::Metadata,
@@ -1745,6 +1757,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         &connection,
         3,
         Method::SkillsRead {
+            execution_session: None,
             target,
             name: "large".into(),
             kind: SkillContentKind::Instructions,
@@ -1981,10 +1994,11 @@ pub(crate) async fn skill_catalog_page_scenario() {
     let mut total = 0;
     let mut pages = 0;
     loop {
-        let MethodResult::Skills { page } = call(
+        let MethodResult::Skills { page, .. } = call(
             &connection,
             1,
             Method::SkillsList {
+                execution_session: None,
                 target: target.clone(),
                 offset,
                 limit: 32,

@@ -3,7 +3,10 @@ use crate::runtime::resources::{RuntimeResourceLoadError, validate_project_resou
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+mod bound_definitions;
 mod evidence;
+
+pub(super) use bound_definitions::BoundDefinitions;
 
 /// Capture equality uses complete bytes, or the independently complete finite
 /// domain fence carried by an incomplete observation. The incomplete tree's

@@ -65,6 +65,8 @@ impl std::fmt::Display for ToolSourceId {
 pub struct ToolSourceDemand {
     pub sources: std::collections::BTreeSet<ToolSourceId>,
     pub managed_python: crate::runtime::resources::ManagedPythonCatalog,
+    /// Workflow dependencies require a live discovery before admission.
+    pub(crate) live_mcp: std::collections::BTreeSet<ToolSourceId>,
 }
 impl ToolSourceDemand {
     #[must_use]
@@ -75,6 +77,7 @@ impl ToolSourceDemand {
         Self {
             sources: sources.into_iter().collect(),
             managed_python,
+            live_mcp: std::collections::BTreeSet::new(),
         }
     }
 }

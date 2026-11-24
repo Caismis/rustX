@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v80 envelope and method vocabulary.
+//! Rust authority for the App Server v81 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 80;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 81;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -119,6 +119,9 @@ pub enum Method {
     #[serde(rename = "mcp/catalog")]
     McpCatalog {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for Client Workspace reads and stdio.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         id: crate::runtime::identity::McpServerId,
         expected_revision: String,
         kind: crate::tools::mcp::catalog::CatalogKind,
@@ -126,6 +129,9 @@ pub enum Method {
     #[serde(rename = "skills/list")]
     SkillsList {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for a live Workspace projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         offset: usize,
         limit: usize,
         expected_revision: Option<String>,
@@ -133,6 +139,9 @@ pub enum Method {
     #[serde(rename = "skills/read")]
     SkillsRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for a live Workspace projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         name: String,
         kind: crate::local_runtime::skill_management::SkillContentKind,
         offset: u64,
@@ -654,6 +663,8 @@ pub enum Method {
         dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         settings: SessionPersistentState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_references: Option<crate::local_runtime::session_inputs::SessionInputReferences>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         submission: Option<crate::local_runtime::mcp_drafts::McpDraftTarget>,
     },
     /// Start or replace this connection's silent, ephemeral Workspace draft.
@@ -1092,10 +1103,19 @@ pub enum Method {
         model: crate::model::catalog::ModelRef,
         source: crate::local_runtime::model_probe::ModelProbeSource,
     },
+    /// Read a redacted Workspace MCP document from its authenticated Client.
+    #[serde(rename = "mcp/sourceRead")]
+    McpSourceRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        execution_session: crate::local_runtime::session::SessionId,
+    },
     /// Finite configuration connectivity check; never an Agent connection.
     #[serde(rename = "mcp/probe")]
     McpProbe {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session for Client Workspace reads and stdio.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         id: crate::runtime::identity::McpServerId,
         expected_revision: String,
     },
@@ -1188,6 +1208,9 @@ pub enum Method {
     #[serde(rename = "workflow/toolCatalog")]
     WorkflowToolCatalog {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+        /// Exact Session authorized to list executable Client sources.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_session: Option<crate::local_runtime::session::SessionId>,
         #[serde(default)]
         source: Option<String>,
         #[serde(default)]
@@ -1229,6 +1252,25 @@ pub enum Method {
     },
     #[serde(rename = "session/settings")]
     SettingsRead { session_id: SessionId },
+    /// Save a validated Session candidate at the current settings revision.
+    #[serde(rename = "session/inputsWrite")]
+    SessionInputsWrite {
+        session_id: SessionId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        expected_revision: u64,
+        #[serde(default)]
+        session_config: Option<
+            crate::local_runtime::session_inputs::SessionInputChange<
+                crate::local_runtime::session_inputs::SessionConfigContent,
+            >,
+        >,
+        #[serde(default)]
+        session_resources: Option<
+            crate::local_runtime::session_inputs::SessionInputChange<
+                crate::local_runtime::session_inputs::SessionResources,
+            >,
+        >,
+    },
     #[serde(rename = "session/settingsValueRead")]
     SettingsValueRead {
         session_id: SessionId,
@@ -1367,6 +1409,7 @@ impl Method {
             | Self::ConversationWorkflowRunSnapshotHeader { .. }
             | Self::ConversationWorkflowRunSnapshotChunk { .. }
             | Self::ConversationWorkflowTraceNode { .. }
+            | Self::McpSourceRead { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
@@ -1428,6 +1471,7 @@ impl Method {
             | Self::InboundSteer { .. }
             | Self::TurnCancel { .. }
             | Self::SourcesWrite { .. }
+            | Self::SessionInputsWrite { .. }
             | Self::ConfigurationReconcile { .. } => true,
         }
     }
@@ -1440,6 +1484,8 @@ pub enum ErrorData {
     EnvironmentUnauthorized,
     EnvironmentResourceNotFound,
     EnvironmentCapacityOrConflict,
+    SessionInputInvalid,
+    SessionInputSourceChanged,
     /// The Session's local execution endpoint does not exist or its
     /// admitted Client is gone; there is no fallback reader.
     ExecutionUnavailable,
@@ -1554,6 +1600,9 @@ pub enum ErrorData {
     SteerUnavailable,
     InvalidState,
     InvalidParams,
+    HostUploadRejected {
+        reason: super::host_upload::HostUploadRefusal,
+    },
     ResyncRequired,
     OperationFailed,
 }
@@ -1644,6 +1693,9 @@ pub struct HostToolCall {
     pub namespace: Option<String>,
     pub tool: String,
     pub arguments: serde_json::Value,
+    /// Address of this particular recipient for chunked results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_scope: Option<Box<super::host_upload::HostUploadScope>>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1706,7 +1758,11 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
-    Skills { page: crate::local_runtime::skill_management::SkillPage },
+    HostUploadAccepted { duplicate: bool },
+    Skills {
+        page: crate::local_runtime::skill_management::SkillPage,
+        authority: WorkspaceCatalogAuthority,
+    },
     SkillContent { content: crate::local_runtime::skill_management::SkillContent },
     CommandExec { result: super::command::ExecResult },
     EnvironmentAccepted {},
@@ -1972,6 +2028,18 @@ pub enum MethodResult {
     ModelProbe {
         outcome: crate::local_runtime::model_probe::ModelProbeOutcome,
     },
+    McpSource {
+        authority: WorkspaceCatalogAuthority,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<
+            crate::local_runtime::configuration::settings::SourceView<
+                std::collections::BTreeMap<
+                    crate::runtime::identity::McpServerId,
+                    crate::local_runtime::configuration::settings::McpView,
+                >,
+            >,
+        >,
+    },
     McpProbe {
         result: crate::local_runtime::mcp_probe::McpProbeResult,
     },
@@ -2014,6 +2082,10 @@ pub enum MethodResult {
     },
     Settings {
         projection: crate::local_runtime::configuration::observation::BoundedSessionSettings,
+    },
+    SessionInputsWritten {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        revision: u64,
     },
 }
 
@@ -2183,6 +2255,7 @@ pub enum ServerOutput {
 #[serde(untagged)]
 pub enum ProtocolMessage {
     Request(Box<Request>),
+    HostUpload(Box<super::host_upload::HostUploadEnvelope>),
     Response(Response),
     Notification(Notification),
     ServerMessage(ServerMessage),
@@ -2246,4 +2319,14 @@ pub enum ObservationSource {
 pub enum ResyncReason {
     ReplayUnavailable,
     RecordTooLarge,
+}
+
+/// Authority governing a Workspace catalog read for a Session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCatalogAuthority {
+    /// Confirmed unclaimed Workspace: Server authoring sources govern reads and writes.
+    Authoring,
+    /// Claimed Session with a live Execution Client: the Client view governs reads.
+    Client,
 }

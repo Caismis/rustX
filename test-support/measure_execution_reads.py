@@ -1,24 +1,21 @@
-"""Linux wire probe for EXEC-01 (paired-lane revision). Run with the absolute
+"""Linux read, search and write wire probe. Run with the absolute
 staged Client binary.
 
-The probe acts as a measuring UDS peer, not the product Agent Server. Each
+The probe acts as a measuring UDS peer. Its footprint is separate from the
+product Agent Server measurements. Each
 sample starts a new peer process and Client; fixtures are warm-cache. rchar
 counts process-wide logical reads, not disk traffic or source-only reads.
 
-Pairing revision (`"probe": "paired-v2"` in results): the Client handshake is
-now two independently authenticated lanes — the data `Hello` is answered with
-a fresh 256-bit pairing challenge that a second connection's `ControlHello`
-must echo — and the Client paces a continuous `ControlPoll`/`ControlTurn`
-loop on that lane for the whole session. Every result produced before this
-revision is HISTORICAL: it predates the control lane entirely, so its
-`client_rchar_ex_socket` excluded traffic that simply did not exist yet and
-is not comparable with paired-v2 numbers. The measuring peer cannot align
-socket sends with reads in a different process. Report observed rchar and
-the scanner's expected source byte count separately, without subtracting
-sent bytes from the former.
+The current results carry `"probe": "paired-v7"`. The data `Hello` receives
+a fresh 256-bit pairing challenge, and the independent `ControlHello` must
+echo it. The Client paces `ControlPoll` and `ControlTurn` for the whole
+session. Older single-lane measurements exclude the control traffic.
+The measuring peer cannot align socket sends with reads in another
+process. Report observed rchar and the expected source bytes separately.
 """
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -36,7 +33,9 @@ import time
 FRAME = 1024 * 1024
 WIDTH = 128
 MARKER = 'needle:"\\\t' + chr(0x96EA)
-PROBE_REVISION = "paired-v2"
+PROBE_REVISION = "paired-v7"
+WIRE_VERSION = 7
+WRITE_CHUNK_BYTES = 64 * 1024
 
 
 def pack(value):
@@ -82,6 +81,8 @@ class PollResponder:
         self.conn = conn
         self.lock = threading.Lock()
         self.bytes_sent = 0
+        self.revoking = threading.Event()
+        self.revoked = threading.Event()
         self.thread = threading.Thread(target=self._serve, daemon=True)
 
     def start(self):
@@ -95,17 +96,25 @@ class PollResponder:
         try:
             while True:
                 poll, _ = receive(self.conn)
+                settled = poll["receipt"] == "revoked"
                 turn = {
                     "sequence": poll["sequence"],
                     "health": poll["health"],
-                    "request": None,
+                    "request": "revoke" if self.revoking.is_set() and not settled else None,
                 }
                 frame = pack(turn)
                 self.conn.sendall(frame)
                 with self.lock:
                     self.bytes_sent += len(frame)
+                if settled:
+                    self.revoked.set()
+                    return
         except (EOFError, OSError, socket.timeout):
             return
+
+    def revoke(self):
+        self.revoking.set()
+        assert self.revoked.wait(5), "Client did not acknowledge physical revocation"
 
     def close(self):
         try:
@@ -122,24 +131,56 @@ class PollResponder:
         assert not self.thread.is_alive(), "control responder did not exit"
 
 
+def write_sample(conn, workspace, size):
+    assert 0 < size <= 2 * 1024 * 1024
+    request_bytes = reply_bytes = requests = 0
+
+    def exchange(operation, **content):
+        nonlocal request_bytes, reply_bytes, requests
+        frame = pack({operation: content})
+        conn.sendall(frame)
+        reply, received = receive(conn)
+        requests += 1
+        request_bytes += len(frame)
+        reply_bytes += received
+        return reply
+
+    name = "output"
+    chunk = b"w" * WRITE_CHUNK_BYTES
+    encoded = base64.b64encode(chunk).decode()
+    ticket = exchange("begin-write", relative_path=name, expectation="absent",
+                      total=str(size))["write-prepared"]["ticket"]
+    for offset in range(0, size, len(chunk)):
+        next_offset = min(offset + len(chunk), size)
+        data = encoded if next_offset - offset == len(chunk) else base64.b64encode(
+            chunk[:next_offset - offset]).decode()
+        reply = exchange("write-chunk", ticket=ticket, offset=str(offset), data_base64=data)
+        assert reply == {"write-chunk-received": {"ticket": ticket, "offset": str(offset)}}
+    assert not (workspace / name).exists()
+    reply = exchange("commit-write", ticket=ticket)["written"]
+    assert reply["ticket"] == ticket and reply["metadata"]["size"] == str(size)
+    return request_bytes, reply_bytes, requests
+
+
 def sample(client, size, operation):
     with tempfile.TemporaryDirectory() as temporary, socket.socket(socket.AF_UNIX) as listener:
         private = Path(temporary).resolve()
         workspace = private / "workspace"
         workspace.mkdir()
         rows, rem = divmod(size, WIDTH)
-        assert not rem and rows % 512 == 0
-        with (workspace / "input").open("wb") as out:
-            block = (b"x" * (WIDTH - 1) + b"\n") * 512
-            for _ in range(rows // 512):
-                out.write(block)
-            out.write(MARKER.encode())
         source_size = size + len(MARKER.encode())
+        if operation != "write":
+            assert not rem and rows % 512 == 0
+            with (workspace / "input").open("wb") as out:
+                block = (b"x" * (WIDTH - 1) + b"\n") * 512
+                for _ in range(rows // 512):
+                    out.write(block)
+                out.write(MARKER.encode())
         address = str(private / "s")
         listener.bind(address)
         listener.listen(2)
         listener.settimeout(10)
-        identity = dict(version=1, session="probe", environment="probe-env",
+        identity = dict(version=WIRE_VERSION, session="probe", environment="probe-env",
                         instance="probe-client", generation="1", workspace=str(workspace))
         # server_incarnation is Server-assigned: it exists in the bootstrap
         # bundle and admission replies but never in a Client Hello.
@@ -149,6 +190,7 @@ def sample(client, size, operation):
         with os.fdopen(os.open(bundle, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
             f.write(pack(dict(server_identity, endpoint={
                 "transport": "unix", "socket_path": address}, credential=secret)))
+        started = time.perf_counter_ns()
         proc = subprocess.Popen([client, "--binding-file", bundle, "--workspace", workspace],
                                 cwd="/", env={}, stdin=subprocess.DEVNULL)
         try:
@@ -181,52 +223,65 @@ def sample(client, size, operation):
                     try:
                         conn.sendall(pack("ping"))
                         assert receive(conn)[0] == "pong"
+                        startup_ns = time.perf_counter_ns() - started
                         if operation == "lines":
                             request = {"read-lines": dict(relative_path="input", offset=str(rows + 1),
                                                           limit="1", expected_revision=None)}
-                        else:
+                        elif operation == "grep":
                             request = {"search": dict(relative_root="input", spec={"grep": dict(
                                 pattern="needle:", glob=None, literal=True, ignore_case=False,
                                 context=0, limit="1")})}
-                        frame = pack(request)
                         before = counter(proc.pid, "io", "rchar")
+                        writes_before = counter(proc.pid, "io", "wchar")
                         control_before = responder.sent()
                         start = time.perf_counter_ns()
-                        conn.sendall(frame)
-                        reply, reply_size = receive(conn)
+                        if operation == "write":
+                            tx, rx, rpc = write_sample(conn, workspace, size)
+                            selected_bytes = size
+                            scan_bytes = 0
+                        else:
+                            frame = pack(request)
+                            conn.sendall(frame)
+                            reply, rx = receive(conn)
+                            tx, rpc = len(frame), 1
+                            if operation == "lines":
+                                page = reply["lines"]
+                                assert page["metadata"]["size"] == str(source_size)
+                                assert page["total_lines"] == str(rows + 1) and page["end"] == "complete"
+                                assert page["shown_lines"] == 1 and page["text"] == MARKER
+                                selection = page["text"]
+                            else:
+                                page = reply["search-page"]
+                                assert page["matches"] == "1" and page["body"] == f"input:{rows+1}: {MARKER}"
+                                assert not any(page[k] for k in ("short_lines", "hit_limit", "byte_limit"))
+                                selection = page["body"]
+                            selected_bytes = len(selection.encode())
+                            scan_bytes = source_size * (1 if operation == "lines" else 2)
                         elapsed = time.perf_counter_ns() - start
                         read_bytes = counter(proc.pid, "io", "rchar") - before
+                        written_bytes = counter(proc.pid, "io", "wchar") - writes_before
                         control_tx = responder.sent() - control_before
-                        if operation == "lines":
-                            page = reply["lines"]
-                            assert page["metadata"]["size"] == str(source_size)
-                            assert page["total_lines"] == str(rows + 1) and page["end"] == "complete"
-                            assert page["shown_lines"] == 1 and page["text"] == MARKER
-                            selection = page["text"]
-                        else:
-                            page = reply["search-page"]
-                            assert page["matches"] == "1" and page["body"] == f"input:{rows+1}: {MARKER}"
-                            assert not any(page[k] for k in ("short_lines", "hit_limit", "byte_limit"))
-                            selection = page["body"]
-                        # rchar includes auxiliary descriptor/metadata reads, not just
-                        # bytes from input. Keep the observed value distinct from the
-                        # two known full passes (UTF-8 validation, then matching).
-                        scan_bytes = source_size * (1 if operation == "lines" else 2)
                         assert read_bytes >= scan_bytes, (read_bytes, scan_bytes)
-                        result = dict(operation=operation, source_bytes=source_size, rpc=1,
-                                      probe=PROBE_REVISION,
-                                      selected_bytes=len(selection.encode()), tx=len(frame),
-                                      rx=reply_size,
-                                      client_process_rchar=read_bytes, control_tx_sample=control_tx,
+                        result = dict(operation=operation,
+                                      source_bytes=size if operation == "write" else source_size,
+                                      rpc=rpc, probe=PROBE_REVISION,
+                                      selected_bytes=selected_bytes, tx=tx, rx=rx,
+                                      client_process_rchar=read_bytes, client_process_wchar=written_bytes,
+                                      control_tx_sample=control_tx,
                                       scan_bytes_by_algorithm=scan_bytes,
-                                      elapsed_ns=elapsed,
+                                      startup_ns=startup_ns, elapsed_ns=elapsed,
                                       client_hwm_kib=counter(proc.pid, "status", "VmHWM"),
                                       probe_hwm_kib=counter("self", "status", "VmHWM"))
+                        if operation == "write":
+                            with (workspace / "output").open("rb") as output:
+                                for offset in range(0, size, WRITE_CHUNK_BYTES):
+                                    length = min(size - offset, WRITE_CHUNK_BYTES)
+                                    assert output.read(length) == b"w" * length
+                                assert output.read(1) == b""
+                        shutdown = time.perf_counter_ns()
+                        responder.revoke()
                     finally:
-                        # Orderly end: the data lane's EOF is the Client's
-                        # clean serve exit — it must close FIRST, because a
-                        # dead control lane fences the data lane (and the
-                        # exit status) via the worker's teardown guard.
+                        # Close the data lane after the explicit physical receipt.
                         conn.close()
                         responder.close()
                         responder.join(10)
@@ -234,6 +289,7 @@ def sample(client, size, operation):
                     control.close()
             if proc.wait(timeout=10):
                 raise RuntimeError("Client did not exit successfully")
+            result["shutdown_ns"] = time.perf_counter_ns() - shutdown
             return result
         finally:
             if proc.poll() is None:
@@ -244,10 +300,12 @@ def sample(client, size, operation):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("client", type=Path)
-    parser.add_argument("--one", choices=("lines", "grep"))
+    parser.add_argument("--one", choices=("lines", "grep", "write"))
     parser.add_argument("--size", type=int)
     args = parser.parse_args()
     if args.one:
+        if args.size is None:
+            parser.error("--one requires --size")
         print(json.dumps(sample(args.client.resolve(strict=True), args.size, args.one)))
     else:
         for mib in (1, 8, 64):

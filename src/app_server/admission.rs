@@ -103,14 +103,29 @@ impl Associations {
         id: &RequestId,
         method: &Method,
     ) -> Result<Association, ErrorData> {
+        self.admit_in_lane(id, Some(method))
+    }
+
+    pub(super) fn admit_host_upload(
+        self: &Arc<Self>,
+        id: &RequestId,
+    ) -> Result<Association, ErrorData> {
+        self.admit_in_lane(id, None)
+    }
+
+    fn admit_in_lane(
+        self: &Arc<Self>,
+        id: &RequestId,
+        method: Option<&Method>,
+    ) -> Result<Association, ErrorData> {
         let mut entries = self.0.lock().expect("request associations");
         if entries.contains_key(id) {
             return Err(ErrorData::DuplicateRequestId);
         }
-        let lane = RequestLane::for_method(method);
-        let observation = if let Method::AgentObserve {
+        let lane = method.map_or(RequestLane::Ordinary, RequestLane::for_method);
+        let observation = if let Some(Method::AgentObserve {
             target, agent_id, ..
-        } = method
+        }) = method
         {
             if entries.values().any(|entry| {
                 entry.observation.as_ref().is_some_and(|admission| {
@@ -139,12 +154,12 @@ impl Associations {
             });
         }
         match method {
-            Method::AuxiliaryClassify { target, submission } => {
+            Some(Method::AuxiliaryClassify { target, submission }) => {
                 submission
                     .fingerprint(&target.conversation_id)
                     .map_err(|_| ErrorData::InvalidParams)?;
             }
-            Method::AuxiliaryBtw { target, submission } => {
+            Some(Method::AuxiliaryBtw { target, submission }) => {
                 submission
                     .fingerprint(&target.conversation_id)
                     .map_err(|_| ErrorData::InvalidParams)?;
@@ -159,14 +174,14 @@ impl Associations {
                 lane,
                 observation,
                 submission: match method {
-                    Method::AuxiliaryClassify { target, submission } => Some(
+                    Some(Method::AuxiliaryClassify { target, submission }) => Some(
                         crate::runtime::auxiliary::submission::SubmissionPermit::new_for(
                             target.conversation_id.clone(),
                             submission.correlation.clone(),
                         )
                         .map_err(|_| ErrorData::RequestCapacity)?,
                     ),
-                    Method::AuxiliaryBtw { target, submission } => Some(
+                    Some(Method::AuxiliaryBtw { target, submission }) => Some(
                         crate::runtime::auxiliary::submission::SubmissionPermit::new_for(
                             target.conversation_id.clone(),
                             submission.correlation.clone(),

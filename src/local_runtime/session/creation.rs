@@ -228,11 +228,21 @@ impl SessionCatalog {
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
             #[cfg(test)]
+            write_gate: None,
+            #[cfg(test)]
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
             classification_gate: None,
             summary_invalidations: Arc::default(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_catalog_file_sync(
+        &mut self,
+        gate: Arc<crate::runtime::conversation_runtime::Gate>,
+    ) {
+        self.write_gate = Some(gate);
     }
 
     /// Arms one deterministic catalog-write fault for the next mutation.

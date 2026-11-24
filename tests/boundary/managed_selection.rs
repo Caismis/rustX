@@ -37,15 +37,32 @@ struct PreparationRunner {
 impl SupervisedProcessRunner for PreparationRunner {
     fn run(
         &self,
-        spec: SupervisedCommandSpec,
+        mut spec: SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
     ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
         Box::pin(async move {
             let sync = spec.command.contains(" sync ");
             let staging = spec.cwd.clone();
+            if let Some(cache) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE")
+                && let Some((_, directory)) = spec
+                    .command_environment
+                    .iter_mut()
+                    .find(|(key, _)| key == "UV_CACHE_DIR")
+            {
+                // The same optional acceptance cache used by the isolated
+                // process harness. uv still resolves and builds real packages.
+                *directory = cache.into_string().expect("UTF-8 test wheel cache path");
+                spec.command_environment
+                    .push(("UV_OFFLINE".into(), "1".into()));
+            }
             let result = self.runner.run(spec, control).await?;
             if sync {
-                assert_eq!(result.exit_code, Some(0), "{result:?}");
+                assert_eq!(
+                    result.exit_code,
+                    Some(0),
+                    "{}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
                 let release = self.release.lock().unwrap().take().expect("one build");
                 self.staged
                     .lock()

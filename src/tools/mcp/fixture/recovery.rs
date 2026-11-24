@@ -183,7 +183,7 @@ pub struct RecoveryScript {
 fn joined(values: &[u64]) -> String {
     values
         .iter()
-        .map(u64::to_string)
+        .map(|generation| format!("fixture-generation:{generation}"))
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -227,7 +227,10 @@ impl RecoveryControl {
         script: &RecoveryScript,
     ) -> std::collections::BTreeMap<String, String> {
         std::collections::BTreeMap::from([
-            (RECOVERY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+            (
+                RECOVERY_FIXTURE_MODE_ENV.to_owned(),
+                "fixture-mcp-recovery".to_owned(),
+            ),
             (
                 RECOVERY_JOURNAL_ENV.to_owned(),
                 self.journal.display().to_string(),
@@ -262,11 +265,13 @@ impl RecoveryControl {
             ),
             (
                 RECOVERY_HANG_PULSES_ENV.to_owned(),
-                script.hang_pulses.to_string(),
+                format!("fixture-pulses:{}", script.hang_pulses),
             ),
             (
                 RECOVERY_LIST_TTL_MS_ENV.to_owned(),
-                script.list_ttl_ms.map_or_default(|ttl| ttl.to_string()),
+                script
+                    .list_ttl_ms
+                    .map_or_default(|ttl| format!("fixture-ttl:{ttl}")),
             ),
         ])
     }
@@ -583,7 +588,12 @@ impl Generation {
             std::env::var(name)
                 .unwrap_or_default()
                 .split(',')
-                .filter_map(|entry| entry.trim().parse::<u64>().ok())
+                .filter_map(|entry| {
+                    entry
+                        .strip_prefix("fixture-generation:")?
+                        .parse::<u64>()
+                        .ok()
+                })
                 .collect()
         }
         let number = claim_generation();
@@ -598,11 +608,11 @@ impl Generation {
                 .contains(&number),
             hang_pulses: std::env::var(RECOVERY_HANG_PULSES_ENV)
                 .ok()
-                .and_then(|value| value.trim().parse().ok())
+                .and_then(|value| value.strip_prefix("fixture-pulses:")?.parse().ok())
                 .unwrap_or(0),
             list_ttl_ms: std::env::var(RECOVERY_LIST_TTL_MS_ENV)
                 .ok()
-                .and_then(|value| value.trim().parse().ok()),
+                .and_then(|value| value.strip_prefix("fixture-ttl:")?.parse().ok()),
         }
     }
 }

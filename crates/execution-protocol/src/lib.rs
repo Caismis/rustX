@@ -1,4 +1,4 @@
-//! Single wire definition for the rustX execution protocol (v2).
+//! Single wire definition for the rustX execution protocol (v4).
 //!
 //! The execution protocol is the physical environment/output channel between
 //! the Agent Server (package `rustx`) and the physical Execution Client
@@ -20,6 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 pub mod changes;
+pub mod mcp;
 pub mod process;
 pub mod save;
 pub mod transport;
@@ -27,10 +28,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v2";
+pub const EXECUTION_PATH: &str = "/execution/v8";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -47,6 +48,12 @@ pub const MAX_DIRECTORY_NAMES: usize = 4096;
 
 /// Maximum entries one `Directory` page reply may carry.
 pub const MAX_DIRECTORY_PAGE_ENTRIES: usize = 128;
+
+/// Maximum contained link hops in one resource observation.
+pub const MAX_RESOURCE_LINK_HOPS: usize = 32;
+
+/// Maximum raw UTF-8 length of a resolved resource or link path.
+pub const MAX_RESOURCE_PATH_BYTES: usize = 4096;
 
 /// Maximum joined bytes of one `Lines` page — the wire policy equal to the
 /// physical scanner's 50KB complete-line budget.
@@ -477,6 +484,8 @@ pub enum Capability {
     Python,
     /// Client-hosted stdio MCP sessions.
     StdioMcp,
+    /// Frozen Managed Python resources and Client-local Store preparation.
+    ManagedPython,
     /// Bounded byte-chunk content transfer and upload staging.
     ContentTransfer,
     /// Client-owned managed output: private allocation, unpublished
@@ -510,7 +519,27 @@ impl BindingCredential {
     pub const fn as_bytes(&self) -> &[u8; Self::LENGTH] {
         &self.0
     }
+
+    /// Derives the live instance's memory-only credential from its original
+    /// authenticated pairing. The launch bundle alone cannot reconnect.
+    #[must_use]
+    pub fn recovery_credential(&self, first_challenge: &PairingNonce) -> Self {
+        use sha2::{Digest as _, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"rustx execution same-instance recovery v1");
+        hash.update(self.as_bytes());
+        hash.update(first_challenge.as_bytes());
+        Self(hash.finalize().into())
+    }
 }
+
+/// Maximum period within which Server may re-admit the same live instance
+/// after recognizing the first lane loss.
+pub const SAME_INSTANCE_RECOVERY_WINDOW: Duration = Duration::from_secs(50);
+
+/// Client starts terminal cleanup when it cannot prove re-admission by
+/// this cutoff. The cleanup itself still requires separate evidence.
+pub const DETACHED_CLIENT_RETENTION: Duration = Duration::from_secs(80);
 
 /// Failure to parse a wire credential. Never carries the submitted value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -772,8 +801,8 @@ pub enum Reject {
     /// A different connection is already live on this binding.
     #[error("binding already has a live connection")]
     AlreadyConnected,
-    /// The binding detached; re-admission requires live-instance recovery
-    /// proof that this layer does not provide (#577).
+    /// The binding detached; same-instance recovery requires its in-memory
+    /// proof within the original recovery window.
     #[error("binding detached; recovery proof required")]
     RecoveryRequired,
     /// The binding was revoked and can never be dispatched again.
@@ -1046,6 +1075,10 @@ pub enum ClientRequest {
     /// One managed-process operation request — register, start, query,
     /// ordered output paging, stdin, resize, close, release.
     Process(crate::process::ProcessRequest),
+    /// One operation on a Client-owned stdio MCP session.
+    Mcp(crate::mcp::Request),
+    /// Observe and retain a frozen Managed Python source in the Client view.
+    PythonSource(crate::mcp::PythonSourceRequest),
     /// Read lines of a Client-owned Bash continuation.
     ReadBashOutput {
         /// The operation under the current binding.
@@ -1066,8 +1099,37 @@ pub enum ClientRequest {
         /// The bounded search parameters.
         spec: SearchSpec,
     },
-    /// One optional-save request. The real Client answers `Unavailable`.
+    /// One optional-save request on a binding offering managed output.
     Save(crate::save::SaveRequest),
+    /// Read lines of a published Client-owned import.
+    ReadSavedOutput {
+        /// The published locator under this binding.
+        locator: crate::save::Locator,
+        /// The Conversation making the read.
+        conversation: crate::save::ConversationId,
+        /// One-based line offset.
+        offset: DecimalU64,
+        /// Optional positive line limit.
+        limit: Option<DecimalU64>,
+    },
+    /// Read up to `MAX_TEXT_BYTES` saved bytes at a zero-based offset.
+    ReadSavedOutputRange {
+        /// The published locator under this binding.
+        locator: crate::save::Locator,
+        /// The Conversation making the read.
+        conversation: crate::save::ConversationId,
+        /// The byte offset to start at.
+        offset: DecimalU64,
+    },
+    /// Search one published Client-owned import.
+    SearchSavedOutput {
+        /// The published locator under this binding.
+        locator: crate::save::Locator,
+        /// The Conversation making the search.
+        conversation: crate::save::ConversationId,
+        /// The bounded search parameters.
+        spec: SearchSpec,
+    },
     /// A bounded revision-checked range read under the binding workspace.
     ReadRange {
         /// The workspace-relative file path: normal components only.
@@ -1086,6 +1148,11 @@ pub enum ClientRequest {
         /// empty for the workspace root itself.
         relative_path: PathBuf,
     },
+    /// Read one Workspace resource entry, resolving only contained links.
+    ResolveResourceEntry {
+        /// Normal Workspace-relative components, or empty for the root.
+        relative_path: PathBuf,
+    },
     /// One bounded page of a directory under the binding workspace.
     ReadDirectory {
         /// The workspace-relative directory path: normal components only,
@@ -1097,6 +1164,8 @@ pub enum ClientRequest {
         limit: u32,
         /// The revision the directory must still hold, when checked.
         expected_revision: Option<String>,
+        /// Omit hidden names from the reply, while charging them to the page.
+        skip_hidden: bool,
     },
     /// A bounded mutation beneath the admitted workspace.
     MutateTree(TreeMutation),
@@ -1338,6 +1407,10 @@ pub enum ClientReply {
     Pong,
     /// The reply to a `Process` request.
     Process(crate::process::ProcessReply),
+    /// A reply from the Client-owned stdio MCP session.
+    Mcp(crate::mcp::Response),
+    /// Result of a bounded Managed Python source request.
+    PythonSource(crate::mcp::PythonSourceReply),
     /// The reply to a `Save` request.
     Save(crate::save::SaveReply),
     /// The verified range the Client physically read.
@@ -1356,6 +1429,22 @@ pub enum ClientReply {
         /// The entry's kind and stamp, stat'ed without following it.
         metadata: EntryStamp,
     },
+    /// The physically resolved, no-follow path of a Workspace resource.
+    ResourceEntry {
+        /// The resolved path relative to the admitted Workspace.
+        relative_path: PathBuf,
+        /// The target's kind and stamp.
+        metadata: EntryStamp,
+        /// Workspace-relative links verified during resolution, in traversal order.
+        link_paths: Vec<PathBuf>,
+    },
+    /// An unresolved Workspace resource with retained watch dependencies.
+    ResourceUnavailable {
+        /// Workspace-relative links verified before resolution stopped.
+        link_paths: Vec<PathBuf>,
+        /// First absent or obstructed component under an existing directory.
+        unresolved_path: Option<PathBuf>,
+    },
     /// One page of a directory listing.
     Directory {
         /// The revision the listing was verified under.
@@ -1364,6 +1453,8 @@ pub enum ClientReply {
         entries: Vec<PageEntry>,
         /// The index the next page starts at, absent at the end.
         next_offset: Option<u32>,
+        /// The number of hidden names consumed by the page.
+        skipped: u32,
     },
     /// The requested tree mutation finished.
     TreeMutated,
@@ -1607,8 +1698,8 @@ pub enum ReadError {
     SearchNeedsDirectory,
     /// The read could not be completed for another reason.
     Unavailable,
-    /// The connection's bounded preparation budget is full — the caller
-    /// may retry after another ticket is consumed.
+    /// Bounded preparation or cleanup remains occupied. The operation
+    /// defines whether and how the caller can retry.
     Busy,
 }
 
@@ -1629,7 +1720,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v2` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v8` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.

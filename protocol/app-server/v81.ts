@@ -6,7 +6,8 @@
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ProtocolMessage".
  */
-export type ProtocolMessage = Request | Response | Notification | ServerMessage | ClientReply;
+export type ProtocolMessage =
+  Request | HostUploadEnvelope | Response | Notification | ServerMessage | ClientReply;
 /**
  * A single public method space, with no nested Runtime Client envelope.
  *
@@ -34,6 +35,10 @@ export type Request1 =
       method: 'mcp/catalog';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for Client Workspace reads and stdio.
+         */
+        execution_session?: SessionId | null;
         id: McpServerId;
         expected_revision: string;
         kind: CatalogKind;
@@ -43,6 +48,10 @@ export type Request1 =
       method: 'skills/list';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for a live Workspace projection.
+         */
+        execution_session?: SessionId | null;
         offset: number;
         limit: number;
         expected_revision?: string | null;
@@ -52,6 +61,10 @@ export type Request1 =
       method: 'skills/read';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for a live Workspace projection.
+         */
+        execution_session?: SessionId | null;
         name: string;
         kind: SkillContentKind;
         offset: string;
@@ -721,6 +734,7 @@ export type Request1 =
       params: {
         dynamicTools?: HostToolDefinition[];
         settings: SessionPersistentState;
+        input_references?: SessionInputReferences | null;
         submission?: McpDraftTarget | null;
       };
     }
@@ -1267,9 +1281,20 @@ export type Request1 =
       };
     }
   | {
+      method: 'mcp/sourceRead';
+      params: {
+        target: SourceTarget;
+        execution_session: SessionId;
+      };
+    }
+  | {
       method: 'mcp/probe';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session for Client Workspace reads and stdio.
+         */
+        execution_session?: SessionId | null;
         id: McpServerId;
         expected_revision: string;
       };
@@ -1374,6 +1399,10 @@ export type Request1 =
       method: 'workflow/toolCatalog';
       params: {
         target: SourceTarget;
+        /**
+         * Exact Session authorized to list executable Client sources.
+         */
+        execution_session?: SessionId | null;
         source?: string | null;
         cursor?: WorkflowToolCatalogCursor | null;
         expected_scope?: SourceScope | null;
@@ -1415,6 +1444,15 @@ export type Request1 =
       method: 'session/settings';
       params: {
         session_id: SessionId;
+      };
+    }
+  | {
+      method: 'session/inputsWrite';
+      params: {
+        session_id: SessionId;
+        expected_revision: number;
+        session_config?: SessionInputChange | null;
+        session_resources?: SessionInputChange2 | null;
       };
     }
   | {
@@ -1462,6 +1500,11 @@ export type SourceTarget =
       kind: 'workspace';
     };
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionId".
+ */
+export type SessionId = string;
+/**
  * Identifies an MCP server bound to the runtime.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1478,11 +1521,6 @@ export type CatalogKind = 'tools' | 'resources' | 'templates';
  * via the `definition` "SkillContentKind".
  */
 export type SkillContentKind = 'instructions' | 'metadata';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionId".
- */
-export type SessionId = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ConversationId".
@@ -1904,6 +1942,13 @@ export type SubagentId = string;
  */
 export type RuntimeClientCursor = string;
 /**
+ * Strict TOML source for one Session, with diagnostics that omit its value.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionConfigContent".
+ */
+export type SessionConfigContent = string;
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ContentSource".
  */
@@ -2167,7 +2212,7 @@ export type WorkflowModelChoicesQuery =
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceScope".
  */
-export type SourceScope = 'user' | 'workspace';
+export type SourceScope = 'user' | 'workspace' | 'session';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowConsumerField".
@@ -2712,6 +2757,76 @@ export type WorkflowEdit =
       operation: 'delete';
     };
 /**
+ * An omitted field makes no edit. Clearing reveals the current lower layer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputChange".
+ */
+export type SessionInputChange =
+  | {
+      operation: 'clear';
+    }
+  | {
+      operation: 'replace';
+      content: SessionConfigContent;
+    }
+  | {
+      operation: 'reference';
+      content: SessionInputReference;
+    };
+/**
+ * An omitted field makes no edit. Clearing reveals the current lower layer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputChange2".
+ */
+export type SessionInputChange2 =
+  | {
+      operation: 'clear';
+    }
+  | {
+      operation: 'replace';
+      content: SessionResources;
+    }
+  | {
+      operation: 'reference';
+      content: SessionInputReference;
+    };
+/**
+ * The complete upload envelope: JSON-RPC version, correlation identifier, and
+ * one closed method.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadEnvelope".
+ */
+export type HostUploadEnvelope = {
+  /**
+   * The JSON-RPC version.
+   */
+  jsonrpc: '2.0';
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  id: string | number;
+} & (
+  | {
+      method: 'item/tool/result/begin';
+      params: HostUploadBeginParams;
+    }
+  | {
+      method: 'item/tool/result/chunk';
+      params: HostUploadChunkParams;
+    }
+  | {
+      method: 'item/tool/result/end';
+      params: HostUploadEndParams;
+    }
+  | {
+      method: 'item/tool/result/abort';
+      params: HostUploadAbortParams;
+    }
+);
+/**
  * Success and failure are exclusive, including on deserialization.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2724,7 +2839,12 @@ export type Response = Success | Failure;
  */
 export type MethodResult =
   | {
+      duplicate: boolean;
+      type: 'host_upload_accepted';
+    }
+  | {
       page: SkillPage;
+      authority: WorkspaceCatalogAuthority;
       type: 'skills';
     }
   | {
@@ -3167,6 +3287,11 @@ export type MethodResult =
       type: 'model_probe';
     }
   | {
+      authority: WorkspaceCatalogAuthority;
+      source?: SourceView | null;
+      type: 'mcp_source';
+    }
+  | {
       result: McpProbeResult;
       type: 'mcp_probe';
     }
@@ -3239,6 +3364,10 @@ export type MethodResult =
   | {
       projection: BoundedSessionSettings;
       type: 'settings';
+    }
+  | {
+      revision: number;
+      type: 'session_inputs_written';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -3363,6 +3492,13 @@ export type SkillDiagnostic =
       shadowed_location: string;
       kind: 'shadowed';
     };
+/**
+ * Authority governing a Workspace catalog read for a Session.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkspaceCatalogAuthority".
+ */
+export type WorkspaceCatalogAuthority = 'authoring' | 'client';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ExecStatus".
@@ -5349,6 +5485,9 @@ export type WorkflowDependencyFailure =
       kind: 'not_admitted';
     }
   | {
+      kind: 'session_grant_required';
+    }
+  | {
       kind: 'model';
       detail: {
         reason: string;
@@ -6617,6 +6756,11 @@ export type Origin =
       kind: 'workspace';
     }
   | {
+      document: string;
+      base: string;
+      kind: 'session';
+    }
+  | {
       base: string;
       kind: 'process';
     };
@@ -6734,6 +6878,8 @@ export type WorkflowModelChoices =
       type: 'profiles';
     };
 /**
+ * Preparing a Python environment may install its requirements first.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowToolSourceKind".
  */
@@ -6749,6 +6895,7 @@ export type WorkflowToolSourceState =
       | 'listed'
       | 'invalid'
       | 'preparation_failed'
+      | 'execution_unavailable'
       | 'connection_failed'
       | 'list_failed'
       | 'timed_out'
@@ -6781,6 +6928,12 @@ export type ErrorData =
     }
   | {
       kind: 'environment_capacity_or_conflict';
+    }
+  | {
+      kind: 'session_input_invalid';
+    }
+  | {
+      kind: 'session_input_source_changed';
     }
   | {
       kind: 'execution_unavailable';
@@ -6958,6 +7111,10 @@ export type ErrorData =
       kind: 'invalid_params';
     }
   | {
+      reason: HostUploadRefusal;
+      kind: 'host_upload_rejected';
+    }
+  | {
       kind: 'resync_required';
     }
   | {
@@ -7005,6 +7162,30 @@ export type SessionArchivePrepareError =
  */
 export type TransferRejection =
   'name_taken' | 'name_enabled' | 'protected_mcp_values' | 'same_directory';
+/**
+ * Why the broker or incremental verifier refused an upload step.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadRefusal".
+ */
+export type HostUploadRefusal =
+  | 'capacity'
+  | 'expired'
+  | 'unknown-tag'
+  | 'reserved-tag'
+  | 'too-many-items'
+  | 'total-too-large'
+  | 'invalid-encoding'
+  | 'digest-mismatch'
+  | 'gap'
+  | 'out-of-order'
+  | 'duplicate-outside-window'
+  | 'conflict'
+  | 'foreign'
+  | 'late'
+  | 'invalid-utf8'
+  | 'incomplete'
+  | 'metadata-mismatch';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "Notification".
@@ -8252,40 +8433,6 @@ export type HostToolContent = {
   text: string;
   type: 'inputText';
 };
-/**
- * The complete upload envelope: JSON-RPC version, correlation identifier, and
- * one closed method.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadEnvelope".
- */
-export type HostUploadEnvelope = {
-  /**
-   * The JSON-RPC version.
-   */
-  jsonrpc: '2.0';
-  /**
-   * Integer request IDs use the JavaScript safe-integer range at admission.
-   */
-  id: string | number;
-} & (
-  | {
-      method: 'item/tool/result/begin';
-      params: HostUploadBeginParams;
-    }
-  | {
-      method: 'item/tool/result/chunk';
-      params: HostUploadChunkParams;
-    }
-  | {
-      method: 'item/tool/result/end';
-      params: HostUploadEndParams;
-    }
-  | {
-      method: 'item/tool/result/abort';
-      params: HostUploadAbortParams;
-    }
-);
 /**
  * Direction-specific server output. Generic client replies cannot weaken
  * validation of typed server responses sharing the same JSON-RPC envelope.
@@ -9999,10 +10146,67 @@ export interface ResourcePermissionSet {
 export interface SessionPersistentState {
   cwd: string;
   /**
+   * Session-authored configuration above the Workspace and User layers.
+   */
+  session_config?: SessionConfigContent | null;
+  /**
+   * Complete definitions owned by this Session.
+   */
+  session_resources?: SessionResources | null;
+  /**
    * Explicit initial selection. Omission delegates to the native configuration
    * owner at creation; clients must not copy a projected default into this field.
    */
   model?: SessionModelConfig | null;
+}
+/**
+ * Complete Session-authored definitions keyed by their resource identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionResources".
+ */
+export interface SessionResources {
+  agents?: {
+    [k: string]: string;
+  };
+  workflows?: {
+    [k: string]: string;
+  };
+  mcp?: {
+    [k: string]: string;
+  };
+}
+/**
+ * Reference either input independently when creating a Session.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputReferences".
+ */
+export interface SessionInputReferences {
+  /**
+   * Source of the initial Session config.
+   */
+  session_config?: SessionInputReference | null;
+  /**
+   * Source of the initial Session resource declarations.
+   */
+  session_resources?: SessionInputReference | null;
+}
+/**
+ * An exact revision of existing Session-owned input for the same Workspace.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionInputReference".
+ */
+export interface SessionInputReference {
+  /**
+   * Existing Session supplying the saved input.
+   */
+  session_id: string;
+  /**
+   * Exact revision observed by the caller.
+   */
+  revision: number;
 }
 /**
  * An opaque draft identity and monotonically increasing selection generation.
@@ -10744,6 +10948,258 @@ export interface SessionApplicationRef {
   version: string;
   revision: string;
   byte_length: number;
+}
+/**
+ * `item/tool/result/begin`: captures the immutable success and descriptors.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadBeginParams".
+ */
+export interface HostUploadBeginParams {
+  candidate: HostUploadCandidate;
+  /**
+   * The tool result's success flag, fixed at begin.
+   */
+  success: boolean;
+  /**
+   * The ordered item descriptors, at most [`MAX_ITEMS`].
+   *
+   * @maxItems 1024
+   */
+  items: HostUploadItem[];
+}
+/**
+ * The candidate being begun.
+ */
+export interface HostUploadCandidate {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * One item descriptor: its type tag and declared byte length.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadItem".
+ */
+export interface HostUploadItem {
+  /**
+   * The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.
+   */
+  typeTag: number;
+  /**
+   * The declared byte length of this item.
+   */
+  length: string;
+}
+/**
+ * `item/tool/result/chunk`: one ordered, bounded chunk of one item.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadChunkParams".
+ */
+export interface HostUploadChunkParams {
+  candidate: HostUploadCandidate1;
+  /**
+   * The current item's index.
+   */
+  itemIndex: number;
+  /**
+   * The strictly increasing chunk sequence, starting at `1`.
+   */
+  sequence: string;
+  /**
+   * The byte offset within the item.
+   */
+  offset: string;
+  /**
+   * The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].
+   */
+  dataBase64: string;
+  /**
+   * The SHA-256 of the decoded bytes.
+   */
+  sha256: string;
+}
+/**
+ * The candidate the chunk feeds.
+ */
+export interface HostUploadCandidate1 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * `item/tool/result/end`: echoes the begin metadata and closes the candidate.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadEndParams".
+ */
+export interface HostUploadEndParams {
+  candidate: HostUploadCandidate2;
+  /**
+   * The success flag, which must equal the begin's.
+   */
+  success: boolean;
+  /**
+   * The item descriptors, which must equal the begin's.
+   *
+   * @maxItems 1024
+   */
+  items: HostUploadItem[];
+  /**
+   * The declared total length, which must equal the sum of the items.
+   */
+  total: string;
+  /**
+   * The result digest over the canonical layout.
+   */
+  digest: string;
+}
+/**
+ * The candidate being ended.
+ */
+export interface HostUploadCandidate2 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
+}
+/**
+ * `item/tool/result/abort`: retires the candidate without a result.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadAbortParams".
+ */
+export interface HostUploadAbortParams {
+  candidate: HostUploadCandidate3;
+}
+/**
+ * The candidate being aborted.
+ */
+export interface HostUploadCandidate3 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -20208,6 +20664,27 @@ export interface EffectiveCollection {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceView".
+ */
+export interface SourceView {
+  path: string;
+  revision: string;
+  authored?: {
+    [k: string]: McpView;
+  } | null;
+  diagnostic?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpView".
+ */
+export interface McpView {
+  definition: McpAuthoring;
+  retained_env: string[];
+  retained_headers: string[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "McpProbeResult".
  */
 export interface McpProbeResult {
@@ -20374,8 +20851,8 @@ export interface SourceSettings {
   provenance: {
     [k: string]: Origin;
   };
-  user: SourceView;
-  workspace?: SourceView | null;
+  user: SourceView2;
+  workspace?: SourceView2 | null;
   /**
    * The latest automatic repair observation of the User source in this
    * process. Absent when the finite ledger retains none — never needed,
@@ -20395,11 +20872,11 @@ export interface SourceSettings {
    */
   repair_sequence: string;
   user_resource_root: string;
-  global_guidance?: SourceView2 | null;
+  global_guidance?: SourceView3 | null;
   workspace_resource_root?: string | null;
   runtime_root: string;
-  user_mcp: SourceView3;
-  workspace_mcp?: SourceView3 | null;
+  user_mcp: SourceView;
+  workspace_mcp?: SourceView | null;
   agents: AgentSourceView[];
 }
 /**
@@ -20537,9 +21014,9 @@ export interface ModelProfileView {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceView".
+ * via the `definition` "SourceView2".
  */
-export interface SourceView {
+export interface SourceView2 {
   path: string;
   revision: string;
   authored?: RuntimeLayer | null;
@@ -20593,34 +21070,13 @@ export interface ConfigRepairReceipt {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceView2".
- */
-export interface SourceView2 {
-  path: string;
-  revision: string;
-  authored?: string | null;
-  diagnostic?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceView3".
  */
 export interface SourceView3 {
   path: string;
   revision: string;
-  authored?: {
-    [k: string]: McpView;
-  } | null;
+  authored?: string | null;
   diagnostic?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "McpView".
- */
-export interface McpView {
-  definition: McpAuthoring;
-  retained_env: string[];
-  retained_headers: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -20988,8 +21444,19 @@ export interface SessionSettingsChunk {
 export interface BoundedSessionSettings {
   revision: string;
   cwd: string;
+  authored?: SessionSettingsAuthored | null;
   inline?: SessionPersistentState | null;
   reference?: SessionSettingsRef | null;
+}
+/**
+ * Presence of the persisted Session-owned source fields at the shared revision.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionSettingsAuthored".
+ */
+export interface SessionSettingsAuthored {
+  session_config: boolean;
+  session_resources: boolean;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -21041,6 +21508,30 @@ export interface HostToolCall {
   namespace?: string | null;
   tool: string;
   arguments: unknown;
+  /**
+   * Address of this particular recipient for chunked results.
+   */
+  uploadScope?: HostUploadScope | null;
+}
+/**
+ * Address supplied to a single recipient of an item/tool/call request.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadScope".
+ */
+export interface HostUploadScope {
+  /**
+   * Incarnation of the callback broker.
+   */
+  callbackIncarnation: string;
+  /**
+   * Incarnation of the receiving Host connection.
+   */
+  connectionIncarnation: string;
+  /**
+   * Incarnation of the Host's subscription to the conversation.
+   */
+  subscriptionIncarnation: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -22033,302 +22524,6 @@ export interface HostToolResponse {
   contentItems: HostToolContent[];
 }
 /**
- * `item/tool/result/begin`: captures the immutable success and descriptors.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadBeginParams".
- */
-export interface HostUploadBeginParams {
-  candidate: HostUploadCandidate;
-  /**
-   * The tool result's success flag, fixed at begin.
-   */
-  success: boolean;
-  /**
-   * The ordered item descriptors, at most [`MAX_ITEMS`].
-   *
-   * @maxItems 1024
-   */
-  items: HostUploadItem[];
-}
-/**
- * The candidate being begun.
- */
-export interface HostUploadCandidate {
-  /**
-   * The Server callback incarnation that issued the original request.
-   */
-  callbackIncarnation: string;
-  /**
-   * Integer request IDs use the JavaScript safe-integer range at admission.
-   */
-  requestId: string | number;
-  /**
-   * The conversation the tool call belongs to.
-   */
-  threadId: string;
-  /**
-   * Identifies one attempt to execute an agent manifest.
-   */
-  turnId: string;
-  /**
-   * Provider/model-issued opaque correlation string, scoped to a request/publication.
-   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
-   */
-  callId: string;
-  /**
-   * The callback connection incarnation the request was delivered on.
-   */
-  connectionIncarnation: string;
-  /**
-   * The selected subscription the request was delivered to.
-   */
-  subscriptionIncarnation: string;
-  /**
-   * The upload identifier, unique per candidate.
-   */
-  uploadId: string;
-}
-/**
- * One item descriptor: its type tag and declared byte length.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadItem".
- */
-export interface HostUploadItem {
-  /**
-   * The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.
-   */
-  typeTag: number;
-  /**
-   * The declared byte length of this item.
-   */
-  length: string;
-}
-/**
- * `item/tool/result/chunk`: one ordered, bounded chunk of one item.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadChunkParams".
- */
-export interface HostUploadChunkParams {
-  candidate: HostUploadCandidate1;
-  /**
-   * The current item's index.
-   */
-  itemIndex: number;
-  /**
-   * The strictly increasing chunk sequence, starting at `1`.
-   */
-  sequence: string;
-  /**
-   * The byte offset within the item.
-   */
-  offset: string;
-  /**
-   * The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].
-   */
-  dataBase64: string;
-  /**
-   * The SHA-256 of the decoded bytes.
-   */
-  sha256: string;
-}
-/**
- * The candidate the chunk feeds.
- */
-export interface HostUploadCandidate1 {
-  /**
-   * The Server callback incarnation that issued the original request.
-   */
-  callbackIncarnation: string;
-  /**
-   * Integer request IDs use the JavaScript safe-integer range at admission.
-   */
-  requestId: string | number;
-  /**
-   * The conversation the tool call belongs to.
-   */
-  threadId: string;
-  /**
-   * Identifies one attempt to execute an agent manifest.
-   */
-  turnId: string;
-  /**
-   * Provider/model-issued opaque correlation string, scoped to a request/publication.
-   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
-   */
-  callId: string;
-  /**
-   * The callback connection incarnation the request was delivered on.
-   */
-  connectionIncarnation: string;
-  /**
-   * The selected subscription the request was delivered to.
-   */
-  subscriptionIncarnation: string;
-  /**
-   * The upload identifier, unique per candidate.
-   */
-  uploadId: string;
-}
-/**
- * `item/tool/result/end`: echoes the begin metadata and closes the candidate.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadEndParams".
- */
-export interface HostUploadEndParams {
-  candidate: HostUploadCandidate2;
-  /**
-   * The success flag, which must equal the begin's.
-   */
-  success: boolean;
-  /**
-   * The item descriptors, which must equal the begin's.
-   *
-   * @maxItems 1024
-   */
-  items: HostUploadItem[];
-  /**
-   * The declared total length, which must equal the sum of the items.
-   */
-  total: string;
-  /**
-   * The result digest over the canonical layout.
-   */
-  digest: string;
-}
-/**
- * The candidate being ended.
- */
-export interface HostUploadCandidate2 {
-  /**
-   * The Server callback incarnation that issued the original request.
-   */
-  callbackIncarnation: string;
-  /**
-   * Integer request IDs use the JavaScript safe-integer range at admission.
-   */
-  requestId: string | number;
-  /**
-   * The conversation the tool call belongs to.
-   */
-  threadId: string;
-  /**
-   * Identifies one attempt to execute an agent manifest.
-   */
-  turnId: string;
-  /**
-   * Provider/model-issued opaque correlation string, scoped to a request/publication.
-   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
-   */
-  callId: string;
-  /**
-   * The callback connection incarnation the request was delivered on.
-   */
-  connectionIncarnation: string;
-  /**
-   * The selected subscription the request was delivered to.
-   */
-  subscriptionIncarnation: string;
-  /**
-   * The upload identifier, unique per candidate.
-   */
-  uploadId: string;
-}
-/**
- * `item/tool/result/abort`: retires the candidate without a result.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadAbortParams".
- */
-export interface HostUploadAbortParams {
-  candidate: HostUploadCandidate3;
-}
-/**
- * The candidate being aborted.
- */
-export interface HostUploadCandidate3 {
-  /**
-   * The Server callback incarnation that issued the original request.
-   */
-  callbackIncarnation: string;
-  /**
-   * Integer request IDs use the JavaScript safe-integer range at admission.
-   */
-  requestId: string | number;
-  /**
-   * The conversation the tool call belongs to.
-   */
-  threadId: string;
-  /**
-   * Identifies one attempt to execute an agent manifest.
-   */
-  turnId: string;
-  /**
-   * Provider/model-issued opaque correlation string, scoped to a request/publication.
-   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
-   */
-  callId: string;
-  /**
-   * The callback connection incarnation the request was delivered on.
-   */
-  connectionIncarnation: string;
-  /**
-   * The selected subscription the request was delivered to.
-   */
-  subscriptionIncarnation: string;
-  /**
-   * The upload identifier, unique per candidate.
-   */
-  uploadId: string;
-}
-/**
- * The identity one upload candidate belongs to. The Server callback
- * incarnation, original request identifier, and tool call identity are the
- * correlation; the Host subscription incarnation and upload identifier bind
- * the candidate to one eligible participant.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "HostUploadCandidate".
- */
-export interface HostUploadCandidate4 {
-  /**
-   * The Server callback incarnation that issued the original request.
-   */
-  callbackIncarnation: string;
-  /**
-   * Integer request IDs use the JavaScript safe-integer range at admission.
-   */
-  requestId: string | number;
-  /**
-   * The conversation the tool call belongs to.
-   */
-  threadId: string;
-  /**
-   * Identifies one attempt to execute an agent manifest.
-   */
-  turnId: string;
-  /**
-   * Provider/model-issued opaque correlation string, scoped to a request/publication.
-   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
-   */
-  callId: string;
-  /**
-   * The callback connection incarnation the request was delivered on.
-   */
-  connectionIncarnation: string;
-  /**
-   * The selected subscription the request was delivered to.
-   */
-  subscriptionIncarnation: string;
-  /**
-   * The upload identifier, unique per candidate.
-   */
-  uploadId: string;
-}
-/**
  * Native display metadata, shared by exact identity reads and catalog rows.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -22844,6 +23039,50 @@ export interface NativeAgentExtensionsDocument2 {
   agent_status?: AgentStatusExtensionDocument1;
   todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;
+}
+/**
+ * The identity one upload candidate belongs to. The Server callback
+ * incarnation, original request identifier, and tool call identity are the
+ * correlation; the Host subscription incarnation and upload identifier bind
+ * the candidate to one eligible participant.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostUploadCandidate".
+ */
+export interface HostUploadCandidate4 {
+  /**
+   * The Server callback incarnation that issued the original request.
+   */
+  callbackIncarnation: string;
+  /**
+   * Integer request IDs use the JavaScript safe-integer range at admission.
+   */
+  requestId: string | number;
+  /**
+   * The conversation the tool call belongs to.
+   */
+  threadId: string;
+  /**
+   * Identifies one attempt to execute an agent manifest.
+   */
+  turnId: string;
+  /**
+   * Provider/model-issued opaque correlation string, scoped to a request/publication.
+   * Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
+   */
+  callId: string;
+  /**
+   * The callback connection incarnation the request was delivered on.
+   */
+  connectionIncarnation: string;
+  /**
+   * The selected subscription the request was delivered to.
+   */
+  subscriptionIncarnation: string;
+  /**
+   * The upload identifier, unique per candidate.
+   */
+  uploadId: string;
 }
 /**
  * One offline check of one exact candidate document.

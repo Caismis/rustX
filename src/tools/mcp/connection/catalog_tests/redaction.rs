@@ -190,7 +190,7 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         .unwrap()
         .lock()
         .await
-        .supervisor_child_pid
+        .supervisor_child_pid()
         .unwrap();
     let child_pid: i32 = std::fs::read_to_string(&journal)
         .unwrap()

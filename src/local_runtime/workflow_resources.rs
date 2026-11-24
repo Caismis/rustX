@@ -1,4 +1,5 @@
 //! Bounded two-scope Workflow discovery, shared by prospective analysis and immutable input capture.
+use super::resource_directory::BoundDefinitions;
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::resources::SourceScope;
 use crate::runtime::workflow::{
@@ -9,10 +10,18 @@ use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
 /// A missing Workspace means User-only discovery, with no cwd-derived authority.
-#[allow(clippy::too_many_lines)] // One two-scope discovery and diagnostic transaction.
 pub(crate) fn load(
     workspace: Option<&Path>,
     user_root: &Path,
+) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
+    load_sources(workspace, user_root, None)
+}
+
+#[allow(clippy::too_many_lines)] // One two-scope discovery and diagnostic transaction.
+pub(super) fn load_sources(
+    workspace: Option<&Path>,
+    user_root: &Path,
+    bound: Option<&BoundDefinitions<'_>>,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
     let mut programs = Vec::new();
     let mut diagnostics = Vec::new();
@@ -29,7 +38,11 @@ pub(crate) fn load(
             }),
         )
     {
-        let paths = match super::resource_directory::files(boundary, &root, "yaml") {
+        let bound = bound.filter(|_| scope == SourceScope::Workspace);
+        let paths = match bound.map_or_else(
+            || super::resource_directory::files(boundary, &root, "yaml"),
+            |bound| bound.files(&root),
+        ) {
             Ok(paths) => paths,
             Err(error) => {
                 candidates.clear();
@@ -61,7 +74,7 @@ pub(crate) fn load(
                     shadowed,
                 },
             );
-            candidates.insert(id, (path, boundary.to_path_buf()));
+            candidates.insert(id, (path, boundary.to_path_buf(), bound));
         }
     }
     let mut invalid = std::collections::BTreeMap::new();
@@ -79,12 +92,12 @@ pub(crate) fn load(
         candidates.clear();
         locations.clear();
     }
-    for (id, (path, boundary)) in candidates {
-        let result = super::resource_directory::read_resource(
-            &boundary,
-            &path,
-            MAX_WORKFLOW_FILE_BYTES as u64,
-        )
+    for (id, (path, boundary, bound)) in candidates {
+        let limit = MAX_WORKFLOW_FILE_BYTES as u64;
+        let result = match bound {
+            Some(bound) => bound.read(&path, limit),
+            None => super::resource_directory::read_resource(&boundary, &path, limit),
+        }
         .and_then(|bytes| {
             let source_revision = super::settings::revision(Some(&bytes));
             parse_source(&id, &path, &bytes).map(|document| (source_revision, document))
@@ -123,6 +136,55 @@ pub(crate) fn load(
     catalog.discovery_diagnostics = diagnostics;
     catalog.presentation_diagnostics = presentation;
     Ok(catalog)
+}
+
+pub(super) fn apply_session(
+    catalog: WorkflowCatalog,
+    authored: &super::session_inputs::SessionResources,
+) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
+    use crate::runtime::resources::ResourceLocation;
+    let mut programs = catalog
+        .entries()
+        .iter()
+        .filter(|(id, _)| !authored.workflows.contains_key(*id))
+        .map(|(_, entry)| (*entry.source).clone())
+        .collect::<Vec<_>>();
+    let mut locations = catalog.locations.clone();
+    for (id, contents) in &authored.workflows {
+        let path = Path::new(super::session_inputs::RESOURCES_DOCUMENT)
+            .join("workflows")
+            .join(format!("{id}.yaml"));
+        let revision = super::settings::revision(Some(contents.as_bytes()));
+        let parsed = parse_source(id, &path, contents.as_bytes())?;
+        programs.push(compile_document(id, &path, revision, parsed)?);
+        let shadowed = locations.remove(id).map(|lower| lower.path);
+        locations.insert(
+            id.clone(),
+            ResourceLocation {
+                scope: SourceScope::Session,
+                path,
+                shadowed,
+            },
+        );
+    }
+    let mut effective = WorkflowCatalog::new(programs)
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+    effective.set_invalid(
+        catalog
+            .invalid()
+            .iter()
+            .filter(|(id, _)| !authored.workflows.contains_key(*id))
+            .map(|(id, error)| (id.clone(), error.clone()))
+            .collect(),
+    );
+    effective.locations = locations;
+    effective.discovery_diagnostics = catalog.discovery_diagnostics;
+    effective.presentation_diagnostics = catalog
+        .presentation_diagnostics
+        .into_iter()
+        .filter(|(id, _)| !authored.workflows.contains_key(id))
+        .collect();
+    Ok(effective)
 }
 
 /// Parse one Workflow file's bytes with the native authoring type. The

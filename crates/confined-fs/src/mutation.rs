@@ -400,23 +400,48 @@ impl WriteTarget {
         self,
         writer: impl FnOnce(&mut File) -> io::Result<()>,
     ) -> io::Result<StagedWrite> {
+        self.stage_at(None, writer)
+    }
+
+    /// The retained destination parent. A local supervisor can use this
+    /// descriptor to allocate a stage on the same filesystem before writing.
+    #[must_use]
+    pub fn destination_parent(&self) -> &PackageDirectory {
+        &self.parent
+    }
+
+    /// Stage the bytes inside a separately owned directory on the destination
+    /// filesystem. The same physical publication gate applies.
+    ///
+    /// # Errors
+    /// Returns the stage's confinement, identity, write or sync error.
+    pub fn stage_at(
+        self,
+        area: Option<PackageDirectory>,
+        writer: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<StagedWrite> {
         self.parent.verify()?;
+        if let Some(area) = &area {
+            area.verify()?;
+        }
         if self.missing.is_empty() {
             recheck(&self.parent, &self.leaf, self.original())?;
-            return self.stage_file(writer);
+            return self.stage_file(area, writer);
         }
-        self.stage_subtree(writer)
+        self.stage_subtree(area, writer)
     }
 
     /// Stages the sibling file under the retained parent — the existing
     /// path when the leaf's containing directory already exists.
     fn stage_file(
         self,
+        area: Option<PackageDirectory>,
         writer: impl FnOnce(&mut File) -> io::Result<()>,
     ) -> io::Result<StagedWrite> {
         let name = OsString::from(format!(".rustx-write-{}", uuid::Uuid::now_v7()));
+        let stage_parent = area.as_ref().unwrap_or(&self.parent);
         let output = File::from(openat(
-            self.parent.descriptor(),
+            stage_parent.descriptor(),
             name.as_os_str(),
             OFlags::WRONLY
                 .union(OFlags::CREATE)
@@ -432,6 +457,7 @@ impl WriteTarget {
             original: self.original,
             output,
             name,
+            area,
             staging: None,
             published: false,
         };
@@ -459,6 +485,7 @@ impl WriteTarget {
     /// the parent or staging is refused before anything is created.
     fn stage_subtree(
         self,
+        area: Option<PackageDirectory>,
         writer: impl FnOnce(&mut File) -> io::Result<()>,
     ) -> io::Result<StagedWrite> {
         // The first missing name must still be absent: anything that
@@ -466,14 +493,15 @@ impl WriteTarget {
         if leaf_metadata(&self.parent, &self.missing[0])?.is_some() {
             return Err(conflict());
         }
+        let stage_parent = area.as_ref().unwrap_or(&self.parent);
         let name = OsString::from(format!(".rustx-mkdir-{}", uuid::Uuid::now_v7()));
         mkdirat(
-            self.parent.descriptor(),
+            stage_parent.descriptor(),
             name.as_os_str(),
             Mode::from_raw_mode(0o700),
         )?;
         let mut stage = match openat(
-            self.parent.descriptor(),
+            stage_parent.descriptor(),
             name.as_os_str(),
             OFlags::RDONLY
                 .union(OFlags::DIRECTORY)
@@ -489,7 +517,7 @@ impl WriteTarget {
                 // The staging directory exists but cannot be proven —
                 // remove only while its name still names it.
                 let _ = unlinkat(
-                    self.parent.descriptor(),
+                    stage_parent.descriptor(),
                     name.as_os_str(),
                     AtFlags::REMOVEDIR,
                 );
@@ -504,11 +532,12 @@ impl WriteTarget {
                 original: None,
                 output,
                 name,
+                area,
                 staging: Some(stage),
                 published: false,
             }),
             Err(error) => {
-                stage.remove(&self.parent, &name);
+                stage.remove(stage_parent, &name);
                 Err(error)
             }
         }
@@ -573,6 +602,8 @@ pub struct StagedWrite {
     /// The private sibling name — `.rustx-write-*` for a file stage,
     /// `.rustx-mkdir-*` for a missing-subtree stage.
     name: OsString,
+    /// The independently retained path that contains the staging name.
+    area: Option<PackageDirectory>,
     /// The private staging directory and its registered owned subtree
     /// when `missing` is non-empty: the staging name itself crosses
     /// whole under the first missing name at publish.
@@ -581,6 +612,10 @@ pub struct StagedWrite {
 }
 
 impl StagedWrite {
+    fn staging_parent(&self) -> &PackageDirectory {
+        self.area.as_ref().unwrap_or(&self.parent)
+    }
+
     /// Publishes the staged bytes at the leaf.
     ///
     /// Callers run this inside their physical cancellation gate. The
@@ -621,6 +656,7 @@ impl StagedWrite {
         G: FnOnce(&mut dyn FnMut() -> io::Result<()>) -> io::Result<()>,
     {
         self.parent.verify()?;
+        self.staging_parent().verify()?;
         if self.staging.is_some() {
             return self.publish_subtree_with_gate(gate);
         }
@@ -630,7 +666,7 @@ impl StagedWrite {
             self.original.as_ref().map(|(_, metadata)| metadata),
         )?;
         let staging = nix::sys::stat::fstatat(
-            self.parent.descriptor(),
+            self.staging_parent().descriptor(),
             self.name.as_os_str(),
             nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
         )?;
@@ -648,7 +684,7 @@ impl StagedWrite {
         let verdict = gate(&mut || -> io::Result<()> {
             if self.original.is_none() {
                 rustix::fs::linkat(
-                    self.parent.descriptor(),
+                    self.staging_parent().descriptor(),
                     self.name.as_os_str(),
                     self.parent.descriptor(),
                     self.leaf.as_os_str(),
@@ -656,7 +692,7 @@ impl StagedWrite {
                 )?;
             } else {
                 rustix::fs::renameat(
-                    self.parent.descriptor(),
+                    self.staging_parent().descriptor(),
                     self.name.as_os_str(),
                     self.parent.descriptor(),
                     self.leaf.as_os_str(),
@@ -669,7 +705,7 @@ impl StagedWrite {
         verdict?;
         if self.original.is_none() {
             rustix::fs::unlinkat(
-                self.parent.descriptor(),
+                self.staging_parent().descriptor(),
                 self.name.as_os_str(),
                 rustix::fs::AtFlags::empty(),
             )
@@ -731,7 +767,7 @@ impl StagedWrite {
         self.staging
             .as_ref()
             .expect("subtree publish requires its staging directory")
-            .verify(&self.parent, &self.name)?;
+            .verify(self.staging_parent(), &self.name)?;
         // One atomic crossing, inside the caller's gate: the staging
         // directory itself becomes `parent/first` — `NOREPLACE` so a
         // concurrent claim can never be overwritten. The staged
@@ -739,7 +775,7 @@ impl StagedWrite {
         let mut crossed = false;
         let verdict = gate(&mut || -> io::Result<()> {
             renameat_with(
-                self.parent.descriptor(),
+                self.staging_parent().descriptor(),
                 self.name.as_os_str(),
                 self.parent.descriptor(),
                 first.as_os_str(),
@@ -789,12 +825,12 @@ impl Drop for StagedWrite {
         // rename can still interleave between them; the check narrows the
         // window, it does not close it.
         if let Some(staging) = self.staging.take() {
-            staging.remove(&self.parent, &self.name);
+            staging.remove(self.staging_parent(), &self.name);
             return;
         }
         let own = nix::sys::stat::fstat(&self.output);
         let named = nix::sys::stat::fstatat(
-            self.parent.descriptor(),
+            self.staging_parent().descriptor(),
             self.name.as_os_str(),
             nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
         );
@@ -802,7 +838,7 @@ impl Drop for StagedWrite {
             && (own.st_dev, own.st_ino) == (named.st_dev, named.st_ino)
         {
             let _ = rustix::fs::unlinkat(
-                self.parent.descriptor(),
+                self.staging_parent().descriptor(),
                 self.name.as_os_str(),
                 rustix::fs::AtFlags::empty(),
             );
@@ -906,6 +942,33 @@ mod tests {
 
     fn revision(directory: &PackageDirectory, leaf: &str) -> String {
         directory.entry_metadata(Path::new(leaf)).unwrap().revision
+    }
+
+    #[test]
+    fn an_owned_staging_directory_keeps_bytes_outside_the_destination_until_publication() {
+        let (temporary, directory) = root();
+        let inbox = temporary.path().join("stage");
+        std::fs::create_dir(&inbox).unwrap();
+        let staging = directory.child(OsStr::new("stage")).unwrap();
+        let target = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            vec![OsString::from("subtree"), OsString::from("nested")],
+            Expectation::Absent,
+        )
+        .unwrap();
+        let staged = target
+            .stage_at(Some(staging), |output| output.write_all(b"commit"))
+            .unwrap();
+        assert_eq!(staging_names(&inbox).len(), 1);
+        assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+        assert!(!temporary.path().join("subtree").exists());
+        staged.publish().unwrap().finish().unwrap();
+        assert_eq!(
+            std::fs::read(temporary.path().join("subtree/nested/file")).unwrap(),
+            b"commit"
+        );
+        assert_eq!(std::fs::read_dir(inbox).unwrap().count(), 0);
     }
 
     #[test]

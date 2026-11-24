@@ -34,6 +34,8 @@ pub mod bash_supervisor {
     }
 }
 #[cfg(unix)]
+pub mod interactive_process;
+#[cfg(unix)]
 pub mod interactive_supervisor;
 #[cfg(not(unix))]
 pub mod interactive_supervisor {
@@ -54,6 +56,8 @@ pub mod interactive_supervisor {
         1
     }
 }
+#[cfg(target_os = "linux")]
+pub mod client_domain;
 pub mod effects;
 pub mod identity;
 pub mod invocation;

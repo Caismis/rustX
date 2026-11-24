@@ -30,17 +30,21 @@
 use base64::Engine as _;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::transport::{
     LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record, read_record,
+    recoverable_lane_loss,
 };
 use rustx_execution_protocol::{
     Admission, Bootstrap, BootstrapEndpoint, Capability, ClientReply, ClientRequest, ControlHello,
@@ -48,14 +52,18 @@ use rustx_execution_protocol::{
     DecimalU64, EntryKind, EntryStamp, FileStamp, Hello, LineEnd, MAX_DIRECTORY_NAMES,
     MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
     MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, PairingNonce,
-    PeerHello, ReadError, is_normalized_absolute_path, transport::CONTROL_FRAME_TIMEOUT,
+    PeerHello, ReadError, Reject, is_normalized_absolute_path,
+    transport::{CONTROL_FRAME_TIMEOUT, CONTROL_POLL_INTERVAL},
 };
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
 mod bash_capture;
 mod changes;
+mod managed_python;
+mod mcp;
 mod mutation;
 mod process;
+mod saves;
 mod search;
 mod terminal;
 mod tree;
@@ -144,7 +152,15 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             }
             let socket_parent = require_private_parent(socket_path)?;
             require_socket(&socket_parent, file_name(socket_path)?)?;
-            Endpoint::Unix(socket_path.clone())
+            let reactor = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .map_err(|error| handshake_error(&error))?;
+            Endpoint::Unix {
+                path: socket_path.clone(),
+                reactor,
+            }
         }
         BootstrapEndpoint::WebSocket {
             url,
@@ -193,14 +209,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     let root = PackageDirectory::open(&bootstrap.workspace)
         .map_err(|_| String::from("untrusted workspace"))?;
 
-    // One absolute budget armed before the transport is established
-    // covers peer proof, the Hello write, the reply read, and the
-    // admission verification — it never re-arms, so a byte-at-a-time peer
-    // cannot stretch it.
-    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    let mut channel = connect_endpoint(&endpoint, deadline, ca_file)?;
-
-    let hello = Hello {
+    let mut hello = Hello {
         version: PROTOCOL_VERSION,
         session: bootstrap.session,
         environment: bootstrap.environment,
@@ -224,74 +233,214 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::BoundedSearch,
             Capability::Process,
             Capability::AgentBash,
+            Capability::ManagedOutput,
+            Capability::StdioMcp,
+            Capability::ManagedPython,
         ]),
         credential: bootstrap.credential,
     };
-    // The lane declares itself as the data half of the pair — the same
-    // record space, wrapped in `PeerHello`.
-    let encoded =
-        encode_record(&PeerHello::Data(hello.clone())).map_err(|error| handshake_error(&error))?;
-    channel
-        .send(&encoded, Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let reply: DataHelloReply = channel
-        .receive(Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let success = reply.map_err(|reject| format!("rejected: {reject}"))?;
-    verify_admission(&hello, &success.admission)?;
+    let pair = pair_endpoint(
+        &endpoint,
+        &hello,
+        Instant::now() + LOCAL_HANDSHAKE_TIMEOUT,
+        ca_file,
+    )
+    .map_err(PairFailure::diagnostic)?;
+    hello.credential = hello.credential.recovery_credential(&pair.challenge);
+    let reconnect = |deadline| pair_endpoint(&endpoint, &hello, deadline, ca_file);
+    serve_session(pair, &root, reconnect)
+}
 
-    // The control lane is mandatory: a second connection to the same
-    // endpoint carrying the pairing challenge — no single-channel
-    // fallback exists. Both lanes share the one armed deadline.
-    let control_channel = pair_control(&endpoint, deadline, &hello, success.challenge, ca_file)?;
-    serve_session(channel, control_channel, &root, success.admission)
+struct Pair {
+    data: RecordChannel,
+    control: RecordChannel,
+    challenge: PairingNonce,
+    admission: Admission,
+}
+
+#[derive(Debug)]
+enum PairFailure {
+    Transport(io::Error),
+    Refused(Reject),
+    Authentication(String),
+}
+
+impl PairFailure {
+    fn diagnostic(self) -> String {
+        match self {
+            Self::Transport(error) => handshake_error(&error),
+            Self::Refused(reject) => format!("rejected: {reject}"),
+            Self::Authentication(reason) => reason,
+        }
+    }
+
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Transport(error) => {
+                recoverable_lane_loss(error)
+                    || matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    )
+            }
+            Self::Refused(Reject::AlreadyConnected) => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<io::Error> for PairFailure {
+    fn from(error: io::Error) -> Self {
+        Self::Transport(error)
+    }
+}
+
+fn pair_endpoint(
+    endpoint: &Endpoint,
+    hello: &Hello,
+    deadline: Instant,
+    ca_file: Option<&Path>,
+) -> Result<Pair, PairFailure> {
+    let mut data = connect_endpoint(endpoint, deadline, ca_file)?;
+    let encoded = encode_record(&PeerHello::Data(hello.clone()))?;
+    data.send(&encoded, Some(deadline))?;
+    let reply: DataHelloReply = data.receive(Some(deadline))?;
+    let success = reply.map_err(PairFailure::Refused)?;
+    verify_admission(hello, &success.admission).map_err(PairFailure::Authentication)?;
+    let control = pair_control(endpoint, deadline, hello, &success, ca_file)?;
+    Ok(Pair {
+        data,
+        control,
+        challenge: success.challenge,
+        admission: success.admission,
+    })
+}
+
+fn recover_pair(
+    reconnect: &impl Fn(Instant) -> Result<Pair, PairFailure>,
+    admission: &Admission,
+    cutoff: Instant,
+) -> Result<Option<Pair>, String> {
+    let mut pause = Duration::from_millis(100);
+    loop {
+        let now = Instant::now();
+        if now >= cutoff {
+            return Err(String::from("same-instance recovery expired"));
+        }
+        match reconnect(cutoff.min(now + LOCAL_HANDSHAKE_TIMEOUT)) {
+            Ok(pair) if pair.admission == *admission => return Ok(Some(pair)),
+            Ok(_) => {
+                return Err(String::from(
+                    "same-instance recovery changed binding identity",
+                ));
+            }
+            Err(error) if error.retryable() => {
+                std::thread::sleep(pause.min(cutoff.saturating_duration_since(Instant::now())));
+                pause = (pause * 2).min(Duration::from_secs(1));
+            }
+            Err(PairFailure::Refused(Reject::Revoked)) => return Ok(None),
+            Err(error) => return Err(error.diagnostic()),
+        }
+    }
 }
 
 fn serve_session(
-    mut channel: RecordChannel,
-    control_channel: RecordChannel,
+    mut pair: Pair,
     root: &PackageDirectory,
-    admission: rustx_execution_protocol::Admission,
+    reconnect: impl Fn(Instant) -> Result<Pair, PairFailure>,
 ) -> Result<(), String> {
-    let workspace = admission.workspace.clone();
-    let arbitration = std::sync::Arc::new(mutation::Arbitration::new());
-    let operations = std::sync::Arc::new(
-        process::Operations::new(admission).map_err(|error| handshake_error(&error))?,
+    let admission = pair.admission.clone();
+    let saves = Arc::new(Mutex::new(saves::Saves::new(admission.clone())));
+    let operations = Arc::new(
+        process::Operations::new(admission.clone()).map_err(|error| handshake_error(&error))?,
     );
-    // The control worker holds a shutdown duplicate of the data lane:
-    // its exit — protocol violation, EOF, a peer that stops answering —
-    // fences the local commit arbitration and interrupts the data
-    // channel, so a dead control lane can never leave a live pair.
-    let data_shutdown = channel
-        .shutdown_handle()
-        .map_err(|error| handshake_error(&error))?;
-    let watches = std::sync::Arc::new(watch::Watches::new());
-    let control = client_control_worker(
-        control_channel,
-        arbitration.clone(),
-        data_shutdown,
-        operations.clone(),
-        watches.clone(),
-    );
-    let result = serve(
-        &mut channel,
-        root,
-        &arbitration,
-        &operations,
-        &workspace,
-        &watches,
-    );
-    // Teardown: stop the worker first so its lane ends cleanly, then
-    // shut the data lane — never exit with a lane still live.
-    control.stop();
-    channel.shutdown();
+    let result = std::thread::scope(|scope| {
+        let (stop, retired) = std::sync::mpsc::channel();
+        let registry = &saves;
+        let maintenance = std::thread::Builder::new()
+            .name("execution-save-cleanup".to_owned())
+            .spawn_scoped(scope, move || saves::Saves::maintain(registry, &retired));
+        let result = match maintenance {
+            Ok(_) => {
+                let mut state = DataState {
+                    mcp: mcp::Sessions::default(),
+                    python: managed_python::Catalog::new(&admission.workspace),
+                    changes: changes::Changes::default(),
+                    next_ticket: None,
+                };
+                let revocation = Arc::new(ClientRevocation::default());
+                let mut recovery_cutoff = None;
+                let mut watches = Arc::new(watch::Watches::new());
+                loop {
+                    let arbitration = Arc::new(mutation::Arbitration::new());
+                    let shutdown = pair
+                        .data
+                        .shutdown_handle()
+                        .map_err(|error| handshake_error(&error))?;
+                    let control = client_control_worker(
+                        pair.control,
+                        arbitration.clone(),
+                        shutdown,
+                        operations.clone(),
+                        watches.clone(),
+                        saves.clone(),
+                        state.python.cleanup(),
+                        revocation.clone(),
+                    );
+                    let outcome = serve(
+                        &mut pair.data,
+                        root,
+                        &arbitration,
+                        &operations,
+                        &admission.workspace,
+                        &watches,
+                        &saves,
+                        &mut state,
+                        &revocation,
+                    );
+                    let now = Instant::now();
+                    let cutoff = now + rustx_execution_protocol::DETACHED_CLIENT_RETENTION;
+                    let control_end = control.stop();
+                    pair.data.shutdown();
+                    if !revocation.started() {
+                        if !watches.shutdown() {
+                            break Err(String::from("unresolved watch cleanup"));
+                        }
+                        watches = Arc::new(watch::Watches::new());
+                    }
+                    if control_end == ControlEnd::Revoked {
+                        break Ok(());
+                    }
+                    if control_end == ControlEnd::Invalid
+                        || !outcome.as_ref().is_err_and(recoverable_lane_loss)
+                    {
+                        break Err(String::from("execution pair violated the protocol"));
+                    }
+                    let cutoff = if revocation.started() {
+                        *recovery_cutoff.get_or_insert(cutoff)
+                    } else {
+                        recovery_cutoff = None;
+                        cutoff
+                    };
+                    match recover_pair(&reconnect, &admission, cutoff) {
+                        Ok(Some(recovered)) => pair = recovered,
+                        Ok(None) => break Ok(()),
+                        Err(error) => break Err(error),
+                    }
+                }
+            }
+            Err(error) => Err(handshake_error(&error)),
+        };
+        drop(stop);
+        result
+    });
     // An unresolved worker is never reported as a clean exit.
-    let drained = operations.shutdown();
-    if !watches.shutdown() {
-        return Err(String::from("unresolved watch cleanup"));
+    let operations_settled = operations.shutdown();
+    if !saves.lock().expect("managed output").close() {
+        return Err(String::from("unresolved managed output cleanup"));
     }
-    let drained =
-        drained.and_then(|()| rustx_execution_client::workspace_python::cleanup_process_scratch());
+    let drained = operations_settled
+        .and_then(|()| rustx_execution_client::workspace_python::cleanup_process_scratch());
     match (result, drained) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), _) => Err(error),
@@ -302,7 +451,10 @@ fn serve_session(
 /// The validated connection target derived from the bootstrap endpoint.
 enum Endpoint {
     /// Owner-only Unix socket for the local sibling composition.
-    Unix(PathBuf),
+    Unix {
+        path: PathBuf,
+        reactor: tokio::runtime::Runtime,
+    },
     /// Strictly validated WebSocket URL for the remote composition.
     WebSocket(ExecutionUrl, Option<Vec<u8>>),
 }
@@ -313,14 +465,38 @@ fn connect_endpoint(
     endpoint: &Endpoint,
     deadline: std::time::Instant,
     ca_file: Option<&Path>,
-) -> Result<RecordChannel, String> {
+) -> Result<RecordChannel, PairFailure> {
     match endpoint {
-        Endpoint::Unix(socket_path) => {
-            let stream =
-                UnixStream::connect(socket_path).map_err(|_| String::from("unreachable"))?;
+        Endpoint::Unix { path, reactor } => {
+            let stream = reactor.block_on(async {
+                tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    tokio::net::UnixStream::connect(path),
+                )
+                .await
+                .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+            });
+            let stream = match stream {
+                Ok(stream) => stream.into_std()?,
+                // A real local listener retains its exclusive socket for
+                // the binding's lifetime. Its disappearance or refusal
+                // means there is no local reattachment rendezvous.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    return Err(PairFailure::Authentication(String::from(
+                        "local execution listener is gone",
+                    )));
+                }
+                Err(error) => return Err(error.into()),
+            };
+            stream.set_nonblocking(false)?;
             // The credential is sent only to a peer owned by this same
             // euid; a socket planted by another user never sees it.
-            require_peer_owner(&stream)?;
+            require_peer_owner(&stream).map_err(PairFailure::Authentication)?;
             Ok(RecordChannel::unix(stream))
         }
         Endpoint::WebSocket(endpoint, certificate) => {
@@ -329,7 +505,7 @@ fn connect_endpoint(
             } else {
                 rustx_execution_transport::connect(endpoint, deadline, ca_file)
             };
-            channel.map_err(|_| String::from("unreachable"))
+            Ok(channel?)
         }
     }
 }
@@ -343,9 +519,9 @@ fn pair_control(
     endpoint: &Endpoint,
     deadline: std::time::Instant,
     data_hello: &Hello,
-    challenge: PairingNonce,
+    data: &rustx_execution_protocol::DataAdmission,
     ca_file: Option<&Path>,
-) -> Result<RecordChannel, String> {
+) -> Result<RecordChannel, PairFailure> {
     let mut channel = connect_endpoint(endpoint, deadline, ca_file)?;
     let hello = ControlHello {
         version: PROTOCOL_VERSION,
@@ -355,18 +531,17 @@ fn pair_control(
         generation: data_hello.generation,
         workspace: data_hello.workspace.clone(),
         credential: data_hello.credential.clone(),
-        connection_nonce: challenge,
+        connection_nonce: data.challenge.clone(),
     };
-    let encoded =
-        encode_record(&PeerHello::Control(hello)).map_err(|error| handshake_error(&error))?;
-    channel
-        .send(&encoded, Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let reply: ControlHelloReply = channel
-        .receive(Some(deadline))
-        .map_err(|error| handshake_error(&error))?;
-    let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
-    verify_admission(data_hello, &admission)?;
+    let encoded = encode_record(&PeerHello::Control(hello))?;
+    channel.send(&encoded, Some(deadline))?;
+    let reply: ControlHelloReply = channel.receive(Some(deadline))?;
+    let admission = reply.map_err(PairFailure::Refused)?;
+    if admission != data.admission {
+        return Err(PairFailure::Authentication(String::from(
+            "control admission did not match data",
+        )));
+    }
     Ok(channel)
 }
 
@@ -376,13 +551,37 @@ struct ClientControlWorker {
     /// The arbitration the worker shares with `serve` — `stop_worker`
     /// ends its loop.
     arbitration: std::sync::Arc<mutation::Arbitration>,
-    join: std::thread::JoinHandle<()>,
+    join: std::thread::JoinHandle<ControlEnd>,
+}
+
+/// One admitted instance's terminal cut survives authenticated re-pairing.
+#[derive(Default)]
+struct ClientRevocation(AtomicU8);
+
+impl ClientRevocation {
+    const CLOSING: u8 = 1;
+    const SETTLED: u8 = 2;
+
+    fn started(&self) -> bool {
+        self.0.load(Ordering::Acquire) >= Self::CLOSING
+    }
+
+    fn settled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::SETTLED
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControlEnd {
+    Detached,
+    Revoked,
+    Invalid,
 }
 
 impl ClientControlWorker {
-    fn stop(self) {
+    fn stop(self) -> ControlEnd {
         self.arbitration.stop_worker();
-        let _ = self.join.join();
+        self.join.join().unwrap_or(ControlEnd::Invalid)
     }
 }
 
@@ -395,13 +594,11 @@ impl ClientControlWorker {
 struct LaneFence {
     arbitration: std::sync::Arc<mutation::Arbitration>,
     data_shutdown: rustx_execution_transport::ChannelShutdown,
-    operations: std::sync::Arc<process::Operations>,
 }
 
 impl Drop for LaneFence {
     fn drop(&mut self) {
         self.arbitration.revoke();
-        self.operations.revoke();
         self.data_shutdown.shutdown();
     }
 }
@@ -416,20 +613,40 @@ impl Drop for LaneFence {
 /// final poll. When no request is outstanding the worker paces the next
 /// poll by a bounded period — the lane never busy-spins, and every
 /// frame runs under an absolute deadline.
+fn settle_revocation(
+    arbitration: &mutation::Arbitration,
+    operations: &process::Operations,
+    watches: &watch::Watches,
+    saves: &std::sync::Arc<std::sync::Mutex<saves::Saves>>,
+    python: &managed_python::SourceCleanup,
+) -> bool {
+    // Leave time in the Server's command budget for the physical receipt.
+    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    arbitration.revoke();
+    operations.revoke();
+    let watches_settled = watches.shutdown();
+    let remaining = cutoff.saturating_duration_since(std::time::Instant::now());
+    let processes_settled = operations.finish_revocation(remaining);
+    let python_settled = python.close();
+    let saves_settled = saves::Saves::close_by(saves, cutoff);
+    let settled = watches_settled && processes_settled.is_ok() && python_settled && saves_settled;
+    #[cfg(target_os = "linux")]
+    let settled =
+        settled && rustx_process_supervisor::client_domain::release_staging(cutoff).is_ok();
+    settled
+}
+
+#[allow(clippy::too_many_arguments)]
 fn client_control_worker(
     mut channel: RecordChannel,
     arbitration: std::sync::Arc<mutation::Arbitration>,
     data_shutdown: rustx_execution_transport::ChannelShutdown,
     operations: std::sync::Arc<process::Operations>,
     watches: std::sync::Arc<watch::Watches>,
+    saves: std::sync::Arc<std::sync::Mutex<saves::Saves>>,
+    python: managed_python::SourceCleanup,
+    revocation: Arc<ClientRevocation>,
 ) -> ClientControlWorker {
-    /// The idle poll period: commands wait at most this for the next
-    /// turn, far inside the Server's command receipt budget.
-    const POLL_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
-    /// Physical process containment the worker awaits before `Revoked`
-    /// is delivered — inside the Server's 5-second command budget so
-    /// the receipt is the honest settlement, not a hope.
-    const REVOKE_SETTLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
     let worker_arbitration = arbitration.clone();
     let join = std::thread::Builder::new()
         .name("execution-control".to_owned())
@@ -442,48 +659,55 @@ fn client_control_worker(
             let _fence = LaneFence {
                 arbitration: worker_arbitration.clone(),
                 data_shutdown,
-                operations: operations.clone(),
             };
             let mut sequence = 1_u64;
             let mut receipt: Option<ControlReply> = None;
             loop {
                 if worker_arbitration.worker_stopped() {
-                    return;
+                    return ControlEnd::Detached;
                 }
                 let Some(health) = fresh_nonce() else {
-                    return;
+                    return ControlEnd::Invalid;
                 };
+                let final_receipt = matches!(&receipt, Some(ControlReply::Revoked));
                 let poll = ControlPoll {
                     sequence: DecimalU64::new(sequence),
                     receipt: receipt.take(),
                     health,
                 };
                 let Ok(encoded) = encode_record(&poll) else {
-                    return;
+                    return ControlEnd::Invalid;
                 };
                 let deadline = std::time::Instant::now() + CONTROL_FRAME_TIMEOUT;
-                if channel.send(&encoded, Some(deadline)).is_err() {
-                    return;
+                if let Err(error) = channel.send(&encoded, Some(deadline)) {
+                    return control_io_end(&error);
                 }
                 let turn: ControlTurn = match channel.receive(Some(deadline)) {
                     Ok(turn) => turn,
-                    Err(_) => return,
+                    Err(error) => return control_io_end(&error),
                 };
                 // The turn must answer this exact poll — sequence and
                 // the fresh nonce both echo — before its request counts.
                 if turn.sequence != poll.sequence || turn.health != poll.health {
-                    return;
+                    operations.revoke();
+                    return ControlEnd::Invalid;
+                }
+                if final_receipt {
+                    return if turn.request.is_none() {
+                        ControlEnd::Revoked
+                    } else {
+                        ControlEnd::Invalid
+                    };
                 }
                 sequence = sequence.saturating_add(1);
                 let Some(request) = turn.request else {
                     // Idle lane: pace the next poll — the worker wake
                     // covers the stop flag and keeps the cadence bounded.
-                    if worker_arbitration.wait_worker(POLL_PERIOD) {
-                        return;
+                    if worker_arbitration.wait_worker(CONTROL_POLL_INTERVAL) {
+                        return ControlEnd::Detached;
                     }
                     continue;
                 };
-                let done = matches!(request, ControlRequest::Revoke);
                 let reply = match request {
                     ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
                     ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
@@ -491,16 +715,22 @@ fn client_control_worker(
                         disposition: worker_arbitration.cancel(ticket),
                     },
                     ControlRequest::Revoke => {
-                        worker_arbitration.revoke();
-                        // `Revoked` is only honest once the process
-                        // operations were signalled and their physical
-                        // containment actually settled — bounded so the
-                        // Server's own revoke budget still fences.
-                        operations.revoke();
-                        let watches_settled = watches.shutdown();
-                        let processes_settled = operations.finish_revocation(REVOKE_SETTLE_BUDGET);
-                        if !watches_settled || processes_settled.is_err() {
-                            return;
+                        if !revocation.settled() {
+                            revocation
+                                .0
+                                .store(ClientRevocation::CLOSING, Ordering::Release);
+                            if !settle_revocation(
+                                &worker_arbitration,
+                                &operations,
+                                &watches,
+                                &saves,
+                                &python,
+                            ) {
+                                return ControlEnd::Detached;
+                            }
+                            revocation
+                                .0
+                                .store(ClientRevocation::SETTLED, Ordering::Release);
                         }
                         ControlReply::Revoked
                     }
@@ -514,30 +744,6 @@ fn client_control_worker(
                     },
                 };
                 receipt = Some(reply);
-                if done {
-                    // One final poll delivers the `Revoked` receipt —
-                    // the Server awaits it before its fence lands.
-                    let Some(health) = fresh_nonce() else {
-                        return;
-                    };
-                    let poll = ControlPoll {
-                        sequence: DecimalU64::new(sequence),
-                        receipt,
-                        health,
-                    };
-                    let deadline = std::time::Instant::now() + CONTROL_FRAME_TIMEOUT;
-                    if let Ok(encoded) = encode_record(&poll)
-                        && channel.send(&encoded, Some(deadline)).is_ok()
-                    {
-                        // The Server now owns orderly data close. Keep the
-                        // control socket alive until that close reaches serve,
-                        // or interrupt the data lane at the bounded deadline.
-                        let _ = worker_arbitration.wait_worker(
-                            deadline.saturating_duration_since(std::time::Instant::now()),
-                        );
-                    }
-                    return;
-                }
                 // A delivered request earns its receipt promptly — the
                 // very next poll, not the idle cadence.
             }
@@ -548,6 +754,14 @@ fn client_control_worker(
 
 /// A fresh health nonce for one poll — OS randomness, never a counter
 /// the peer could predict and replay.
+fn control_io_end(error: &io::Error) -> ControlEnd {
+    if recoverable_lane_loss(error) {
+        ControlEnd::Detached
+    } else {
+        ControlEnd::Invalid
+    }
+}
+
 fn fresh_nonce() -> Option<DecimalU64> {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).ok()?;
@@ -656,35 +870,69 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
         .ok_or_else(|| String::from("untrusted admission"))
 }
 
-/// The Client does not advertise managed output: a save message is refused
-/// before any path, allocation, or queue is touched.
-fn save_unavailable() -> ClientReply {
-    ClientReply::Save(rustx_execution_protocol::save::SaveReply::Unavailable {
-        code: rustx_execution_protocol::save::SaveCode::CapabilityUnavailable,
-    })
+struct DataState {
+    mcp: mcp::Sessions,
+    python: managed_python::Catalog,
+    changes: changes::Changes,
+    next_ticket: Option<u64>,
 }
 
-#[allow(clippy::too_many_lines)] // The typed one-request/one-reply dispatch loop.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One typed data lane.
 fn serve(
     channel: &mut RecordChannel,
     root: &PackageDirectory,
-    arbitration: &std::sync::Arc<mutation::Arbitration>,
-    operations: &std::sync::Arc<process::Operations>,
+    arbitration: &Arc<mutation::Arbitration>,
+    operations: &Arc<process::Operations>,
     workspace: &Path,
     watches: &watch::Watches,
-) -> Result<(), String> {
-    // One serialized writer state per connection: at most one staged
-    // preparation lives at a time, and it is dropped — cleaning up its own
-    // private stage — when the owner is dropped at EOF or revoke.
-    let changes = changes::Changes::default();
+    saves: &Mutex<saves::Saves>,
+    state: &mut DataState,
+    revocation: &ClientRevocation,
+) -> io::Result<()> {
     let mut writes = mutation::Writes::new(arbitration.clone());
+    if let Some(ticket) = state.next_ticket {
+        writes.continue_ticket_sequence(ticket);
+    }
+    let outcome = serve_requests(
+        channel,
+        root,
+        arbitration,
+        operations,
+        workspace,
+        watches,
+        saves,
+        state,
+        &mut writes,
+        revocation,
+    );
+    state.next_ticket = Some(writes.ticket_sequence());
+    outcome
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // The typed one-request/one-reply dispatch loop.
+fn serve_requests(
+    channel: &mut RecordChannel,
+    root: &PackageDirectory,
+    arbitration: &mutation::Arbitration,
+    operations: &Arc<process::Operations>,
+    workspace: &Path,
+    watches: &watch::Watches,
+    saves: &Mutex<saves::Saves>,
+    state: &mut DataState,
+    writes: &mut mutation::Writes,
+    revocation: &ClientRevocation,
+) -> io::Result<()> {
     loop {
-        let Some(request) = channel
-            .receive_optional::<ClientRequest>(None)
-            .map_err(|_| String::from("request"))?
-        else {
-            return Ok(());
-        };
+        let request = channel.receive::<ClientRequest>(None)?;
+        if revocation.started() {
+            channel.send(
+                &encode_record(&ClientReply::Error {
+                    kind: ReadError::Unavailable,
+                })?,
+                Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            )?;
+            continue;
+        }
         let reply = match request {
             ClientRequest::Ping => ClientReply::Pong,
             ClientRequest::WorkspacePythonStatus => {
@@ -743,9 +991,89 @@ fn serve(
                     }
                 }
             }
-            // The Client does not advertise managed output: a save message is
-            // refused before any path, allocation, or queue is touched.
-            ClientRequest::Save(_) => save_unavailable(),
+            ClientRequest::Mcp(request) => {
+                ClientReply::Mcp(state.mcp.exchange(request, operations, &state.python))
+            }
+            ClientRequest::PythonSource(request) => {
+                ClientReply::PythonSource(if arbitration.is_revoked() {
+                    rustx_execution_protocol::mcp::PythonSourceReply::Refused(
+                        ReadError::Unavailable,
+                    )
+                } else {
+                    state.python.exchange(request, operations)
+                })
+            }
+            ClientRequest::Save(request) => ClientReply::Save(if arbitration.is_revoked() {
+                rustx_execution_protocol::save::SaveReply::Refused {
+                    code: rustx_execution_protocol::save::SaveCode::StaleOwner,
+                }
+            } else {
+                saves
+                    .lock()
+                    .expect("managed output")
+                    .dispatch(&request, std::time::Instant::now())
+            }),
+            ClientRequest::ReadSavedOutput {
+                locator,
+                conversation,
+                offset,
+                limit,
+            } => saves
+                .lock()
+                .expect("managed output")
+                .with_published(&locator, &conversation, |root, path| {
+                    read_lines(root, path, offset, limit, None)
+                })
+                .unwrap_or_else(|error| ClientReply::Error {
+                    kind: read_error(&error),
+                }),
+            ClientRequest::ReadSavedOutputRange {
+                locator,
+                conversation,
+                offset,
+            } => saves
+                .lock()
+                .expect("managed output")
+                .with_published(&locator, &conversation, |root, path| {
+                    read_range(
+                        root,
+                        path,
+                        offset,
+                        u32::try_from(rustx_execution_protocol::MAX_TEXT_BYTES)
+                            .expect("bounded saved-output page"),
+                        None,
+                    )
+                })
+                .unwrap_or_else(|error| ClientReply::Error {
+                    kind: read_error(&error),
+                }),
+            ClientRequest::SearchSavedOutput {
+                locator,
+                conversation,
+                spec,
+            } => {
+                if matches!(spec, rustx_execution_protocol::SearchSpec::Grep { .. }) {
+                    saves
+                        .lock()
+                        .expect("managed output")
+                        .with_published(&locator, &conversation, |root, path| {
+                            search::search_as(
+                                root,
+                                path,
+                                Some(locator.file_name()),
+                                &spec,
+                                std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
+                            )
+                        })
+                        .unwrap_or_else(|error| ClientReply::Error {
+                            kind: read_error(&error),
+                        })
+                } else {
+                    ClientReply::Error {
+                        kind: ReadError::Invalid,
+                    }
+                }
+            }
             ClientRequest::ReadRange {
                 relative_path,
                 offset,
@@ -759,10 +1087,20 @@ fn serve(
                 expected_revision.as_deref(),
             ),
             ClientRequest::GetMetadata { relative_path } => get_metadata(root, &relative_path),
+            ClientRequest::ResolveResourceEntry { relative_path } => {
+                resolve_resource_entry(root, workspace, &relative_path)
+            }
             ClientRequest::WorkspaceChanges(request) => ClientReply::WorkspaceChanges(
-                changes.dispatch(operations, operations.workspace(), request),
+                state
+                    .changes
+                    .dispatch(operations, operations.workspace(), request),
             ),
-            ClientRequest::MutateTree(request) => tree::mutate(root, arbitration, &request),
+            ClientRequest::MutateTree(request) => match operations.admit_auxiliary() {
+                Some(_mutation) => tree::mutate(root, arbitration, &request),
+                None => ClientReply::Error {
+                    kind: ReadError::Unavailable,
+                },
+            },
             ClientRequest::Watch(request) => {
                 ClientReply::Watch(watches.dispatch(root, workspace, request))
             }
@@ -771,12 +1109,14 @@ fn serve(
                 offset,
                 limit,
                 expected_revision,
+                skip_hidden,
             } => read_directory(
                 root,
                 &relative_path,
                 offset,
                 limit,
                 expected_revision.as_deref(),
+                skip_hidden,
             ),
             ClientRequest::PrepareWrite {
                 relative_path,
@@ -798,7 +1138,10 @@ fn serve(
                 expectation,
                 replacements,
             } => writes.prepare_edit(root, &relative_path, &expectation, &replacements),
-            ClientRequest::CommitWrite { ticket } => writes.commit(ticket),
+            ClientRequest::CommitWrite { ticket } => match operations.admit_auxiliary() {
+                Some(_staging) => writes.commit(ticket),
+                None => ClientReply::WriteCancelled { ticket },
+            },
             ClientRequest::AbortWrite { ticket } => writes.abort(ticket),
             ClientRequest::ReadLines {
                 relative_path,
@@ -834,10 +1177,8 @@ fn serve(
                 std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
             ),
         };
-        let encoded = encode_record(&reply).map_err(|_| String::from("reply"))?;
-        channel
-            .send(&encoded, None)
-            .map_err(|_| String::from("reply"))?;
+        let encoded = encode_record(&reply)?;
+        channel.send(&encoded, None)?;
     }
 }
 
@@ -1219,6 +1560,45 @@ fn get_metadata(root: &PackageDirectory, relative_path: &Path) -> ClientReply {
     }
 }
 
+fn resolve_resource_entry(
+    root: &PackageDirectory,
+    workspace: &Path,
+    relative_path: &Path,
+) -> ClientReply {
+    let resolution = match root.resolve_resource(workspace, relative_path) {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            return ClientReply::Error {
+                kind: read_error(&error),
+            };
+        }
+    };
+    if resolution
+        .link_paths
+        .iter()
+        .chain(resolution.unresolved_path.iter())
+        .any(|path| path.to_str().is_none())
+    {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    }
+    match resolution.entry {
+        Some(entry) if entry.relative_path.to_str().is_some() => ClientReply::ResourceEntry {
+            relative_path: entry.relative_path,
+            metadata: stamp(&entry.metadata),
+            link_paths: resolution.link_paths,
+        },
+        Some(_) => ClientReply::Error {
+            kind: ReadError::Invalid,
+        },
+        None => ClientReply::ResourceUnavailable {
+            link_paths: resolution.link_paths,
+            unresolved_path: resolution.unresolved_path,
+        },
+    }
+}
+
 /// `ReadDirectory`: one revision-checked page under the workspace — an
 /// empty `relative_path` lists the root. Bounds are enforced before any
 /// physical work; errors cross as stable [`ReadError`] codes only.
@@ -1228,6 +1608,7 @@ fn read_directory(
     offset: u32,
     limit: u32,
     expected_revision: Option<&str>,
+    skip_hidden: bool,
 ) -> ClientReply {
     let Ok(relative) = relative_entry(relative_path) else {
         return ClientReply::Error {
@@ -1244,15 +1625,29 @@ fn read_directory(
             kind: ReadError::Invalid,
         };
     };
-    match root.directory_page(
-        relative,
-        offset,
-        limit,
-        expected_revision,
-        MAX_DIRECTORY_NAMES,
-        MAX_DIRECTORY_PAGE_ENTRIES,
-    ) {
-        Ok(page) => ClientReply::Directory {
+    let page = if skip_hidden {
+        root.skill_directory_page(
+            relative,
+            offset,
+            limit,
+            expected_revision,
+            MAX_DIRECTORY_NAMES,
+            MAX_DIRECTORY_PAGE_ENTRIES,
+        )
+    } else {
+        root.directory_page(
+            relative,
+            offset,
+            limit,
+            expected_revision,
+            MAX_DIRECTORY_NAMES,
+            MAX_DIRECTORY_PAGE_ENTRIES,
+        )
+        .map(|page| (page, 0))
+    };
+    match page {
+        Ok((page, skipped)) => ClientReply::Directory {
+            skipped: u32::try_from(skipped).expect("bounded directory page"),
             revision: page.revision,
             entries: page
                 .entries

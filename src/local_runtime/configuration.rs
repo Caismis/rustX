@@ -3,7 +3,7 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
-pub(in crate::local_runtime) mod capture;
+pub(crate) mod capture;
 pub mod effective_observation;
 pub mod generation;
 pub mod observation;
@@ -122,11 +122,16 @@ impl ConfigurationHooks {
 pub struct SessionConfigInput {
     pub cwd: PathBuf,
     pub model: Option<crate::model::session::SessionModelConfig>,
+    pub authoring: super::session_inputs::SessionAuthoredInputs,
 }
 impl SessionConfigInput {
     #[must_use]
     pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd, model: None }
+        Self {
+            cwd,
+            model: None,
+            authoring: super::session_inputs::SessionAuthoredInputs::default(),
+        }
     }
 }
 
@@ -137,6 +142,7 @@ pub enum Origin {
     Builtin,
     User { document: PathBuf, base: PathBuf },
     Workspace { document: PathBuf, base: PathBuf },
+    Session { document: PathBuf, base: PathBuf },
     Process { base: PathBuf },
 }
 
@@ -185,16 +191,7 @@ pub(crate) struct WorkspaceResourceIdentity {
 #[derive(Clone, Copy)]
 pub(crate) enum WorkspaceResourceAuthority {
     Authored(WorkspaceResourceIdentity),
-    Bound(Option<WorkspaceResourceIdentity>),
-}
-
-impl WorkspaceResourceAuthority {
-    pub(crate) const fn identity(self) -> Option<WorkspaceResourceIdentity> {
-        match self {
-            Self::Authored(identity) => Some(identity),
-            Self::Bound(identity) => identity,
-        }
-    }
+    Bound,
 }
 
 /// Immutable prospective Session settings and statically resolved resources.

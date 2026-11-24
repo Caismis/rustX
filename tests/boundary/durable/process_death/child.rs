@@ -577,6 +577,8 @@ impl Child {
             )
         };
         let state = SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             model: Some(runtime_config.initial_model().clone().clone()),
             ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
                 std::path::PathBuf::from("/"),
@@ -734,6 +736,8 @@ async fn compose_session_child(
     let runtime_config =
         CurrentRuntimeConfig::from_toml_slice(&config_bytes).expect("valid runtime config");
     let template = SessionPersistentState {
+        session_config: None,
+        session_resources: None,
         model: Some(runtime_config.initial_model().clone().clone()),
         ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
             paths.workspace.clone(),
@@ -1497,6 +1501,8 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 registry,
                 runtime_config.clone(),
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     model: Some(runtime_config.initial_model().clone().clone()),
                     ..SessionPersistentState::from_input(
                         &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from(
@@ -1970,6 +1976,8 @@ async fn compose_workflow_emulator_child(
     )
     .expect("construct emulator model bindings");
     let state = SessionPersistentState {
+        session_config: None,
+        session_resources: None,
         model: Some(runtime_config.initial_model().clone()),
         ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
             root.join("workspace"),

@@ -7,6 +7,9 @@
       "$ref": "#/$defs/Request"
     },
     {
+      "$ref": "#/$defs/HostUploadEnvelope"
+    },
+    {
       "$ref": "#/$defs/Response"
     },
     {
@@ -8093,318 +8096,6 @@
         }
       ]
     },
-    "HostUploadEnvelope": {
-      "description": "The complete upload envelope: JSON-RPC version, correlation identifier, and\none closed method.",
-      "type": "object",
-      "properties": {
-        "jsonrpc": {
-          "description": "The JSON-RPC version.",
-          "$ref": "#/$defs/JsonRpcVersion"
-        },
-        "id": {
-          "description": "The correlation identifier of this request.",
-          "$ref": "#/$defs/AppServerRequestId"
-        }
-      },
-      "required": [
-        "jsonrpc",
-        "id"
-      ],
-      "oneOf": [
-        {
-          "description": "Begins a candidate.",
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "item/tool/result/begin"
-            },
-            "params": {
-              "$ref": "#/$defs/HostUploadBeginParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "description": "Appends one chunk.",
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "item/tool/result/chunk"
-            },
-            "params": {
-              "$ref": "#/$defs/HostUploadChunkParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "description": "Ends and verifies the candidate.",
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "item/tool/result/end"
-            },
-            "params": {
-              "$ref": "#/$defs/HostUploadEndParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        },
-        {
-          "description": "Aborts the candidate.",
-          "type": "object",
-          "properties": {
-            "method": {
-              "type": "string",
-              "const": "item/tool/result/abort"
-            },
-            "params": {
-              "$ref": "#/$defs/HostUploadAbortParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ]
-        }
-      ]
-    },
-    "JsonRpcVersion": {
-      "type": "string",
-      "enum": [
-        "2.0"
-      ]
-    },
-    "AppServerRequestId": {
-      "description": "Integer request IDs use the JavaScript safe-integer range at admission.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "integer",
-          "format": "int64",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
-        }
-      ]
-    },
-    "HostUploadBeginParams": {
-      "description": "`item/tool/result/begin`: captures the immutable success and descriptors.",
-      "type": "object",
-      "properties": {
-        "candidate": {
-          "description": "The candidate being begun.",
-          "$ref": "#/$defs/HostUploadCandidate"
-        },
-        "success": {
-          "description": "The tool result's success flag, fixed at begin.",
-          "type": "boolean"
-        },
-        "items": {
-          "description": "The ordered item descriptors, at most [`MAX_ITEMS`].",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/HostUploadItem"
-          },
-          "maxItems": 1024
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "candidate",
-        "success",
-        "items"
-      ]
-    },
-    "HostUploadCandidate": {
-      "description": "The identity one upload candidate belongs to. The Server callback\nincarnation, original request identifier, and tool call identity are the\ncorrelation; the Host subscription incarnation and upload identifier bind\nthe candidate to one eligible participant.",
-      "type": "object",
-      "properties": {
-        "callbackIncarnation": {
-          "description": "The Server callback incarnation that issued the original request.",
-          "type": "string",
-          "pattern": "^[A-Za-z0-9._-]{1,128}$"
-        },
-        "requestId": {
-          "description": "The original request identifier.",
-          "$ref": "#/$defs/AppServerRequestId"
-        },
-        "threadId": {
-          "description": "The conversation the tool call belongs to.",
-          "$ref": "#/$defs/ConversationId"
-        },
-        "turnId": {
-          "description": "The attempt the tool call belongs to.",
-          "$ref": "#/$defs/AttemptId"
-        },
-        "callId": {
-          "description": "The tool call being answered.",
-          "$ref": "#/$defs/ToolCallId"
-        },
-        "connectionIncarnation": {
-          "description": "The callback connection incarnation the request was delivered on.",
-          "type": "string",
-          "pattern": "^[A-Za-z0-9._-]{1,128}$"
-        },
-        "subscriptionIncarnation": {
-          "description": "The selected subscription the request was delivered to.",
-          "type": "string",
-          "pattern": "^[A-Za-z0-9._-]{1,128}$"
-        },
-        "uploadId": {
-          "description": "The upload identifier, unique per candidate.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "callbackIncarnation",
-        "requestId",
-        "threadId",
-        "turnId",
-        "callId",
-        "connectionIncarnation",
-        "subscriptionIncarnation",
-        "uploadId"
-      ]
-    },
-    "HostUploadItem": {
-      "description": "One item descriptor: its type tag and declared byte length.",
-      "type": "object",
-      "properties": {
-        "typeTag": {
-          "description": "The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.",
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 1,
-          "maximum": 1
-        },
-        "length": {
-          "description": "The declared byte length of this item.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,19})$"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "typeTag",
-        "length"
-      ]
-    },
-    "HostUploadChunkParams": {
-      "description": "`item/tool/result/chunk`: one ordered, bounded chunk of one item.",
-      "type": "object",
-      "properties": {
-        "candidate": {
-          "description": "The candidate the chunk feeds.",
-          "$ref": "#/$defs/HostUploadCandidate"
-        },
-        "itemIndex": {
-          "description": "The current item's index.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        },
-        "sequence": {
-          "description": "The strictly increasing chunk sequence, starting at `1`.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,19})$"
-        },
-        "offset": {
-          "description": "The byte offset within the item.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,19})$"
-        },
-        "dataBase64": {
-          "description": "The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].",
-          "type": "string",
-          "maxLength": 87384
-        },
-        "sha256": {
-          "description": "The SHA-256 of the decoded bytes.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "candidate",
-        "itemIndex",
-        "sequence",
-        "offset",
-        "dataBase64",
-        "sha256"
-      ]
-    },
-    "HostUploadEndParams": {
-      "description": "`item/tool/result/end`: echoes the begin metadata and closes the candidate.",
-      "type": "object",
-      "properties": {
-        "candidate": {
-          "description": "The candidate being ended.",
-          "$ref": "#/$defs/HostUploadCandidate"
-        },
-        "success": {
-          "description": "The success flag, which must equal the begin's.",
-          "type": "boolean"
-        },
-        "items": {
-          "description": "The item descriptors, which must equal the begin's.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/HostUploadItem"
-          },
-          "maxItems": 1024
-        },
-        "total": {
-          "description": "The declared total length, which must equal the sum of the items.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,19})$"
-        },
-        "digest": {
-          "description": "The result digest over the canonical layout.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "candidate",
-        "success",
-        "items",
-        "total",
-        "digest"
-      ]
-    },
-    "HostUploadAbortParams": {
-      "description": "`item/tool/result/abort`: retires the candidate without a result.",
-      "type": "object",
-      "properties": {
-        "candidate": {
-          "description": "The candidate being aborted.",
-          "$ref": "#/$defs/HostUploadCandidate"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "candidate"
-      ]
-    },
     "ServerOutput": {
       "description": "Direction-specific server output. Generic client replies cannot weaken\nvalidation of typed server responses sharing the same JSON-RPC envelope.",
       "anyOf": [
@@ -8450,13 +8141,53 @@
         "result"
       ]
     },
+    "JsonRpcVersion": {
+      "type": "string",
+      "enum": [
+        "2.0"
+      ]
+    },
+    "AppServerRequestId": {
+      "description": "Integer request IDs use the JavaScript safe-integer range at admission.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "format": "int64",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
     "MethodResult": {
       "oneOf": [
         {
           "type": "object",
           "properties": {
+            "duplicate": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "host_upload_accepted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "duplicate"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "page": {
               "$ref": "#/$defs/SkillPage"
+            },
+            "authority": {
+              "$ref": "#/$defs/WorkspaceCatalogAuthority"
             },
             "type": {
               "type": "string",
@@ -8466,7 +8197,8 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "page"
+            "page",
+            "authority"
           ]
         },
         {
@@ -10413,6 +10145,33 @@
         {
           "type": "object",
           "properties": {
+            "authority": {
+              "$ref": "#/$defs/WorkspaceCatalogAuthority"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "mcp_source"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "authority"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "result": {
               "$ref": "#/$defs/McpProbeResult"
             },
@@ -10729,6 +10488,26 @@
           "required": [
             "type",
             "projection"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "session_inputs_written"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "revision"
           ]
         }
       ]
@@ -11240,6 +11019,21 @@
             "cause",
             "path"
           ]
+        }
+      ]
+    },
+    "WorkspaceCatalogAuthority": {
+      "description": "Authority governing a Workspace catalog read for a Session.",
+      "oneOf": [
+        {
+          "description": "Confirmed unclaimed Workspace: Server authoring sources govern reads and writes.",
+          "type": "string",
+          "const": "authoring"
+        },
+        {
+          "description": "Claimed Session with a live Execution Client: the Client view governs reads.",
+          "type": "string",
+          "const": "client"
         }
       ]
     },
@@ -21226,7 +21020,8 @@
       "type": "string",
       "enum": [
         "user",
-        "workspace"
+        "workspace",
+        "session"
       ]
     },
     "ResourceDiagnostic": {
@@ -21883,6 +21678,18 @@
             "kind": {
               "type": "string",
               "const": "not_admitted"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_grant_required"
             }
           },
           "required": [
@@ -29916,6 +29723,26 @@
         {
           "type": "object",
           "properties": {
+            "document": {
+              "type": "string"
+            },
+            "base": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "required": [
+            "kind",
+            "document",
+            "base"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "base": {
               "type": "string"
             },
@@ -30075,6 +29902,193 @@
         "unavailable",
         "timed_out"
       ]
+    },
+    "SourceView": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "authored": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/McpView"
+          }
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "revision"
+      ]
+    },
+    "McpView": {
+      "type": "object",
+      "properties": {
+        "definition": {
+          "$ref": "#/$defs/McpAuthoring"
+        },
+        "retained_env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retained_headers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "definition",
+        "retained_env",
+        "retained_headers"
+      ]
+    },
+    "McpAuthoring": {
+      "description": "Secret-field presence is retained even for empty tables, so project authority\ncannot be widened by replacing an authored empty table with a default map.",
+      "type": "object",
+      "properties": {
+        "sensitive_env": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvironmentReference"
+          }
+        },
+        "sensitive_headers": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvironmentReference"
+          }
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpTransportType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/McpToolPermissionDocument"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentReference": {
+      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
+      "type": "string",
+      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "McpTransportType": {
+      "description": "The transport an `mcpServers` entry selects explicitly.",
+      "oneOf": [
+        {
+          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
+          "type": "string",
+          "const": "http"
+        },
+        {
+          "description": "A locally launched stdio server.",
+          "type": "string",
+          "const": "stdio"
+        }
+      ]
+    },
+    "McpToolPermissionDocument": {
+      "description": "Exact-tool permission override authored under one MCP server.",
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "description": "Complete three-mode permission object for this exact tool.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "McpProbeResult": {
       "type": "object",
@@ -30567,12 +30581,12 @@
           }
         },
         "user": {
-          "$ref": "#/$defs/SourceView"
+          "$ref": "#/$defs/SourceView2"
         },
         "workspace": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView"
+              "$ref": "#/$defs/SourceView2"
             },
             {
               "type": "null"
@@ -30612,7 +30626,7 @@
         "global_guidance": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView2"
+              "$ref": "#/$defs/SourceView3"
             },
             {
               "type": "null"
@@ -30629,12 +30643,12 @@
           "type": "string"
         },
         "user_mcp": {
-          "$ref": "#/$defs/SourceView3"
+          "$ref": "#/$defs/SourceView"
         },
         "workspace_mcp": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView3"
+              "$ref": "#/$defs/SourceView"
             },
             {
               "type": "null"
@@ -30832,7 +30846,7 @@
         "id"
       ]
     },
-    "SourceView": {
+    "SourceView2": {
       "type": "object",
       "properties": {
         "path": {
@@ -31059,33 +31073,6 @@
         }
       ]
     },
-    "SourceView2": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "revision": {
-          "type": "string"
-        },
-        "authored": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "diagnostic": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "path",
-        "revision"
-      ]
-    },
     "SourceView3": {
       "type": "object",
       "properties": {
@@ -31097,12 +31084,9 @@
         },
         "authored": {
           "type": [
-            "object",
+            "string",
             "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/McpView"
-          }
+          ]
         },
         "diagnostic": {
           "type": [
@@ -31115,163 +31099,6 @@
         "path",
         "revision"
       ]
-    },
-    "McpView": {
-      "type": "object",
-      "properties": {
-        "definition": {
-          "$ref": "#/$defs/McpAuthoring"
-        },
-        "retained_env": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "retained_headers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "definition",
-        "retained_env",
-        "retained_headers"
-      ]
-    },
-    "McpAuthoring": {
-      "description": "Secret-field presence is retained even for empty tables, so project authority\ncannot be widened by replacing an authored empty table with a default map.",
-      "type": "object",
-      "properties": {
-        "sensitive_env": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/EnvironmentReference"
-          }
-        },
-        "sensitive_headers": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/EnvironmentReference"
-          }
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/McpTransportType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "headers": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {}
-        },
-        "command": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {}
-        },
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "permissions": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResourcePermissionSet"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tools": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/McpToolPermissionDocument"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "EnvironmentReference": {
-      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
-      "type": "string",
-      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$"
-    },
-    "McpTransportType": {
-      "description": "The transport an `mcpServers` entry selects explicitly.",
-      "oneOf": [
-        {
-          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
-          "type": "string",
-          "const": "http"
-        },
-        {
-          "description": "A locally launched stdio server.",
-          "type": "string",
-          "const": "stdio"
-        }
-      ]
-    },
-    "McpToolPermissionDocument": {
-      "description": "Exact-tool permission override authored under one MCP server.",
-      "type": "object",
-      "properties": {
-        "permissions": {
-          "description": "Complete three-mode permission object for this exact tool.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResourcePermissionSet"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
     },
     "AgentSourceView": {
       "type": "object",
@@ -31968,6 +31795,7 @@
       ]
     },
     "WorkflowToolSourceKind": {
+      "description": "Preparing a Python environment may install its requirements first.",
       "type": "string",
       "enum": [
         "mcp",
@@ -31983,6 +31811,7 @@
             "listed",
             "invalid",
             "preparation_failed",
+            "execution_unavailable",
             "connection_failed",
             "list_failed",
             "timed_out",
@@ -32963,6 +32792,16 @@
         "cwd": {
           "type": "string"
         },
+        "authored": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionSettingsAuthored"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "inline": {
           "anyOf": [
             {
@@ -32990,12 +32829,51 @@
         "cwd"
       ]
     },
+    "SessionSettingsAuthored": {
+      "description": "Presence of the persisted Session-owned source fields at the shared revision.",
+      "type": "object",
+      "properties": {
+        "session_config": {
+          "type": "boolean"
+        },
+        "session_resources": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_config",
+        "session_resources"
+      ]
+    },
     "SessionPersistentState": {
       "description": "Deliberate Session-owned intent. Effective configuration is never persisted.",
       "type": "object",
       "properties": {
         "cwd": {
           "type": "string"
+        },
+        "session_config": {
+          "description": "Session-authored configuration above the Workspace and User layers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionConfigContent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_resources": {
+          "description": "Complete definitions owned by this Session.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionResources"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "description": "Explicit initial selection. Omission delegates to the native configuration\nowner at creation; clients must not copy a projected default into this field.",
@@ -33013,6 +32891,35 @@
       "required": [
         "cwd"
       ]
+    },
+    "SessionConfigContent": {
+      "description": "Strict TOML source for one Session, with diagnostics that omit its value.",
+      "type": "string"
+    },
+    "SessionResources": {
+      "description": "Complete Session-authored definitions keyed by their resource identity.",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workflows": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Failure": {
       "type": "object",
@@ -33116,6 +33023,32 @@
             "kind": {
               "type": "string",
               "const": "environment_capacity_or_conflict"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_input_invalid"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_input_source_changed"
             }
           },
           "required": [
@@ -33891,6 +33824,23 @@
         {
           "type": "object",
           "properties": {
+            "reason": {
+              "$ref": "#/$defs/HostUploadRefusal"
+            },
+            "kind": {
+              "type": "string",
+              "const": "host_upload_rejected"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "kind": {
               "type": "string",
               "const": "resync_required"
@@ -33961,6 +33911,96 @@
         "name_enabled",
         "protected_mcp_values",
         "same_directory"
+      ]
+    },
+    "HostUploadRefusal": {
+      "description": "Why the broker or incremental verifier refused an upload step.",
+      "oneOf": [
+        {
+          "description": "A receive slot limit was reached.",
+          "type": "string",
+          "const": "capacity"
+        },
+        {
+          "description": "The fixed total or idle deadline ran out.",
+          "type": "string",
+          "const": "expired"
+        },
+        {
+          "description": "A type tag is not defined by this contract.",
+          "type": "string",
+          "const": "unknown-tag"
+        },
+        {
+          "description": "A type tag is reserved and never valid.",
+          "type": "string",
+          "const": "reserved-tag"
+        },
+        {
+          "description": "More than [`MAX_ITEMS`] descriptors.",
+          "type": "string",
+          "const": "too-many-items"
+        },
+        {
+          "description": "The declared total exceeds [`MAX_TOTAL_BYTES`] or overflows.",
+          "type": "string",
+          "const": "total-too-large"
+        },
+        {
+          "description": "A chunk is empty, oversize, or not canonical padded base64.",
+          "type": "string",
+          "const": "invalid-encoding"
+        },
+        {
+          "description": "The chunk digest or the end digest does not match.",
+          "type": "string",
+          "const": "digest-mismatch"
+        },
+        {
+          "description": "A chunk skipped ahead of the next sequence.",
+          "type": "string",
+          "const": "gap"
+        },
+        {
+          "description": "A chunk's item or offset does not follow the bytes received.",
+          "type": "string",
+          "const": "out-of-order"
+        },
+        {
+          "description": "A replayed chunk older than the one-chunk evidence window.",
+          "type": "string",
+          "const": "duplicate-outside-window"
+        },
+        {
+          "description": "A replay of the last sequence with different identity, or an overflow.",
+          "type": "string",
+          "const": "conflict"
+        },
+        {
+          "description": "A chunk names an item that does not exist.",
+          "type": "string",
+          "const": "foreign"
+        },
+        {
+          "description": "The candidate already ended or aborted.",
+          "type": "string",
+          "const": "late"
+        },
+        {
+          "description": "An item ends inside a UTF-8 scalar, or the bytes are not UTF-8.",
+          "type": "string",
+          "const": "invalid-utf8"
+        },
+        {
+          "description": "The end arrived before every item was complete.",
+          "type": "string",
+          "const": "incomplete"
+        },
+        {
+          "description": "The end's success or descriptors differ from the begin's.",
+          "type": "string",
+          "const": "metadata-mismatch"
+        }
       ]
     },
     "Notification": {
@@ -34629,7 +34669,18 @@
         "tool": {
           "type": "string"
         },
-        "arguments": true
+        "arguments": true,
+        "uploadScope": {
+          "description": "Address of this particular recipient for chunked results.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostUploadScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       },
       "additionalProperties": false,
       "required": [
@@ -34638,6 +34689,30 @@
         "callId",
         "tool",
         "arguments"
+      ]
+    },
+    "HostUploadScope": {
+      "description": "Address supplied to a single recipient of an item/tool/call request.",
+      "type": "object",
+      "properties": {
+        "callbackIncarnation": {
+          "description": "Incarnation of the callback broker.",
+          "type": "string"
+        },
+        "connectionIncarnation": {
+          "description": "Incarnation of the receiving Host connection.",
+          "type": "string"
+        },
+        "subscriptionIncarnation": {
+          "description": "Incarnation of the Host's subscription to the conversation.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "callbackIncarnation",
+        "connectionIncarnation",
+        "subscriptionIncarnation"
       ]
     },
     "ServerResolvedMethod": {
@@ -34692,6 +34767,17 @@
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
                 },
+                "execution_session": {
+                  "description": "Exact Session for Client Workspace reads and stdio.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "id": {
                   "$ref": "#/$defs/McpServerId"
                 },
@@ -34728,6 +34814,17 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "description": "Exact Session for a live Workspace projection.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "offset": {
                   "type": "integer",
@@ -34773,6 +34870,17 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "description": "Exact Session for a live Workspace projection.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "name": {
                   "type": "string"
@@ -37534,6 +37642,16 @@
                 "settings": {
                   "$ref": "#/$defs/SessionPersistentState"
                 },
+                "input_references": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInputReferences"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "submission": {
                   "anyOf": [
                     {
@@ -39959,6 +40077,36 @@
           ]
         },
         {
+          "description": "Read a redacted Workspace MCP document from its authenticated Client.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/sourceRead"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "execution_session"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "description": "Finite configuration connectivity check; never an Agent connection.",
           "type": "object",
           "properties": {
@@ -39971,6 +40119,17 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "description": "Exact Session for Client Workspace reads and stdio.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "id": {
                   "$ref": "#/$defs/McpServerId"
@@ -40439,6 +40598,17 @@
                 "target": {
                   "$ref": "#/$defs/SourceTarget"
                 },
+                "execution_session": {
+                  "description": "Exact Session authorized to list executable Client sources.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "source": {
                   "type": [
                     "string",
@@ -40623,6 +40793,61 @@
               "additionalProperties": false,
               "required": [
                 "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Save a validated Session candidate at the current settings revision.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/inputsWrite"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "expected_revision": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "session_config": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInputChange"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "session_resources": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionInputChange2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "expected_revision"
               ]
             }
           },
@@ -41781,6 +42006,57 @@
         "images",
         "questionnaires",
         "reviews"
+      ]
+    },
+    "SessionInputReferences": {
+      "description": "Reference either input independently when creating a Session.",
+      "type": "object",
+      "properties": {
+        "session_config": {
+          "description": "Source of the initial Session config.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInputReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_resources": {
+          "description": "Source of the initial Session resource declarations.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionInputReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionInputReference": {
+      "description": "An exact revision of existing Session-owned input for the same Workspace.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "Existing Session supplying the saved input.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "revision": {
+          "description": "Exact revision observed by the caller.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "revision"
       ]
     },
     "McpDraftTarget": {
@@ -43013,6 +43289,402 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "SessionInputChange": {
+      "description": "An omitted field makes no edit. Clearing reveals the current lower layer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "clear"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "replace"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionConfigContent"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "reference"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionInputReference"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SessionInputChange2": {
+      "description": "An omitted field makes no edit. Clearing reveals the current lower layer.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "clear"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "replace"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionResources"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "reference"
+            },
+            "content": {
+              "$ref": "#/$defs/SessionInputReference"
+            }
+          },
+          "required": [
+            "operation",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HostUploadEnvelope": {
+      "description": "The complete upload envelope: JSON-RPC version, correlation identifier, and\none closed method.",
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "description": "The JSON-RPC version.",
+          "$ref": "#/$defs/JsonRpcVersion"
+        },
+        "id": {
+          "description": "The correlation identifier of this request.",
+          "$ref": "#/$defs/AppServerRequestId"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "oneOf": [
+        {
+          "description": "Begins a candidate.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/begin"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadBeginParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Appends one chunk.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/chunk"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadChunkParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Ends and verifies the candidate.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/end"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadEndParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Aborts the candidate.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "item/tool/result/abort"
+            },
+            "params": {
+              "$ref": "#/$defs/HostUploadAbortParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        }
+      ]
+    },
+    "HostUploadBeginParams": {
+      "description": "`item/tool/result/begin`: captures the immutable success and descriptors.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate being begun.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        },
+        "success": {
+          "description": "The tool result's success flag, fixed at begin.",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "The ordered item descriptors, at most [`MAX_ITEMS`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostUploadItem"
+          },
+          "maxItems": 1024
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "success",
+        "items"
+      ]
+    },
+    "HostUploadCandidate": {
+      "description": "The identity one upload candidate belongs to. The Server callback\nincarnation, original request identifier, and tool call identity are the\ncorrelation; the Host subscription incarnation and upload identifier bind\nthe candidate to one eligible participant.",
+      "type": "object",
+      "properties": {
+        "callbackIncarnation": {
+          "description": "The Server callback incarnation that issued the original request.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "requestId": {
+          "description": "The original request identifier.",
+          "$ref": "#/$defs/AppServerRequestId"
+        },
+        "threadId": {
+          "description": "The conversation the tool call belongs to.",
+          "$ref": "#/$defs/ConversationId"
+        },
+        "turnId": {
+          "description": "The attempt the tool call belongs to.",
+          "$ref": "#/$defs/AttemptId"
+        },
+        "callId": {
+          "description": "The tool call being answered.",
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "connectionIncarnation": {
+          "description": "The callback connection incarnation the request was delivered on.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "subscriptionIncarnation": {
+          "description": "The selected subscription the request was delivered to.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "uploadId": {
+          "description": "The upload identifier, unique per candidate.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "callbackIncarnation",
+        "requestId",
+        "threadId",
+        "turnId",
+        "callId",
+        "connectionIncarnation",
+        "subscriptionIncarnation",
+        "uploadId"
+      ]
+    },
+    "HostUploadItem": {
+      "description": "One item descriptor: its type tag and declared byte length.",
+      "type": "object",
+      "properties": {
+        "typeTag": {
+          "description": "The item's type tag; only [`TYPE_TAG_INPUT_TEXT`] is defined.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "length": {
+          "description": "The declared byte length of this item.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "typeTag",
+        "length"
+      ]
+    },
+    "HostUploadChunkParams": {
+      "description": "`item/tool/result/chunk`: one ordered, bounded chunk of one item.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate the chunk feeds.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        },
+        "itemIndex": {
+          "description": "The current item's index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "sequence": {
+          "description": "The strictly increasing chunk sequence, starting at `1`.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "offset": {
+          "description": "The byte offset within the item.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "dataBase64": {
+          "description": "The raw bytes, canonical padded base64, at most [`MAX_CHUNK_BYTES`].",
+          "type": "string",
+          "maxLength": 87384
+        },
+        "sha256": {
+          "description": "The SHA-256 of the decoded bytes.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "itemIndex",
+        "sequence",
+        "offset",
+        "dataBase64",
+        "sha256"
+      ]
+    },
+    "HostUploadEndParams": {
+      "description": "`item/tool/result/end`: echoes the begin metadata and closes the candidate.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate being ended.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        },
+        "success": {
+          "description": "The success flag, which must equal the begin's.",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "The item descriptors, which must equal the begin's.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostUploadItem"
+          },
+          "maxItems": 1024
+        },
+        "total": {
+          "description": "The declared total length, which must equal the sum of the items.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "digest": {
+          "description": "The result digest over the canonical layout.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "success",
+        "items",
+        "total",
+        "digest"
+      ]
+    },
+    "HostUploadAbortParams": {
+      "description": "`item/tool/result/abort`: retires the candidate without a result.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "description": "The candidate being aborted.",
+          "$ref": "#/$defs/HostUploadCandidate"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate"
       ]
     },
     "ClientReply": {

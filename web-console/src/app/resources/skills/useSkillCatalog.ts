@@ -1,32 +1,35 @@
 import {useEffect,useState} from 'react';
-import type {SkillDescriptor,SourceScope,SourceSettings} from '../../../../../protocol/app-server/v80';
+import type {SkillDescriptor,SourceScope,SourceSettings,SourceTarget,WorkspaceCatalogAuthority} from '../../../../../protocol/app-server/v81';
 import type {AppServerClient} from '../../../client/app-server';
 
 /** Native discovery and display information share a paginated catalog revision. */
-export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind,refresh=0) {
- const directory=scope==='workspace'&&source.target.kind==='workspace'?source.target.directory:undefined;
+export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings|undefined,enabled:boolean,scope:SourceScope,refresh=0,executionSession?:string,target:SourceTarget|undefined=source?.target) {
+ const directory=scope==='workspace'&&target?.kind==='workspace'?target.directory:undefined;
+ const session=scope==='workspace'?executionSession:undefined;
  const generation=client?.getSnapshot().generation;
- const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;directory?:string;generation:number;refresh:number;skills:SkillDescriptor[];error?:string}>();
+ const [result,setResult]=useState<{source?:SourceSettings;scope:SourceScope;directory?:string;session?:string;generation:number;refresh:number;skills:SkillDescriptor[];authority?:WorkspaceCatalogAuthority;error?:string}>();
  useEffect(()=>{
-  if(!enabled||!client)return;
+  if(!enabled||!client||(scope==='workspace'&&!directory))return;
   let alive=true;
-  const target=scope==='user'?{kind:'user' as const}:source.target;
+  const target:SourceTarget=scope==='user'?{kind:'user'}:{kind:'workspace',directory:directory!};
   const generation=client.getSnapshot().generation;
   const current=()=>alive&&client.getSnapshot().generation===generation;
   void (async()=>{
    const skills:SkillDescriptor[]=[];
-   let offset=0,revision:string|undefined;
+   let offset=0,revision:string|undefined,authority:WorkspaceCatalogAuthority|undefined;
    do {
-    const {page}=await client.request({method:'skills/list',params:{target,offset,limit:32,expected_revision:revision}},'skills',undefined,current);
+    const {page,authority:pageAuthority}=await client.request({method:'skills/list',params:{target,execution_session:session,offset,limit:32,expected_revision:revision}},'skills',undefined,current);
     if(!current())return;
+    if(authority&&authority!==pageAuthority)throw new Error('Workspace catalog authority changed during pagination');
+    authority=pageAuthority;
     revision=page.revision;skills.push(...page.data);
     if(page.next_offset==null)break;
     offset=page.next_offset;
    } while(current());
-   if(current())setResult({source,scope,directory,generation,refresh,skills});
-  })().catch(error=>{if(current())setResult({source,scope,directory,generation,refresh,skills:[],error:String(error)});});
+   if(current())setResult({source,scope,directory,session,generation,refresh,skills,authority});
+  })().catch(error=>{if(current())setResult({source,scope,directory,session,generation,refresh,skills:[],error:String(error)});});
   return()=>{alive=false;};
- },[client,source,enabled,scope,directory,generation,refresh]);
- return enabled&&result&&result.scope===scope&&result.directory===directory&&result.generation===generation
+ },[client,source,enabled,scope,directory,session,generation,refresh]);
+ return enabled&&result&&result.scope===scope&&result.directory===directory&&result.session===session&&result.generation===generation
   ? {...result,pending:result.source!==source||result.refresh!==refresh}:undefined;
 }

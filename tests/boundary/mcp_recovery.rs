@@ -2921,7 +2921,7 @@ async fn drain_terminates_every_streamable_http_request_the_generation_still_own
     // A directly connected runtime: its connection is *fixed*, so this test
     // owns the runtime and closes it itself — exactly the drain boundary
     // under test, with no capability generation in the way.
-    let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+    let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
         &McpServerId::new("http-drain"),
         &server.binding(),
         fixture.runtime.workspace(),
@@ -3197,7 +3197,7 @@ async fn successful_streamable_http_requests_leave_no_request_lifecycle_state() 
     let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
-    let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+    let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
         &McpServerId::new("http-cleanup"),
         &server.binding(),
         fixture.runtime.workspace(),
@@ -3480,7 +3480,7 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
     // A directly connected runtime: this test owns the operation future, so
     // it can prove settlement is *pending* rather than only observe what it
     // eventually became.
-    let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+    let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
         &McpServerId::new("http-stale-send"),
         &server.binding(),
         fixture.runtime.workspace(),

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { waitFor as waitIdle } from 'xstate';
-import type { RuntimeClientTranscriptEntry, TraceRecord } from '../../protocol/app-server/v80';
+import type { RuntimeClientTranscriptEntry, TraceRecord } from '../../protocol/app-server/v81';
 import { isDurableColdRead } from '../src/client/cold-reads';
 import { RpcFailure } from '../src/client/errors';
 import { deriveSessionProductState } from '../src/bindings/session-product';

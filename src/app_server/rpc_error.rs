@@ -97,6 +97,19 @@ pub(super) fn model_selection_error(
     }
 }
 
+pub(super) fn session_input_error(
+    error: crate::local_runtime::session_runtime_manager::SessionInputError,
+) -> RpcError {
+    use crate::local_runtime::session_runtime_manager::SessionInputError;
+    match error {
+        SessionInputError::Invalid => domain(ErrorData::SessionInputInvalid),
+        SessionInputError::SourceChanged => domain(ErrorData::SessionInputSourceChanged),
+        SessionInputError::ExecutionUnavailable => domain(ErrorData::ExecutionUnavailable),
+        SessionInputError::Unconfirmed => domain(ErrorData::OutcomeUnknown),
+        SessionInputError::Persistence(error) => session_error(error),
+    }
+}
+
 pub(super) fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError {
     use crate::local_runtime::session::SessionError;
     domain(match error {
@@ -181,6 +194,13 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
             "The Session's configured Model is not in its published catalog; select one it provides"
         }
         ErrorData::SteerUnavailable => "The expected Turn is no longer active or steerable",
+        ErrorData::HostUploadRejected { .. } => "Hosted result upload refused",
+        ErrorData::SessionInputInvalid => {
+            "Validate the Session config and complete resource definitions"
+        }
+        ErrorData::SessionInputSourceChanged => {
+            "Session sources changed; reread settings before saving"
+        }
         _ => "Operation rejected",
     };
     rpc_error(-32000, message, Some(data))
@@ -227,6 +247,7 @@ pub(super) fn source_error(
             actual,
         },
         SettingsError::Invalid => ErrorData::InvalidParams,
+        SettingsError::ExecutionUnavailable => ErrorData::ExecutionUnavailable,
         SettingsError::InvalidWorkflow(diagnostic) => ErrorData::WorkflowInvalid { diagnostic },
         SettingsError::TransferRejected(reason) => ErrorData::ResourceTransferRejected { reason },
         SettingsError::Io => ErrorData::OperationFailed,

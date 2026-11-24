@@ -237,14 +237,22 @@ it('early TUI startup waits for live MCP discovery before its first provider req
     fixture = ServerFixture.create('rustx-tui-mcp-startup-', provider.url());
     const cwd = fixture.workspace('selected-source');
     gate = await mcpStartupGate(cwd, t.signal);
-    const activeHost = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env, signal: t.signal });
-    host = activeHost;
-    const focus = await startupWait(() => prepareStartup(activeHost, parseArguments(['--binary', BINARY, '--workspace', cwd, '--name', 'MCP startup'])), t.signal);
+    const creator = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env, signal: t.signal });
+    host = creator;
+    const focus = await startupWait(() => prepareStartup(creator, parseArguments(['--binary', BINARY, '--workspace', cwd, '--name', 'MCP startup'])), t.signal);
     assert.ok('connecting' in focus && focus.connecting, 'the editable TUI can open before attachment');
     const connecting = focus.connecting;
     const nodeId = connecting.nodeId;
     assert.ok(nodeId, 'creation supplies the exact first-submission node');
     assert.equal(gate.calls, 0, 'Session creation does not prepare an MCP source');
+    await startupWait(() => creator.shutdown(), t.signal);
+    const activeHost = await AppServerHost.spawnLocal({
+      binary: BINARY,
+      launch: { runtimeRoot: fixture.runtimeRoot, localExecution: { sessionId: connecting.sessionId, workspace: cwd } },
+      env: fixture.env,
+      signal: t.signal,
+    });
+    host = activeHost;
     let attached = false;
     const attaching = activeHost.attach(connecting.sessionId, nodeId).then(session => {
       attached = true;

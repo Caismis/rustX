@@ -15,8 +15,12 @@ use tokio::process::{Child, Command};
 mod peer;
 use peer::Peer;
 
-async fn start(root: &Path) -> (Child, String, tokio::task::JoinHandle<()>) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rustx"))
+#[cfg(target_os = "linux")]
+mod generation;
+
+fn server_command(root: &Path, program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command
         .current_dir(root)
         .env("HOME", root.join("home"))
         .env_remove("XDG_CONFIG_HOME")
@@ -31,9 +35,16 @@ async fn start(root: &Path) -> (Child, String, tokio::task::JoinHandle<()>) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+        .kill_on_drop(true);
+    command
+}
+
+async fn start(root: &Path) -> (Child, String, tokio::task::JoinHandle<()>) {
+    launch(server_command(root, env!("CARGO_BIN_EXE_rustx"))).await
+}
+
+async fn launch(mut command: Command) -> (Child, String, tokio::task::JoinHandle<()>) {
+    let mut child = command.spawn().unwrap();
     let (endpoint, mut stderr) = websocket_startup(&mut child).await;
     let diagnostics = tokio::spawn(async move {
         tokio::io::copy(&mut stderr, &mut tokio::io::sink())
@@ -63,7 +74,7 @@ async fn host_effect_is_unknown_after_process_death_and_is_never_automatically_r
         let mut client=Peer::connect(&endpoint).await;
         let definition=HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Read application record".into(),permissions: None,
             input_schema:serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false})};
-        let MethodResult::SessionTransition {thread,session,..}=client.rpc(Method::SessionCreate {settings:SessionPersistentState {cwd:workspace,model:None},submission:None,dynamic_tools:vec![definition.clone()]}).await else {panic!("Thread")};
+        let MethodResult::SessionTransition {thread,session,..}=client.rpc(Method::SessionCreate {input_references: None,settings:SessionPersistentState {session_config: None,session_resources: None,cwd:workspace,model:None},submission:None,dynamic_tools:vec![definition.clone()]}).await else {panic!("Thread")};
         client.rpc(Method::SessionName {session_id:session.id.clone(),name:"Host crash recovery".into()}).await;
         let target=client.follow(thread.id.clone()).await;
         client.rpc(Method::TurnStart {target,input_id:"crash-input".into(),content:vec![UserInputBlock::Text(TextBlock {text:"crash-host".into()})]}).await;

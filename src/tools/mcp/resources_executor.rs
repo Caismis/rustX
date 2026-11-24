@@ -217,11 +217,11 @@ impl ResourceExecutor {
         }
         let (server, operation) = match self.decode(arguments) {
             Ok(input) => input,
-            Err(error) => return failed_mcp(&error, context, started),
+            Err(error) => return failed_mcp(&error, started),
         };
         let sources = match self.selected_sources(server.as_deref()) {
             Ok(sources) => sources,
-            Err(error) => return failed_mcp(&error, context, started),
+            Err(error) => return failed_mcp(&error, started),
         };
         if server.is_some() {
             return request(&sources[0].1.runtime, operation, context, started).await;
@@ -311,11 +311,7 @@ async fn request(
         return cancelled(context, started);
     }
     let Some(_lease) = binding.acquire_lease() else {
-        return failed_mcp(
-            "MCP resource generation is physically retired",
-            context,
-            started,
-        );
+        return failed_mcp("MCP resource generation is physically retired", started);
     };
     binding
         .connection()
@@ -329,7 +325,6 @@ fn cancelled(context: &ToolExecutionContext<'_>, started: Instant) -> ToolExecut
             reason: context.cancellation.reason(),
             phase: ToolCancellationPhase::DuringExecution,
         },
-        context,
         started,
     )
 }
@@ -429,12 +424,9 @@ mod tests {
             vec![
                 (
                     McpServerId::new("a"),
-                    mcp_empty_terminal(ToolExecutionStatus::Success, &context, started),
+                    mcp_empty_terminal(ToolExecutionStatus::Success, started),
                 ),
-                (
-                    McpServerId::new("b"),
-                    failed_mcp("remote failure", &context, started),
-                ),
+                (McpServerId::new("b"), failed_mcp("remote failure", started)),
             ],
             &context,
             started,
@@ -453,7 +445,6 @@ mod tests {
                         ToolExecutionStatus::OutcomeUnknown {
                             detail: "transport ended after dispatch".into(),
                         },
-                        &context,
                         started,
                     ),
                 ),
@@ -479,7 +470,7 @@ mod tests {
         let progress = NoProgress;
         let context = context(&runtime, None, &progress);
         let started = Instant::now();
-        let mut page = mcp_empty_terminal(ToolExecutionStatus::Success, &context, started);
+        let mut page = mcp_empty_terminal(ToolExecutionStatus::Success, started);
         page.content.push(crate::tools::types::ToolResultContent::Json {
             value: serde_json::json!({"resources": "x".repeat(crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES)}),
         });

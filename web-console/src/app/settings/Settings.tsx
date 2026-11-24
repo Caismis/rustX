@@ -4,7 +4,6 @@ import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -112,7 +111,7 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   // authorizes, so the page and focus are rendered exactly as they are.
   const { actor, transport } = useSettingsTarget(client, activeTarget, host);
   const onFocus = (next?: SettingsFocus) => navigation.send({ type: 'FOCUS', focus: next });
-  const scope: SourceScope = settingsTargetScope(activeTarget);
+  const scope = settingsTargetScope(activeTarget);
   // The fresh authoritative observation, and the last one demoted to stale
   // presentation data by a presentation or generation boundary. Rendering the
   // stale value keeps the presentation continuous across a page return; it is

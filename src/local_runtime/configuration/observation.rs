@@ -550,8 +550,17 @@ pub struct SourceWriteReceipt {
 pub struct BoundedSessionSettings {
     pub revision: u64,
     pub cwd: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored: Option<SessionSettingsAuthored>,
     pub inline: Option<Box<crate::local_runtime::session::SessionPersistentState>>,
     pub reference: Option<SessionSettingsRef>,
+}
+/// Presence of the persisted Session-owned source fields at the shared revision.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSettingsAuthored {
+    pub session_config: bool,
+    pub session_resources: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -572,17 +581,36 @@ pub struct SessionSettingsChunk {
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub next_offset: Option<u64>,
 }
+// Session-authored source content can carry references and credentials.
+fn projected_settings(
+    settings: &crate::local_runtime::session::SessionPersistentState,
+) -> crate::local_runtime::session::SessionPersistentState {
+    crate::local_runtime::session::SessionPersistentState {
+        cwd: settings.cwd.clone(),
+        model: settings.model.clone(),
+        session_config: None,
+        session_resources: None,
+    }
+}
+
 pub(crate) fn session_settings(
     revision: u64,
     settings: &crate::local_runtime::session::SessionPersistentState,
 ) -> Result<BoundedSessionSettings, String> {
-    let (bytes, total) = encode(settings, 0, 524_288)?;
+    let authored = (settings.session_config.is_some() || settings.session_resources.is_some())
+        .then(|| SessionSettingsAuthored {
+            session_config: settings.session_config.is_some(),
+            session_resources: settings.session_resources.is_some(),
+        });
+    let settings = projected_settings(settings);
+    let cwd = settings.cwd.clone();
+    let (bytes, total) = encode(&settings, 0, 524_288)?;
     let inline_value = (total <= 524_288)
         .then(|| serde_json::from_slice::<serde_json::Value>(&bytes))
         .transpose()
         .map_err(|error| error.to_string())?;
     let (inline, reference) = if inline_value.as_ref().is_some_and(count_bounded) {
-        (Some(Box::new(settings.clone())), None)
+        (Some(Box::new(settings)), None)
     } else {
         (
             None,
@@ -594,7 +622,8 @@ pub(crate) fn session_settings(
     };
     Ok(BoundedSessionSettings {
         revision,
-        cwd: settings.cwd.clone(),
+        cwd,
+        authored,
         inline,
         reference,
     })
@@ -620,7 +649,7 @@ pub(crate) fn session_settings_read(
         return Err("invalid settings byte range".into());
     }
     let (bytes, total) = encode(
-        settings,
+        &projected_settings(settings),
         offset,
         usize::try_from(max_bytes).map_err(|e| e.to_string())?,
     )?;

@@ -505,6 +505,7 @@ fn project(operation: &'static str, launch: &ProspectiveSessionConfig) -> Report
                 Origin::Builtin => ("builtin", "no higher-precedence declaration; domain default applies"),
                 Origin::User { .. } => ("user", "user declaration overrides builtin; no admitted higher-precedence declaration"),
                 Origin::Workspace { .. } => ("workspace", "Workspace semantic unit replaces User or product default"),
+                Origin::Session { .. } => ("session", "Session semantic unit replaces the Workspace, User or product default"),
                 Origin::Process { .. } => ("explicit", "explicit host/Session intent has highest precedence"),
             };
             (field.clone(), ProvenanceProjection { origin: origin.clone(), authority, reason })

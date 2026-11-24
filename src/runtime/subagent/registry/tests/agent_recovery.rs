@@ -850,9 +850,13 @@ async fn published_initialization_error_retains_live_registry_obligation_until_e
     let reopened = SubagentRegistry::new(plane.registry.config.clone());
     reopened.restore_agents(plane.store.as_ref()).unwrap();
     assert_eq!(reopened.unproven_settlements(), vec![activation]);
-    // Restore the exact original authority receipt, never a heuristic proof.
+    // The failed live publication has a reconciliation owner before the
+    // original authority receipt is restored.
+    let reconciled = plane.registry.wait_recovery_reconciliation();
+    tokio::pin!(reconciled);
+    assert!(futures_util::poll!(&mut reconciled).is_pending());
     std::fs::write(path, &*receipt.lock().unwrap()).unwrap();
-    plane.registry.wait_recovery_reconciliation().await;
+    reconciled.await;
     reopened.wait_recovery_reconciliation().await;
     assert_eq!(plane.registry.with_goal_idle(|| true), Some(true));
     assert_eq!(reopened.with_goal_idle(|| true), Some(true));

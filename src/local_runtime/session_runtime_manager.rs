@@ -34,14 +34,17 @@ mod schedule_catalog;
 mod schedule_driver;
 pub(crate) mod status;
 pub(crate) use execution::{
-    ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, StandaloneExecution,
-    WorkspaceConfiguration, launch_sibling, workspace_entry,
+    ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, OutputBinding,
+    ReceiveExchange, SiblingClient, StandaloneExecution, StdioMcpBinding,
+    WorkspaceDocumentSnapshot, launch_sibling, workspace_entry,
 };
 pub use execution::{
     EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,
 };
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
+mod session_inputs;
 mod sessions;
+pub(crate) use session_inputs::SessionInputError;
 mod source_watch;
 
 pub(crate) use client::ConfigurationObservationSource;

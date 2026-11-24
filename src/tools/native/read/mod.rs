@@ -50,7 +50,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<ReadInput>(
         TOOL_ID,
         NAME,
-        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
         policy,
     )
 }
@@ -114,7 +114,36 @@ async fn run_read(
     // writer wait under the absolute page deadline, and the blocking
     // exchange awaited to physical settlement even when cancellation
     // wins — a cancelled read never detaches the wire.
-    let page = if let Some(operation) = crate::tools::native::bash_operation_at(&target) {
+    let page = if let Some(locator) = crate::tools::managed_import::locator_at(&target) {
+        let Some(conversation) =
+            rustx_execution_protocol::save::ConversationId::parse(context.conversation_id.as_str())
+        else {
+            return failed_result("saved output is unavailable for this Conversation");
+        };
+        if let Some(offset) = input.byte_offset {
+            return match scope
+                .read_saved_output_range(locator, conversation, offset, &context.cancellation)
+                .await
+            {
+                Ok(range) => project_saved_bytes(&range),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    cancelled_result(context.cancellation.reason())
+                }
+                Err(error) => failed_result(read_failure(&target, None, &error)),
+            };
+        }
+        scope
+            .read_saved_output(
+                locator,
+                conversation,
+                input.offset(),
+                input.limit,
+                &context.cancellation,
+            )
+            .await
+    } else if input.byte_offset.is_some() {
+        return failed_result("byte_offset requires a saved output locator");
+    } else if let Some(operation) = crate::tools::native::bash_operation_at(&target) {
         scope
             .read_bash_output(
                 operation,
@@ -143,6 +172,34 @@ async fn run_read(
         Err(error) => return failed_result(read_failure(&target, format, &error)),
     };
     project_page(&page, &input)
+}
+
+fn project_saved_bytes(page: &rustx_execution_server::RangeRead) -> ToolExecutionResult {
+    let text = match std::str::from_utf8(&page.bytes) {
+        Ok(text) => text,
+        Err(error) if error.error_len().is_none() && page.next_offset.is_some() => {
+            std::str::from_utf8(&page.bytes[..error.valid_up_to()]).expect("validated UTF-8 prefix")
+        }
+        Err(_) => return failed_result("byte_offset must start at a valid UTF-8 boundary"),
+    };
+    let end = page.offset + text.len() as u64;
+    let size = page.metadata.size.get();
+    if end == size {
+        return success_text(text.to_owned(), None);
+    }
+    let mut output = text.to_owned();
+    let _ = write!(
+        output,
+        "\n\n[Showing bytes {}–{end} of {size}. Use byte_offset={end} to continue.]",
+        page.offset
+    );
+    success_text(
+        output,
+        Some(TruncationState {
+            truncated: true,
+            original_bytes: Some(size),
+        }),
+    )
 }
 
 /// Renders one physical-read failure as the user-meaningful diagnostic.
@@ -217,7 +274,11 @@ fn project_page(page: &rustx_confined_fs::TextPage, input: &ReadInput) -> ToolEx
         rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes } => {
             let size = format_size(bytes);
             let target = std::path::Path::new(&input.path);
-            let text = if crate::tools::native::bash_operation_at(target).is_some() {
+            let text = if crate::tools::managed_import::locator_at(target).is_some() {
+                format!(
+                    "[Line {offset} is {size}, exceeds 50.0KB limit. Use Read with byte_offset=0 to page through this saved output.]"
+                )
+            } else if crate::tools::native::bash_operation_at(target).is_some() {
                 format!("[Line {offset} is {size}, exceeds 50.0KB limit]")
             } else {
                 format!(
@@ -586,7 +647,7 @@ mod tests {
     /// diagnostic.
     struct TestRead {
         _directory: tempfile::TempDir,
-        _execution: crate::session_execution_support::ExecutionFixture,
+        execution: crate::session_execution_support::ExecutionFixture,
         workspace: Workspace,
         conversation_id: ConversationId,
         artifacts: ArtifactStore,
@@ -613,7 +674,7 @@ mod tests {
             .expect("managed output");
             Self {
                 _directory: directory,
-                _execution: execution,
+                execution,
                 workspace,
                 conversation_id,
                 artifacts,
@@ -697,6 +758,78 @@ mod tests {
             std::fs::write(&target, bytes).expect("fixture copy");
             target.to_str().expect("workspace path is UTF-8").to_owned()
         }
+    }
+
+    #[tokio::test]
+    async fn saved_output_pages_a_long_utf8_line_without_losing_bytes() {
+        let reader = TestRead::new();
+        let scope = reader.workspace.execution_scope().unwrap().clone();
+        let signal = crate::runtime::CancellationSignal::new();
+        let cancellation = crate::runtime::ExecutionCancellation::detached(
+            signal,
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let boundary = rustx_execution_protocol::MAX_TEXT_BYTES - 1;
+        let prefix = "x".repeat(boundary);
+        let data = format!("{prefix}🦀tail\n");
+        let mut import = crate::tools::managed_import::Import::new(
+            scope,
+            reader.conversation_id.clone(),
+            cancellation,
+        );
+        import.push(&data);
+        let path = import.publish().await.expect("published Client output");
+        let initial = reader
+            .read("saved-lines", serde_json::json!({"path": path}))
+            .await;
+        assert_eq!(initial.status, ToolExecutionStatus::Success);
+        assert!(
+            initial
+                .model_facing_projection()
+                .as_text()
+                .contains("byte_offset=0")
+        );
+        assert!(!initial.model_facing_projection().as_text().contains("sed"));
+
+        let first = reader
+            .read(
+                "saved-bytes-1",
+                serde_json::json!({"path": path, "byte_offset": 0}),
+            )
+            .await;
+        assert_eq!(first.status, ToolExecutionStatus::Success);
+        let [ToolResultContent::Text(first_text)] = first.content.as_slice() else {
+            panic!("range text");
+        };
+        assert_eq!(&first_text.text[..boundary], prefix);
+        assert!(first_text.text.contains(&format!("byte_offset={boundary}")));
+        assert!(!first_text.text.contains('🦀'));
+        assert_eq!(
+            first.truncation.unwrap().original_bytes,
+            Some(data.len() as u64)
+        );
+
+        let last = reader
+            .read(
+                "saved-bytes-2",
+                serde_json::json!({"path": path, "byte_offset": boundary}),
+            )
+            .await;
+        assert_eq!(last.status, ToolExecutionStatus::Success);
+        let [ToolResultContent::Text(last_text)] = last.content.as_slice() else {
+            panic!("last range text");
+        };
+        assert_eq!(last_text.text, "🦀tail\n");
+        assert_eq!(last.truncation, None);
+
+        let split = reader
+            .read(
+                "saved-invalid-byte",
+                serde_json::json!({"path": path, "byte_offset": boundary + 1}),
+            )
+            .await;
+        assert!(failure_of(split).contains("valid UTF-8 boundary"));
+        reader.execution.settle().await;
     }
 
     fn text_of(result: &ToolExecutionResult) -> &str {

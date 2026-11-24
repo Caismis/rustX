@@ -14,33 +14,34 @@ use rustls_pki_types::pem::PemObject;
 
 #[test]
 fn endpoint_validation_accepts_loopback_ws_and_any_wss() {
-    let ws = ExecutionUrl::validate("ws://127.0.0.1:9001/execution/v2").unwrap();
+    let ws = ExecutionUrl::validate("ws://127.0.0.1:9001/execution/v8").unwrap();
     assert!(!ws.is_secure());
     assert_eq!(ws.address().port(), 9001);
-    let wss = ExecutionUrl::validate("wss://203.0.113.7/execution/v2").unwrap();
+    let wss = ExecutionUrl::validate("wss://203.0.113.7/execution/v8").unwrap();
     assert!(wss.is_secure());
     assert_eq!(wss.address().port(), 443);
-    let v6 = ExecutionUrl::validate("wss://[::1]:4443/execution/v2").unwrap();
+    let v6 = ExecutionUrl::validate("wss://[::1]:4443/execution/v8").unwrap();
     assert!(v6.is_secure());
 }
 
 #[test]
 fn endpoint_validation_rejects_everything_insecure_or_ambiguous() {
     for url in [
-        "http://127.0.0.1/execution/v2",
+        "http://127.0.0.1/execution/v8",
+        "ws://127.0.0.1/execution/v7",
         "wss://127.0.0.1/execution/v1",
         "ws://127.0.0.1/other",
-        "ws://127.0.0.1/execution/v2/",
-        "ws://127.0.0.1/execution/v2?x=1",
-        "ws://127.0.0.1/execution/v2#frag",
+        "ws://127.0.0.1/execution/v8/",
+        "ws://127.0.0.1/execution/v8?x=1",
+        "ws://127.0.0.1/execution/v8#frag",
         "ws://127.0.0.1",
-        "ws://user@127.0.0.1/execution/v2",
-        "ws://localhost/execution/v2",
-        "ws://execution.internal/execution/v2",
-        "ws://192.0.2.1/execution/v2",
-        "wss://not-an-ip.example/execution/v2",
-        "wss://127.0.0.1:99999/execution/v2",
-        "ws://127.0.0.1:9001/execution/v2/extra",
+        "ws://user@127.0.0.1/execution/v8",
+        "ws://localhost/execution/v8",
+        "ws://execution.internal/execution/v8",
+        "ws://192.0.2.1/execution/v8",
+        "wss://not-an-ip.example/execution/v8",
+        "wss://127.0.0.1:99999/execution/v8",
+        "ws://127.0.0.1:9001/execution/v8/extra",
     ] {
         assert!(
             ExecutionUrl::validate(url).is_err(),
@@ -51,7 +52,7 @@ fn endpoint_validation_rejects_everything_insecure_or_ambiguous() {
 
 #[test]
 fn endpoint_validation_rejects_plaintext_nonloopback() {
-    let error = ExecutionUrl::validate("ws://8.8.8.8/execution/v2").unwrap_err();
+    let error = ExecutionUrl::validate("ws://8.8.8.8/execution/v8").unwrap_err();
     assert!(error.contains("loopback"));
 }
 
@@ -69,7 +70,7 @@ fn ws_pair() -> (RecordChannel, RecordChannel) {
         let (stream, _) = listener.accept().unwrap();
         accept(stream, Instant::now() + Duration::from_secs(10)).unwrap()
     });
-    let endpoint = ExecutionUrl::validate(&format!("ws://{address}/execution/v2")).unwrap();
+    let endpoint = ExecutionUrl::validate(&format!("ws://{address}/execution/v8")).unwrap();
     let client = connect(&endpoint, Instant::now() + Duration::from_secs(10), None).unwrap();
     (server.join().unwrap(), client)
 }
@@ -152,7 +153,7 @@ fn websocket_raw_eof_and_truncated_frame_are_never_clean_closes() {
 fn raw_ws_client(address: std::net::SocketAddr) -> tungstenite::WebSocket<std::net::TcpStream> {
     let stream = std::net::TcpStream::connect(address).unwrap();
     tungstenite::client::client_with_config(
-        format!("ws://{address}/execution/v2").as_str(),
+        format!("ws://{address}/execution/v8").as_str(),
         stream,
         // The probe client is unbounded so it can send what the contract
         // forbids; the *server* config stays bound and must reject it.
@@ -289,7 +290,7 @@ fn websocket_server_rejects_wrong_path_and_origin() {
             "wrong path",
         ),
         (
-            "GET /execution/v2 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://example.test\r\n\r\n",
+            "GET /execution/v8 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://example.test\r\n\r\n",
             "browser Origin",
         ),
     ] {
@@ -399,7 +400,7 @@ fn wss_connect_validates_against_a_private_ca_and_sends_after_tls() {
     let address = listener.local_addr().unwrap();
     let server = tls_server_side(listener, &fixture.leaf, &fixture.key);
 
-    let endpoint = ExecutionUrl::validate(&format!("wss://{address}/execution/v2")).unwrap();
+    let endpoint = ExecutionUrl::validate(&format!("wss://{address}/execution/v8")).unwrap();
     let mut client = connect(
         &endpoint,
         Instant::now() + Duration::from_secs(10),
@@ -447,7 +448,7 @@ fn wss_wrong_ca_and_wrong_ip_san_fail_before_any_record() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = tls_server_side(listener, leaf, key);
-        let endpoint = ExecutionUrl::validate(&format!("wss://{address}/execution/v2")).unwrap();
+        let endpoint = ExecutionUrl::validate(&format!("wss://{address}/execution/v8")).unwrap();
         let outcome = connect(
             &endpoint,
             Instant::now() + Duration::from_secs(10),
@@ -467,7 +468,7 @@ fn wss_without_a_matching_ca_file_fails() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = tls_server_side(listener, &fixture.leaf, &fixture.key);
-    let endpoint = ExecutionUrl::validate(&format!("wss://{address}/execution/v2")).unwrap();
+    let endpoint = ExecutionUrl::validate(&format!("wss://{address}/execution/v8")).unwrap();
     // The WebPKI roots alone cannot trust a private fixture CA.
     assert!(connect(&endpoint, Instant::now() + Duration::from_secs(10), None).is_err());
     assert!(server.join().unwrap().is_err());
@@ -475,11 +476,11 @@ fn wss_without_a_matching_ca_file_fails() {
 
 #[test]
 fn bracketed_ipv6_urls_use_the_scheme_default_port() {
-    let secure = ExecutionUrl::validate("wss://[::1]/execution/v2").unwrap();
+    let secure = ExecutionUrl::validate("wss://[::1]/execution/v8").unwrap();
     assert_eq!(secure.address(), "[::1]:443".parse().unwrap());
-    let clear = ExecutionUrl::validate("ws://[::1]/execution/v2").unwrap();
+    let clear = ExecutionUrl::validate("ws://[::1]/execution/v8").unwrap();
     assert_eq!(clear.address(), "[::1]:80".parse().unwrap());
-    assert!(ExecutionUrl::validate("wss://::1/execution/v2").is_err());
+    assert!(ExecutionUrl::validate("wss://::1/execution/v8").is_err());
 }
 
 #[test]
@@ -511,7 +512,7 @@ fn trusted_loopback_tls_reaches_and_rejects_a_malformed_websocket_upgrade() {
     }
     let mut stream = rustls::StreamOwned::new(client, stream);
     stream
-        .write_all(b"GET /execution/v2 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        .write_all(b"GET /execution/v8 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
         .unwrap();
     let failure = worker.join().unwrap();
     assert_eq!(failure.kind(), std::io::ErrorKind::InvalidData, "{failure}");
