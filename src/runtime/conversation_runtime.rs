@@ -348,7 +348,7 @@ use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ModelToolDefinition;
 
-mod activity;
+pub(crate) mod activity;
 mod admission;
 mod attempt;
 mod bootstrap;
@@ -812,13 +812,13 @@ pub(crate) struct ForegroundState {
     /// The one foreground execution slot: `Attempt`, `ManualCompaction`,
     /// `Scheduled`, `Idle`, or `Poisoned`, mutually exclusive by type
     /// (Issue #606).
-    slot: foreground::ForegroundSlot,
+    pub(crate) slot: foreground::ForegroundSlot,
     /// The physical manual-compaction task reclamation state:
     /// `None` | `Pending` | `Joining`, under this lock, so a claimed but
     /// unjoined task is never misread as reaped.
-    manual_tail: foreground::ManualTailState,
+    pub(crate) manual_tail: foreground::ManualTailState,
     /// Per-start rejection backoff bookkeeping for scheduled admission.
-    scheduled_retries: std::collections::BTreeMap<
+    pub(crate) scheduled_retries: std::collections::BTreeMap<
         crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
         u64,
     >,
@@ -830,7 +830,7 @@ pub(crate) struct ForegroundState {
     /// durable history. The durable Event Journal rejects a second
     /// `AttemptStarted` for one identity, so the invariant is enforced on
     /// both sides.
-    next_attempt_seq: u64,
+    pub(crate) next_attempt_seq: u64,
     /// Startup recovery's exact provenance for the already-canonical adopted
     /// turn that may continue through one new attempt.
     ///
@@ -838,9 +838,9 @@ pub(crate) struct ForegroundState {
     /// finds no pending inbound. It is never set for an indeterminate
     /// external outcome (Class C), where continuing would risk duplicating an
     /// external side effect rustX cannot observe.
-    recovered_continuation: Option<AttemptProvenance>,
+    pub(crate) recovered_continuation: Option<AttemptProvenance>,
     /// Candidate provenance of the recovered turn, not committed task authority.
-    recovered_permission_task_message: Option<MessageId>,
+    pub(crate) recovered_permission_task_message: Option<MessageId>,
     /// The coordinator-owned transient admission-cycle retry bookkeeping
     /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
     /// stored here: it lives in exactly one place, the runtime-owned
@@ -848,7 +848,7 @@ pub(crate) struct ForegroundState {
     /// attempt admission, the registries, the shutdown diagnostic, the
     /// observation) consults. This field only tracks the finite-cycle retry
     /// allowances and the latest pending re-kick of the admission worker.
-    admission_durability_cycle: AdmissionDurabilityCycle,
+    pub(crate) admission_durability_cycle: AdmissionDurabilityCycle,
     /// How many attempts this coordinator has admitted, counted at the one
     /// admission publication point (Issue #193).
     ///
@@ -1045,6 +1045,11 @@ pub(crate) struct RuntimeInner {
     /// linearize against it. The coordinator requests failure without waiting
     /// for SQL; the gate publishes after any earlier ownership writer exits.
     durability_gate: Arc<DurabilityGate>,
+    /// The extracted scheduled-workflow executor (Issue #606): the runtime
+    /// keeps only this handle for drain sequencing — no scheduled
+    /// preparation, claim, execution or settlement logic remains on the
+    /// runtime.
+    scheduled_executor: Arc<crate::runtime::workflow::scheduled::executor::ScheduledExecutor>,
     /// The extracted external-auxiliary service (Issue #606): the runtime
     /// keeps only this handle for drain sequencing and for handing the
     /// service to composed consumers — no auxiliary business logic remains
@@ -1087,10 +1092,10 @@ pub(crate) struct RuntimeInner {
     /// Settlement signal: fired once per attempt settlement handoff, so
     /// headless drivers await the authoritative state transfer
     /// deterministically instead of by polling.
-    settlement: tokio::sync::Notify,
+    settlement: Arc<tokio::sync::Notify>,
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
-    probe: Mutex<Option<CoordinatorProbe>>,
+    probe: Arc<Mutex<Option<CoordinatorProbe>>>,
     /// Test-only one-shot pre-tool policy injection for a runtime-created
     /// attempt. Production constructs the required policy from the admitted
     /// effective `ApprovalMode`; this hook never changes the production
@@ -1159,9 +1164,13 @@ impl ConversationRuntime {
         if let crate::scheduler::ScheduleOperation::WorkflowReconcile { id, after, limit } =
             operation
         {
-            return self
-                .inner
-                .reconcile_scheduled(&state, binding, id, (*after, *limit), clock);
+            return self.inner.scheduled_executor.reconcile(
+                &state,
+                binding,
+                id,
+                (*after, *limit),
+                clock,
+            );
         }
         let prepared;
         let operation = if let crate::scheduler::ScheduleOperation::Command(command) = operation {

@@ -453,7 +453,7 @@ impl RuntimeInner {
                             admit = true;
                         }
                     }
-                    if admit && !inner.admit_next_scheduled() {
+                    if admit && !inner.scheduled_executor.admit_next() {
                         inner.admit_next_attempt();
                     }
                     let state = inner.lock_state();

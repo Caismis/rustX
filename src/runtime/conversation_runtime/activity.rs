@@ -4,17 +4,17 @@ use super::{ConversationRuntime, RuntimeInner};
 use tokio::sync::watch;
 
 #[derive(Debug, Clone)]
-pub(super) struct TaskActivity(watch::Sender<usize>);
+pub(crate) struct TaskActivity(watch::Sender<usize>);
 impl Default for TaskActivity {
     fn default() -> Self {
         Self(watch::channel(0).0)
     }
 }
 impl TaskActivity {
-    pub(super) fn pulse(&self) {
+    pub(crate) fn pulse(&self) {
         self.0.send_modify(|_| {});
     }
-    pub(super) fn lease(&self) -> TaskActivityLease {
+    pub(crate) fn lease(&self) -> TaskActivityLease {
         self.0.send_modify(|count| *count += 1);
         TaskActivityLease(self.0.clone())
     }

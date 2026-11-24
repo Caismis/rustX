@@ -4,6 +4,7 @@
 //! The Workflow owner must still retain/revalidate these resources through its
 //! configuration/lifecycle fence and durably claim the exact start before use.
 pub(crate) mod effects;
+pub(crate) mod executor;
 pub mod lifecycle;
 
 use super::{

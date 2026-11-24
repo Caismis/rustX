@@ -1005,6 +1005,33 @@ impl ConversationRuntime {
                 mcp_settlement_failure: None,
             },
         }));
+        let settlement = Arc::new(tokio::sync::Notify::new());
+        let activity = super::activity::TaskActivity::default();
+        #[cfg(test)]
+        let probe = Arc::new(Mutex::new(None));
+        let scheduled_executor = Arc::new(
+            crate::runtime::workflow::scheduled::executor::ScheduledExecutor::new(
+                crate::runtime::workflow::scheduled::executor::ScheduledExecutorParts {
+                    state: state.clone(),
+                    lifecycle: lifecycle.clone(),
+                    store: store.clone(),
+                    mailbox: mailbox.clone(),
+                    interaction: interaction.clone(),
+                    subagents: config.subagents.clone(),
+                    capability: config.capability.clone(),
+                    tool_runtime: config.tool_runtime.clone(),
+                    auxiliary_executor: auxiliary.clone(),
+                    monotonic_clock: monotonic_clock.clone(),
+                    clock: clock.clone(),
+                    activity: activity.clone(),
+                    settlement: settlement.clone(),
+                    durability_gate: durability_gate.clone(),
+                    spawner: executor.clone(),
+                    #[cfg(test)]
+                    probe: probe.clone(),
+                },
+            ),
+        );
         let external_auxiliary = crate::runtime::auxiliary::external::ExternalAuxiliary::new(
             crate::runtime::auxiliary::external::ExternalAuxiliaryParts {
                 conversation_id: conversation_id.clone(),
@@ -1022,7 +1049,7 @@ impl ConversationRuntime {
             configuration_owner: Arc::new(()),
             unrecorded_configuration: Arc::default(),
             initialization_cancellation: std::sync::OnceLock::new(),
-            activity: super::activity::TaskActivity::default(),
+            activity,
             runtime_catalog_preparer: std::sync::OnceLock::new(),
             runtime_catalog_publication: tokio::sync::watch::channel(0).0,
             #[cfg(test)]
@@ -1050,6 +1077,7 @@ impl ConversationRuntime {
             monotonic_clock,
             durability_gate: durability_gate.clone(),
             external_auxiliary,
+            scheduled_executor,
             host_task: Mutex::new(None),
             recovery,
             executor,
@@ -1059,9 +1087,9 @@ impl ConversationRuntime {
             drain: std::sync::OnceLock::new(),
             drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
-            settlement: tokio::sync::Notify::new(),
+            settlement: settlement.clone(),
             #[cfg(test)]
-            probe: Mutex::new(None),
+            probe: probe.clone(),
             #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
@@ -1369,7 +1397,7 @@ impl ConversationRuntime {
         // Any inbound published before activation (there can be none: the
         // mailbox refused it) and any inbound racing this activation is
         // admitted here rather than depending on a wake permit.
-        if !self.inner.admit_next_scheduled() {
+        if !self.inner.scheduled_executor.admit_next() {
             self.inner.admit_next_attempt();
         }
     }

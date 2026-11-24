@@ -88,7 +88,7 @@ pub(super) struct PendingDurabilityRetry {
 /// `DurabilityGate::commit_failure` — the one mutation API of the failure
 /// authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct AdmissionDurabilityCycle {
+pub(crate) struct AdmissionDurabilityCycle {
     /// The independent select/adopt retry allowances for this cycle.
     pub(super) budget: AdmissionRetryBudget,
     /// The latest transient failure whose re-kick is armed.
