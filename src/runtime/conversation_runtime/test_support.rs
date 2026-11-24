@@ -230,6 +230,12 @@ pub(super) struct HeadlessRuntimeOptions {
     pub(super) project_context_files: Vec<crate::runtime::ProjectContextFile>,
     pub(super) agent_profile: Option<String>,
     pub(super) workflow_catalog: crate::runtime::WorkflowCatalog,
+    /// Explicit Root Workflow authority for headless scheduled-execution
+    /// tests: the fixture has no `rustx.toml` authoring layer.
+    pub(super) root_workflows: std::collections::BTreeSet<crate::runtime::workflow::WorkflowId>,
+    /// Install a subagent registry — scheduled workflow execution requires
+    /// one (`native Workflow registry unavailable` otherwise).
+    pub(super) with_subagents: bool,
     pub(super) mcp_servers: std::collections::BTreeMap<
         crate::runtime::identity::McpServerId,
         crate::tools::mcp::McpServerBinding,
@@ -254,6 +260,8 @@ impl Default for HeadlessRuntimeOptions {
             project_context_files: Vec::new(),
             agent_profile: None,
             workflow_catalog: crate::runtime::WorkflowCatalog::empty(),
+            root_workflows: std::collections::BTreeSet::new(),
+            with_subagents: false,
             mcp_servers: std::collections::BTreeMap::new(),
             pre_activation_mcp_close_probe: None,
         }
@@ -374,16 +382,47 @@ pub(super) async fn headless_runtime_with_options(
     }
     let model = Arc::new(FakeModel::new(scripts));
     let adapter: Arc<dyn ModelAdapter> = model.clone();
-    let resources = Arc::new(
-        crate::runtime::RuntimeResourceSnapshot::new(
-            crate::runtime::RuntimeResourceRevision::new(1),
-            options.project_context_files,
-            options.agent_profile,
-            crate::context::ContextAssembly::new(),
-            coordinator.current_snapshot(),
+    let resources = crate::runtime::RuntimeResourceSnapshot::new(
+        crate::runtime::RuntimeResourceRevision::new(1),
+        options.project_context_files,
+        options.agent_profile,
+        crate::context::ContextAssembly::new(),
+        coordinator.current_snapshot(),
+    )
+    .with_workflow_catalog(options.workflow_catalog);
+    // Injecting test Workflow authority replaces the capability snapshot
+    // `Arc`, so the same `Arc` is pushed back into the coordinator: the
+    // runtime's ownership check requires them to be pointer-identical.
+    let resources = if options.root_workflows.is_empty() {
+        Arc::new(resources)
+    } else {
+        let resources = resources.with_test_root_workflows(options.root_workflows);
+        coordinator.replace_snapshot_for_test(resources.capability().clone());
+        Arc::new(resources)
+    };
+    let subagents = options.with_subagents.then(|| {
+        crate::runtime::subagent::SubagentRegistry::new(
+            crate::runtime::subagent::SubagentRegistryConfig {
+                conversation_id: conversation_id.clone(),
+                agent_id: AgentId::new("agent-a"),
+                mailbox: tool_runtime.mailbox(),
+                clock: Arc::new(crate::runtime::types::SystemClock),
+                monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
+                spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                    session_id: crate::runtime::identity::SessionId::new(
+                        "ses_01900000-0000-7000-8000-000000000001",
+                    ),
+                    program: std::path::PathBuf::from("/nonexistent/rustx"),
+                    product_root: crate::runtime::local_storage::ProductRoot::create(
+                        &dir.path().join("subagents"),
+                    )
+                    .expect("product root"),
+                },
+                workspace: workspace.clone(),
+                max_active: 4,
+            },
         )
-        .with_workflow_catalog(options.workflow_catalog),
-    );
+    });
     let config = RuntimeConversationConfig {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
@@ -405,7 +444,7 @@ pub(super) async fn headless_runtime_with_options(
         capability: coordinator,
         clock: None,
         initial_messages: options.initial_messages,
-        subagents: None,
+        subagents,
         role: ConversationRole::Root,
     };
     let runtime = match probe {

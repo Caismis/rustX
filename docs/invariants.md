@@ -8573,16 +8573,18 @@ read repair never loads a cold runtime or repeats semantic work. See the
   physical proof, the durable settlement, the exact slot release and the
   admission release are all complete — so a settlement owner cannot lose its
   runtime while a Claim it started is still open.
-- **Auxiliary admission is one atomic bundle.** `ExternalAuxiliary` — the
-  extracted owner of classification, BTW and title auxiliary work — performs
-  `admit_auxiliary_work` inside a single coordinator critical section: it
-  freezes the model invocation, resource snapshot, timeout policy and
-  revision, reserves executor capacity (which itself acquires the Call's
+- **Auxiliary admission is one atomic bundle.** `RuntimeInner::admit_auxiliary_work`
+  — not the extracted `ExternalAuxiliary` — is the authority that runs the
+  bundle inside a single coordinator critical section: it freezes the model
+  invocation, resource snapshot, timeout policy and revision, reserves
+  executor capacity (which itself acquires the Call's
   `LifecycleAdmission`), and optionally takes the business admission that
-  outlives Call settlement. The returned `AdmittedAuxiliaryWork` is the only
-  way auxiliary execution obtains these facts; no snapshot can be newer or
-  older than the capacity it was acquired with, and failure paths release
-  everything together.
+  outlives Call settlement. `ExternalAuxiliary` — the extracted owner of
+  classification, BTW and title auxiliary work — only invokes that
+  interface. The returned `AdmittedAuxiliaryWork` is the only way auxiliary
+  execution obtains these facts; no snapshot can be newer or older than the
+  capacity it was acquired with, and failure paths release everything
+  together.
 - **Scheduled claim is one atomic bundle.** `ScheduledExecutor` owns scheduled
   workflow execution outside `RuntimeInner`. `claim_scheduled_start` validates
   configuration freshness (resources Arc identity, model config, approval

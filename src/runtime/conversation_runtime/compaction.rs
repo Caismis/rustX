@@ -573,6 +573,23 @@ impl ConversationRuntime {
                     .await;
                 #[cfg(test)]
                 {
+                    let panic_worker = inner
+                        .probe
+                        .lock()
+                        .expect("coordinator probe lock poisoned")
+                        .as_ref()
+                        .is_some_and(|probe| probe.manual_compaction_worker_panic);
+                    // A real unwind through the worker task: the
+                    // `JoinHandle` resolves with a `JoinError` and the
+                    // reaper — not this task — owns the failed
+                    // settlement (Issue #606).
+                    assert!(
+                        !panic_worker,
+                        "test-injected manual compaction worker panic"
+                    );
+                }
+                #[cfg(test)]
+                {
                     let gate = inner
                         .probe
                         .lock()

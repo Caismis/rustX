@@ -2506,11 +2506,35 @@ impl CapabilityCoordinator {
             .active_attempts
     }
 
+    /// Replaces the active snapshot in place before a runtime consumes it.
+    /// Test fixtures use this to inject a resolved profile carrying test
+    /// authority (for example a Workflow list) while keeping one shared
+    /// `Arc` between the coordinator and `RuntimeResourceSnapshot` — the
+    /// runtime's ownership check requires them to be pointer-identical.
+    /// Only available under `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn replace_snapshot_for_test(&self, snapshot: Arc<CapabilitySnapshot>) {
+        self.inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .snapshot = snapshot;
+    }
+
     /// Installs the test-only synchronization hook at the commit boundary.
     /// Only available under `#[cfg(test)]`; never used by production code.
     #[cfg(test)]
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
+    }
+
+    /// Bumps the MCP catalog-change revision a live discovery would record,
+    /// so tests can drive the runtime catalog publication pipeline without
+    /// a real MCP server (Issue #606).
+    /// Only available under `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn notify_catalog_change_for_test(&self) {
+        self.inner.mcp_invalidation.successful_catalog_discovery();
     }
 
     /// Installs a pre-built Python tool store into the lazy slot, replacing

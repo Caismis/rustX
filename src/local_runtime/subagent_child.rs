@@ -2612,12 +2612,16 @@ pub(crate) mod tests {
     }
 
     /// Native handoff classifications cannot be mistaken for successful completion.
+    /// `RuntimeFailed` is included for both child roles: a panicking parent
+    /// attempt task publishes it through the shared `from_native` driver
+    /// (Issue #606).
     #[test]
     fn time_and_turn_limit_native_handoffs_map_to_failed_activation() {
         use crate::runtime::conversation_runtime::{NativeAttemptOutcome, NativeAttemptSettlement};
         for outcome in [
             NativeAttemptOutcome::TimedOut,
             NativeAttemptOutcome::LimitExceeded,
+            NativeAttemptOutcome::RuntimeFailed,
         ] {
             let receipt = NativeAttemptSettlement {
                 ordinal: 1,

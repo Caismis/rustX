@@ -91,6 +91,15 @@ pub(crate) struct CoordinatorProbe {
     /// before `claim_scheduled_start` — proving the prep runs outside the
     /// Claim critical section (Issue #606).
     pub(crate) scheduled_prep_gate: Option<Arc<Gate>>,
+    /// Parks the session-title host task after its auxiliary Call has
+    /// settled and immediately before the separate catalog visibility
+    /// transaction — the real title-publication tail a drain must wait
+    /// on (Issue #606).
+    pub(crate) title_publication_gate: Option<Arc<Gate>>,
+    /// Panics the manual-compaction worker task after `run_manual_compaction`
+    /// returns — a real task unwind that resolves the `JoinHandle` with a
+    /// `JoinError`, exercising the reaper's panic path (Issue #606).
+    pub(crate) manual_compaction_worker_panic: bool,
     /// Parks the next `submit_inbound` **after** the coordinator lock is
     /// acquired and the shutdown/activation decision is read, but **before**
     /// the durable acceptance. This is the exact critical-section window the
@@ -628,6 +637,19 @@ impl ConversationRuntime {
     pub(crate) fn fail_residency_settlement(&self) {
         self.inner
             .fence_mcp_settlement_failure("residency test settlement failure".into());
+    }
+
+    #[cfg(test)]
+    /// Installs the test-only manual-compaction worker panic injection.
+    /// Only available under `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn install_manual_compaction_worker_panic(&self) {
+        self.inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .get_or_insert_with(CoordinatorProbe::default)
+            .manual_compaction_worker_panic = true;
     }
 
     #[cfg(test)]

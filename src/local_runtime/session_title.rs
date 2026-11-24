@@ -286,6 +286,7 @@ fn consume_own_capacity_release(
     capacity.borrow_and_update().wrapping_sub(before) > 1
 }
 
+#[allow(clippy::too_many_lines)]
 async fn generate(
     weak_catalog: &Weak<tokio::sync::Mutex<SessionCatalog>>,
     session_id: &SessionId,
@@ -387,9 +388,34 @@ async fn generate(
     }
     // Execution settlement is confirmed before the separate Catalog visibility
     // transaction. The native admission and resource owner survive this tail.
+    #[cfg(test)]
+    {
+        let gate = runtime
+            .coordinator_probe()
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.title_publication_gate.clone());
+        if let Some(gate) = gate {
+            // The host task parks between the settled Call and the
+            // catalog publication — the exact tail a drain must wait on.
+            tokio::task::block_in_place(|| gate.enter());
+        }
+    }
     let mut catalog = catalog.lock().await;
     publish_title(&mut catalog, session_id, &source, &call_id, &output.text);
     TitleProgress::Finished
+}
+
+/// Drives the real `generate` path for tests that install it as the host
+/// task the drain must wait on (Issue #606).
+#[cfg(test)]
+pub(crate) async fn generate_for_test(
+    weak_catalog: &Weak<tokio::sync::Mutex<SessionCatalog>>,
+    session_id: &SessionId,
+    runtime: &ConversationRuntime,
+) {
+    let _ = generate(weak_catalog, session_id, runtime).await;
 }
 
 async fn after_execution_failure(

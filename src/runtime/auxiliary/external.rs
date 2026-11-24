@@ -1,9 +1,11 @@
 //! Named external consumers over the shared native auxiliary execution owner
 //! (Issue #606): the extracted `ExternalAuxiliary` service owns submission
-//! admission, correlation dedup, prompt/parsing business logic, stream and
-//! result delivery, and the auxiliary executor itself. The `ConversationRuntime`
-//! keeps only a drain handle and hands this service to composed consumers;
-//! it holds no auxiliary business logic.
+//! admission orchestration, correlation dedup, prompt/parsing business logic,
+//! and stream and result delivery for composed consumers. The auxiliary
+//! executor itself and the admission critical section stay on `RuntimeInner`:
+//! `RuntimeInner::admit_auxiliary_work` is the only authority that freezes an
+//! invocation, reserves executor capacity and takes the business admission
+//! inside one coordinator lock, and `ExternalAuxiliary` merely invokes it.
 //!
 //! Ownership boundary: `ExternalAuxiliary` holds no coordinator state. It is
 //! bound to the runtime through a `Weak<RuntimeInner>` and mutates foreground
