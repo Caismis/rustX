@@ -2428,7 +2428,7 @@ async fn session_input_commit_publishes_its_bound_skill_dependencies() {
         assert_eq!(persisted.session_config, Some(session_config));
         assert!(endpoint.control().unwrap().same_pair(&lane));
         assert!(!fixture.workspaces[0].exists());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
         stop.cancel();
         watcher.await.unwrap().unwrap();
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
@@ -2503,7 +2503,7 @@ async fn a_bound_source_rechecks_after_its_final_document_read_fails() {
         assert!(runtime.runtime_resources().project_context_files().iter().any(|file| file.content == "Edited before a failed verification"));
         assert!(endpoint.control().unwrap().same_pair(&lane));
         assert!(!fixture.workspaces[0].exists());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
         stop.cancel();
         watcher.await.unwrap().unwrap();
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
