@@ -464,8 +464,6 @@ impl RuntimeInner {
                             }));
                     }
                 }
-                tail.completion.joined.store(true, Ordering::Release);
-                tail.completion.notify.notify_waiters();
                 {
                     let mut state = self.lock_state();
                     if matches!(
@@ -475,6 +473,12 @@ impl RuntimeInner {
                         state.foreground.manual_tail = super::foreground::ManualTailState::None;
                     }
                 }
+                // `joined` publishes last: every waiter it releases — the
+                // `wait()` caller or another reaper — must already observe
+                // the freed maintenance slot, or a follow-up
+                // `admit_compaction` transiently sees `Busy` (Issue #606).
+                tail.completion.joined.store(true, Ordering::Release);
+                tail.completion.notify.notify_waiters();
                 self.settlement.notify_waiters();
                 self.wake.notify.notify_one();
             }
