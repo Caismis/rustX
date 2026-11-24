@@ -787,3 +787,13 @@ Write directory sync. Grep throughput uses input size, even though the
 algorithm scans it twice. The management-only Server workload and the
 paired Client workloads measure different boundaries. The earlier
 Hosted import saturation proof records four occupied fragment slots.
+
+## Follow-up to the review of `072f00ead`
+
+| Boundary | Regression |
+|---|---|
+| Selective Python capture | `selective_python_watch_fallback_skips_healthy_siblings` holds an admitted Attempt while a healthy watched package reaches Ready. A partial capture of the other package preserves that Ready update, adds one physical Capture for the uncovered package and none for the healthy one. The next Attempt sees both new source digests. |
+| Session settings versus partial capture | `session_input_commit_fences_a_parked_python_fallback` stops the partial capture after it records the source and settings generations. A real Session inputs write commits while that capture waits. Releasing the old capture leaves the newer application and persisted settings intact. |
+| Host drain cutoff | `host_cutoff_rejects_an_already_delivered_revoke_receipt` tightens the cutoff after the Client reads Revoke. A receipt delivered inside the original command window cannot confirm settlement or release the durable marker. The split-lane tests tighten the cutoff only after data admission is observed. |
+| Skills refresh | `bound-resources.test.tsx` changes the same Session from authoring to Client authority without reconnecting. Refresh keeps the Session identity on the wire, reports pending and failed reads, and displays the Client catalog without authoring actions after success. |
+| Delegated Open witness | `parent_held_initial_open_keeps_child_relay_and_ready_mcp_intact` parks the chosen Open after the parent relay receives it and before it attempts physical dispatch. It observes a typed pre-forward rejection, zero physical Opens for that attempt, and continued use of the existing Ready peer. |

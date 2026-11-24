@@ -119,7 +119,7 @@ impl ControlShared {
     pub(super) fn resolve(
         &self,
         receipt: Option<ControlReply>,
-        confirm_revocation: impl FnOnce(),
+        confirm_revocation: impl FnOnce(Instant) -> bool,
     ) -> bool {
         let mut state = self.lock();
         let command = state.inflight.take();
@@ -130,15 +130,14 @@ impl ControlShared {
             (None, None) => true,
             (Some(command), Some(reply)) => {
                 if receipt_matches(&command.request, &reply) {
-                    if matches!(reply, ControlReply::Revoked) {
-                        if command
-                            .deadline
-                            .is_some_and(|deadline| Instant::now() >= deadline)
-                        {
-                            let _ = command.responder.send(Err(io::ErrorKind::TimedOut.into()));
-                            return false;
-                        }
-                        confirm_revocation();
+                    if matches!(reply, ControlReply::Revoked)
+                        && !command.deadline.is_some_and(confirm_revocation)
+                    {
+                        let _ = command.responder.send(Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "control command outlived its budget",
+                        )));
+                        return false;
                     }
                     let _ = command.responder.send(Ok(reply));
                     true
@@ -520,6 +519,7 @@ impl ControlWorker {
                     let deadline = shared
                         .revoke_deadline()
                         .unwrap_or_else(|| Instant::now() + CONTROL_FRAME_TIMEOUT);
+                    let deadline = worker_owner.clamp_revocation_cutoff(deadline);
                     let poll = match channel.receive::<ControlPoll>(Some(deadline)) {
                         Ok(poll) => poll,
                         Err(error) => {
@@ -544,52 +544,44 @@ impl ControlWorker {
                         break false;
                     }
                     next_sequence = next_sequence.saturating_add(1);
-                    let settling = matches!(&poll.receipt, Some(ControlReply::Revoked));
-                    let mut ack = Ok(());
-                    if !shared.resolve(poll.receipt, || {
-                        worker_owner.confirm_revocation(&connection);
-                        let final_turn = ControlTurn {
-                            sequence: poll.sequence,
-                            health: poll.health,
-                            request: None,
-                        };
-                        ack = encode_record(&final_turn).and_then(|encoded| {
-                            channel.send(
-                                &encoded,
-                                Some(deadline.min(Instant::now() + CONTROL_FRAME_TIMEOUT)),
-                            )
-                        });
+                    let mut turn = ControlTurn {
+                        sequence: poll.sequence,
+                        health: poll.health,
+                        request: None,
+                    };
+                    let mut acknowledged = None;
+                    if !shared.resolve(poll.receipt, |command_deadline| {
+                        if !worker_owner.confirm_revocation(&connection, command_deadline) {
+                            return false;
+                        }
+                        let deadline = worker_owner.clamp_revocation_cutoff(
+                            deadline.min(Instant::now() + CONTROL_FRAME_TIMEOUT),
+                        );
+                        acknowledged = Some(send_turn(&mut channel, &turn, deadline).is_ok());
+                        true
                     }) {
                         break false;
                     }
-                    if settling {
-                        if ack.is_err() {
-                            break false;
-                        }
-                        continue;
+                    match acknowledged {
+                        Some(true) => continue,
+                        Some(false) => break false,
+                        None => (),
                     }
-                    let request = shared.next_command();
+                    turn.request = shared.next_command();
                     #[cfg(test)]
-                    if matches!(&request, Some(ControlRequest::Revoke))
+                    if matches!(&turn.request, Some(ControlRequest::Revoke))
                         && let Some((entered, release)) =
                             shared.before_revoke_send.lock().unwrap().take()
                     {
                         let _ = entered.send(());
                         let _ = release.recv();
                     }
-                    let turn = ControlTurn {
-                        sequence: poll.sequence,
-                        health: poll.health,
-                        request,
-                    };
-                    let Ok(encoded) = encode_record(&turn) else {
-                        break false;
-                    };
                     let frame_deadline = Instant::now() + CONTROL_FRAME_TIMEOUT;
                     let send_deadline = shared
                         .revoke_deadline()
                         .map_or(frame_deadline, |limit| frame_deadline.min(limit));
-                    if let Err(error) = channel.send(&encoded, Some(send_deadline)) {
+                    let send_deadline = worker_owner.clamp_revocation_cutoff(send_deadline);
+                    if let Err(error) = send_turn(&mut channel, &turn, send_deadline) {
                         break rustx_execution_protocol::transport::recoverable_lane_loss(&error);
                     }
                 };
@@ -622,6 +614,10 @@ impl ControlWorker {
         self.handle.stop();
         let _ = self.join.join();
     }
+}
+
+fn send_turn(channel: &mut RecordChannel, turn: &ControlTurn, deadline: Instant) -> io::Result<()> {
+    channel.send(&encode_record(turn)?, Some(deadline))
 }
 
 /// Whether a poll receipt is the exact answer the in-flight request

@@ -15,7 +15,13 @@ pub(super) struct BoundCapture {
     endpoint: Arc<super::LocalExecutionEndpoint>,
     watch: Option<rustx_execution_server::ControlHandle>,
     ticket: Arc<()>,
-    prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+    prefetched_python: Option<PrefetchedPython>,
+}
+
+struct PrefetchedPython {
+    catalog: crate::runtime::resources::ManagedPythonCatalog,
+    source_attempt: u64,
+    settings_revision: u64,
 }
 
 impl SessionRuntimeManager {
@@ -829,26 +835,38 @@ impl SessionRuntimeManager {
                             .is_some_and(|current| current.same_pair(&watch))
                 })
         };
+        let mut application = self.applications.lock();
         if !same_binding() {
             return false;
         }
-        let Some((mut input, retained_python)) = self
-            .sessions
-            .configuration_bindings
-            .lock()
-            .expect("Session configuration bindings")
-            .get(session)
-            .map(|binding| (binding.input.clone(), binding.managed_python.clone()))
+        let Some((source, source_attempt)) = application.latest_bound_source(session.as_str())
         else {
             return false;
         };
-        {
+        let input = source.input.clone();
+        let retained_python = source.managed_python.clone();
+        let settings_revision = {
             let catalog = self.sessions.catalog.blocking_lock();
             let Ok((_, settings)) = catalog.lineage(session, None) else {
                 return false;
             };
-            input.authoring = settings.input().authoring;
-        }
+            let Ok(revision) = catalog.settings_revision(session) else {
+                return false;
+            };
+            let authoring = settings.input().authoring;
+            if input.authoring != authoring {
+                return false;
+            }
+            revision
+        };
+        let Some(ticket) = application.try_begin_bound_capture(session) else {
+            return false;
+        };
+        drop(application);
+        #[cfg(test)]
+        self.configuration
+            .test_hooks
+            .reach("before_bound_python_fallback_read");
         let Some(updated_python) =
             crate::local_runtime::managed_python_resources::recapture_bound_subset(
                 endpoint,
@@ -857,26 +875,27 @@ impl SessionRuntimeManager {
                 &self.configuration.resource_io,
             )
         else {
+            self.applications
+                .lock()
+                .finish_bound_capture(session, &ticket);
             return false;
         };
-        let mut application = self.applications.lock();
-        if !same_binding() {
-            return false;
-        }
-        let ticket = application.begin_bound_capture(session.clone());
-        drop(application);
         self.capture_bound_consumers(vec![BoundCapture {
             session: session.clone(),
             input,
             endpoint: endpoint.clone(),
             watch: Some(watch),
             ticket,
-            prefetched_python: Some(updated_python),
-        }]);
-        true
+            prefetched_python: Some(PrefetchedPython {
+                catalog: updated_python,
+                source_attempt,
+                settings_revision,
+            }),
+        }])
     }
 
-    fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) {
+    fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) -> bool {
+        let mut published = false;
         for BoundCapture {
             session,
             input,
@@ -890,11 +909,17 @@ impl SessionRuntimeManager {
             self.configuration
                 .test_hooks
                 .reach("before_bound_source_read");
+            let (python, baseline) = prefetched_python.map_or((None, None), |prefetched| {
+                (
+                    Some(prefetched.catalog),
+                    Some((prefetched.source_attempt, prefetched.settings_revision)),
+                )
+            });
             let mut capture = self.configuration.capture_session_application_with_python(
                 &input,
                 &self.credentials,
                 Some(&endpoint),
-                prefetched_python,
+                python,
             );
             #[cfg(all(test, target_os = "linux"))]
             if watch.is_some() {
@@ -902,6 +927,21 @@ impl SessionRuntimeManager {
             }
             let mut application = self.applications.lock();
             if !application.finish_bound_capture(&session, &ticket) {
+                continue;
+            }
+            if let Some((source_attempt, settings_revision)) = baseline
+                && (application
+                    .latest_bound_source(session.as_str())
+                    .map(|(_, attempt)| attempt)
+                    != Some(source_attempt)
+                    || self
+                        .sessions
+                        .catalog
+                        .blocking_lock()
+                        .settings_revision(&session)
+                        .ok()
+                        != Some(settings_revision))
+            {
                 continue;
             }
             if let Some(watch) = &watch
@@ -951,7 +991,9 @@ impl SessionRuntimeManager {
             self.applications.notify(&application);
             drop(application);
             self.applications.run(self.clone());
+            published = true;
         }
+        published
     }
 
     /// Source authoring never loads, creates, or derives authority from a Session.

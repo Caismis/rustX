@@ -145,9 +145,14 @@ impl ConnectionOwner {
         }
     }
 
-    pub(super) fn confirm_revocation(&self, connection: &ConnectionId) {
+    pub(super) fn confirm_revocation(&self, connection: &ConnectionId, deadline: Instant) -> bool {
         let mut inner = self.inner();
+        let deadline = inner
+            .effective_recovery_deadline()
+            .map_or(deadline, |limit| deadline.min(limit));
         if matches!(&inner.settlement, PhysicalSettlement::Unconfirmed { control } if control == connection)
+            && inner.phase == BindingPhase::Live
+            && Instant::now() < inner.clamp_cutoff(deadline)
         {
             inner.settlement = PhysicalSettlement::Confirmed;
             if let Some(proof) = &mut inner.recovery {
@@ -155,7 +160,13 @@ impl ConnectionOwner {
             }
             inner.pending = None;
             self.pair_ready.notify_all();
+            return true;
         }
+        false
+    }
+
+    pub(super) fn clamp_revocation_cutoff(&self, deadline: Instant) -> Instant {
+        self.inner().clamp_cutoff(deadline)
     }
 
     pub(super) fn revocation_confirmed(&self) -> bool {

@@ -630,13 +630,6 @@ pub(crate) async fn drain_rejects_split_lane_recovery_across_cutoff() {
     bounded(control).await.unwrap();
     bounded(data).await.unwrap();
 
-    let cutoff = Instant::now() + std::time::Duration::from_millis(200);
-    fixture.host.begin_drain_by(cutoff);
-    let drain = tokio::spawn({
-        let host = fixture.host.clone();
-        async move { host.drain().await }
-    });
-
     // Data recovery lane arrives BEFORE the Host cutoff, while the Client's
     // control recovery lane is held at a barrier until AFTER the cutoff.
     let ((mut data_peer_2, mut data_server_2), data_admit) =
@@ -664,7 +657,8 @@ pub(crate) async fn drain_rejects_split_lane_recovery_across_cutoff() {
         let (peer, _) = bounded(listener.accept()).await.unwrap();
         (peer, socket_path, raw_listener)
     };
-    let failures = bounded(drain).await.unwrap();
+    fixture.host.begin_drain_by(Instant::now());
+    let failures = bounded(fixture.host.drain()).await;
     assert_eq!(
         failures.len(),
         1,

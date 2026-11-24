@@ -156,6 +156,54 @@ it('never falls back to Server authoring when a claimed Session Client is unavai
   } finally { stop(); }
 });
 
+it('refreshes Skills authority when the same Workspace Session acquires a Client', async () => {
+  const skills = (authority: 'authoring' | 'client', name: string): MethodResult => {
+    const location = `${cwd}/.agents/skills/${name}/SKILL.md`;
+    return { type: 'skills', authority, page: { revision: name, diagnostics: [], diagnostics_truncated: false, data: [{
+      catalog: { name, description: name, location },
+      provenance: { name, source: 'workspace', location, shadowed: [] },
+      operation_revision: name, metadata_revision: name, disable_model_invocation: false, enabled_by_default: true,
+    }] } };
+  };
+  let current: Promise<MethodResult> = Promise.resolve(skills('authoring', 'authored-skill'));
+  const subject = cfg3Client(op => op.method === 'skills/list' && op.params.target.kind === 'workspace' ? current : Promise.resolve());
+  const { associations, surface } = mountResources(subject);
+  const stop = associations.start();
+  try {
+    const ui = render(surface('skills', first));
+    const page = ui.container.querySelector('[data-resource-module="skills"]');
+    await waitFor(() => expect(within(screen.getByRole('listitem', { name: 'authored-skill' })).getByRole('button', { name: /Actions/ }).matches(':disabled')).toBe(false));
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    const workspaceLists = () => subject.request.mock.calls.flatMap(([op]) => op.method === 'skills/list' && op.params.target.kind === 'workspace' ? [op.params] : []);
+    const generation = subject.state.generation;
+
+    let fail!: (error: Error) => void;
+    current = new Promise((_resolve, reject) => { fail = reject; });
+    const beforeFailure = workspaceLists().length;
+    fireEvent.click(refresh);
+    await waitFor(() => expect(workspaceLists().length).toBeGreaterThan(beforeFailure));
+    expect(workspaceLists().slice(beforeFailure).every(params => params.execution_session === first.id)).toBe(true);
+    expect(page?.getAttribute('data-lifecycle')).toBe('loading');
+    await act(async () => fail(new Error('ExecutionUnavailable')));
+    await screen.findByRole('alert');
+    expect(page?.getAttribute('data-lifecycle')).toBe('failed');
+
+    let complete!: (result: MethodResult) => void;
+    current = new Promise(resolve => { complete = resolve; });
+    const beforeRecovery = workspaceLists().length;
+    fireEvent.click(refresh);
+    await waitFor(() => expect(workspaceLists().length).toBeGreaterThan(beforeRecovery));
+    expect(workspaceLists().slice(beforeRecovery).every(params => params.execution_session === first.id)).toBe(true);
+    expect(page?.getAttribute('data-lifecycle')).toBe('loading');
+    await act(async () => complete(skills('client', 'client-skill')));
+    const clientSkill = await screen.findByRole('listitem', { name: 'client-skill' });
+    await waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe('ready'));
+    expect(within(clientSkill).queryByRole('button', { name: /Actions/ })).toBeNull();
+    expect(screen.queryByRole('listitem', { name: 'authored-skill' })).toBeNull();
+    expect(subject.state.generation).toBe(generation);
+  } finally { stop(); }
+});
+
 it('tracks bound Skills data-lifecycle from the real skills/list response', async () => {
   let resolveSkills!: (result: MethodResult) => void;
   let rejectSkills!: (error: Error) => void;

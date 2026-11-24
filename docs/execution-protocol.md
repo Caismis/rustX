@@ -288,8 +288,10 @@ any phase, and `Live` always means a *committed pair* of lanes.
   immediately. A transport loss before sending Revoke or before obtaining
   its receipt keeps the same instance's cleanup admission under the fixed
   recovery window. Host drain accepts cleanup only until its overall
-  shutdown deadline. The recovered Client returns its previously proved
-  physical settlement or finishes the remaining cleanup. The Server
+  shutdown deadline. Both pairing and the exact Revoke confirmation check
+  that deadline under the binding lock, including receipts from commands
+  already in flight when drain starts. The recovered Client returns its
+  previously proved physical settlement or finishes the remaining cleanup. The Server
   acknowledges the final control poll before closing the pair.
 - The Session recovery owner is written to a bounded private staging file,
   synced, published atomically without replacement and directory-synced

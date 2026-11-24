@@ -783,6 +783,14 @@ impl Authority {
     }
 }
 
+#[cfg(test)]
+pub(super) struct OpenCut {
+    source: String,
+    received: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    refused: tokio::sync::oneshot::Sender<bool>,
+}
+
 fn run_data(
     mut channel: RecordChannel,
     owner: &LocalExecutionEndpoint,
@@ -796,11 +804,35 @@ fn run_data(
     {
         let budget = Duration::from_millis(u64::from(remaining_ms)).min(PAGE_REQUEST_TIMEOUT);
         let deadline = Instant::now() + budget;
+        #[cfg(test)]
+        let open_cut = if let ClientRequest::Mcp(McpRequest::Open { source_id, .. }) = &request {
+            let cut = owner
+                .test_hooks
+                .lock()
+                .unwrap()
+                .delegated_open
+                .take_if(|cut| &cut.source == source_id);
+            cut.map(|cut| {
+                cut.received.send(()).unwrap();
+                cut.release.recv().unwrap();
+                cut.refused
+            })
+        } else {
+            None
+        };
         let (reply, request_unconfirmed) = if authority.permits(owner, &request) {
             forward_data_request(owner, authority, &request, deadline)
         } else {
             (DataReply::Rejected(Refusal::Denied), false)
         };
+        #[cfg(test)]
+        if let Some(refused) = open_cut {
+            refused
+                .send(
+                    matches!(&reply, DataReply::Rejected(Refusal::Timeout)) && !request_unconfirmed,
+                )
+                .unwrap();
+        }
         unconfirmed |= request_unconfirmed;
         if encode_record(&reply)
             .and_then(|encoded| {
@@ -1759,7 +1791,29 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
         assert_eq!(open_count.load(Ordering::SeqCst), 1);
         assert_eq!(ready_runtime.list_tools().await.unwrap().len(), 1);
 
-        // Hold only the parent's data connection while leaving the child writer free.
+        // Park the selected Open at the parent relay before holding its physical lane.
+        // The other peer's Receive pump can run until this Open owns the child writer.
+        let (received, at_relay) = tokio::sync::oneshot::channel();
+        let (forward, release_open) = std::sync::mpsc::channel();
+        let (refused, refusal) = tokio::sync::oneshot::channel();
+        parent_endpoint.test_hooks.lock().unwrap().delegated_open = Some(OpenCut {
+            source: queued_source.to_string(),
+            received,
+            release: release_open,
+            refused,
+        });
+        let opening = McpServerRuntime::connect_owned(OwnedConnect::new(
+            &queued_source,
+            &authored,
+            &child_workspace,
+            Arc::new(McpInvalidationState::new()),
+            crate::runtime::CancellationSignal::new(),
+        ));
+        tokio::pin!(opening);
+        tokio::select! {
+            seen = at_relay => seen.unwrap(),
+            result = &mut opening => panic!("Open ended before reaching the parent relay: {result:?}"),
+        }
         let (held, holding) = tokio::sync::oneshot::channel();
         let (release, resume) = std::sync::mpsc::channel();
         let parent_for_hold = parent_endpoint.clone();
@@ -1772,19 +1826,14 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
                 .unwrap();
         });
         holding.await.unwrap();
-
-        let refused = tokio::time::timeout(
-            Duration::from_secs(15),
-            McpServerRuntime::connect_owned(OwnedConnect::new(
-                &queued_source,
-                &authored,
-                &child_workspace,
-                Arc::new(McpInvalidationState::new()),
-                crate::runtime::CancellationSignal::new(),
-            )),
-        )
-        .await
-        .unwrap();
+        forward.send(()).unwrap();
+        let refused = tokio::time::timeout(Duration::from_secs(15), opening)
+            .await
+            .unwrap();
+        assert!(
+            refusal.await.unwrap(),
+            "the parent replied with a proved pre-forward refusal"
+        );
         assert!(
             matches!(refused, Err(McpError::Discovery(_))),
             "parent-held pre-dispatch refusal must not escalate to physical settlement failure: {refused:?}"

@@ -81,13 +81,12 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [catalogRefresh, setCatalogRefresh] = useState(0);
   const candidateOwner = `${client.getSnapshot().endpoint}|${client.getSnapshot().authorityRevision}`;
   const boundKey = JSON.stringify([candidateOwner, hostOwner, client.getSnapshot().generation, workspaceId, workspace?.location, sessionCandidate?.id, sessionCandidate?.cwd, catalogRefresh]);
-  const boundSkillKey = JSON.stringify([candidateOwner, hostOwner, client.getSnapshot().generation, workspaceId, workspace?.location, sessionCandidate?.id, sessionCandidate?.cwd]);
   const activeBoundKey = useRef(boundKey);
   activeBoundKey.current = boundKey;
   const [boundObservation, setBoundObservation] = useState<{ key: string; authority?: WorkspaceCatalogAuthority; source?: SourceSettings['user_mcp']; error?: string }>();
   const [boundSkillObservation, setBoundSkillObservation] = useState<{ key: string; status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }>();
   const boundSource = sessionCandidate && module === 'mcp' && boundObservation?.key === boundKey ? boundObservation : undefined;
-  const boundSkillState = sessionCandidate && module === 'skills' && boundSkillObservation?.key === boundSkillKey ? boundSkillObservation : undefined;
+  const boundSkillState = sessionCandidate && module === 'skills' && boundSkillObservation?.key === boundKey ? boundSkillObservation : undefined;
   const authoringConfirmed = !!sessionCandidate && (module === 'mcp' ? boundSource?.authority === 'authoring' : boundSkillState?.authority === 'authoring');
   const bound = sessionCandidate && (module === 'mcp' ? boundSource?.authority === 'client' && !!boundSource.source : boundSkillState?.authority === 'client')
     ? sessionCandidate : undefined;
@@ -225,7 +224,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const mcpDraftKey = mcpFocus ? JSON.stringify([owner, editorTarget.kind === 'workspace' ? lifetime : 'user', editorSource?.target, mcpFocus.name ?? null]) : undefined;
   const editorConfig = configAuthoring(editorSource, editorTarget.kind);
   const refresh = () => {
-    if (!bound) actor.send({ type: 'REFRESH' });
+    if (!sessionCandidate) actor.send({ type: 'REFRESH' });
     if (catalogModule) setCatalogRefresh(value => value + 1);
     if (showingWorkspace && module !== 'skills') globalActor.send({ type: 'REFRESH' });
   };
@@ -371,12 +370,12 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
           </div>
           {awaitingAssociation ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p>
           : sessionCandidate && !authoringConfirmed && module === 'skills' ? <SettingsActorContext value={actor}>
-            <ResourceBrowser key={boundSkillKey} client={client} target={{ kind: 'workspace', directory: sessionCandidate.cwd }} scope="workspace" query={query} view={view}
+            <ResourceBrowser key={boundKey} client={client} target={{ kind: 'workspace', directory: sessionCandidate.cwd }} scope="workspace" query={query} view={view}
               refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={sessionCandidate.id}
               bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} transferDisabled readOnly
               onCatalogState={state => setBoundSkillObservation(prev =>
-                prev && prev.key === boundSkillKey && prev.status === state.status && prev.authority === state.authority
-                  ? prev : { key: boundSkillKey, ...state })} />
+                prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority
+                  ? prev : { key: boundKey, ...state })} />
           </SettingsActorContext> : sessionCandidate && !authoringConfirmed && module === 'mcp' ? (
             boundSource?.authority === 'client' && boundSource.source ? <McpPage workspaceDocument={boundSource.source} scope="workspace" query={query} view={view}
               probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />
@@ -387,7 +386,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
                 {module === 'skills' ? <ResourceBrowser client={client} source={source} target={source.target} scope={scope} revision={revision}
-                  query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
+                  query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={sessionCandidate?.id}
                   bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}

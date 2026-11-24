@@ -4080,6 +4080,77 @@ fn assert_erred_on_unconfirmed(next: &Binding, root: &Path) {
 }
 
 #[test]
+fn host_cutoff_rejects_an_already_delivered_revoke_receipt() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (binding, launch) = reserved(BTreeSet::from([Capability::Connection]));
+    let fence = binding.retain_recovery_fence(&root).unwrap();
+    let (mut data, data_server) = UnixStream::pair().unwrap();
+    write_record(&mut data, &PeerHello::Data(launch.clone())).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_server).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let challenge = read_record::<DataHelloReply>(&mut data)
+        .unwrap()
+        .unwrap()
+        .challenge;
+    let (mut control, control_server) = UnixStream::pair().unwrap();
+    control
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write_record(&mut control, &control_hello(&launch, challenge)).unwrap();
+    let ChannelAccept::Live(_connection) = binding.accept_local(control_server).unwrap() else {
+        panic!("admit both lanes");
+    };
+    read_record::<ControlHelloReply>(&mut control)
+        .unwrap()
+        .unwrap();
+    let handle = binding.control().unwrap();
+    let command_deadline = Instant::now() + Duration::from_secs(5);
+    thread::scope(|scope| {
+        let settling = scope.spawn(|| binding.settle_revocation_by(command_deadline));
+        while handle.shared.lock().queue.is_empty() {
+            assert!(Instant::now() < command_deadline, "Revoke was not queued");
+            thread::yield_now();
+        }
+        write_record(
+            &mut control,
+            &ControlPoll {
+                sequence: 1.into(),
+                receipt: None,
+                health: 11.into(),
+            },
+        )
+        .unwrap();
+        let turn: ControlTurn = read_record(&mut control).unwrap();
+        assert_eq!(turn.request, Some(ControlRequest::Revoke));
+        binding.begin_revocation_by(Instant::now());
+        assert!(
+            Instant::now() < command_deadline,
+            "the old command deadline is still open"
+        );
+        write_record(
+            &mut control,
+            &ControlPoll {
+                sequence: 2.into(),
+                receipt: Some(ControlReply::Revoked),
+                health: 12.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            settling.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+    });
+    assert!(!binding.revocation_confirmed());
+    binding.revoke();
+    assert!(binding.release_recovery_fence(&fence).is_err());
+    assert!(RecoveryFence::session_pending(&root, &launch.session).unwrap());
+}
+
+#[test]
 fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
     let product = tempfile::tempdir().unwrap();
     let root = product.path().canonicalize().unwrap();
@@ -4116,10 +4187,9 @@ fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
     let wait_detach = Instant::now() + Duration::from_secs(5);
     while binding.status().phase == BindingPhase::Live {
         assert!(Instant::now() < wait_detach, "pair did not detach");
-        std::thread::sleep(Duration::from_millis(10));
+        thread::yield_now();
     }
-    let cutoff = Instant::now() + Duration::from_millis(80);
-    binding.begin_revocation_by(cutoff);
+    binding.begin_revocation();
     assert!(binding.may_recover());
     assert!(binding.awaiting_revocation_recovery());
 
@@ -4134,8 +4204,8 @@ fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
         panic!("expected recovery data admission before cutoff");
     };
 
-    // Second half is delayed past the Host cutoff.
-    std::thread::sleep(Duration::from_millis(120));
+    // Tighten the Host cutoff only after the data half is admitted.
+    binding.begin_revocation_by(Instant::now());
     let (mut ctrl_2, ctrl_server_2) = UnixStream::pair().unwrap();
     write_record(
         &mut ctrl_2,

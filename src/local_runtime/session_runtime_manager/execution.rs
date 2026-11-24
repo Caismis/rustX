@@ -108,6 +108,7 @@ enum Settlement {
 #[derive(Default)]
 struct ExecutionTestHooks {
     expire_bash_capture_query: bool,
+    delegated_open: Option<delegation::OpenCut>,
     preparation_cleanup: std::collections::BTreeMap<
         rustx_execution_protocol::DecimalU64,
         tokio::sync::oneshot::Sender<()>,

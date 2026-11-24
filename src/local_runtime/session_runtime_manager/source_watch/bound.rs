@@ -105,6 +105,7 @@ impl SessionRuntimeManager {
     }
 
     fn workspace_watch_plan(&self, session: &SessionId, workspace: &Path) -> WorkspaceWatchPlan {
+        let application = self.applications.lock();
         let bindings = self
             .sessions
             .configuration_bindings
@@ -129,8 +130,11 @@ impl SessionRuntimeManager {
         }
         let mut incomplete_coverage = false;
         let mut incomplete_python = BTreeSet::new();
-        if let Some(config) = bindings.get(session) {
-            let python = &config.managed_python;
+        let python = application
+            .latest_bound_source(session.as_str())
+            .map(|(source, _)| &source.managed_python)
+            .or_else(|| bindings.get(session).map(|config| &config.managed_python));
+        if let Some(python) = python {
             incomplete_coverage = !python.discovery_diagnostics.is_empty();
             for (source, location) in &python.locations {
                 if location.scope != crate::runtime::resources::SourceScope::Workspace {

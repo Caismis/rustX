@@ -2551,6 +2551,24 @@ async fn workspace_catalog_authority_separates_unclaimed_authoring_claimed_unava
     .await;
 }
 
+fn python_fallback_packages(
+    workspace: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let tools = workspace.join(".agents/tools");
+    let healthy = tools.join("healthy-pkg");
+    let incomplete = tools.join("incomplete-pkg");
+    for root in [&healthy, &incomplete] {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("server.py"), "VERSION = 1\n").unwrap();
+        std::fs::write(root.join("requirements.txt"), []).unwrap();
+    }
+    for index in 0..=rustx_execution_protocol::mcp::MAX_SOURCE_WATCH_DIRECTORIES {
+        std::fs::create_dir_all(incomplete.join(format!("d{index:03}"))).unwrap();
+    }
+    std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 1\n").unwrap();
+    (healthy, incomplete)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn selective_python_watch_fallback_skips_healthy_siblings() {
@@ -2567,20 +2585,7 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
 
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
-        let tools_root = fixture.workspaces[0].join(".agents/tools");
-        let healthy = tools_root.join("healthy-pkg");
-        std::fs::create_dir_all(&healthy).unwrap();
-        std::fs::write(healthy.join("server.py"), "VERSION = 1\n").unwrap();
-        std::fs::write(healthy.join("requirements.txt"), []).unwrap();
-
-        let incomplete = tools_root.join("incomplete-pkg");
-        std::fs::create_dir_all(&incomplete).unwrap();
-        std::fs::write(incomplete.join("server.py"), "VERSION = 1\n").unwrap();
-        std::fs::write(incomplete.join("requirements.txt"), []).unwrap();
-        for index in 0..=rustx_execution_protocol::mcp::MAX_SOURCE_WATCH_DIRECTORIES {
-            std::fs::create_dir_all(incomplete.join(format!("d{index:03}"))).unwrap();
-        }
-        std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 1\n").unwrap();
+        let (healthy, incomplete) = python_fallback_packages(&fixture.workspaces[0]);
 
         let endpoint = fixture
             .manager
@@ -2772,8 +2777,11 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
             initial_incomplete
         );
 
-        // Modify an unwatched nested file inside incomplete-pkg and verify only it updates.
-        let mut changes = fixture.manager.configuration_changes();
+        let mut settlement = super::SettlementReceiptWait::capture(&runtime);
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let running = runtime.configuration_cut().admitted_attempt.unwrap();
+        let frozen = runtime.runtime_resources();
         let (resynced_tx, resynced_rx) = tokio::sync::oneshot::channel();
         fixture.manager.configuration.test_hooks.insert(
             "bound_configuration_watch_resynced",
@@ -2781,27 +2789,159 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
                 resynced_tx.send(()).unwrap();
             },
         );
-        std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 2\n").unwrap();
+        std::fs::write(healthy.join("server.py"), "VERSION = 2\n").unwrap();
         resynced_rx.await.unwrap();
-        while digest(&runtime.runtime_resources(), &incomplete_source) == initial_incomplete {
-            changes.changed().await.unwrap();
-        }
-        assert_eq!(
-            capture_counts.lock().unwrap().get("healthy-pkg"),
-            Some(&healthy_after_register)
-        );
-        assert_eq!(
-            capture_counts.lock().unwrap().get("incomplete-pkg"),
-            Some(&(incomplete_after_register + 2))
-        );
-        assert_eq!(digest(&runtime.runtime_resources(), &healthy_source), initial_healthy);
-        assert_ne!(digest(&runtime.runtime_resources(), &incomplete_source), initial_incomplete);
-
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(staged.units[&ApplyUnit::Capabilities], UnitApplication::Ready);
         stop.cancel();
         watch.await.unwrap().unwrap();
+        let desired = |source: &ToolSourceId| {
+            let application = fixture.manager.applications.lock();
+            let (capture, _) = application.latest_bound_source(id.as_str()).unwrap();
+            capture.managed_python.packages()[source].as_ref().unwrap().source_digest().to_owned()
+        };
+        let healthy_update = desired(&healthy_source);
+        assert_ne!(healthy_update, initial_healthy);
+        assert_eq!(desired(&incomplete_source), initial_incomplete);
+        let before = capture_counts.lock().unwrap().clone();
+
+        std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 2\n").unwrap();
+        assert!(tokio::task::spawn_blocking({
+            let manager = fixture.manager.clone();
+            let id = id.clone();
+            let endpoint = endpoint.clone();
+            let incomplete_source = incomplete_source.clone();
+            move || manager.observe_incomplete_bound_python(&id, &endpoint, endpoint.control().unwrap(), &std::collections::BTreeSet::from([incomplete_source]))
+        }).await.unwrap());
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(staged.units[&ApplyUnit::Capabilities], UnitApplication::Ready);
+        assert_eq!(desired(&healthy_source), healthy_update);
+        let incomplete_update = desired(&incomplete_source);
+        assert_ne!(incomplete_update, initial_incomplete);
+        {
+            let counts = capture_counts.lock().unwrap();
+            assert_eq!(counts["healthy-pkg"], before["healthy-pkg"]);
+            assert_eq!(counts["incomplete-pkg"], before["incomplete-pkg"] + 1);
+        }
+        assert_eq!(runtime.configuration_cut().admitted_attempt, Some(running.clone()));
+        assert_eq!(digest(&runtime.runtime_resources(), &healthy_source), initial_healthy);
+        assert_eq!(digest(&runtime.runtime_resources(), &incomplete_source), initial_incomplete);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        runtime.submit_inbound(input("request-B")).unwrap();
+        fixture.gates[1].wait_entered().await;
+        assert_ne!(runtime.configuration_cut().admitted_attempt, Some(running));
+        assert_eq!(digest(&runtime.runtime_resources(), &healthy_source), healthy_update);
+        assert_eq!(digest(&runtime.runtime_resources(), &incomplete_source), incomplete_update);
+        assert_eq!(digest(&frozen, &healthy_source), initial_healthy);
+        assert_eq!(digest(&frozen, &incomplete_source), initial_incomplete);
+        fixture.gates[1].release();
+        settlement.wait().await;
+        assert_eq!(fixture.provider.request_bodies().len(), 2);
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         assert!(client.wait().await.unwrap().success());
         let _ = proxy_join.join();
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_input_commit_fences_a_parked_python_fallback() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{Method, MethodResult},
+    };
+    use crate::capabilities::ToolSourceId;
+    use crate::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let (_, incomplete) = python_fallback_packages(&fixture.workspaces[0]);
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = fixture.sessions[0].id.clone();
+        let endpoint = fixture.manager.execution_endpoint(&id).unwrap();
+        tokio::task::spawn_blocking({
+            let manager = fixture.manager.clone();
+            let id = id.clone();
+            let endpoint = endpoint.clone();
+            move || manager.observe_bound_source(&id, &endpoint, endpoint.control().unwrap())
+        })
+        .await
+        .unwrap();
+        applied(&fixture, 0).await;
+
+        std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 2\n").unwrap();
+        let (captured, waiting) = tokio::sync::oneshot::channel();
+        let (release, parked) = std::sync::mpsc::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "before_bound_python_fallback_read",
+            move || {
+                captured.send(()).unwrap();
+                parked.recv().unwrap();
+            },
+        );
+        let old = tokio::task::spawn_blocking({
+            let manager = fixture.manager.clone();
+            let id = id.clone();
+            move || {
+                manager.observe_incomplete_bound_python(
+                    &id,
+                    &endpoint,
+                    endpoint.control().unwrap(),
+                    &std::collections::BTreeSet::from([ToolSourceId::ManagedPython(
+                        "incomplete-pkg".into(),
+                    )]),
+                )
+            }
+        });
+        waiting.await.unwrap();
+
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let (revision, _) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+        let session_config =
+            SessionConfigContent("[tool_deadline_policy]\nhard_deadline_ms=12345\n".into());
+        let MethodResult::SessionInputsWritten { revision: written } = call(
+            &connection,
+            1,
+            Method::SessionInputsWrite {
+                session_id: id.clone(),
+                expected_revision: revision,
+                session_config: Some(SessionInputChange::Replace(session_config.clone())),
+                session_resources: None,
+            },
+        )
+        .await
+        else {
+            panic!("committed Session configuration");
+        };
+        assert_eq!(written, revision + 1);
+        let adopted = applied(&fixture, 0).await.desired;
+        release.send(()).unwrap();
+        assert!(!old.await.unwrap(), "the obsolete fallback did not publish");
+        let (persisted_revision, persisted) =
+            fixture.manager.sessions.read_settings(&id).await.unwrap();
+        assert_eq!(persisted_revision, written);
+        assert_eq!(persisted.session_config, Some(session_config));
+        assert_eq!(
+            fixture
+                .manager
+                .configuration_application(&id)
+                .unwrap()
+                .desired,
+            adopted
+        );
+        {
+            let application = fixture.manager.applications.lock();
+            let (source, _) = application.latest_bound_source(id.as_str()).unwrap();
+            assert_eq!(source.input.authoring, persisted.input().authoring);
+        }
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
     }))
     .await;
 }

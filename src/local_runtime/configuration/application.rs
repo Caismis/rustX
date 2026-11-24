@@ -322,6 +322,35 @@ impl ApplicationState {
         ticket
     }
 
+    pub(crate) fn try_begin_bound_capture(
+        &mut self,
+        session: &crate::runtime::identity::SessionId,
+    ) -> Option<Arc<()>> {
+        if self.bound_captures.contains_key(session) {
+            return None;
+        }
+        Some(self.begin_bound_capture(session.clone()))
+    }
+
+    pub(crate) fn latest_bound_source(
+        &self,
+        scope: &str,
+    ) -> Option<(&super::ProspectiveSessionConfig, u64)> {
+        let capture = self
+            .inputs
+            .get(scope)?
+            .as_ref()
+            .ok()?
+            .context
+            .as_ref()
+            .ok()?;
+        matches!(
+            capture.workspace_resources,
+            super::WorkspaceResourceAuthority::Bound
+        )
+        .then_some((capture, self.scopes.get(scope)?.desired.attempt))
+    }
+
     pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {
         self.bound_captures.remove(session);
     }
