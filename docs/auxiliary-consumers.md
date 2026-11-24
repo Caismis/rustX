@@ -310,3 +310,29 @@ It uses existing admission, required-write, cancellation and physical join owner
 Do not add a purpose switch, scheduler, detached inference task, second durable
 cursor, result ACK state machine or primary-runtime continuation to the executor.
 Expose a named authorized boundary only when the product needs that consumer.
+
+## ExternalAuxiliary ownership and atomic admission (Issue #606)
+
+`ExternalAuxiliary` is the runtime-side owner of external auxiliary work —
+classification, BTW delivery and title invocation. `ConversationRuntime` no
+longer contains this business logic; hosts reach it through
+`runtime.external_auxiliary()`, which performs the subscriptions and
+submissions described above without exposing coordinator internals.
+
+Admission is a single atomic operation. `admit_auxiliary_work` runs inside
+one coordinator critical section and returns an `AdmittedAuxiliaryWork`
+bundle: the frozen `ResolvedModelInvocation` for the requested
+`AuxiliaryInvocationKind` (Classification, Btw or Title), the resource
+snapshot and its revision, the effective `ModelTimeoutPolicy`, the executor
+capacity reservation (which itself acquires the Call's `LifecycleAdmission`),
+and — only when the consumer asks for it — the business admission that
+survives Call settlement (the title publication tail). Because all of it is
+captured under the same lock acquisition, the execution snapshot can never
+be newer or older than the capacity it was acquired with, and every refusal
+path releases the whole bundle together.
+
+This replaces the previous shape where a consumer sampled configuration
+state first and then contended for executor capacity in separate steps —
+the window in which a concurrent configuration commit could pair a stale
+snapshot with fresh capacity. There is exactly one admission entry point
+and no retained legacy path.

@@ -8539,3 +8539,57 @@ read repair never loads a cold runtime or repeats semantic work. See the
   replacement retire callbacks and fence held successes, held errors and lazy reads.
   Status/paging updates preserve camera and focus;
   explicit current-owner closure alone may restore the opener.
+
+## ConversationRuntime boundary ownership (Issue #606)
+
+- **One foreground source of truth.** The coordinator owns a single typed
+  `ForegroundSlot` (`Idle`, `Attempt`, `ManualCompaction`, `Scheduled`,
+  `Poisoned`) inside `CoordinatorState.foreground`. Every ownership question —
+  who holds the lent `ConversationState`, whether an idle claim may proceed,
+  whether the slot is fenced — reads that one variant; there is no second
+  foreground fact, no implicit inference from task liveness, and no
+  `ConversationState` ownership outside the slot. `ManualTailState`
+  (`None`/`Pending`/`Joining`) lives in the same `foreground` group under the
+  same coordinator lock, so a claimed-but-unjoined manual compaction can never
+  be misread as reaped, and reclamation is installed before the lock releases.
+- **Panic is an absorbing failure, never a silent re-admission.** A lending
+  task that dies without returning `ConversationState` leaves the slot
+  `Poisoned` via `AttemptTaskPoisonGuard`; every subsequent foreground
+  admission, idle claim and staged commit fails against the recorded evidence
+  while drain still completes. No path recreates a slot out of thin air.
+- **Auxiliary admission is one atomic bundle.** `ExternalAuxiliary` — the
+  extracted owner of classification, BTW and title auxiliary work — performs
+  `admit_auxiliary_work` inside a single coordinator critical section: it
+  freezes the model invocation, resource snapshot, timeout policy and
+  revision, reserves executor capacity (which itself acquires the Call's
+  `LifecycleAdmission`), and optionally takes the business admission that
+  outlives Call settlement. The returned `AdmittedAuxiliaryWork` is the only
+  way auxiliary execution obtains these facts; no snapshot can be newer or
+  older than the capacity it was acquired with, and failure paths release
+  everything together.
+- **Scheduled claim is one atomic bundle.** `ScheduledExecutor` owns scheduled
+  workflow execution outside `RuntimeInner`. `claim_scheduled_start` validates
+  configuration freshness (resources Arc identity, model config, approval
+  mode) and freezes the permission-reviewer invocation inside the same
+  coordinator critical section as the durable Claim, so a concurrent
+  configuration commit cannot slide between preparation and claim. A stale
+  start is deferred through `scheduled_retries` backoff and a durable wait
+  receipt, never silently claimed. `finish_scheduled` requires
+  `ForegroundSlot::Scheduled` with the matching start identity — nothing else
+  may release the foreground right or retire the durable run.
+- **Roles are explicit.** `ConversationRole` (`Root` vs `SubagentChild`) is
+  chosen at construction, never inferred from configuration contents. Child
+  physical settlement moves behind `ChildControl`, reachable only through
+  `runtime.child_control()` on a child-role runtime; a `subagents` registry
+  configured on a child role fails validation instead of silently
+  re-interpreting intent. Root runtimes observe the same physical drain
+  through `shutdown_outcome`/`rollback_preparation_outcome`.
+- **Session title publication owns its lifecycle boundary.** Title refresh
+  is a local-runtime owner (`SessionTitle`) driving auxiliary invocation
+  through the same `admit_auxiliary_work` path with its business admission
+  held across Call settlement; no title state machine lives inside
+  `ConversationRuntime`.
+- **No second linearization domain.** The regrouped `foreground` state and
+  the extracted owners still synchronize on the one coordinator lock: the
+  refactor narrows ownership surfaces without adding locks, parallel commit
+  paths, compatibility shims or retained duplicates of the moved logic.
