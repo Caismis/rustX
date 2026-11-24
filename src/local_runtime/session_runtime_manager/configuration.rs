@@ -14,6 +14,7 @@ pub(super) struct BoundCapture {
     input: super::super::configuration::SessionConfigInput,
     endpoint: Arc<super::LocalExecutionEndpoint>,
     watch: Option<rustx_execution_server::ControlHandle>,
+    coalesce_failure: bool,
     ticket: Arc<()>,
     prefetched_python: Option<PrefetchedPython>,
 }
@@ -748,6 +749,7 @@ impl SessionRuntimeManager {
                         input,
                         endpoint,
                         watch: None,
+                        coalesce_failure: false,
                         ticket,
                         prefetched_python: None,
                     });
@@ -771,6 +773,7 @@ impl SessionRuntimeManager {
         session: &SessionId,
         endpoint: &Arc<super::LocalExecutionEndpoint>,
         watch: rustx_execution_server::ControlHandle,
+        native_change: bool,
     ) {
         let mut application = self.applications.lock();
         if !self
@@ -790,6 +793,8 @@ impl SessionRuntimeManager {
         let Some(input) = self.bound_watch_input(session) else {
             return;
         };
+        // A new watch plan also resynchronizes the source. The previous
+        // physical lane may still hold a ticket after a pair replacement.
         let ticket = application.begin_bound_capture(session.clone());
         drop(application);
         self.capture_bound_consumers(vec![BoundCapture {
@@ -797,6 +802,7 @@ impl SessionRuntimeManager {
             input,
             endpoint: endpoint.clone(),
             watch: Some(watch),
+            coalesce_failure: !native_change,
             ticket,
             prefetched_python: None,
         }]);
@@ -859,6 +865,7 @@ impl SessionRuntimeManager {
                 input,
                 endpoint: endpoint.clone(),
                 watch: Some(watch),
+                coalesce_failure: true,
                 ticket,
                 prefetched_python: None,
             }]);
@@ -905,6 +912,7 @@ impl SessionRuntimeManager {
             input,
             endpoint: endpoint.clone(),
             watch: Some(watch),
+            coalesce_failure: true,
             ticket,
             prefetched_python: Some(PrefetchedPython {
                 catalog: updated_python,
@@ -914,6 +922,27 @@ impl SessionRuntimeManager {
         }])
     }
 
+    fn bound_capture_baseline_current(
+        &self,
+        application: &super::super::configuration::application::ApplicationState,
+        session: &SessionId,
+        baseline: Option<(u64, u64)>,
+    ) -> bool {
+        baseline.is_none_or(|(attempt, settings_revision)| {
+            application
+                .latest_bound_source(session.as_str())
+                .map(|(_, attempt)| attempt)
+                == Some(attempt)
+                && self
+                    .sessions
+                    .catalog
+                    .blocking_lock()
+                    .settings_revision(session)
+                    .ok()
+                    == Some(settings_revision)
+        })
+    }
+
     fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) -> bool {
         let mut published = false;
         for BoundCapture {
@@ -921,6 +950,7 @@ impl SessionRuntimeManager {
             input,
             endpoint,
             watch,
+            coalesce_failure,
             ticket,
             prefetched_python,
         } in bound
@@ -935,40 +965,26 @@ impl SessionRuntimeManager {
                     Some((prefetched.source_attempt, prefetched.settings_revision)),
                 )
             });
+            #[cfg(all(test, target_os = "linux"))]
+            let watched = watch.is_some();
+            let lane = watch.or_else(|| endpoint.control());
+            let mut reads = super::super::configuration::application::BoundSourceReads::default();
             let mut capture = self.configuration.capture_session_application_with_python(
                 &input,
                 &self.credentials,
                 Some(&endpoint),
                 python,
+                &mut reads,
             );
             #[cfg(all(test, target_os = "linux"))]
-            if watch.is_some() {
+            if watched {
                 self.configuration.test_hooks.reach("bound_watch_captured");
             }
             let mut application = self.applications.lock();
             if !application.finish_bound_capture(&session, &ticket) {
                 continue;
             }
-            if let Some((source_attempt, settings_revision)) = baseline
-                && (application
-                    .latest_bound_source(session.as_str())
-                    .map(|(_, attempt)| attempt)
-                    != Some(source_attempt)
-                    || self
-                        .sessions
-                        .catalog
-                        .blocking_lock()
-                        .settings_revision(&session)
-                        .ok()
-                        != Some(settings_revision))
-            {
-                continue;
-            }
-            if let Some(watch) = &watch
-                && !endpoint
-                    .control()
-                    .is_some_and(|current| current.same_pair(watch))
-            {
+            if !self.bound_capture_baseline_current(&application, &session, baseline) {
                 continue;
             }
             let binding = self
@@ -999,14 +1015,26 @@ impl SessionRuntimeManager {
                 context.input.model.clone_from(&retained.input.model);
             }
             drop(binding);
-            let publish =
-                || application.capture_bound_source(session.to_string(), &input.cwd, capture);
-            if let Some(watch) = &watch {
-                if endpoint.with_control_lane(watch, publish).is_none() {
-                    continue;
-                }
+            let scope = session.to_string();
+            let observed = if let Some(lane) = lane {
+                endpoint
+                    .with_control_lane(&lane, || {
+                        application.publish_bound_observation(
+                            scope,
+                            &input.cwd,
+                            capture,
+                            reads,
+                            lane.clone(),
+                            coalesce_failure,
+                        )
+                    })
+                    .unwrap_or(false)
             } else {
-                publish();
+                application.capture_bound_source(scope, &input.cwd, capture);
+                true
+            };
+            if !observed {
+                continue;
             }
             self.applications.notify(&application);
             drop(application);

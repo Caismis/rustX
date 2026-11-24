@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
@@ -106,7 +106,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [query, setQuery] = useState('');
   const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
-  const [transferIntent, setTransferIntent] = useState<TransferIntent>();
+  const [pendingTransfer, setPendingTransfer] = useState<{ intent: TransferIntent; skillScope?: string; token: object }>();
+  const liveTransfer = useRef<object | undefined>(undefined);
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
   const mcpDrafts = useRef(new Map<string, { draft: McpEditorDraft; hostOwner?: string }>());
   const [resourceFocus, setResourceFocus] = useState<string>();
@@ -157,17 +158,26 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const config = configAuthoring(source, scope);
   const revision = config.state === 'structured' ? config.revision : undefined;
   const editable = available && !bound && !awaitingAssociation && (!sessionCandidate || authoringConfirmed) && !!observation && !readError && transport.connection === 'connected';
+  const skillTransferScope = module === 'skills' && visible && showingWorkspace && editable && directory
+    && (!sessionCandidate || boundSkillState?.status === 'ready') ? JSON.stringify([lifetime, boundKey, directory]) : undefined;
+  const activeTransfer = pendingTransfer && (pendingTransfer.intent.family !== 'skill' || (
+    !!skillTransferScope && pendingTransfer.skillScope === skillTransferScope
+  )) ? pendingTransfer : undefined;
+  useLayoutEffect(() => {
+    liveTransfer.current = activeTransfer?.token;
+    return () => { liveTransfer.current = undefined; };
+  }, [activeTransfer]);
   const title = tx(`resources:${module}.title`);
   const scopeLabel = showingWorkspace ? workspace?.displayName : tx('resources:scope.global');
   const resetScope = () => {
     setMcpFocus(undefined);
     setDetailScope(undefined);
-    setTransferIntent(undefined);
+    setPendingTransfer(undefined);
     setResourceFocus(undefined);
     setNewAgent(undefined);
     setQuery('');
   };
-  if (transferIntent?.family === 'skill' && boundSkillState?.authority === 'client') setTransferIntent(undefined);
+  if (pendingTransfer && !activeTransfer) setPendingTransfer(undefined);
   if (owner !== presentedOwner) {
     mcpDrafts.current.clear();
     setPresentedOwner(owner);
@@ -265,18 +275,20 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     ? shown?.agents.filter(agent => agent.scope === owner).map(agent => agent.name) ?? []
     : Object.keys((owner === 'user' ? shown?.user_mcp : shown?.workspace_mcp)?.authored ?? {});
   const startTransfer = (from: SourceScope, name: string, revision: string, operation: TransferIntent['operation'], skillNames?: ReadonlySet<string>) => {
-    if (!showingWorkspace || !workspace || !directory || !editable || (module !== 'skills' && !globalEditable)) return;
+    if (!showingWorkspace || !workspace || !directory || !editable || (module === 'skills' ? !skillTransferScope : !globalEditable)) return;
     const destination = from === 'user' ? resourceNames(source, 'workspace') : resourceNames(globalSource, 'user');
     const names = from === 'user' ? resourceNames(globalSource, 'user') : resourceNames(source, 'workspace');
-    setTransferIntent({
+    const token = {};
+    setPendingTransfer({ token, skillScope: skillTransferScope, intent: {
       from, name, revision, operation, family: module === 'skills' ? 'skill' : module === 'subagents' ? 'agent' : 'mcp', directory,
       destinationLabel: from === 'user' ? workspace.displayName : tx('resources:scope.global'),
       taken: skillNames ?? new Set([...names.filter(id => id !== name), ...destination]),
-      transfer: bindResourceTransfer(client, () => host, authority.capture(), workspace.id),
-    });
+      transfer: bindResourceTransfer(client, () => host, authority.capture(), workspace.id,
+        module === 'skills' ? () => liveTransfer.current === token : undefined),
+    } });
   };
   const transfer = showingWorkspace && workspace ? startTransfer : undefined;
-  const transferDisabled = !directory || !editable || (module !== 'skills' && !globalEditable) || busy || !host.configureWorkspace;
+  const transferDisabled = !directory || !editable || (module === 'skills' ? !skillTransferScope : !globalEditable) || busy || !host.configureWorkspace;
   const renderResources = (shown: SourceSettings, owner: SourceScope, inherited = false) => {
     const config = configAuthoring(shown, owner);
     const revision = config.state === 'structured' ? config.revision : undefined;
@@ -404,6 +416,6 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         </TabPanel>
       </Tabs>
     </div>}
-    {transferIntent && <TransferDialog intent={transferIntent} close={() => setTransferIntent(undefined)} refresh={refresh} />}
+    {activeTransfer && <TransferDialog intent={activeTransfer.intent} close={() => setPendingTransfer(undefined)} refresh={refresh} />}
   </section>;
 }

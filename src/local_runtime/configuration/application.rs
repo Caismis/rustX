@@ -120,6 +120,7 @@ pub(crate) struct ApplicationState {
     pending: BTreeMap<String, ApplicationIdentity>,
     bound_captures: BTreeMap<crate::runtime::identity::SessionId, Arc<()>>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
+    bound_observations: BTreeMap<String, BoundSourceObservation>,
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
@@ -159,6 +160,34 @@ pub(crate) struct CapturedApplication {
     /// valid stays an input, so a fix to it alone is observed. Diagnostics
     /// keep naming the authored file at fault.
     pub(crate) read: Vec<std::path::PathBuf>,
+}
+
+/// Physical reads from one bound capture, including reads that preceded a
+/// rejected configuration.
+#[derive(Default, PartialEq, Eq)]
+pub(crate) struct BoundSourceReads {
+    pub(crate) documents: BTreeMap<std::path::PathBuf, String>,
+    pub(crate) skills: Option<crate::skills::SkillWatchObservation>,
+}
+
+struct BoundSourceObservation {
+    lane: rustx_execution_server::ControlHandle,
+    reads: BoundSourceReads,
+}
+
+fn same_capture_failure(
+    previous: &Result<CapturedApplication, String>,
+    current: &Result<CapturedApplication, String>,
+) -> bool {
+    match (previous, current) {
+        (Err(previous), Err(current)) => previous == current,
+        (Ok(previous), Ok(current)) => {
+            previous.revision == current.revision
+                && matches!((&previous.context, &current.context),
+                    (Err(previous), Err(current)) if previous == current)
+        }
+        _ => false,
+    }
 }
 
 impl std::fmt::Debug for ApplicationState {
@@ -271,6 +300,7 @@ impl ConfigurationApplications {
         state.scope_targets.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
+        state.bound_observations.remove(scope);
         state
             .bound_captures
             .retain(|session, _| session.as_ref() != scope);
@@ -349,6 +379,55 @@ impl ApplicationState {
             super::WorkspaceResourceAuthority::Bound
         )
         .then_some((capture, self.scopes.get(scope)?.desired.attempt))
+    }
+
+    pub(crate) fn bound_source_reads(
+        &self,
+        scope: &str,
+        lane: &rustx_execution_server::ControlHandle,
+    ) -> Option<&BoundSourceReads> {
+        let observation = self.bound_observations.get(scope)?;
+        observation
+            .lane
+            .same_pair(lane)
+            .then_some(&observation.reads)
+    }
+
+    pub(crate) fn bound_source_failed(&self, scope: &str) -> bool {
+        self.inputs.get(scope).is_some_and(|capture| {
+            capture
+                .as_ref()
+                .map_or(true, |capture| capture.context.is_err())
+        })
+    }
+
+    /// Retain the physical observation even when configuration validation
+    /// failed. Only automatic observations coalesce an identical failure.
+    pub(crate) fn publish_bound_observation(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+        reads: BoundSourceReads,
+        lane: rustx_execution_server::ControlHandle,
+        coalesce_failure: bool,
+    ) -> bool {
+        if coalesce_failure
+            && self
+                .bound_observations
+                .get(&scope)
+                .is_some_and(|previous| previous.lane.same_pair(&lane) && previous.reads == reads)
+            && self
+                .inputs
+                .get(&scope)
+                .is_some_and(|previous| same_capture_failure(previous, &input))
+        {
+            return false;
+        }
+        self.capture_bound_source(scope.clone(), source, input);
+        self.bound_observations
+            .insert(scope, BoundSourceObservation { lane, reads });
+        true
     }
 
     pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {

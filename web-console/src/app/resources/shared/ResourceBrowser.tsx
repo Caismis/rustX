@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import type { SkillDescriptor, SourceScope, SourceSettings, SourceTarget, TransferOperation, WorkspaceCatalogAuthority } from '../../../../../protocol/app-server/v81';
 import type { AppServerClient } from '../../../client/app-server';
@@ -59,7 +59,7 @@ export function ResourceBrowser({ client, source: observedSource, target, scope,
   }
   const reportCatalogState = useRef(onCatalogState);
   reportCatalogState.current = onCatalogState;
-  useEffect(() => {
+  useLayoutEffect(() => {
     reportCatalogState.current?.({ status: catalogStatus, authority: catalogAuthority });
   }, [catalogAuthority, catalogStatus]);
   const listed = effective?.skills ?? [];

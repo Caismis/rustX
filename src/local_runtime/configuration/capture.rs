@@ -172,7 +172,14 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(request, credentials, None, None, || {})
+        self.capture_application_with_workspace(
+            request,
+            credentials,
+            None,
+            None,
+            &mut application::BoundSourceReads::default(),
+            || {},
+        )
     }
 
     /// A Session scope's capture: its source generation, resolved and
@@ -186,7 +193,13 @@ impl UserConfigManager {
         credentials: &crate::credentials::CredentialSnapshot,
         workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_session_application_with_python(input, credentials, workspace, None)
+        self.capture_session_application_with_python(
+            input,
+            credentials,
+            workspace,
+            None,
+            &mut application::BoundSourceReads::default(),
+        )
     }
 
     pub(crate) fn capture_session_application_with_python(
@@ -195,6 +208,7 @@ impl UserConfigManager {
         credentials: &crate::credentials::CredentialSnapshot,
         workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
         prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+        observed: &mut application::BoundSourceReads,
     ) -> Result<application::CapturedApplication, String> {
         let mut default = input.clone();
         default.model = None;
@@ -203,6 +217,7 @@ impl UserConfigManager {
             Some(credentials),
             workspace,
             prefetched_python,
+            observed,
             || {},
         )?;
         if let Ok(context) = &mut captured.context {
@@ -218,7 +233,14 @@ impl UserConfigManager {
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(request, credentials, None, None, after_layers)
+        self.capture_application_with_workspace(
+            request,
+            credentials,
+            None,
+            None,
+            &mut application::BoundSourceReads::default(),
+            after_layers,
+        )
     }
 
     fn capture_application_with_workspace(
@@ -227,10 +249,15 @@ impl UserConfigManager {
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
         prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+        observed: &mut application::BoundSourceReads,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
-            .capture_layers(request, workspace.map(std::sync::Arc::as_ref))
+            .capture_layers(
+                request,
+                workspace.map(std::sync::Arc::as_ref),
+                &mut observed.documents,
+            )
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -269,6 +296,7 @@ impl UserConfigManager {
                     capture,
                     workspace.map_or(ResourceSource::Authored, ResourceSource::Bound),
                     prefetched_python,
+                    &mut observed.skills,
                 )
             })
             .map_err(|error| error.diagnostic.reason)
@@ -303,11 +331,11 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        let (layers, documents) = self.capture_layers(request, None)?;
+        let (layers, documents) = self.capture_layers(request, None, &mut BTreeMap::new())?;
         let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
         let prospective =
-            self.resolve_resources(request, resolved, ResourceSource::Authored, None)?;
+            self.resolve_resources(request, resolved, ResourceSource::Authored, None, &mut None)?;
         self.verify_documents(&documents, &prospective.source_revisions)?;
         Ok(prospective)
     }
@@ -368,6 +396,7 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
         endpoint: Option<&'a LocalExecutionEndpoint>,
+        observed: &mut BTreeMap<PathBuf, String>,
     ) -> Result<(LayerCapture, ConfigurationDocuments<'a>), LaunchFailure> {
         request.authoring.validate_bounds()?;
         let host = &self.sources;
@@ -408,7 +437,6 @@ impl UserConfigManager {
         };
 
         let user_bytes = read_document(&user_document)?;
-        let user = layer_of(&user_path, user_bytes.as_deref(), false)?;
         let user_revision = super::super::settings::revision(user_bytes.as_deref());
         let authored;
         let project_bytes = match &workspace_document {
@@ -421,12 +449,14 @@ impl UserConfigManager {
                 .as_ref()
                 .map(|(bytes, _)| bytes.as_slice()),
         };
-        let project = layer_of(&project_path, project_bytes, true)?;
         let workspace_revision = super::super::settings::revision(project_bytes);
         let mut revisions = BTreeMap::from([
             (user_path.clone(), user_revision),
             (project_path.clone(), workspace_revision),
         ]);
+        observed.clone_from(&revisions);
+        let user = layer_of(&user_path, user_bytes.as_deref(), false)?;
+        let project = layer_of(&project_path, project_bytes, true)?;
         // Binding authoring remains strictly validated, but cannot rebind this manager.
 
         storage_disjoint(&locations.runtime_root, &locations.workspace)?;
@@ -464,11 +494,10 @@ impl UserConfigManager {
         if let Some(config) = &request.authoring.session_config {
             let bytes = config.0.as_bytes();
             let document = PathBuf::from(super::super::session_inputs::CONFIG_DOCUMENT);
+            let revision = super::super::settings::revision(Some(bytes));
+            observed.insert(document.clone(), revision.clone());
             let layer = parse_layer(&document, bytes, true)?;
-            revisions.insert(
-                document.clone(),
-                super::super::settings::revision(Some(bytes)),
-            );
+            revisions.insert(document.clone(), revision);
             let origin = Origin::Session {
                 document,
                 base: locations.workspace.clone(),
@@ -798,6 +827,7 @@ impl UserConfigManager {
         resolved: SourceCapture,
         resource_source: ResourceSource<'_>,
         prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+        skill_watches: &mut Option<crate::skills::SkillWatchObservation>,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         crate::package_io::check_cancelled(&self.resource_io)
             .map_err(|error| LaunchFailure::from(error.to_string()))?;
@@ -913,14 +943,16 @@ impl UserConfigManager {
             },
             |root| crate::skills::automatic_skill_roots(Some(&host.home_directory), root),
         );
-        let discover_skills = || {
-            let discovery =
-                crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
-                    automatic: skill_sources.clone(),
-                })
+        let mut discover_skills =
+            || {
+                let discovery = crate::skills::SkillDiscovery::with_config(
+                    crate::skills::SkillDiscoveryConfig {
+                        automatic: skill_sources.clone(),
+                    },
+                )
                 .with_cancellation(self.resource_io.clone());
-            if let Some(endpoint) = workspace_endpoint {
-                discovery.discover_bound(endpoint).map_err(|error| {
+                if let Some(endpoint) = workspace_endpoint {
+                    discovery.discover_bound_observed(endpoint, skill_watches).map_err(|error| {
                     LaunchFailure::at(
                         Some(
                             crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root,
@@ -931,10 +963,10 @@ impl UserConfigManager {
                         error.to_string(),
                     )
                 })
-            } else {
-                Ok(discovery.discover())
-            }
-        };
+                } else {
+                    Ok(discovery.discover())
+                }
+            };
         let skill_discovery = discover_skills()?;
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills

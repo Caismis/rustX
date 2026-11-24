@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import type { MethodResult, SessionSummary } from '../../protocol/app-server/v81';
+import { configurationSystem } from '../src/app/settings/machines/system';
+import { workspaceSettingsTarget } from '../src/app/settings/projection';
 import { ResourceSurface } from '../src/app/resources/ResourceSurface';
+import { bindResourceTransfer } from '../src/workspaces/resource-transfer';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
@@ -24,7 +27,7 @@ function mountResources(subject: ReturnType<typeof cfg3Client>, missing = false)
   const authority = new WorkspaceAuthority(host);
   const associations = new WorkspaceAssociations(subject.client, authority);
   subject.publish({sessions: [first, second]});
-  return { associations, surface: (module: 'skills' | 'mcp', active: SessionSummary) =>
+  return { associations, authority, host, surface: (module: 'skills' | 'mcp', active: SessionSummary) =>
     <ResourceSurface module={module} visible client={subject.client} host={host} authority={authority}
       associations={associations} initialWorkspace="A" executionSession={active} /> };
 }
@@ -204,16 +207,18 @@ it('refreshes Skills authority when the same Workspace Session acquires a Client
   } finally { stop(); }
 });
 
+const skillResult = (authority: 'authoring' | 'client', name: string): MethodResult => {
+  const location = `${cwd}/.agents/skills/${name}/SKILL.md`;
+  return { type: 'skills', authority, page: { revision: name, diagnostics: [], diagnostics_truncated: false, data: [{
+    catalog: { name, description: name, location },
+    provenance: { name, source: 'workspace', location, shadowed: [] },
+    ...(authority === 'authoring' ? { operation_revision: name } : {}),
+    metadata_revision: name, disable_model_invocation: false, enabled_by_default: true,
+  }] } };
+};
+
+
 it('uses the authority of a follow-up Skills catalog without a manual refresh', async () => {
-  const skillResult = (authority: 'authoring' | 'client', name: string): MethodResult => {
-    const location = `${cwd}/.agents/skills/${name}/SKILL.md`;
-    return { type: 'skills', authority, page: { revision: name, diagnostics: [], diagnostics_truncated: false, data: [{
-      catalog: { name, description: name, location },
-      provenance: { name, source: 'workspace', location, shadowed: [] },
-      ...(authority === 'authoring' ? { operation_revision: name } : {}),
-      metadata_revision: name, disable_model_invocation: false, enabled_by_default: true,
-    }] } };
-  };
   let respond!: (result: MethodResult) => void;
   const followUp = new Promise<MethodResult>(resolve => { respond = resolve; });
   let requests = 0;
@@ -290,4 +295,73 @@ it('tracks bound Skills data-lifecycle from the real skills/list response', asyn
     await waitFor(() => expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('failed'));
     expect(screen.getByRole('alert')).toBeTruthy();
   } finally { stop(); }
+});
+
+it.each(['failed', 'client'] as const)('revokes a Skill transfer after the next scoped read is %s', async outcome => {
+  let respond!: (result: MethodResult) => void;
+  let fail!: (error: Error) => void;
+  const next = new Promise<MethodResult>((resolve, reject) => { respond = resolve; fail = reject; });
+  let rechecking = false;
+  let requests = 0;
+  const subject = cfg3Client(async op => {
+    if (op.method !== 'skills/list' || op.params.target.kind !== 'workspace') return;
+    expect(op.params.execution_session).toBe(first.id);
+    requests += 1;
+    return rechecking ? next : skillResult('authoring', 'authored-skill');
+  });
+  subject.publish({ authorityId: 'native-fixture' });
+  const { associations, host, surface } = mountResources(subject);
+  const configure = vi.spyOn(host, 'configureWorkspace');
+  const stop = associations.start();
+  try {
+    const ui = render(surface('skills', first));
+    const page = ui.container.querySelector('[data-resource-module="skills"]');
+    const row = await screen.findByRole('listitem', { name: 'authored-skill' });
+    await waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe('ready'));
+    fireEvent.click(within(row).getByRole('button', { name: /Actions/ }));
+    const action = await screen.findByRole('menuitem', { name: outcome === 'failed' ? 'Copy to Global' : 'Move to Global' });
+    await waitFor(() => expect(action.getAttribute('aria-disabled')).not.toBe('true'));
+    fireEvent.click(action);
+    const dialog = await screen.findByRole('dialog');
+    const formerSubmit = within(dialog).getByRole('button', { name: outcome === 'failed' ? 'Copy' : 'Move' });
+    expect((formerSubmit as HTMLButtonElement).disabled).toBe(false);
+    const generation = subject.state.generation;
+    const before = requests;
+    rechecking = true;
+
+    // A new source observation triggers the scoped catalog on the same Session
+    // without remounting the page through its manual Refresh.
+    await act(async () => {
+      configurationSystem(subject.client).settingsTarget(workspaceSettingsTarget('A', 'A'), () => host).send({ type: 'REFRESH' });
+    });
+    await waitFor(() => expect(requests).toBeGreaterThan(before));
+    await act(async () => {
+      if (outcome === 'client') respond(skillResult('client', 'client-skill'));
+      else fail(new Error('ExecutionUnavailable'));
+    });
+    await waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe(outcome === 'client' ? 'ready' : 'failed'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(formerSubmit);
+    expect(configure.mock.calls.filter(([, , operation]) => operation.kind === 'transfer')).toHaveLength(0);
+    expect(subject.state.generation).toBe(generation);
+  } finally { stop(); }
+});
+
+it('checks the transfer intent again before forwarding to the Host', async () => {
+  const subject = cfg3Client();
+  subject.publish({ authorityId: 'native-fixture' });
+  const { authority, host } = mountResources(subject);
+  const configure = vi.spyOn(host, 'configureWorkspace').mockResolvedValue({ kind: 'transfer' });
+  await authority.observe();
+  const owner = authority.capture();
+  expect(owner?.current()).toBe(true);
+  let current = true;
+  const submit = bindResourceTransfer(subject.client, () => host, owner, 'A', () => current);
+  const mutation = { kind: 'resource_transfer', from: 'workspace', operation: 'copy',
+    resource: { family: 'skill', source: 'skill', destination: 'skill-copy' } } as const;
+  await submit(cwd, 'current', mutation);
+  expect(configure).toHaveBeenCalledTimes(1);
+  current = false;
+  await expect(submit(cwd, 'current', mutation)).rejects.toMatchObject({ kind: 'workspace_unavailable' });
+  expect(configure).toHaveBeenCalledTimes(1);
 });

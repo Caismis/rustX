@@ -104,16 +104,30 @@ impl SessionRuntimeManager {
         while workers.join_next().await.is_some() {}
     }
 
-    fn workspace_watch_plan(&self, session: &SessionId, workspace: &Path) -> WorkspaceWatchPlan {
+    fn workspace_watch_plan(
+        &self,
+        session: &SessionId,
+        workspace: &Path,
+        lane: &ControlHandle,
+    ) -> WorkspaceWatchPlan {
         let application = self.applications.lock();
         let bindings = self
             .sessions
             .configuration_bindings
             .lock()
             .expect("Session configuration bindings");
-        let mut plan = bindings.get(session).map_or_else(WatchPlan::new, |config| {
-            config.skill_discovery.observed_workspace.clone()
-        });
+        let observed_skills = application
+            .bound_source_reads(session.as_str(), lane)
+            .and_then(|reads| reads.skills.as_ref());
+        let mut plan = observed_skills
+            .map(|observation| &observation.paths)
+            .or_else(|| {
+                bindings
+                    .get(session)
+                    .map(|config| &config.skill_discovery.observed_workspace)
+            })
+            .cloned()
+            .unwrap_or_default();
         named(
             &mut plan,
             workspace.to_path_buf(),
@@ -128,14 +142,15 @@ impl SessionRuntimeManager {
         for name in ["agents", "workflows", "tools", "skills"] {
             plan.entry(agents.join(name)).or_insert(None);
         }
-        let mut incomplete_coverage = false;
+        let mut incomplete_coverage =
+            observed_skills.is_some_and(|observation| !observation.complete);
         let mut incomplete_python = BTreeSet::new();
         let python = application
             .latest_bound_source(session.as_str())
             .map(|(source, _)| &source.managed_python)
             .or_else(|| bindings.get(session).map(|config| &config.managed_python));
         if let Some(python) = python {
-            incomplete_coverage = !python.discovery_diagnostics.is_empty();
+            incomplete_coverage |= !python.discovery_diagnostics.is_empty();
             for (source, location) in &python.locations {
                 if location.scope != crate::runtime::resources::SourceScope::Workspace {
                     continue;
@@ -155,6 +170,11 @@ impl SessionRuntimeManager {
                 }
             }
         }
+        // The Python-only recheck already rebuilds the full source if its
+        // baseline was lost. With no such periodic work, schedule recovery here.
+        incomplete_coverage |= observed_skills.is_none()
+            && incomplete_python.is_empty()
+            && application.bound_source_failed(session.as_str());
         WorkspaceWatchPlan {
             plan,
             incomplete_coverage,
@@ -221,8 +241,9 @@ impl Watches {
                     self.registered.insert(path.clone(), (relative, id));
                     new_watch = true;
                 }
-                // A watched ancestor observes a later creation.
-                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    self.incomplete_coverage |= !self.observes_creation(path);
+                }
                 Err(error) if endpoint.control().is_some() => {
                     tracing::debug!(kind = ?error.kind(), "configuration watch coverage incomplete");
                     self.incomplete_coverage = true;
@@ -231,6 +252,22 @@ impl Watches {
             }
         }
         Ok(changed || new_watch)
+    }
+
+    /// An absent directory is repairable by a native hint only when a
+    /// registered ancestor observes the next component on its path.
+    fn observes_creation(&self, path: &Path) -> bool {
+        path.ancestors()
+            .skip(1)
+            .zip(path.ancestors())
+            .any(|(ancestor, child)| {
+                self.registered.contains_key(ancestor)
+                    && self.plan.get(ancestor).is_some_and(|filter| {
+                        filter.as_ref().is_none_or(|names| {
+                            child.file_name().is_some_and(|name| names.contains(name))
+                        })
+                    })
+            })
     }
 
     fn poll(
@@ -280,6 +317,12 @@ impl Watches {
     }
 
     fn stop_all(self, endpoint: &LocalExecutionEndpoint, lane: &ControlHandle) {
+        if !endpoint
+            .control()
+            .is_some_and(|current| current.same_pair(lane))
+        {
+            return;
+        }
         for (_, id) in self.registered.into_values() {
             if endpoint.stop_watch(id, lane).is_err() {
                 // The binding owns unresolved physical settlement.
@@ -319,7 +362,8 @@ async fn watch_session(
                 {
                     return Err(io::ErrorKind::NotConnected.into());
                 }
-                let mut changed = watches.poll(|id, path| binding.poll_watch(id, path, &turn))?;
+                let native_change = watches.poll(|id, path| binding.poll_watch(id, path, &turn))?;
+                let mut changed = native_change;
                 #[cfg(test)]
                 if !watches.retiring.is_empty() {
                     worker
@@ -332,11 +376,11 @@ async fn watch_session(
                     changed |= watches.register(
                         &binding,
                         &turn,
-                        worker.workspace_watch_plan(&id, binding.workspace()),
+                        worker.workspace_watch_plan(&id, binding.workspace(), &turn),
                     )?;
                 }
-                if changed || (recheck && watches.incomplete_coverage) {
-                    worker.observe_bound_source(&id, &binding, turn);
+                if changed || recheck && watches.incomplete_coverage {
+                    worker.observe_bound_source(&id, &binding, turn, native_change);
                     #[cfg(test)]
                     worker
                         .configuration
@@ -351,6 +395,7 @@ async fn watch_session(
                         turn,
                         &watches.incomplete_python,
                     );
+                    check = Instant::now() + COVERAGE_RECHECK;
                     #[cfg(test)]
                     {
                         worker
@@ -364,7 +409,6 @@ async fn watch_session(
                                 .reach("bound_configuration_watch_resynced");
                         }
                     }
-                    check = Instant::now() + COVERAGE_RECHECK;
                 } else if recheck {
                     check = Instant::now() + COVERAGE_RECHECK;
                 }
@@ -382,15 +426,7 @@ async fn watch_session(
             break;
         }
     }
-    let _ = tokio::task::spawn_blocking(move || {
-        if endpoint
-            .control()
-            .is_some_and(|current| current.same_pair(&lane))
-        {
-            watches.stop_all(&endpoint, &lane);
-        }
-    })
-    .await;
+    let _ = tokio::task::spawn_blocking(move || watches.stop_all(&endpoint, &lane)).await;
 }
 
 #[cfg(test)]

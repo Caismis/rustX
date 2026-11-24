@@ -28,7 +28,7 @@ use std::io;
 
 use rustx_execution_protocol::EntryKind;
 
-use super::tree::{Client, Native, SkillTree};
+use super::tree::{Client, Native, SkillTree, SkillWatchObservation};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::identity::{SkillId, SkillVersionId};
@@ -360,10 +360,25 @@ impl SkillDiscovery {
         &self,
         endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
     ) -> io::Result<SkillDiscoveryOutcome> {
+        self.discover_bound_observed(endpoint, &mut None)
+    }
+
+    pub(crate) fn discover_bound_observed(
+        &self,
+        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        observed: &mut Option<SkillWatchObservation>,
+    ) -> io::Result<SkillDiscoveryOutcome> {
         let client = Client::new(endpoint, &self.cancellation);
-        let mut outcome = self.discover_with(Some(&client))?;
-        outcome.observed_workspace = client.into_observations();
-        Ok(outcome)
+        let outcome = self.discover_with(Some(&client));
+        let paths = client.into_observations();
+        *observed = Some(SkillWatchObservation {
+            paths: paths.clone(),
+            complete: outcome.is_ok(),
+        });
+        outcome.map(|mut outcome| {
+            outcome.observed_workspace = paths;
+            outcome
+        })
     }
 
     fn discover_with(&self, client: Option<&Client<'_>>) -> io::Result<SkillDiscoveryOutcome> {

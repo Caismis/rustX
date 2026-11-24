@@ -83,6 +83,12 @@ impl SkillTree for Native {
 pub(crate) type ObservedSkillDirectories =
     std::collections::BTreeMap<PathBuf, Option<std::collections::BTreeSet<std::ffi::OsString>>>;
 
+#[derive(PartialEq, Eq)]
+pub(crate) struct SkillWatchObservation {
+    pub(crate) paths: ObservedSkillDirectories,
+    pub(crate) complete: bool,
+}
+
 pub(super) struct Client<'a> {
     observations: std::cell::RefCell<ObservedSkillDirectories>,
     resolved_links: std::cell::RefCell<std::collections::BTreeMap<PathBuf, PathBuf>>,

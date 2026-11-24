@@ -2171,6 +2171,118 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn bound_skill_watch_keeps_the_failed_target_observable() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::rename(workspace, &physical).unwrap();
+        std::fs::write(physical.join("rustx.toml"), "[agent]\nskills = ['foo']\n").unwrap();
+        let collection = physical.join(".agents/skills");
+        std::fs::create_dir_all(&collection).unwrap();
+        let original = physical.join("targets/a");
+        let replacement = physical.join("targets/b");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::create_dir_all(&replacement).unwrap();
+        let write_marker = |directory: &std::path::Path, description| {
+            std::fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: foo\ndescription: {description}\n---\nBody\n"),
+            ).unwrap();
+        };
+        write_marker(&original, "Original");
+        std::fs::write(replacement.join("SKILL.md"), "broken frontmatter").unwrap();
+        std::os::unix::fs::symlink("../../targets/a", collection.join("foo")).unwrap();
+        let launcher = workspace_overlay_launcher(mount.path());
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = &fixture.sessions[0].id;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let endpoint = fixture.manager.execution_endpoint(id).unwrap();
+        let lane = endpoint.control().unwrap();
+        let description = |snapshot: &crate::runtime::resources::RuntimeResourceSnapshot| {
+            snapshot.capability().skills().packages()[0].description().to_owned()
+        };
+
+        let wait_for_resync = || {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            fixture.manager.configuration.test_hooks.insert("bound_configuration_watch_resynced", move || {
+                send.send(()).unwrap();
+            });
+            receive
+        };
+        let registered = wait_for_resync();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let watcher = tokio::spawn({
+            let manager = fixture.manager.clone();
+            let stop = stop.clone();
+            async move { manager.run_source_watch(stop).await }
+        });
+        registered.await.unwrap();
+
+        let mut settlement = super::SettlementReceiptWait::capture(&runtime);
+        runtime.submit_inbound(input("keep-original")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let frozen = runtime.runtime_resources();
+        assert_eq!(description(&frozen), "Original");
+
+        let (captured, retargeted) = tokio::sync::oneshot::channel();
+        let (resume, parked) = std::sync::mpsc::channel();
+        fixture.manager.configuration.test_hooks.insert("bound_configuration_watch_resynced", move || {
+            captured.send(()).unwrap();
+            let _ = parked.recv();
+        });
+        let next = physical.join(".next");
+        std::os::unix::fs::symlink("../../targets/b", &next).unwrap();
+        std::fs::rename(next, collection.join("foo")).unwrap();
+        retargeted.await.unwrap();
+        let failed = settled(&fixture, 0).await;
+        assert!(matches!(&failed.units[&ApplyUnit::Capabilities], UnitApplication::Failed { diagnostic, .. }
+            if diagnostic.contains("selected Skill is unavailable")));
+        {
+            let state = fixture.manager.applications.lock();
+            let observed = state.bound_source_reads(id.as_str(), &lane).unwrap().skills.as_ref().unwrap();
+            assert!(observed.complete);
+            assert!(observed.paths.contains_key(&workspace.join("targets/b")));
+            assert!(!observed.paths.contains_key(&workspace.join("targets/a")));
+        }
+        assert_eq!(description(&runtime.runtime_resources()), "Original");
+
+        // Wait for native registration and its resync before editing the
+        // replacement. Only the package marker changes after this point.
+        let registered = wait_for_resync();
+        resume.send(()).unwrap();
+        registered.await.unwrap();
+        assert_eq!(fixture.manager.configuration_application(id).unwrap(), failed);
+        let recovered = wait_for_resync();
+        write_marker(&replacement, "Recovered");
+        recovered.await.unwrap();
+        let prepared = settled(&fixture, 0).await;
+        assert_ne!(prepared.desired, failed.desired);
+        assert_eq!(prepared.units[&ApplyUnit::Capabilities], UnitApplication::Ready);
+        assert_eq!(description(&runtime.runtime_resources()), "Original");
+        assert_eq!(description(&frozen), "Original");
+        assert!(endpoint.control().unwrap().same_pair(&lane));
+
+        fixture.gates[0].release();
+        settlement.wait().await;
+        assert_eq!(applied(&fixture, 0).await.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
+        assert_eq!(description(&runtime.runtime_resources()), "Recovered");
+        assert_eq!(description(&frozen), "Original");
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
+        assert!(!workspace.exists());
+        stop.cancel();
+        watcher.await.unwrap().unwrap();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    })).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn replacing_a_skill_refreshes_the_catalog_while_native_watch_retirement_is_held() {
     use std::os::unix::fs::PermissionsExt as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -2574,7 +2686,7 @@ async fn selective_python_watch_fallback_skips_healthy_siblings() {
     python_watch_fallback(false).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 async fn selective_python_watch_fallback_recovers_after_configuration_read_failure() {
     python_watch_fallback(true).await;
 }
@@ -2653,6 +2765,8 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
         let counts_wire = capture_counts.clone();
         let (arm_failure, arm_wire) = std::sync::mpsc::channel();
         let (injected, mut injected_wire) = tokio::sync::oneshot::channel();
+        let (fail_next_read, requested_failure) = std::sync::mpsc::channel();
+        let (observed_read, mut read_observation) = tokio::sync::mpsc::unbounded_channel();
         let endpoint_ref = endpoint.clone();
         let (live_tx, live_rx) = tokio::sync::oneshot::channel();
         let proxy_join = std::thread::spawn(move || {
@@ -2682,6 +2796,7 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
             let _ = live_tx.send(());
 
             let exchange_data = std::thread::spawn(move || {
+                let mut last_recheck = 0;
                 let mut affected_capture = None;
                 let mut captured_digest = None;
                 let mut injected = Some(injected);
@@ -2716,6 +2831,16 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
                             if let Some(digest) = captured_digest.take() {
                                 reply = ClientReply::Error { kind: ReadError::Unavailable };
                                 injected.take().unwrap().send(digest).unwrap();
+                            } else {
+                                if let Ok(retry) = requested_failure.try_recv() {
+                                    last_recheck = retry;
+                                    if retry != 0 {
+                                        observed_read.send(retry).unwrap();
+                                    }
+                                }
+                                if last_recheck != 0 {
+                                    reply = ClientReply::Error { kind: ReadError::Unavailable };
+                                }
                             }
                         }
                         _ => {}
@@ -2824,12 +2949,43 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
             assert_ne!(captured, initial_incomplete);
             assert!(fixture.manager.applications.lock().latest_bound_source(id.as_str()).is_none());
             assert!(endpoint.control().unwrap().same_pair(&watch_owner));
+            let failed = settled(&fixture, 0).await;
+            assert!(matches!(failed.units[&ApplyUnit::Capabilities], UnitApplication::Failed { .. }));
+            let mut resume = resume;
+            for round in 1..=2 {
+                // Drive the periodic check against a real data exchange. The
+                // clock only selects the due tick; IPC runs in real time.
+                tokio::time::pause();
+                let (rechecked, next_check) = tokio::sync::oneshot::channel();
+                let (next_resume, park) = std::sync::mpsc::channel();
+                let (started, started_read) = tokio::sync::oneshot::channel();
+                let (go, allow_read) = std::sync::mpsc::channel();
+                fixture.manager.configuration.test_hooks.insert("before_bound_source_read", move || {
+                    started.send(()).unwrap();
+                    let _ = allow_read.recv();
+                });
+                fixture.manager.configuration.test_hooks.insert("bound_python_fallback_checked", move || {
+                    rechecked.send(()).unwrap();
+                    let _ = park.recv();
+                });
+                tokio::time::advance(std::time::Duration::from_secs(5)).await;
+                resume.send(()).unwrap();
+                started_read.await.unwrap();
+                tokio::time::resume();
+                fail_next_read.send(round).unwrap();
+                go.send(()).unwrap();
+                assert_eq!(read_observation.recv().await.unwrap(), round);
+                next_check.await.unwrap();
+                let view = fixture.manager.configuration_application(id).unwrap();
+                assert_eq!(view, failed);
+                assert_eq!(digest(&runtime.runtime_resources(), &incomplete_source), initial_incomplete);
+                resume = next_resume;
+            }
+            fail_next_read.send(0).unwrap();
             let (rechecked, next_check) = tokio::sync::oneshot::channel();
             fixture.manager.configuration.test_hooks.insert("bound_python_fallback_checked", move || {
                 rechecked.send(()).unwrap();
             });
-            // The watch schedules its next recheck after this hook returns.
-            // The workspace receives no further changes before recovery.
             resume.send(()).unwrap();
             next_check.await.unwrap();
             stop.cancel();
@@ -2938,7 +3094,7 @@ async fn session_input_commit_fences_a_parked_python_fallback() {
             let manager = fixture.manager.clone();
             let id = id.clone();
             let endpoint = endpoint.clone();
-            move || manager.observe_bound_source(&id, &endpoint, endpoint.control().unwrap())
+            move || manager.observe_bound_source(&id, &endpoint, endpoint.control().unwrap(), true)
         })
         .await
         .unwrap();
