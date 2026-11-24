@@ -2739,16 +2739,16 @@ mod tests {
             cleanup.clone(),
             Arc::default(),
         );
-        let poll: ControlPoll = read_record(&mut server).unwrap();
-        write_record(
-            &mut server,
-            &ControlTurn {
+        let respond = |server: &mut UnixStream, poll: ControlPoll, request| {
+            let turn = ControlTurn {
                 sequence: poll.sequence,
                 health: poll.health,
-                request: Some(ControlRequest::Revoke),
-            },
-        )
-        .unwrap();
+                request,
+            };
+            write_record(server, &turn).unwrap();
+        };
+        let poll = read_record(&mut server).unwrap();
+        respond(&mut server, poll, Some(ControlRequest::Revoke));
         let wait = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -2767,15 +2767,7 @@ mod tests {
         release.send(()).unwrap();
         let poll: ControlPoll = read_record(&mut server).unwrap();
         assert_eq!(poll.receipt, Some(ControlReply::Revoked));
-        write_record(
-            &mut server,
-            &ControlTurn {
-                sequence: poll.sequence,
-                health: poll.health,
-                request: None,
-            },
-        )
-        .unwrap();
+        respond(&mut server, poll, None);
         assert!(worker.stop() == crate::ControlEnd::Revoked);
         assert!(cleanup.close());
         operations.shutdown().unwrap();
