@@ -4406,11 +4406,10 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
     })).await;
 }
 
-#[tokio::test]
-async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
-    use app_server_conformance::AppServerConformanceDriver;
+pub(super) fn seed_sealed_archive_image(
+    access: &rustx::local_runtime::session_controller::SessionAccess,
+) -> (rustx::runtime::ArtifactId, Vec<u8>) {
     use base64::Engine as _;
-    use rustx::app_server::protocol::*;
     use rustx::durable::SqliteConversationStore;
     use rustx::message::{
         content::ImageReference,
@@ -4418,32 +4417,42 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
     };
     use rustx::runtime::identity::MessageId;
     use rustx::tools::artifacts::ArtifactStore;
-    use std::io::{Read, Write as _};
+    use std::io::Write as _;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=").unwrap();
+    let conversation = access.node.conversation_id.clone();
+    let artifacts =
+        ArtifactStore::new(conversation.clone(), access.database_path.parent().unwrap()).unwrap();
+    let artifact = artifacts.create_artifact().unwrap();
+    let mut writer = artifacts.open_writer(&artifact).unwrap();
+    writer.write_all(&bytes).unwrap();
+    writer.finish().unwrap();
+    let store = SqliteConversationStore::open(conversation, &access.database_path).unwrap();
+    store
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("cold-archive-artifact"),
+            content: vec![AssistantContentBlock::Image(ImageReference {
+                artifact_id: artifact.clone(),
+                alt: Some("sealed archive image".to_owned()),
+            })],
+        }))
+        .unwrap();
+    (artifact, bytes)
+}
+
+#[tokio::test]
+async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
+    use app_server_conformance::AppServerConformanceDriver;
+    use rustx::app_server::protocol::*;
+    use std::io::Read as _;
     bounded(async {
         let f = Fixture::new().await;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=").unwrap();
-        let (conversation_id, artifact) = {
+        let (conversation_id, artifact, bytes) = {
             let controller = SessionController::open(&f.root.path().join("runtime")).unwrap();
             let access = controller.acquire_session(&f.sessions[0], None).await.unwrap();
-            let conversation_id = access.node.conversation_id.clone();
-            let artifacts = ArtifactStore::new(
-                conversation_id.clone(),
-                access.database_path.parent().unwrap(),
-            ).unwrap();
-            let artifact = artifacts.create_artifact().unwrap();
-            let mut writer = artifacts.open_writer(&artifact).unwrap();
-            writer.write_all(&bytes).unwrap();
-            writer.finish().unwrap();
-            let store = SqliteConversationStore::open(conversation_id.clone(), &access.database_path).unwrap();
-            store.append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new("cold-archive-artifact"),
-                content: vec![AssistantContentBlock::Image(ImageReference {
-                    artifact_id: artifact.clone(),
-                    alt: Some("sealed archive image".to_owned()),
-                })],
-            })).unwrap();
-            (conversation_id, artifact)
+            let (artifact, bytes) = seed_sealed_archive_image(&access);
+            (access.node.conversation_id.clone(), artifact, bytes)
         };
         let workspace = f.root.path().join("a");
         std::fs::rename(&workspace, f.root.path().join("retired")).unwrap();

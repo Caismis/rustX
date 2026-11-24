@@ -596,6 +596,16 @@ async fn crash_during_output(cut: CrashCut) {
         let probe = workspace.join("probe");
         std::fs::write(&probe, b"original Workspace").unwrap();
         let (session, thread, node) = create_host_session(root.path(), &workspace).await;
+        let delivered = if cut == CrashCut::Canonical {
+            let sessions = SessionController::open(&root.path().join("runtime")).unwrap();
+            let access = sessions
+                .acquire_session(&session, Some(&node))
+                .await
+                .unwrap();
+            Some(super::super::app_server::seed_sealed_archive_image(&access))
+        } else {
+            None
+        };
 
         let (_bins, binary) = super::super::app_server::isolated_server_pair();
         let scratch = tempfile::tempdir_in("/tmp").unwrap();
@@ -606,6 +616,7 @@ async fn crash_during_output(cut: CrashCut) {
         let (start_old, old_started) = oneshot::channel();
         let (start_new, new_started) = oneshot::channel();
         let (saw_save, reached_cut) = oneshot::channel();
+        let (probe_saved, saved_probe) = oneshot::channel::<ClientRequest>();
         let (offsets, progress) = watch::channel(0);
         let relay = tokio::spawn(async move {
             let (old, (data, server_data), (mut control, mut server_control)) =
@@ -616,8 +627,20 @@ async fn crash_during_output(cut: CrashCut) {
             let old_control = tokio::spawn(async move {
                 let _ = tokio::io::copy_bidirectional(&mut control, &mut server_control).await;
             });
-            let (new, (data, server_data), (mut control, mut server_control)) =
+            let (new, (mut data, server_data), (mut control, mut server_control)) =
                 proxy_launch(&witness, scratch.path(), 2).await;
+            if cut == CrashCut::Canonical {
+                // The replacement cannot be asked to save again. Observe the old
+                // locator against its untouched Client-owned output registry.
+                write(&mut data, &saved_probe.await.unwrap()).await.unwrap();
+                let reply = read::<ClientReply>(&mut data).await.unwrap();
+                assert_eq!(
+                    reply,
+                    ClientReply::Error {
+                        kind: rustx_execution_protocol::ReadError::NotFound,
+                    }
+                );
+            }
             start_new.send(new).ok().unwrap();
             let _ = tokio::join!(
                 reject_save_replay(data, server_data),
@@ -701,6 +724,16 @@ async fn crash_during_output(cut: CrashCut) {
         assert_eq!(file.metadata().unwrap().len(), held.length);
         if cut == CrashCut::Canonical {
             peer.settled(&turn_id).await;
+            let SaveReply::Published { locator, key, .. } = &held.receipt else {
+                panic!("expected the committed locator");
+            };
+            probe_saved
+                .send(ClientRequest::ReadSavedOutputRange {
+                    locator: locator.clone(),
+                    conversation: key.owner.conversation.clone(),
+                    offset: 0.into(),
+                })
+                .unwrap();
         }
         kill(old.pid, Signal::SIGKILL).unwrap();
 
@@ -769,6 +802,47 @@ async fn crash_during_output(cut: CrashCut) {
         drop(peer);
         shutdown(server, diagnostics).await;
         relay.await.unwrap();
+        if let Some((artifact, bytes)) = delivered {
+            std::fs::rename(&workspace, root.path().join("retired-workspace")).unwrap();
+            let (_bin, binary) = super::super::app_server::isolated_server_bin();
+            let (cold, endpoint, diagnostics) = launch(server_command(root.path(), binary)).await;
+            let mut peer = Peer::connect(&endpoint).await;
+            let MethodResult::SessionArchive { download } = peer
+                .rpc(Method::SessionExportPrepare {
+                    session_id: session.clone(),
+                })
+                .await
+            else {
+                panic!("a standalone Server must export delivered bytes");
+            };
+            assert!(download.loopback_port.is_none());
+            let mut url = reqwest::Url::parse(&endpoint).unwrap();
+            url.set_scheme("http").unwrap();
+            url.set_path(&download.path);
+            let archive = reqwest::get(url)
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive)).unwrap();
+            let path = format!("artifacts/{thread}/{artifact}/content");
+            let mut stored = Vec::new();
+            std::io::Read::read_to_end(&mut zip.by_name(&path).unwrap(), &mut stored).unwrap();
+            assert_eq!(stored, bytes);
+            assert_eq!(
+                zip.file_names()
+                    .filter(|name| name.starts_with("artifacts/"))
+                    .count(),
+                1
+            );
+            assert!(!workspace.exists());
+            assert!(!old.scratch.exists());
+            drop(peer);
+            shutdown(cold, diagnostics).await;
+        }
         let sessions = SessionController::open(&root.path().join("runtime")).unwrap();
         let access = sessions
             .acquire_session(&session, Some(&node))
