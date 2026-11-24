@@ -505,18 +505,18 @@ pub(crate) async fn lost_control_is_unconfirmed_in_host_drain() {
     assert!(endpoint.control().is_none());
     assert_eq!(fixture.host.file_observers().available_permits(), 32);
     // This test withholds recovery. An elapsed drain budget must report the
-    // missing receipt while the old instance is still alive.
+    // missing receipt while the old instance is still alive, and close
+    // cleanup admission without an artificial cut_pair().
     fixture.host.begin_drain_by(Instant::now());
     let failures = bounded(fixture.host.drain()).await;
     assert_eq!(
         failures,
         [
-            "Client revocation is unconfirmed: the original instance is detached without physical settlement"
+            "Client revocation is unconfirmed: admitted Client has no control lane or physical settlement receipt"
         ]
     );
     bounded(data).await.unwrap();
     assert!(child.try_wait().unwrap().is_none());
-    endpoint.cut_pair();
     let (_lanes, reject) = forward_execution_lane(&listener, &endpoint).await;
     assert!(matches!(
         reject.await.unwrap().unwrap(),
@@ -593,6 +593,111 @@ pub(crate) async fn drain_accepts_the_original_receipt_after_revoke_lane_loss() 
     bounded(data).await.unwrap();
     assert!(bounded(child.wait()).await.unwrap().success());
     assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
+}
+
+pub(crate) async fn drain_rejects_split_lane_recovery_across_cutoff() {
+    use crate::local_runtime::session_runtime_manager::EndpointAdmission;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let (
+        ProxiedClient {
+            data: (mut data_peer, mut data_server),
+            control: (mut control_peer, mut control_server),
+            endpoint,
+            mut child,
+            _scratch,
+        },
+        listener,
+    ) = proxied_client_with_listener(&fixture).await;
+    let (stop, stopped) = oneshot::channel::<()>();
+    let control = tokio::spawn(async move {
+        tokio::select! {
+            _ = stopped => {},
+            _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server) => {
+                panic!("control peer stays connected until the test cuts the lane")
+            }
+        }
+    });
+    let data = tokio::spawn(async move {
+        assert_eq!(data_server.read(&mut [0]).await.unwrap(), 0);
+        let _ = data_peer.shutdown().await;
+    });
+    let live = endpoint.control().unwrap();
+    bounded(tokio::task::spawn_blocking(move || live.health()))
+        .await
+        .unwrap()
+        .unwrap();
+    stop.send(()).unwrap();
+    bounded(control).await.unwrap();
+    bounded(data).await.unwrap();
+
+    let cutoff = Instant::now() + std::time::Duration::from_millis(200);
+    fixture.host.begin_drain_by(cutoff);
+    let drain = tokio::spawn({
+        let host = fixture.host.clone();
+        async move { host.drain().await }
+    });
+
+    // Data recovery lane arrives BEFORE the Host cutoff, while the Client's
+    // control recovery lane is held at a barrier until AFTER the cutoff.
+    let ((mut data_peer_2, mut data_server_2), data_admit) =
+        forward_execution_lane(&listener, &endpoint).await;
+    assert!(matches!(
+        bounded(data_admit).await.unwrap().unwrap(),
+        EndpointAdmission::Pending
+    ));
+    let data_2 = tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut data_peer_2, &mut data_server_2).await;
+    });
+
+    let (mut ctrl_peer_2, socket_path, raw_listener) = {
+        use crate::local_runtime::session_runtime_manager::ExecutionListener;
+        let bootstrap: Bootstrap =
+            read_record(&mut std::fs::File::open(endpoint.bootstrap_path()).unwrap()).unwrap();
+        let BootstrapEndpoint::Unix { socket_path } = bootstrap.endpoint else {
+            panic!("local Session")
+        };
+        let ExecutionListener::Unix(raw_listener) = endpoint.listener() else {
+            panic!("Unix endpoint")
+        };
+        raw_listener.set_nonblocking(true).unwrap();
+        let raw_listener = UnixListener::from_std(raw_listener.try_clone().unwrap()).unwrap();
+        let (peer, _) = bounded(listener.accept()).await.unwrap();
+        (peer, socket_path, raw_listener)
+    };
+    let failures = bounded(drain).await.unwrap();
+    assert_eq!(
+        failures.len(),
+        1,
+        "expected unconfirmed revocation: {failures:?}"
+    );
+    assert!(
+        failures[0].contains("Client revocation is unconfirmed"),
+        "unexpected drain failure: {failures:?}"
+    );
+    let mut ctrl_server_2 = UnixStream::connect(&socket_path).await.unwrap();
+    let (stream, _) = bounded(raw_listener.accept()).await.unwrap();
+    let ctrl_admit = tokio::task::spawn_blocking({
+        let endpoint = Arc::clone(&endpoint);
+        move || endpoint.admit_local_stream(stream.into_std().unwrap())
+    });
+    forward_hello(&mut ctrl_peer_2, &mut ctrl_server_2).await;
+    assert!(matches!(
+        bounded(ctrl_admit).await.unwrap().unwrap(),
+        EndpointAdmission::Rejected(rustx_execution_protocol::Reject::Revoked)
+    ));
+    // Ensure no post-cutoff Revoke request is sent on the rejected control lane.
+    assert_eq!(ctrl_server_2.read(&mut [0]).await.unwrap(), 0);
+    drop((ctrl_peer_2, ctrl_server_2));
+    let _ = data_2.await;
+    assert!(
+        rustx_execution_server::RecoveryFence::session_pending(
+            fixture.manager.configuration.runtime_root(),
+            &rustx_execution_protocol::SessionId::new(fixture.sessions[0].id.as_str()),
+        )
+        .unwrap(),
+        "durable recovery fence remains when cutoff expires unconfirmed"
+    );
+    assert!(bounded(child.wait()).await.unwrap().success());
 }
 
 pub(crate) async fn refused_register_does_not_allocate_a_cancellation_tombstone() {

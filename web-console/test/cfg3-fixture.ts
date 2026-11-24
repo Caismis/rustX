@@ -24,7 +24,7 @@ export function cfg3Client(handler?: (operation: Request1, source: SourceSetting
             disable_model_invocation: false,
             enabled_by_default: true,
         }));
-        return {type: 'skills', page: {data, revision: 'skills-1', diagnostics: [], diagnostics_truncated: false, next_offset: null}} as never;
+        return {type: 'skills', authority: 'authoring', page: {data, revision: 'skills-1', diagnostics: [], diagnostics_truncated: false, next_offset: null}} as never;
     }
     if(operation.method==='skills/read')return {type:'skill_content',content:{skill:{catalog:{name:operation.params.name,description:'Skill '+operation.params.name,location:'/skills/'+operation.params.name+'/SKILL.md'},provenance:{name:operation.params.name,source:'user',location:'/skills/'+operation.params.name+'/SKILL.md',shadowed:[]},metadata_revision:'skill-1',disable_model_invocation:false,enabled_by_default:true},revision:'skill-1',kind:operation.params.kind,data_base64:Buffer.from('Instructions for '+operation.params.name).toString('base64'),next_offset:null}} as never;
     if (operation.method === 'model/probe') return { type: 'model_probe', outcome: 'connected' } as never;

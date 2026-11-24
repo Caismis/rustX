@@ -1129,7 +1129,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
     let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };
-    let MethodResult::Skills { page } = call(
+    let MethodResult::Skills { page, .. } = call(
         &connection,
         1,
         Method::SkillsList {
@@ -1680,7 +1680,7 @@ pub(crate) async fn skill_large_resources_scenario() {
     let target = SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };
-    let MethodResult::Skills { page } = call(
+    let MethodResult::Skills { page, .. } = call(
         &connection,
         1,
         Method::SkillsList {
@@ -1701,7 +1701,7 @@ pub(crate) async fn skill_large_resources_scenario() {
     let preview = page.data[0].catalog.description.strip_suffix('…').unwrap();
     assert!(!preview.is_empty() && description.starts_with(preview));
     assert_eq!(page.next_offset, Some(1));
-    let MethodResult::Skills { page: last } = call(
+    let MethodResult::Skills { page: last, .. } = call(
         &connection,
         1,
         Method::SkillsList {
@@ -1994,7 +1994,7 @@ pub(crate) async fn skill_catalog_page_scenario() {
     let mut total = 0;
     let mut pages = 0;
     loop {
-        let MethodResult::Skills { page } = call(
+        let MethodResult::Skills { page, .. } = call(
             &connection,
             1,
             Method::SkillsList {

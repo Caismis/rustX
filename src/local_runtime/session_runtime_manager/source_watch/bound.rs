@@ -18,6 +18,12 @@ const COVERAGE_RECHECK: Duration = Duration::from_secs(5);
 
 type WatchPlan = BTreeMap<PathBuf, Option<BTreeSet<OsString>>>;
 
+struct WorkspaceWatchPlan {
+    plan: WatchPlan,
+    incomplete_coverage: bool,
+    incomplete_python: BTreeSet<crate::capabilities::ToolSourceId>,
+}
+
 struct Observer {
     lane: ControlHandle,
     stop: CancellationToken,
@@ -98,7 +104,7 @@ impl SessionRuntimeManager {
         while workers.join_next().await.is_some() {}
     }
 
-    fn workspace_watch_plan(&self, session: &SessionId, workspace: &Path) -> (WatchPlan, bool) {
+    fn workspace_watch_plan(&self, session: &SessionId, workspace: &Path) -> WorkspaceWatchPlan {
         let bindings = self
             .sessions
             .configuration_bindings
@@ -121,10 +127,11 @@ impl SessionRuntimeManager {
         for name in ["agents", "workflows", "tools", "skills"] {
             plan.entry(agents.join(name)).or_insert(None);
         }
-        let mut incomplete = false;
+        let mut incomplete_coverage = false;
+        let mut incomplete_python = BTreeSet::new();
         if let Some(config) = bindings.get(session) {
             let python = &config.managed_python;
-            incomplete = !python.discovery_diagnostics.is_empty();
+            incomplete_coverage = !python.discovery_diagnostics.is_empty();
             for (source, location) in &python.locations {
                 if location.scope != crate::runtime::resources::SourceScope::Workspace {
                     continue;
@@ -140,11 +147,15 @@ impl SessionRuntimeManager {
                         plan.entry(location.path.join(directory)).or_insert(None);
                     }
                 } else {
-                    incomplete = true;
+                    incomplete_python.insert(source.clone());
                 }
             }
         }
-        (plan, incomplete)
+        WorkspaceWatchPlan {
+            plan,
+            incomplete_coverage,
+            incomplete_python,
+        }
     }
 }
 
@@ -159,7 +170,8 @@ struct Watches {
     registered: BTreeMap<PathBuf, (PathBuf, WatchId)>,
     plan: WatchPlan,
     retiring: BTreeSet<WatchId>,
-    incomplete: bool,
+    incomplete_coverage: bool,
+    incomplete_python: BTreeSet<crate::capabilities::ToolSourceId>,
 }
 
 impl Watches {
@@ -167,12 +179,14 @@ impl Watches {
         &mut self,
         endpoint: &LocalExecutionEndpoint,
         lane: &ControlHandle,
-        (plan, incomplete): (WatchPlan, bool),
+        plan: WorkspaceWatchPlan,
     ) -> io::Result<bool> {
-        let changed = plan != self.plan;
-        self.plan = plan;
-        self.incomplete =
-            incomplete || self.plan.len() > MAX_CONFIGURATION_WATCHES || !self.retiring.is_empty();
+        let changed = plan.plan != self.plan;
+        self.plan = plan.plan;
+        self.incomplete_coverage = plan.incomplete_coverage
+            || self.plan.len() > MAX_CONFIGURATION_WATCHES
+            || !self.retiring.is_empty();
+        self.incomplete_python = plan.incomplete_python;
         let expired = self
             .registered
             .iter()
@@ -191,7 +205,7 @@ impl Watches {
                 continue;
             }
             let Some(id) = WatchId::configuration() else {
-                self.incomplete = true;
+                self.incomplete_coverage = true;
                 break;
             };
             match endpoint.register_watch(id, path, || {
@@ -207,7 +221,7 @@ impl Watches {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => (),
                 Err(error) if endpoint.control().is_some() => {
                     tracing::debug!(kind = ?error.kind(), "configuration watch coverage incomplete");
-                    self.incomplete = true;
+                    self.incomplete_coverage = true;
                 }
                 Err(error) => return Err(error),
             }
@@ -309,22 +323,46 @@ async fn watch_session(
                         .test_hooks
                         .reach("bound_watch_retiring");
                 }
-                if changed || now >= check {
+                let recheck = now >= check;
+                if changed || recheck {
                     changed |= watches.register(
                         &binding,
                         &turn,
                         worker.workspace_watch_plan(&id, binding.workspace()),
                     )?;
-                    changed |= watches.incomplete;
-                    check = now + COVERAGE_RECHECK;
                 }
-                if changed {
+                if changed || (recheck && watches.incomplete_coverage) {
                     worker.observe_bound_source(&id, &binding, turn);
                     #[cfg(test)]
                     worker
                         .configuration
                         .test_hooks
                         .reach("bound_configuration_watch_resynced");
+                    check = Instant::now() + COVERAGE_RECHECK;
+                } else if recheck && !watches.incomplete_python.is_empty() {
+                    #[cfg_attr(not(test), allow(unused_variables))]
+                    let updated = worker.observe_incomplete_bound_python(
+                        &id,
+                        &binding,
+                        turn,
+                        &watches.incomplete_python,
+                    );
+                    #[cfg(test)]
+                    {
+                        worker
+                            .configuration
+                            .test_hooks
+                            .reach("bound_python_fallback_checked");
+                        if updated {
+                            worker
+                                .configuration
+                                .test_hooks
+                                .reach("bound_configuration_watch_resynced");
+                        }
+                    }
+                    check = Instant::now() + COVERAGE_RECHECK;
+                } else if recheck {
+                    check = Instant::now() + COVERAGE_RECHECK;
                 }
                 Ok::<_, io::Error>(())
             })();

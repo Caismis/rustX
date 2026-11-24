@@ -248,6 +248,7 @@ struct Inner {
     next_attempt: u64,
     recovery: Option<RecoveryProof>,
     closing: bool,
+    revocation_cutoff: Option<Instant>,
 }
 
 struct RecoveryProof {
@@ -354,6 +355,18 @@ impl Inner {
             proof.deadline = Some(now + rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW);
         }
     }
+
+    fn clamp_cutoff(&self, deadline: Instant) -> Instant {
+        self.revocation_cutoff
+            .map_or(deadline, |cutoff| deadline.min(cutoff))
+    }
+
+    fn effective_recovery_deadline(&self) -> Option<Instant> {
+        self.recovery
+            .as_ref()
+            .and_then(|proof| proof.deadline)
+            .map(|window| self.clamp_cutoff(window))
+    }
 }
 
 /// The live control lane the pair committed.
@@ -454,6 +467,7 @@ impl Binding {
                     next_attempt: 0,
                     recovery: None,
                     closing: false,
+                    revocation_cutoff: None,
                 }),
                 pair_ready: Condvar::new(),
             }),
@@ -598,13 +612,15 @@ impl Binding {
         if inner.settlement == PhysicalSettlement::Confirmed {
             return Err(Reject::Revoked);
         }
+        if inner.revocation_cutoff.is_some_and(|cutoff| now >= cutoff) {
+            return Err(Reject::Revoked);
+        }
         match inner.phase {
             BindingPhase::Reserved => Ok(()),
             BindingPhase::Detached
                 if inner
-                    .recovery
-                    .as_ref()
-                    .is_some_and(|proof| proof.deadline.is_some_and(|deadline| now < deadline)) =>
+                    .effective_recovery_deadline()
+                    .is_some_and(|deadline| now < deadline) =>
             {
                 Ok(())
             }
@@ -632,7 +648,7 @@ impl Binding {
         hello: &Hello,
         connection: ConnectionId,
         deadline: Instant,
-    ) -> io::Result<Result<(PairingNonce, u64, Admission), Reject>> {
+    ) -> io::Result<Result<(PairingNonce, u64, Admission, Instant), Reject>> {
         let mut inner = self.inner();
         if let Err(reject) = self.check_identity(
             &inner,
@@ -651,10 +667,10 @@ impl Binding {
             return Ok(Err(reject));
         }
         let deadline = inner
-            .recovery
-            .as_ref()
-            .and_then(|proof| proof.deadline)
-            .map_or(deadline, |limit| limit.min(deadline));
+            .effective_recovery_deadline()
+            .map_or(inner.clamp_cutoff(deadline), |limit| {
+                limit.min(inner.clamp_cutoff(deadline))
+            });
         if deadline.saturating_duration_since(Instant::now()).is_zero() {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -685,7 +701,7 @@ impl Binding {
             shutdown: None,
             wake: None,
         });
-        Ok(Ok((nonce, attempt, self.admission())))
+        Ok(Ok((nonce, attempt, self.admission(), deadline)))
     }
 
     /// Stores the answered data lane's channel and shutdown handle into
@@ -772,7 +788,7 @@ impl Binding {
             // One absolute budget spans both lanes: the armed pairing
             // deadline from the data accept bounds this commit — the
             // control lane's own armed deadline can only tighten it.
-            let budget = pending.deadline.min(deadline);
+            let budget = inner.clamp_cutoff(pending.deadline.min(deadline));
             let remaining = budget.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(Reject::InvalidPairing);
@@ -920,10 +936,10 @@ impl Binding {
             let mut inner = self.inner.inner();
             inner.closing = true;
             let deadline = inner
-                .recovery
-                .as_ref()
-                .and_then(|proof| proof.deadline)
-                .map_or(deadline, |cutoff| deadline.min(cutoff));
+                .effective_recovery_deadline()
+                .map_or(inner.clamp_cutoff(deadline), |cutoff| {
+                    inner.clamp_cutoff(deadline).min(cutoff)
+                });
             match &inner.settlement {
                 PhysicalSettlement::NeverAdmitted => {
                     inner.phase = BindingPhase::Revoked;
@@ -941,15 +957,22 @@ impl Binding {
                 ),
             }
         };
-        let result = control
-            .as_ref()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "admitted Client has no control lane or physical settlement receipt",
-                )
-            })
-            .and_then(|(_, control)| control.request_revoke_by(deadline));
+        let result = match control.as_ref() {
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "admitted Client has no control lane or physical settlement receipt",
+            )),
+            Some((_, control)) => {
+                if deadline.saturating_duration_since(Instant::now()).is_zero() {
+                    Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Client revocation cutoff expired",
+                    ))
+                } else {
+                    control.request_revoke_by(deadline)
+                }
+            }
+        };
         if result
             .as_ref()
             .is_err_and(rustx_execution_protocol::transport::recoverable_lane_loss)
@@ -984,6 +1007,33 @@ impl Binding {
         }
     }
 
+    /// Close normal admission and cap any cleanup recovery or revocation at `cutoff`.
+    pub fn begin_revocation_by(&self, cutoff: Instant) {
+        let mut inner = self.inner.inner();
+        inner.closing = true;
+        inner.revocation_cutoff = Some(
+            inner
+                .revocation_cutoff
+                .map_or(cutoff, |existing| existing.min(cutoff)),
+        );
+        if inner.settlement == PhysicalSettlement::NeverAdmitted {
+            inner.phase = BindingPhase::Revoked;
+            inner.pending = None;
+        } else if let Some(pending) = inner.pending.as_mut() {
+            pending.deadline = pending.deadline.min(cutoff);
+            if Instant::now() >= pending.deadline {
+                inner.pending = None;
+            }
+        }
+        self.inner.pair_ready.notify_all();
+    }
+
+    /// The Host-committed absolute revocation cutoff, if bounded.
+    #[must_use]
+    pub fn revocation_cutoff(&self) -> Option<Instant> {
+        self.inner.inner().revocation_cutoff
+    }
+
     /// The original instance's last possible cleanup admission.
     #[must_use]
     pub fn revocation_recovery_deadline(&self) -> Option<Instant> {
@@ -991,7 +1041,7 @@ impl Binding {
         if inner.settlement == PhysicalSettlement::Confirmed {
             return None;
         }
-        inner.recovery.as_ref().and_then(|proof| proof.deadline)
+        inner.effective_recovery_deadline()
     }
 
     /// An authenticated cleanup attempt can still arrive or be in pairing.
@@ -1287,7 +1337,7 @@ impl Binding {
                 let connection = fresh_connection_id()?;
                 let watch = channel.shutdown_handle()?;
                 match self.allocate_pending(&hello, connection.clone(), deadline)? {
-                    Ok((nonce, attempt, admission)) => {
+                    Ok((nonce, attempt, admission, deadline)) => {
                         let reply = DataHelloReply::Ok(DataAdmission {
                             admission,
                             challenge: nonce,

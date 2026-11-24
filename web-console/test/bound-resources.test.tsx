@@ -30,7 +30,7 @@ function mountResources(subject: ReturnType<typeof cfg3Client>, missing = false)
 }
 
 const mcpDocument = (id: string, revision: string): MethodResult => ({
-  type: 'mcp_source', source: { path: cwd + '/.agents/mcp.toml', revision, authored: {
+  type: 'mcp_source', authority: 'client', source: { path: cwd + '/.agents/mcp.toml', revision, authored: {
     [id]: { definition: { type: 'stdio', command: id }, retained_env: [], retained_headers: [] },
   } },
 });
@@ -41,7 +41,7 @@ it('opens Client-only Skills without a Server Workspace source observation', asy
     if (op.method !== 'skills/list' || op.params.target.kind !== 'workspace') return;
     expect(op.params).toMatchObject({ execution_session: first.id, target: { kind: 'workspace', directory: cwd } });
     const path = cwd + '/.agents/skills/client-guide/SKILL.md';
-    return { type: 'skills', page: { revision: 'client-skills', diagnostics: [], diagnostics_truncated: false, data: [{
+    return { type: 'skills', authority: 'client', page: { revision: 'client-skills', diagnostics: [], diagnostics_truncated: false, data: [{
       catalog: { name: 'client-guide', description: 'A Client-only skill', location: path },
       provenance: { name: 'client-guide', source: 'workspace', location: path, shadowed: [] },
       operation_revision: 'client-skill-write', metadata_revision: 'client-skill', disable_model_invocation: false, enabled_by_default: true,
@@ -92,5 +92,112 @@ it('uses the selected Client MCP revision and ignores a late document from the f
     expect(screen.getByRole('listitem', { name: 'client-server' })).toBeTruthy();
     expect(screen.queryByRole('listitem', { name: 'stale-server' })).toBeNull();
     expect(screen.queryByRole('listitem', { name: 'decoy' })).toBeNull();
+  } finally { stop(); }
+});
+
+it('keeps unclaimed selected Sessions editable via Server authoring for MCP and Skills', async () => {
+  const subject = cfg3Client(async op => {
+    if (op.method === 'mcp/sourceRead') return { type: 'mcp_source', authority: 'authoring' };
+    if (op.method === 'skills/list' && op.params.target.kind === 'workspace') {
+      return { type: 'skills', authority: 'authoring', page: { revision: 'authored-skills', diagnostics: [], diagnostics_truncated: false, data: [{
+        catalog: { name: 'authored-skill', description: 'Authored skill', location: cwd + '/.agents/skills/authored-skill/SKILL.md' },
+        provenance: { name: 'authored-skill', source: 'workspace', location: cwd + '/.agents/skills/authored-skill/SKILL.md', shadowed: [] },
+        operation_revision: 'authored-skill-write', metadata_revision: 'authored-skill', disable_model_invocation: false, enabled_by_default: true,
+      }] } };
+    }
+  });
+  subject.source.workspace_mcp = {
+    path: cwd + '/.agents/mcp.toml', revision: 'server-rev',
+    authored: { authored: { definition: { type: 'stdio', command: 'authored-cmd' }, retained_env: [], retained_headers: [] } },
+  };
+  const { associations, surface } = mountResources(subject);
+  const stop = associations.start();
+  try {
+    const mcpUi = render(surface('mcp', first));
+    await screen.findByRole('listitem', { name: 'authored' });
+    await waitFor(() => expect(document.querySelector('[data-resource-module="mcp"]')?.getAttribute('data-lifecycle')).toBe('ready'));
+    expect((screen.getByRole('button', { name: /New MCP server/ }) as HTMLButtonElement).disabled).toBe(false);
+    mcpUi.unmount();
+
+    render(surface('skills', first));
+    await waitFor(() => {
+      expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('ready');
+      const skill = screen.getByRole('listitem', { name: 'authored-skill' });
+      expect(within(skill).getByRole('button', { name: /Actions/ })).toBeTruthy();
+    });
+  } finally { stop(); }
+});
+
+it('never falls back to Server authoring when a claimed Session Client is unavailable', async () => {
+  const subject = cfg3Client(async op => {
+    if (op.method === 'mcp/sourceRead') throw new Error('ExecutionUnavailable');
+    if (op.method === 'skills/list' && op.params.target.kind === 'workspace') throw new Error('ExecutionUnavailable');
+  });
+  subject.source.workspace_mcp = {
+    path: cwd + '/.agents/mcp.toml', revision: 'server-rev',
+    authored: { decoy: { definition: { type: 'stdio', command: 'decoy-cmd' }, retained_env: [], retained_headers: [] } },
+  };
+  const { associations, surface } = mountResources(subject);
+  const stop = associations.start();
+  try {
+    const mcpUi = render(surface('mcp', first));
+    await screen.findByRole('alert');
+    expect(document.querySelector('[data-resource-module="mcp"]')?.getAttribute('data-lifecycle')).toBe('failed');
+    expect(screen.queryByRole('listitem', { name: 'decoy' })).toBeNull();
+    expect(subject.request.mock.calls.some(([op]) =>
+      op.method === 'configuration/sourcesRead' && op.params.target.kind === 'workspace')).toBe(false);
+    mcpUi.unmount();
+
+    render(surface('skills', first));
+    await screen.findByRole('alert');
+    await waitFor(() => expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('failed'));
+    expect(subject.request.mock.calls.some(([op]) =>
+      op.method === 'configuration/sourcesRead' && op.params.target.kind === 'workspace')).toBe(false);
+  } finally { stop(); }
+});
+
+it('tracks bound Skills data-lifecycle from the real skills/list response', async () => {
+  let resolveSkills!: (result: MethodResult) => void;
+  let rejectSkills!: (error: Error) => void;
+  let attempt = 0;
+  const subject = cfg3Client(async op => {
+    if (op.method !== 'skills/list' || op.params.target.kind !== 'workspace') return;
+    attempt += 1;
+    if (attempt === 1) {
+      return new Promise<MethodResult>((resolve, reject) => {
+        resolveSkills = resolve;
+        rejectSkills = reject;
+      });
+    }
+    return new Promise<MethodResult>((resolve, reject) => {
+      resolveSkills = resolve;
+      rejectSkills = reject;
+    });
+  });
+  const { associations, surface } = mountResources(subject, true);
+  const stop = associations.start();
+  try {
+    const ui = render(surface('skills', first));
+    await waitFor(() => expect(attempt).toBe(1));
+    expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('loading');
+    const path = cwd + '/.agents/skills/live-skill/SKILL.md';
+    await act(async () => resolveSkills({
+      type: 'skills',
+      authority: 'client',
+      page: { revision: 'client-skills', diagnostics: [], diagnostics_truncated: false, data: [{
+        catalog: { name: 'live-skill', description: 'Loaded from Client', location: path },
+        provenance: { name: 'live-skill', source: 'workspace', location: path, shadowed: [] },
+        metadata_revision: 'client-skill', disable_model_invocation: false, enabled_by_default: true,
+      }] },
+    }));
+    await waitFor(() => expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('ready'));
+    expect(screen.getByRole('listitem', { name: 'live-skill' })).toBeTruthy();
+
+    ui.rerender(surface('skills', second));
+    await waitFor(() => expect(attempt).toBe(2));
+    expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('loading');
+    await act(async () => rejectSkills(new Error('Client disconnected')));
+    await waitFor(() => expect(document.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('failed'));
+    expect(screen.getByRole('alert')).toBeTruthy();
   } finally { stop(); }
 });

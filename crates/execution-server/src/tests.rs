@@ -1046,7 +1046,7 @@ fn pairing_commit_refuses_data_eof_before_the_watchdog_can_run() {
     let (binding, hello) = reserved(required());
     let (data_peer, data_stream) = UnixStream::pair().unwrap();
     let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    let (challenge, attempt, _) = binding
+    let (challenge, attempt, _, _) = binding
         .allocate_pending(&hello, ConnectionId::new("pending"), deadline)
         .unwrap()
         .unwrap();
@@ -3686,7 +3686,7 @@ fn a_replayed_or_crossed_pairing_nonce_never_pairs() {
 fn a_verified_control_hello_waits_for_the_in_flight_channel_store() {
     let (binding, hello) = reserved(required());
     let deadline = Instant::now() + Duration::from_secs(10);
-    let (nonce, attempt, _admission) = binding
+    let (nonce, attempt, _admission, _) = binding
         .allocate_pending(&hello, ConnectionId::new("data-1"), deadline)
         .unwrap()
         .expect("the honest data Hello opens an attempt");
@@ -4077,4 +4077,82 @@ fn assert_erred_on_unconfirmed(next: &Binding, root: &Path) {
         Ok(_) => panic!("an unconfirmed binding admitted a replacement"),
         Err(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
     }
+}
+
+#[test]
+fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
+    let product = tempfile::tempdir().unwrap();
+    let root = product.path().canonicalize().unwrap();
+    let (binding, launch) = reserved(BTreeSet::from([Capability::Connection]));
+    let fence = binding.retain_recovery_fence(&root).unwrap();
+
+    let (data_1, data_server_1) = UnixStream::pair().unwrap();
+    let mut data_1 = RecordChannel::unix(data_1);
+    let encoded = encode_record(&PeerHello::Data(launch.clone())).unwrap();
+    data_1.send(&encoded, None).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_server_1).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let DataHelloReply::Ok(admission) = data_1.receive(None).unwrap() else {
+        panic!("expected data admission");
+    };
+    let mut recovery = launch.clone();
+    recovery.credential = launch.credential.recovery_credential(&admission.challenge);
+
+    let (ctrl_1, ctrl_server_1) = UnixStream::pair().unwrap();
+    let mut ctrl_1 = RecordChannel::unix(ctrl_1);
+    let encoded = encode_record(&control_hello(&launch, admission.challenge)).unwrap();
+    ctrl_1.send(&encoded, None).unwrap();
+    let ChannelAccept::Live(_conn_1) = binding.accept_local(ctrl_server_1).unwrap() else {
+        panic!("expected live pair");
+    };
+    let ControlHelloReply::Ok(_) = ctrl_1.receive(None).unwrap() else {
+        panic!("expected control admission");
+    };
+
+    // Lose the pair cleanly; the instance recovery window is still open.
+    drop((data_1, ctrl_1));
+    let wait_detach = Instant::now() + Duration::from_secs(5);
+    while binding.status().phase == BindingPhase::Live {
+        assert!(Instant::now() < wait_detach, "pair did not detach");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let cutoff = Instant::now() + Duration::from_millis(80);
+    binding.begin_revocation_by(cutoff);
+    assert!(binding.may_recover());
+    assert!(binding.awaiting_revocation_recovery());
+
+    // First half of recovery pairing arrives BEFORE the cutoff.
+    let (mut data_2, data_server_2) = UnixStream::pair().unwrap();
+    write_record(&mut data_2, &PeerHello::Data(recovery.clone())).unwrap();
+    assert!(matches!(
+        binding.accept_local(data_server_2).unwrap(),
+        ChannelAccept::Pending
+    ));
+    let DataHelloReply::Ok(recovery_admission) = read_record(&mut data_2).unwrap() else {
+        panic!("expected recovery data admission before cutoff");
+    };
+
+    // Second half is delayed past the Host cutoff.
+    std::thread::sleep(Duration::from_millis(120));
+    let (mut ctrl_2, ctrl_server_2) = UnixStream::pair().unwrap();
+    write_record(
+        &mut ctrl_2,
+        &control_hello(&recovery, recovery_admission.challenge),
+    )
+    .unwrap();
+    assert!(matches!(
+        binding.accept_local(ctrl_server_2).unwrap(),
+        ChannelAccept::Rejected(Reject::Revoked)
+    ));
+    let reply: ControlHelloReply = read_record(&mut ctrl_2).unwrap();
+    assert_eq!(reply, ControlHelloReply::Err(Reject::Revoked));
+    assert!(!binding.may_recover());
+    assert!(!binding.awaiting_revocation_recovery());
+    assert!(binding.release_recovery_fence(&fence).is_err());
+    assert!(
+        RecoveryFence::session_pending(&root, &reservation().session).unwrap(),
+        "durable recovery fence stays on disk when cutoff expires unconfirmed"
+    );
 }

@@ -12,6 +12,7 @@ impl SessionRuntimeManager {
     /// Permanently close native initialization admission before host drain inventories.
     pub(crate) fn begin_draining(
         &self,
+        deadline: std::time::Instant,
     ) -> (
         Vec<Arc<super::Initialization>>,
         Vec<Arc<LocalExecutionEndpoint>>,
@@ -39,7 +40,7 @@ impl SessionRuntimeManager {
             }
             initializations
         };
-        let endpoints = self.execution.close_admission();
+        let endpoints = self.execution.close_admission(deadline);
         for initialization in &initializations {
             initialization.request_retirement();
         }

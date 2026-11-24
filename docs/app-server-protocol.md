@@ -1688,12 +1688,19 @@ even for direct generic RPC callers. A retained key cannot also be replaced;
 omitting it removes it. Native source provisioning remains outside this Web
 contract, and general protocol diagnostics omit authoring payloads.
 
-`mcp/sourceRead` reads the redacted Workspace MCP document and its exact
-revision from the Client authorized by `execution_session` and `target`.
-The reply is `mcp_source`. That same Session and revision are the inputs to
-a Workspace `mcp/probe`. Bound Skill browsing uses its Session with
-`skills/list` and `skills/read`. These reads stay available without a Server
-Workspace authoring projection. User authoring remains source-scoped.
+`mcp/sourceRead` checks the Server-owned execution authority for `execution_session`
+and `target`, returning `mcp_source` with `authority`: when the Session is bound
+to a live Execution Client, `authority` is `client` and `source` carries the
+redacted Client Workspace MCP document and its exact revision; when the Session
+and Workspace are confirmed unclaimed, `authority` is `authoring` and `source`
+is omitted so the caller uses normal source authoring (`configuration/sourcesRead`).
+A claimed Session whose Client is unavailable or recovering returns
+`execution_unavailable` instead of falling back to Server authoring. That same
+Session and revision are the inputs to a Workspace `mcp/probe`. Bound Skill
+browsing uses its Session with `skills/list` (which returns `authority` as
+`client` or `authoring` alongside `page`) and `skills/read`. These reads stay
+available without a Server Workspace authoring projection. User authoring remains
+source-scoped.
 
 `mcp/probe` accepts `target`, `id`, and `expected_revision`. It checks exactly
 that authored MCP source using native credentials and the source's working

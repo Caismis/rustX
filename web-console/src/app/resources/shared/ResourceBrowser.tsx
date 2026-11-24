@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { SkillDescriptor, SourceScope, SourceSettings, SourceTarget, TransferOperation } from '../../../../../protocol/app-server/v81';
+import type { SkillDescriptor, SourceScope, SourceSettings, SourceTarget, TransferOperation, WorkspaceCatalogAuthority } from '../../../../../protocol/app-server/v81';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
@@ -29,13 +29,14 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
 }
 
 export function ResourceBrowser({ client, source, target, scope, revision, query, view, refresh, onRefresh, workspaceLabel, executionSession,
-  bindDisplayWrite, bindDelete, onTransfer, transferDisabled, readOnly = false }: {
+  bindDisplayWrite, bindDelete, onTransfer, transferDisabled, readOnly = false, onCatalogState }: {
   client: AppServerClient; source?: SourceSettings; target: SourceTarget; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
   transferDisabled: boolean; readOnly?: boolean; workspaceLabel?: string; executionSession?: string;
   query: string; view: CatalogView; refresh: number; onRefresh: () => void;
+  onCatalogState?: (state: { status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }) => void;
 }) {
   const tx = useTranslation();
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -46,6 +47,13 @@ export function ResourceBrowser({ client, source, target, scope, revision, query
   const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
   const effective = useSkillCatalog(client, source, true, scope, refresh + localRefresh, executionSession, target);
   const global = useSkillCatalog(client, source, scope === 'workspace', 'user', refresh + localRefresh);
+  const catalogStatus: 'loading' | 'ready' | 'failed' = !effective || effective.pending ? 'loading' : effective.error ? 'failed' : 'ready';
+  const catalogAuthority = catalogStatus === 'ready' ? effective?.authority : undefined;
+  const reportCatalogState = useRef(onCatalogState);
+  reportCatalogState.current = onCatalogState;
+  useEffect(() => {
+    reportCatalogState.current?.({ status: catalogStatus, authority: catalogAuthority });
+  }, [catalogAuthority, catalogStatus]);
   const listed = effective?.skills ?? [];
   // The effective catalog drives selection. Global's own catalog keeps shadowed
   // definitions accessible by their exact owning scope.

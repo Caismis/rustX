@@ -2844,6 +2844,7 @@ export type MethodResult =
     }
   | {
       page: SkillPage;
+      authority: WorkspaceCatalogAuthority;
       type: 'skills';
     }
   | {
@@ -3286,7 +3287,8 @@ export type MethodResult =
       type: 'model_probe';
     }
   | {
-      source: SourceView;
+      authority: WorkspaceCatalogAuthority;
+      source?: SourceView | null;
       type: 'mcp_source';
     }
   | {
@@ -3490,6 +3492,13 @@ export type SkillDiagnostic =
       shadowed_location: string;
       kind: 'shadowed';
     };
+/**
+ * Authority governing a Workspace catalog read for a Session.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkspaceCatalogAuthority".
+ */
+export type WorkspaceCatalogAuthority = 'authoring' | 'client';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ExecStatus".

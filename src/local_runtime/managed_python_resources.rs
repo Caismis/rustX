@@ -119,6 +119,52 @@ pub(super) fn discover_bound_for(
     Ok(catalog)
 }
 
+/// Re-captures only workspace packages missing watch coverage, reusing healthy siblings unchanged.
+pub(super) fn recapture_bound_subset(
+    endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
+    retained: &ManagedPythonCatalog,
+    targets: &std::collections::BTreeSet<ToolSourceId>,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Option<ManagedPythonCatalog> {
+    use rustx_execution_protocol::mcp::PythonSourceScope;
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut updated = None;
+    for source in targets {
+        let Some(location) = retained.locations.get(source) else {
+            continue;
+        };
+        if location.scope != SourceScope::Workspace {
+            continue;
+        }
+        let ToolSourceId::ManagedPython(name) = source else {
+            continue;
+        };
+        let next = capture_bound_package(
+            endpoint,
+            PythonSourceScope::Workspace,
+            name.clone(),
+            location.path.clone(),
+            deadline,
+            cancellation,
+        );
+        if retained.packages().get(source) != Some(&next) {
+            updated
+                .get_or_insert_with(|| retained.packages().clone())
+                .insert(source.clone(), next);
+        }
+    }
+    updated.map(|packages| {
+        let mut catalog = ManagedPythonCatalog::new(packages);
+        catalog.locations = retained.locations.clone();
+        catalog
+            .discovery_diagnostics
+            .clone_from(&retained.discovery_diagnostics);
+        catalog
+    })
+}
+
 fn capture_bound_package(
     endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
     scope: rustx_execution_protocol::mcp::PythonSourceScope,

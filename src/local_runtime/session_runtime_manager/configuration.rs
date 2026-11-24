@@ -15,6 +15,7 @@ pub(super) struct BoundCapture {
     endpoint: Arc<super::LocalExecutionEndpoint>,
     watch: Option<rustx_execution_server::ControlHandle>,
     ticket: Arc<()>,
+    prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
 }
 
 impl SessionRuntimeManager {
@@ -742,6 +743,7 @@ impl SessionRuntimeManager {
                         endpoint,
                         watch: None,
                         ticket,
+                        prefetched_python: None,
                     });
                 }
                 Err(error) => {
@@ -804,7 +806,74 @@ impl SessionRuntimeManager {
             endpoint: endpoint.clone(),
             watch: Some(watch),
             ticket,
+            prefetched_python: None,
         }]);
+    }
+
+    pub(super) fn observe_incomplete_bound_python(
+        &self,
+        session: &SessionId,
+        endpoint: &Arc<super::LocalExecutionEndpoint>,
+        watch: rustx_execution_server::ControlHandle,
+        incomplete: &std::collections::BTreeSet<crate::capabilities::ToolSourceId>,
+    ) -> bool {
+        let same_binding = || {
+            self.execution
+                .configuration_endpoint(session)
+                .ok()
+                .flatten()
+                .is_some_and(|current| {
+                    Arc::ptr_eq(endpoint, &current)
+                        && current
+                            .control()
+                            .is_some_and(|current| current.same_pair(&watch))
+                })
+        };
+        if !same_binding() {
+            return false;
+        }
+        let Some((mut input, retained_python)) = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)
+            .map(|binding| (binding.input.clone(), binding.managed_python.clone()))
+        else {
+            return false;
+        };
+        {
+            let catalog = self.sessions.catalog.blocking_lock();
+            let Ok((_, settings)) = catalog.lineage(session, None) else {
+                return false;
+            };
+            input.authoring = settings.input().authoring;
+        }
+        let Some(updated_python) =
+            crate::local_runtime::managed_python_resources::recapture_bound_subset(
+                endpoint,
+                &retained_python,
+                incomplete,
+                &self.configuration.resource_io,
+            )
+        else {
+            return false;
+        };
+        let mut application = self.applications.lock();
+        if !same_binding() {
+            return false;
+        }
+        let ticket = application.begin_bound_capture(session.clone());
+        drop(application);
+        self.capture_bound_consumers(vec![BoundCapture {
+            session: session.clone(),
+            input,
+            endpoint: endpoint.clone(),
+            watch: Some(watch),
+            ticket,
+            prefetched_python: Some(updated_python),
+        }]);
+        true
     }
 
     fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) {
@@ -814,16 +883,18 @@ impl SessionRuntimeManager {
             endpoint,
             watch,
             ticket,
+            prefetched_python,
         } in bound
         {
             #[cfg(test)]
             self.configuration
                 .test_hooks
                 .reach("before_bound_source_read");
-            let mut capture = self.configuration.capture_session_application(
+            let mut capture = self.configuration.capture_session_application_with_python(
                 &input,
                 &self.credentials,
                 Some(&endpoint),
+                prefetched_python,
             );
             #[cfg(all(test, target_os = "linux"))]
             if watch.is_some() {

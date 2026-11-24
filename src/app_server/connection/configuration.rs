@@ -41,7 +41,7 @@ impl AppServerConnection {
             .map_err(|_| domain(ErrorData::OperationFailed))?
     }
 
-    async fn bound_catalog_endpoint(
+    async fn catalog_endpoint(
         &self,
         target: &crate::local_runtime::configuration::settings::SourceTarget,
         session: Option<&crate::local_runtime::session::SessionId>,
@@ -51,20 +51,24 @@ impl AppServerConnection {
         >,
         RpcError,
     > {
-        let Some(session) = session else {
-            return Ok(None);
+        let Some(workspace) = target.workspace() else {
+            return if session.is_some() {
+                Err(domain(ErrorData::InvalidParams))
+            } else {
+                Ok(None)
+            };
         };
-        let workspace = target
-            .workspace()
-            .ok_or_else(|| domain(ErrorData::InvalidParams))?;
-        self.sessions
-            .read_session_summary(session)
-            .await
-            .map_err(session_error)?;
-        let endpoint = self
+        self.validate_catalog_session(target, session).await?;
+        let Some(scope) = self
             .host
             .manager()
-            .execution_endpoint(session)
+            .source_catalog_scope(session, Some(workspace))
+            .map_err(|_| domain(ErrorData::ExecutionUnavailable))?
+        else {
+            return Ok(None);
+        };
+        let endpoint = scope
+            .endpoint()
             .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
         if endpoint.workspace().as_os_str() != workspace.as_os_str() {
             return Err(domain(ErrorData::InvalidParams));
@@ -112,8 +116,13 @@ impl AppServerConnection {
                 expected_revision,
             } => {
                 let endpoint = self
-                    .bound_catalog_endpoint(&target, execution_session.as_ref())
+                    .catalog_endpoint(&target, execution_session.as_ref())
                     .await?;
+                let authority = if endpoint.is_some() {
+                    crate::app_server::protocol::WorkspaceCatalogAuthority::Client
+                } else {
+                    crate::app_server::protocol::WorkspaceCatalogAuthority::Authoring
+                };
                 let page = self
                     .host
                     .manager()
@@ -127,7 +136,7 @@ impl AppServerConnection {
                     )
                     .await
                     .map_err(source_error)?;
-                Ok(MethodResult::Skills { page })
+                Ok(MethodResult::Skills { page, authority })
             }
             Method::SkillsRead {
                 target,
@@ -139,7 +148,7 @@ impl AppServerConnection {
                 expected_revision,
             } => {
                 let endpoint = self
-                    .bound_catalog_endpoint(&target, execution_session.as_ref())
+                    .catalog_endpoint(&target, execution_session.as_ref())
                     .await?;
                 let content = self
                     .host
@@ -293,10 +302,16 @@ impl AppServerConnection {
                 target,
                 execution_session,
             } => {
-                let endpoint = self
-                    .bound_catalog_endpoint(&target, Some(&execution_session))
+                let Some(endpoint) = self
+                    .catalog_endpoint(&target, Some(&execution_session))
                     .await?
-                    .ok_or_else(|| domain(ErrorData::ExecutionUnavailable))?;
+                else {
+                    return Ok(MethodResult::McpSource {
+                        authority:
+                            crate::app_server::protocol::WorkspaceCatalogAuthority::Authoring,
+                        source: None,
+                    });
+                };
                 let source = tokio::task::spawn_blocking(move || {
                     let document =
                         crate::local_runtime::configuration::capture::read_bound_mcp(&endpoint)
@@ -313,7 +328,10 @@ impl AppServerConnection {
                 })
                 .await
                 .map_err(|_| domain(ErrorData::OperationFailed))??;
-                Ok(MethodResult::McpSource { source })
+                Ok(MethodResult::McpSource {
+                    authority: crate::app_server::protocol::WorkspaceCatalogAuthority::Client,
+                    source: Some(source),
+                })
             }
             Method::McpProbe {
                 target,

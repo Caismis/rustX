@@ -416,7 +416,7 @@ impl AppServerHost {
             if state.lifecycle != ServerLifecycle::Accepting {
                 return;
             }
-            let (initializations, endpoints) = self.manager().begin_draining();
+            let (initializations, endpoints) = self.manager().begin_draining(deadline);
             *self
                 .0
                 .execution_drain_plan

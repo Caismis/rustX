@@ -172,7 +172,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(request, credentials, None, || {})
+        self.capture_application_with_workspace(request, credentials, None, None, || {})
     }
 
     /// A Session scope's capture: its source generation, resolved and
@@ -186,10 +186,25 @@ impl UserConfigManager {
         credentials: &crate::credentials::CredentialSnapshot,
         workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
     ) -> Result<application::CapturedApplication, String> {
+        self.capture_session_application_with_python(input, credentials, workspace, None)
+    }
+
+    pub(crate) fn capture_session_application_with_python(
+        &self,
+        input: &SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
+        prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
+    ) -> Result<application::CapturedApplication, String> {
         let mut default = input.clone();
         default.model = None;
-        let mut captured =
-            self.capture_application_with_workspace(&default, Some(credentials), workspace, || {})?;
+        let mut captured = self.capture_application_with_workspace(
+            &default,
+            Some(credentials),
+            workspace,
+            prefetched_python,
+            || {},
+        )?;
         if let Ok(context) = &mut captured.context {
             context.input.model.clone_from(&input.model);
         }
@@ -203,7 +218,7 @@ impl UserConfigManager {
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_with_workspace(request, credentials, None, after_layers)
+        self.capture_application_with_workspace(request, credentials, None, None, after_layers)
     }
 
     fn capture_application_with_workspace(
@@ -211,6 +226,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         credentials: Option<&crate::credentials::CredentialSnapshot>,
         workspace: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
+        prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
@@ -252,6 +268,7 @@ impl UserConfigManager {
                     request,
                     capture,
                     workspace.map_or(ResourceSource::Authored, ResourceSource::Bound),
+                    prefetched_python,
                 )
             })
             .map_err(|error| error.diagnostic.reason)
@@ -289,7 +306,8 @@ impl UserConfigManager {
         let (layers, documents) = self.capture_layers(request, None)?;
         let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
-        let prospective = self.resolve_resources(request, resolved, ResourceSource::Authored)?;
+        let prospective =
+            self.resolve_resources(request, resolved, ResourceSource::Authored, None)?;
         self.verify_documents(&documents, &prospective.source_revisions)?;
         Ok(prospective)
     }
@@ -779,6 +797,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         resolved: SourceCapture,
         resource_source: ResourceSource<'_>,
+        prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         crate::package_io::check_cancelled(&self.resource_io)
             .map_err(|error| LaunchFailure::from(error.to_string()))?;
@@ -949,20 +968,23 @@ impl UserConfigManager {
             &models,
         ));
         let python_user = host.home_directory.join("rustx/.agents");
-        let managed_python = if let Some(endpoint) = workspace_endpoint {
+        let managed_python = if let Some(catalog) = prefetched_python {
+            catalog
+        } else if let Some(endpoint) = workspace_endpoint {
             super::super::managed_python_resources::discover_bound(
                 endpoint,
                 &python_user,
                 &self.resource_io,
             )
+            .map_err(LaunchFailure::resource)?
         } else {
             super::super::managed_python_resources::discover_controlled(
                 authored_workspace,
                 &python_user,
                 &self.resource_io,
             )
-        }
-        .map_err(LaunchFailure::resource)?;
+            .map_err(LaunchFailure::resource)?
+        };
         if workspace_endpoint.is_some() {
             let mut manifest = Sha256::new();
             for (source, outcome) in managed_python.packages() {

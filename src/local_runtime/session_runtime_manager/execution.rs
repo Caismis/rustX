@@ -495,8 +495,24 @@ impl LocalExecutionEndpoint {
                 if cleanup_only {
                     // A logically closed owner can accept its old Client only
                     // to obtain physical cleanup. dispatch_open stays false.
-                    let cutoff = Instant::now()
+                    if self
+                        .reservation()
+                        .binding
+                        .revocation_cutoff()
+                        .is_some_and(|host| Instant::now() >= host)
+                    {
+                        self.close_transport();
+                        return EndpointAdmission::Rejected(
+                            rustx_execution_protocol::Reject::Revoked,
+                        );
+                    }
+                    let command_deadline = Instant::now()
                         + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+                    let cutoff = self
+                        .reservation()
+                        .binding
+                        .revocation_cutoff()
+                        .map_or(command_deadline, |host| command_deadline.min(host));
                     let mut result = self.fence_connection_by(cutoff);
                     // A prior lane may have failed while this authenticated pair
                     // was being committed. Join that attempt before using the new lane.
@@ -1451,6 +1467,15 @@ impl LocalExecutionEndpoint {
         self.connection_released.notify_waiters();
     }
 
+    fn close_dispatch_by(&self, cutoff: Instant) {
+        let mut settlement = self.settlement.lock().expect("execution settlement");
+        self.reservation().binding.begin_revocation_by(cutoff);
+        if matches!(*settlement, Settlement::Open) {
+            *settlement = Settlement::Closing;
+        }
+        self.connection_released.notify_waiters();
+    }
+
     pub(crate) async fn settle(self: Arc<Self>) -> io::Result<()> {
         let deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
@@ -1459,7 +1484,33 @@ impl LocalExecutionEndpoint {
             .map_err(io::Error::other)?
     }
 
+    fn expire_drain_settlement(
+        &self,
+        mut state: std::sync::MutexGuard<'_, Settlement>,
+        attempt: io::Result<()>,
+    ) -> io::Result<()> {
+        if let Settlement::Finished(outcome) = &*state {
+            return settlement_result(outcome);
+        }
+        if self.reservation().binding.revocation_confirmed() {
+            let result = Ok(());
+            let outcome = settlement_result(&result);
+            *state = Settlement::Finished(result);
+            self.settlement_changed.notify_all();
+            self.connection_released.notify_waiters();
+            return outcome;
+        }
+        let result = attempt.map_err(Arc::new);
+        let outcome = settlement_result(&result);
+        self.close_transport();
+        *state = Settlement::Finished(result);
+        self.settlement_changed.notify_all();
+        self.connection_released.notify_waiters();
+        outcome
+    }
+
     pub(super) async fn settle_for_drain(self: Arc<Self>, deadline: Instant) -> io::Result<()> {
+        self.close_dispatch_by(deadline);
         let endpoint = self.clone();
         let bound = Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
         let attempt =
@@ -1479,14 +1530,15 @@ impl LocalExecutionEndpoint {
                 match self.reservation().binding.revocation_recovery_deadline() {
                     Some(window) => deadline.min(window),
                     None if matches!(*state, Settlement::Revoking) => deadline,
-                    None => return attempt,
+                    None => return self.expire_drain_settlement(state, attempt),
                 }
             };
             if tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), changed)
                 .await
                 .is_err()
             {
-                return attempt;
+                let state = self.settlement.lock().expect("execution settlement");
+                return self.expire_drain_settlement(state, attempt);
             }
         }
     }
@@ -1520,6 +1572,9 @@ impl LocalExecutionEndpoint {
         let result = self.revoke_and_close(deadline).map_err(Arc::new);
         let outcome = settlement_result(&result);
         let mut state = self.settlement.lock().expect("execution settlement");
+        if let Settlement::Finished(existing) = &*state {
+            return settlement_result(existing);
+        }
         *state = if result.is_err() && self.reservation().binding.awaiting_revocation_recovery() {
             Settlement::Closing
         } else {
@@ -2988,7 +3043,7 @@ impl Slot {
         false
     }
 
-    fn close_admission(&self) -> Option<Arc<LocalExecutionEndpoint>> {
+    fn close_admission(&self, cutoff: Option<Instant>) -> Option<Arc<LocalExecutionEndpoint>> {
         let mut phase = self.phase.lock().expect("execution slot phase");
         match &*phase {
             Phase::Preparing => {
@@ -2997,11 +3052,20 @@ impl Slot {
             }
             Phase::Published(endpoint) => {
                 let endpoint = endpoint.clone();
-                endpoint.close_dispatch();
+                if let Some(cutoff) = cutoff {
+                    endpoint.close_dispatch_by(cutoff);
+                } else {
+                    endpoint.close_dispatch();
+                }
                 *phase = Phase::Closed(Some(endpoint.clone()));
                 Some(endpoint)
             }
-            Phase::Closed(endpoint) => endpoint.clone(),
+            Phase::Closed(endpoint) => {
+                if let (Some(endpoint), Some(cutoff)) = (endpoint, cutoff) {
+                    endpoint.close_dispatch_by(cutoff);
+                }
+                endpoint.clone()
+            }
         }
     }
 }
@@ -3026,7 +3090,7 @@ fn spawn_preparation(
         impl Drop for CloseOnFailure<'_> {
             fn drop(&mut self) {
                 if let Some(slot) = self.0 {
-                    slot.close_admission();
+                    slot.close_admission(None);
                 }
             }
         }
@@ -3267,15 +3331,15 @@ impl SessionExecutionRegistry {
             .lock()
             .expect("execution registry mutex")
             .get(session)?
-            .close_admission()
+            .close_admission(None)
     }
 
-    pub(super) fn close_admission(&self) -> Vec<Arc<LocalExecutionEndpoint>> {
+    pub(super) fn close_admission(&self, cutoff: Instant) -> Vec<Arc<LocalExecutionEndpoint>> {
         self.0
             .lock()
             .expect("execution registry mutex")
             .values()
-            .filter_map(|slot| slot.close_admission())
+            .filter_map(|slot| slot.close_admission(Some(cutoff)))
             .collect()
     }
 
@@ -3572,10 +3636,24 @@ impl SessionRuntimeManager {
         session: Option<&SessionId>,
         workspace: Option<&Path>,
     ) -> Result<Option<SessionExecutionScope>, RuntimeManagerError> {
+        {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            if registry.draining {
+                return Err(RuntimeManagerError::Draining);
+            }
+            if session.is_some_and(|id| registry.retiring_sessions.contains(id)) {
+                return Err(error("Session retirement has fenced runtime admission"));
+            }
+        }
         let slots = self.execution.0.lock().expect("execution registry mutex");
         if let Some((session, slot)) = session.and_then(|id| slots.get(id).map(|slot| (id, slot))) {
             let phase = slot.phase.lock().expect("execution slot phase");
             if let Phase::Published(endpoint) = &*phase {
+                if workspace.is_some_and(|ws| endpoint.workspace().as_os_str() != ws.as_os_str()) {
+                    return Err(error(
+                        "the Session execution binding belongs to another Workspace",
+                    ));
+                }
                 return Ok(Some(SessionExecutionScope {
                     session: session.clone(),
                     route: ExecutionRoute::Fixed(endpoint.clone()),
@@ -3593,6 +3671,9 @@ impl SessionRuntimeManager {
             return Err(error("the reserved Workspace requires its exact Session"));
         }
         drop(slots);
+        if let Some(session) = session {
+            self.require_unclaimed_workspace(session)?;
+        }
         if let Some(workspace) = workspace
             && rustx_execution_server::RecoveryFence::workspace_pending(
                 self.configuration.runtime_root(),
@@ -4317,7 +4398,9 @@ mod tests {
         wire_is_closed(&mut client);
         // Draining permanently closes claims for Sessions that were never
         // bound — the permanent gate, not endpoint status, refuses them.
-        manager.begin_draining();
+        manager.begin_draining(
+            Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT,
+        );
         match manager.reserve_local_execution(&sessions[1]).await {
             Err(RuntimeManagerError::Draining) => {}
             other => panic!("draining rejects a fresh claim: {other:?}"),
@@ -4516,8 +4599,9 @@ mod tests {
             failures,
             ["Client revocation is unconfirmed: control command outlived its budget"]
         );
-        assert_eq!(endpoint.binding().status().phase, BindingPhase::Detached);
-        assert!(endpoint.binding().awaiting_revocation_recovery());
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
+        assert!(!endpoint.binding().awaiting_revocation_recovery());
+        assert!(!endpoint.binding().revocation_confirmed());
         release.send(()).unwrap();
     }
 
@@ -4895,7 +4979,7 @@ mod tests {
         // park for the whole 60-second exchange deadline.
         let (fenced_tx, fenced_rx) = std::sync::mpsc::channel::<()>();
         let fencer = std::thread::spawn(move || {
-            slot.close_admission()
+            slot.close_admission(None)
                 .unwrap()
                 .fence_connection_by(
                     Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT,

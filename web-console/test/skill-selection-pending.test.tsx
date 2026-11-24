@@ -13,6 +13,7 @@ afterEach(cleanup);
 function skillPage(names: string[]): MethodResult {
   return {
     type: 'skills',
+    authority: 'authoring',
     page: {
       data: names.map(name => ({
         catalog: { name, description: name, location: `/skills/${name}/SKILL.md` },

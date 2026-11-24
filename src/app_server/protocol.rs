@@ -1759,7 +1759,10 @@ pub struct Failure {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
     HostUploadAccepted { duplicate: bool },
-    Skills { page: crate::local_runtime::skill_management::SkillPage },
+    Skills {
+        page: crate::local_runtime::skill_management::SkillPage,
+        authority: WorkspaceCatalogAuthority,
+    },
     SkillContent { content: crate::local_runtime::skill_management::SkillContent },
     CommandExec { result: super::command::ExecResult },
     EnvironmentAccepted {},
@@ -2026,10 +2029,14 @@ pub enum MethodResult {
         outcome: crate::local_runtime::model_probe::ModelProbeOutcome,
     },
     McpSource {
-        source: crate::local_runtime::configuration::settings::SourceView<
-            std::collections::BTreeMap<
-                crate::runtime::identity::McpServerId,
-                crate::local_runtime::configuration::settings::McpView,
+        authority: WorkspaceCatalogAuthority,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<
+            crate::local_runtime::configuration::settings::SourceView<
+                std::collections::BTreeMap<
+                    crate::runtime::identity::McpServerId,
+                    crate::local_runtime::configuration::settings::McpView,
+                >,
             >,
         >,
     },
@@ -2312,4 +2319,14 @@ pub enum ObservationSource {
 pub enum ResyncReason {
     ReplayUnavailable,
     RecordTooLarge,
+}
+
+/// Authority governing a Workspace catalog read for a Session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCatalogAuthority {
+    /// Confirmed unclaimed Workspace: Server authoring sources govern reads and writes.
+    Authoring,
+    /// Claimed Session with a live Execution Client: the Client view governs reads.
+    Client,
 }

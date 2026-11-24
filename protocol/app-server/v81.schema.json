@@ -8186,6 +8186,9 @@
             "page": {
               "$ref": "#/$defs/SkillPage"
             },
+            "authority": {
+              "$ref": "#/$defs/WorkspaceCatalogAuthority"
+            },
             "type": {
               "type": "string",
               "const": "skills"
@@ -8194,7 +8197,8 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "page"
+            "page",
+            "authority"
           ]
         },
         {
@@ -10141,8 +10145,18 @@
         {
           "type": "object",
           "properties": {
+            "authority": {
+              "$ref": "#/$defs/WorkspaceCatalogAuthority"
+            },
             "source": {
-              "$ref": "#/$defs/SourceView"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "type": "string",
@@ -10152,7 +10166,7 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "source"
+            "authority"
           ]
         },
         {
@@ -11005,6 +11019,21 @@
             "cause",
             "path"
           ]
+        }
+      ]
+    },
+    "WorkspaceCatalogAuthority": {
+      "description": "Authority governing a Workspace catalog read for a Session.",
+      "oneOf": [
+        {
+          "description": "Confirmed unclaimed Workspace: Server authoring sources govern reads and writes.",
+          "type": "string",
+          "const": "authoring"
+        },
+        {
+          "description": "Claimed Session with a live Execution Client: the Client view governs reads.",
+          "type": "string",
+          "const": "client"
         }
       ]
     },

@@ -371,11 +371,11 @@ impl Authority {
             .position(|source| source.id == id && source.launch == *launch)
     }
 
-    fn mcp_physical_request(&self, request: &McpRequest) -> io::Result<McpRequest> {
+    fn mcp_physical_request(&self, request: &McpRequest) -> io::Result<(McpRequest, bool)> {
         let key = request.key();
         let mut operations = self.mcp_operations.lock().expect("child MCP identities");
         let existing = operations.get(&key.operation);
-        let physical = if let McpRequest::Open {
+        let (physical, inserted) = if let McpRequest::Open {
             source_id, launch, ..
         } = request
         {
@@ -386,7 +386,7 @@ impl Authority {
                 if operation.key != *key || operation.source != source {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
-                operation.physical.clone()
+                (operation.physical.clone(), false)
             } else {
                 if operations.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
                     return Err(io::ErrorKind::WouldBlock.into());
@@ -402,16 +402,19 @@ impl Authority {
                         retained: false,
                     },
                 );
-                physical
+                (physical, true)
             }
         } else {
-            existing
-                .filter(|operation| operation.key == *key)
-                .ok_or(io::ErrorKind::PermissionDenied)?
-                .physical
-                .clone()
+            (
+                existing
+                    .filter(|operation| operation.key == *key)
+                    .ok_or(io::ErrorKind::PermissionDenied)?
+                    .physical
+                    .clone(),
+                false,
+            )
         };
-        Ok(request.clone().with_key(physical))
+        Ok((request.clone().with_key(physical), inserted))
     }
 
     fn permits_mcp_message(&self, source: usize, encoded: &str) -> bool {
@@ -793,82 +796,12 @@ fn run_data(
     {
         let budget = Duration::from_millis(u64::from(remaining_ms)).min(PAGE_REQUEST_TIMEOUT);
         let deadline = Instant::now() + budget;
-        let reply = if authority.permits(owner, &request) {
-            // Known operations and tickets already have an owner. The
-            // following exchanges can create an unidentified resource or
-            // consume a ticket without a confirmable settlement.
-            let needs_receipt = matches!(
-                request,
-                ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
-                    | ClientRequest::Mcp(McpRequest::Open { .. })
-                    | ClientRequest::PrepareWrite { .. }
-                    | ClientRequest::BeginWrite { .. }
-                    | ClientRequest::PrepareEdit { .. }
-                    | ClientRequest::CommitWrite { .. }
-            );
-            let crossed = Cell::new(false);
-            let result = owner
-                .with_bounded_data_connection(deadline, |connection| {
-                    Ok((|| {
-                        let physical;
-                        let dispatched = if let ClientRequest::Mcp(command) = &request {
-                            physical = ClientRequest::Mcp(authority.mcp_physical_request(command)?);
-                            &physical
-                        } else {
-                            &request
-                        };
-                        let mut reply = connection.forward_delegated(
-                            dispatched,
-                            deadline,
-                            authority.commit_size(&request),
-                            || {
-                                if Instant::now() >= deadline {
-                                    return Err(io::ErrorKind::TimedOut.into());
-                                }
-                                authority
-                                    .stop
-                                    .with_active(|| crossed.set(true))
-                                    .ok_or(io::ErrorKind::Interrupted.into())
-                            },
-                        )?;
-                        if let (ClientRequest::Mcp(logical), ClientReply::Mcp(response)) =
-                            (&request, &mut reply)
-                        {
-                            response.key = logical.key().clone();
-                        }
-                        if let Err(error) = authority.retain_reply(&request, &reply) {
-                            connection.disconnect();
-                            return Err(error);
-                        }
-                        Ok(reply)
-                    })())
-                })
-                .and_then(std::convert::identity);
-            match result {
-                Ok(reply) => {
-                    unconfirmed |= needs_receipt
-                        && crossed.get()
-                        && matches!(
-                            reply,
-                            ClientReply::CommitUnknown { .. }
-                                | ClientReply::Process(ProcessReply::Unknown { .. })
-                        );
-                    DataReply::Client(reply)
-                }
-                Err(error) => {
-                    // The send gate runs after encoding and admission. In
-                    // particular, a refused deadline/permit cannot leave debt.
-                    unconfirmed |= needs_receipt && crossed.get();
-                    if crossed.get() {
-                        DataReply::Unknown(error.into())
-                    } else {
-                        DataReply::Rejected(error.into())
-                    }
-                }
-            }
+        let (reply, request_unconfirmed) = if authority.permits(owner, &request) {
+            forward_data_request(owner, authority, &request, deadline)
         } else {
-            DataReply::Rejected(Refusal::Denied)
+            (DataReply::Rejected(Refusal::Denied), false)
         };
+        unconfirmed |= request_unconfirmed;
         if encode_record(&reply)
             .and_then(|encoded| {
                 channel.send(
@@ -882,6 +815,107 @@ fn run_data(
         }
     }
     unconfirmed
+}
+
+fn forward_data_request(
+    owner: &LocalExecutionEndpoint,
+    authority: &Authority,
+    request: &ClientRequest,
+    deadline: Instant,
+) -> (DataReply, bool) {
+    // Known operations and tickets already have an owner. The following
+    // exchanges can create an unidentified resource or consume a ticket
+    // without a confirmable settlement.
+    let needs_receipt = matches!(
+        request,
+        ClientRequest::Process(ProcessRequest::RegisterAgentBash { .. })
+            | ClientRequest::Mcp(McpRequest::Open { .. })
+            | ClientRequest::PrepareWrite { .. }
+            | ClientRequest::BeginWrite { .. }
+            | ClientRequest::PrepareEdit { .. }
+            | ClientRequest::CommitWrite { .. }
+    );
+    let crossed = Cell::new(false);
+    let result = owner
+        .with_bounded_data_connection(deadline, |connection| {
+            Ok((|| {
+                let mut inserted_mcp = None;
+                let physical;
+                let dispatched = if let ClientRequest::Mcp(command) = request {
+                    let (mapped, inserted) = authority.mcp_physical_request(command)?;
+                    if inserted {
+                        inserted_mcp = Some(command.key().operation);
+                    }
+                    physical = ClientRequest::Mcp(mapped);
+                    &physical
+                } else {
+                    request
+                };
+                let forward = connection.forward_delegated(
+                    dispatched,
+                    deadline,
+                    authority.commit_size(request),
+                    || {
+                        if Instant::now() >= deadline {
+                            return Err(io::ErrorKind::TimedOut.into());
+                        }
+                        authority
+                            .stop
+                            .with_active(|| crossed.set(true))
+                            .ok_or(io::ErrorKind::Interrupted.into())
+                    },
+                );
+                let mut reply = match forward {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        if !crossed.get()
+                            && let Some(operation) = inserted_mcp
+                        {
+                            authority
+                                .mcp_operations
+                                .lock()
+                                .expect("child MCP identities")
+                                .remove(&operation);
+                        }
+                        return Err(error);
+                    }
+                };
+                if let (ClientRequest::Mcp(logical), ClientReply::Mcp(response)) =
+                    (request, &mut reply)
+                {
+                    response.key = logical.key().clone();
+                }
+                if let Err(error) = authority.retain_reply(request, &reply) {
+                    connection.disconnect();
+                    return Err(error);
+                }
+                Ok(reply)
+            })())
+        })
+        .and_then(std::convert::identity);
+    match result {
+        Ok(reply) => {
+            let unconfirmed = needs_receipt
+                && crossed.get()
+                && matches!(
+                    reply,
+                    ClientReply::CommitUnknown { .. }
+                        | ClientReply::Process(ProcessReply::Unknown { .. })
+                );
+            (DataReply::Client(reply), unconfirmed)
+        }
+        Err(error) => {
+            // The send gate runs after encoding and admission. In particular,
+            // a refused deadline/permit cannot leave debt.
+            let unconfirmed = needs_receipt && crossed.get();
+            let reply = if crossed.get() {
+                DataReply::Unknown(error.into())
+            } else {
+                DataReply::Rejected(error.into())
+            };
+            (reply, unconfirmed)
+        }
+    }
 }
 
 fn run_control(
@@ -1106,9 +1140,13 @@ mod tests {
             source_id: "a".into(),
             launch: launch.clone(),
         };
-        let physical = authority.mcp_physical_request(&open).unwrap();
+        let (physical, inserted) = authority.mcp_physical_request(&open).unwrap();
+        assert!(inserted);
         assert_ne!(physical.key().operation, key.operation);
-        assert_eq!(authority.mcp_physical_request(&open).unwrap(), physical);
+        assert_eq!(
+            authority.mcp_physical_request(&open).unwrap(),
+            (physical.clone(), false)
+        );
         let mut changed = launch.clone();
         changed.args.push("different".into());
         let conflicting = McpRequest::Open {
@@ -1126,7 +1164,7 @@ mod tests {
 
         let close = McpRequest::Close { key: key.clone() };
         assert_eq!(
-            authority.mcp_physical_request(&close).unwrap().key(),
+            authority.mcp_physical_request(&close).unwrap().0.key(),
             physical.key()
         );
         authority.retain_mcp_reply(&open, &McpReply::Opening);
@@ -1137,7 +1175,10 @@ mod tests {
         assert!(authority.mcp_operations.lock().unwrap()[&key.operation].retained);
         authority.retain_mcp_reply(&close, &McpReply::Closed);
         assert!(!authority.mcp_operations.lock().unwrap()[&key.operation].retained);
-        assert_eq!(authority.mcp_physical_request(&open).unwrap(), physical);
+        assert_eq!(
+            authority.mcp_physical_request(&open).unwrap(),
+            (physical.clone(), false)
+        );
 
         let message = |name: &str| {
             base64::engine::general_purpose::STANDARD.encode(
@@ -1158,9 +1199,10 @@ mod tests {
         );
         let mut other_key = key.clone();
         other_key.operation = OperationId::new();
-        let other = authority
+        let (other, inserted_other) = authority
             .mcp_physical_request(&open_other.with_key(other_key.clone()))
             .unwrap();
+        assert!(inserted_other);
         assert_ne!(physical.key(), other.key());
         let resources = base64::engine::general_purpose::STANDARD
             .encode(br#"{"jsonrpc":"2.0","id":3,"method":"resources/list"}"#);
@@ -1433,6 +1475,389 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
             .read_range(&root.join("receipt"), 0, 128, None)
             .unwrap();
         assert_eq!(read.bytes, b"parent still bound");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // Drive a real proxied Client, ready MCP server, and parent-held Open on one relay.
+    async fn parent_held_initial_open_keeps_child_relay_and_ready_mcp_intact() {
+        use crate::credentials::CredentialSnapshot;
+        use crate::local_runtime::composition::LocalRuntimeDependencies;
+        use crate::local_runtime::configuration::{
+            SessionConfigInput, UserConfigManager, UserConfigSources,
+        };
+        use crate::local_runtime::session::SessionPersistentState;
+        use crate::local_runtime::session_controller::SessionController;
+        use crate::local_runtime::session_runtime_manager::{
+            RuntimeResidencyPolicy, SessionRuntimeManager,
+        };
+        use crate::tools::mcp::{
+            McpError, McpInvalidationState, McpServerBinding, McpServerRuntime, McpTransportConfig,
+            OwnedConnect,
+        };
+        use rustx_execution_protocol::{
+            Bootstrap, BootstrapEndpoint, ControlHelloReply, DataHelloReply, PeerHello,
+            transport::{read_record, write_record},
+        };
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncReadExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let runtime_root = temporary.path().join("runtime");
+        let home = temporary.path().join("home");
+        std::fs::create_dir_all(&runtime_root).unwrap();
+        std::fs::create_dir_all(home.join("rustx")).unwrap();
+        let controller = SessionController::open(&runtime_root).unwrap();
+        let session = controller
+            .create_session(SessionPersistentState::from_input(
+                &SessionConfigInput::new(root.clone()),
+            ))
+            .await
+            .unwrap()
+            .session
+            .id;
+        let user_config = UserConfigManager::new(UserConfigSources {
+            home_directory: home.clone(),
+            config_path: home.join("rustx").join("rustx.toml"),
+            runtime_root,
+        })
+        .unwrap();
+        let manager = SessionRuntimeManager::new(
+            controller,
+            user_config,
+            CredentialSnapshot::default(),
+            LocalRuntimeDependencies::default(),
+            RuntimeResidencyPolicy {
+                max_resident_runtimes: Some(8),
+                idle_grace_ms: 300_000,
+            },
+        )
+        .unwrap();
+        let parent_endpoint = manager.reserve_local_execution(&session).await.unwrap();
+
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let proxy_path = scratch.path().canonicalize().unwrap().join("proxy.sock");
+        let proxy = std::os::unix::net::UnixListener::bind(&proxy_path).unwrap();
+        let mut bootstrap: Bootstrap =
+            read_record(&mut std::fs::File::open(parent_endpoint.bootstrap_path()).unwrap())
+                .unwrap();
+        let BootstrapEndpoint::Unix {
+            socket_path: server_socket,
+        } = bootstrap.endpoint
+        else {
+            panic!("local execution endpoint");
+        };
+        bootstrap.endpoint = BootstrapEndpoint::Unix {
+            socket_path: proxy_path,
+        };
+        let bundle = scratch.path().join("binding");
+        let mut bundle_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&bundle)
+            .unwrap();
+        write_record(&mut bundle_file, &bootstrap).unwrap();
+        drop(bundle_file);
+
+        let client_bin = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        let mut client_proc = tokio::process::Command::new(client_bin)
+            .arg("--binding-file")
+            .arg(bundle.canonicalize().unwrap())
+            .arg("--workspace")
+            .arg(&root)
+            .env_clear()
+            .env("TMPDIR", scratch.path())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+
+        let super::super::ExecutionListener::Unix(server_listener) = parent_endpoint.listener()
+        else {
+            panic!("Unix listener");
+        };
+        let server_listener = server_listener.try_clone().unwrap();
+        let open_count = Arc::new(AtomicUsize::new(0));
+        let open_count_wire = open_count.clone();
+        let endpoint_ref = parent_endpoint.clone();
+        let (live_tx, live_rx) = tokio::sync::oneshot::channel();
+        let proxy_join = std::thread::spawn(move || {
+            let (mut data_peer, _) = proxy.accept().unwrap();
+            let mut data_server = UnixStream::connect(&server_socket).unwrap();
+            let (server_data_accepted, _) = server_listener.accept().unwrap();
+            let endpoint_data = endpoint_ref.clone();
+            let admit_data =
+                std::thread::spawn(move || endpoint_data.admit_local_stream(server_data_accepted));
+            let hello: PeerHello = read_record(&mut data_peer).unwrap();
+            write_record(&mut data_server, &hello).unwrap();
+            let reply: DataHelloReply = read_record(&mut data_server).unwrap();
+            write_record(&mut data_peer, &reply).unwrap();
+            assert!(matches!(
+                admit_data.join().unwrap().unwrap(),
+                super::super::EndpointAdmission::Pending
+            ));
+
+            let (mut ctrl_peer, _) = proxy.accept().unwrap();
+            let mut ctrl_server = UnixStream::connect(&server_socket).unwrap();
+            let (server_ctrl_accepted, _) = server_listener.accept().unwrap();
+            let endpoint_ctrl = endpoint_ref.clone();
+            let admit_ctrl =
+                std::thread::spawn(move || endpoint_ctrl.admit_local_stream(server_ctrl_accepted));
+            let hello: PeerHello = read_record(&mut ctrl_peer).unwrap();
+            write_record(&mut ctrl_server, &hello).unwrap();
+            let reply: ControlHelloReply = read_record(&mut ctrl_server).unwrap();
+            write_record(&mut ctrl_peer, &reply).unwrap();
+            assert!(matches!(
+                admit_ctrl.join().unwrap().unwrap(),
+                super::super::EndpointAdmission::Live
+            ));
+            let _ = live_tx.send(());
+
+            let mut data_peer_rx = data_peer.try_clone().unwrap();
+            let mut data_server_tx = data_server.try_clone().unwrap();
+            let request_fwd = std::thread::spawn(move || {
+                while let Ok(req) = read_record::<ClientRequest>(&mut data_server) {
+                    if matches!(req, ClientRequest::Mcp(McpRequest::Open { .. })) {
+                        open_count_wire.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if write_record(&mut data_peer, &req).is_err() {
+                        break;
+                    }
+                }
+            });
+            let reply_fwd = std::thread::spawn(move || {
+                while let Ok(rep) = read_record::<ClientReply>(&mut data_peer_rx) {
+                    if write_record(&mut data_server_tx, &rep).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut ctrl_peer_rx = ctrl_peer.try_clone().unwrap();
+            let mut ctrl_server_tx = ctrl_server.try_clone().unwrap();
+            let ctrl_s2c = std::thread::spawn(move || {
+                let _ = std::io::copy(&mut ctrl_server, &mut ctrl_peer);
+            });
+            let ctrl_c2s = std::thread::spawn(move || {
+                let _ = std::io::copy(&mut ctrl_peer_rx, &mut ctrl_server_tx);
+            });
+            let _ = request_fwd.join();
+            let _ = reply_fwd.join();
+            let _ = ctrl_s2c.join();
+            let _ = ctrl_c2s.join();
+        });
+
+        let observer_socket = root.join("started.sock");
+        let observer = tokio::net::UnixListener::bind(&observer_socket).unwrap();
+        let server_code = r"
+import json, socket, sys
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
+    proof.connect(sys.argv[1])
+    proof.sendall(b'started')
+    for line in sys.stdin:
+        message = json.loads(line)
+        if message.get('method') == 'server/discover':
+            result = {
+                'resultType': 'complete', 'supportedVersions': ['2026-07-28'],
+                'capabilities': {'tools': {}}, 'ttlMs': 0, 'cacheScope': 'private',
+                '_meta': {'io.modelcontextprotocol/serverInfo': {'name': 'delegated', 'version': '1'}}
+            }
+        elif message.get('method') == 'tools/list':
+            result = {
+                'tools': [{'name': 'inspect', 'description': 'inspect', 'inputSchema': {'type': 'object'}}]
+            }
+        else:
+            continue
+        print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
+";
+        let ready_source = crate::runtime::identity::McpServerId::new("ready-stdio");
+        let queued_source = crate::runtime::identity::McpServerId::new("queued-stdio");
+        let authored = McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            transport: McpTransportConfig::Stdio {
+                program: "/usr/bin/env".into(),
+                args: vec![
+                    "python3".into(),
+                    "-c".into(),
+                    server_code.into(),
+                    observer_socket.to_string_lossy().into_owned(),
+                ],
+                cwd: None,
+                environment: BTreeMap::from([(
+                    "PATH".into(),
+                    "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin".into(),
+                )]),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: BTreeMap::new(),
+        };
+        let ready_launch = crate::tools::mcp::stdio_launch_spec(&authored, &ready_source, &root)
+            .unwrap()
+            .unwrap();
+        let queued_launch = crate::tools::mcp::stdio_launch_spec(&authored, &queued_source, &root)
+            .unwrap()
+            .unwrap();
+        let conversation = crate::runtime::identity::ConversationId::new(
+            "conv_0410af39-84e2-7896-a1f1-06c4c338553d",
+        );
+        let parent_scope = manager.execution_scope(&session);
+        tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, live_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut relay =
+            ChildExecutionRelay::create(&parent_scope, &root, &conversation, &[], None).unwrap();
+        let authority = Arc::get_mut(&mut relay.authority).unwrap();
+        authority.tools.insert("read_image".into());
+        authority.mcp_sources.extend([
+            ChildMcpSource {
+                id: ready_source.to_string(),
+                launch: ready_launch,
+                tools: BTreeSet::from(["inspect".into()]),
+                resources: false,
+            },
+            ChildMcpSource {
+                id: queued_source.to_string(),
+                launch: queued_launch,
+                tools: BTreeSet::from(["inspect".into()]),
+                resources: false,
+            },
+        ]);
+        let (parent, child) = tokio::net::UnixStream::pair().unwrap();
+        relay.transfer(&parent).await.unwrap();
+        let child = relay.grant().open(&session, &root, &child).await.unwrap();
+        let cleanup = relay.start().unwrap();
+        let child_workspace =
+            crate::tools::workspace::Workspace::for_session(&root, child.clone()).unwrap();
+
+        let ready_runtime = tokio::time::timeout(
+            LOCAL_HANDSHAKE_TIMEOUT,
+            McpServerRuntime::connect_owned(OwnedConnect::new(
+                &ready_source,
+                &authored,
+                &child_workspace,
+                Arc::new(McpInvalidationState::new()),
+                crate::runtime::CancellationSignal::new(),
+            )),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let (mut first_started, _) =
+            tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, observer.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let mut marker = [0; 7];
+        first_started.read_exact(&mut marker).await.unwrap();
+        assert_eq!(&marker, b"started");
+        assert_eq!(open_count.load(Ordering::SeqCst), 1);
+        assert_eq!(ready_runtime.list_tools().await.unwrap().len(), 1);
+
+        // Hold only the parent's data connection while leaving the child writer free.
+        let (held, holding) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let parent_for_hold = parent_endpoint.clone();
+        let parking = tokio::task::spawn_blocking(move || {
+            parent_for_hold
+                .hold_data_exchange_for_test(|| {
+                    held.send(()).unwrap();
+                    resume.recv().unwrap();
+                })
+                .unwrap();
+        });
+        holding.await.unwrap();
+
+        let refused = tokio::time::timeout(
+            Duration::from_secs(15),
+            McpServerRuntime::connect_owned(OwnedConnect::new(
+                &queued_source,
+                &authored,
+                &child_workspace,
+                Arc::new(McpInvalidationState::new()),
+                crate::runtime::CancellationSignal::new(),
+            )),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(refused, Err(McpError::Discovery(_))),
+            "parent-held pre-dispatch refusal must not escalate to physical settlement failure: {refused:?}"
+        );
+        assert_eq!(
+            open_count.load(Ordering::SeqCst),
+            1,
+            "the Execution Client must receive zero Open requests for the parent-held attempt"
+        );
+        let mut unexpected_process = Box::pin(observer.accept());
+        assert!(
+            futures_util::poll!(&mut unexpected_process).is_pending(),
+            "zero MCP processes may start when parent held the data lane"
+        );
+        drop(unexpected_process);
+
+        release.send(()).unwrap();
+        parking.await.unwrap();
+
+        // After releasing the barrier, the same child relay still reads,
+        // keeps the existing Ready MCP operation intact, and opens legally.
+        std::fs::write(root.join("child-receipt"), b"child still alive").unwrap();
+        let read = loop {
+            match child
+                .endpoint()
+                .unwrap()
+                .read_range(&root.join("child-receipt"), 0, 128, None)
+            {
+                Ok(read) => break read,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => panic!("child read_range failed after barrier release: {error}"),
+            }
+        };
+        assert_eq!(read.bytes, b"child still alive");
+        assert_eq!(ready_runtime.list_tools().await.unwrap().len(), 1);
+        assert_eq!(open_count.load(Ordering::SeqCst), 1);
+
+        let recovered_runtime = tokio::time::timeout(
+            LOCAL_HANDSHAKE_TIMEOUT,
+            McpServerRuntime::connect_owned(OwnedConnect::new(
+                &queued_source,
+                &authored,
+                &child_workspace,
+                Arc::new(McpInvalidationState::new()),
+                crate::runtime::CancellationSignal::new(),
+            )),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let (mut second_started, _) =
+            tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, observer.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        second_started.read_exact(&mut marker).await.unwrap();
+        assert_eq!(&marker, b"started");
+        assert_eq!(open_count.load(Ordering::SeqCst), 2);
+        assert_eq!(recovered_runtime.list_tools().await.unwrap().len(), 1);
+
+        ready_runtime.close().await.unwrap();
+        recovered_runtime.close().await.unwrap();
+        cleanup.after_child_reaped().await.unwrap();
+        tokio::task::spawn_blocking(move || {
+            parent_endpoint.fence_connection_by(Instant::now() + LOCAL_HANDSHAKE_TIMEOUT)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let _ = client_proc.wait().await;
+        let _ = proxy_join.join();
     }
 
     #[test]

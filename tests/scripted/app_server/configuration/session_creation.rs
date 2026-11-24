@@ -1424,7 +1424,8 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
             limit: 32,
             expected_revision: None,
         };
-        let MethodResult::Skills { page } = call(&connection, 50, request(0)).await else { panic!("live Workspace Skills"); };
+        let MethodResult::Skills { page, authority } = call(&connection, 50, request(0)).await else { panic!("live Workspace Skills"); };
+        assert_eq!(authority, crate::app_server::protocol::WorkspaceCatalogAuthority::Client);
         let [descriptor] = page.data.as_slice() else { panic!("one Skill: {page:?}"); };
         assert_eq!(descriptor.catalog.name, "bound-skill");
         assert_eq!(descriptor.catalog.location, workspace.join(".agents/skills/bound-skill/SKILL.md").display().to_string());
@@ -2281,7 +2282,10 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
-        let MethodResult::McpSource { source } = call(
+        let MethodResult::McpSource {
+            authority,
+            source: Some(source),
+        } = call(
             &connection,
             98,
             Method::McpSourceRead {
@@ -2295,6 +2299,10 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         else {
             panic!("bound Workspace MCP source");
         };
+        assert_eq!(
+            authority,
+            crate::app_server::protocol::WorkspaceCatalogAuthority::Client
+        );
         assert_eq!(
             source.revision,
             crate::local_runtime::settings::revision(Some(document.as_bytes()))
@@ -2318,7 +2326,10 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
             revision,
             crate::local_runtime::settings::revision(Some(decoy))
         );
-        let MethodResult::McpSource { source } = call(
+        let MethodResult::McpSource {
+            authority,
+            source: Some(source),
+        } = call(
             &connection,
             100,
             Method::McpSourceRead {
@@ -2332,6 +2343,10 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         else {
             panic!("Client source with a Server decoy");
         };
+        assert_eq!(
+            authority,
+            crate::app_server::protocol::WorkspaceCatalogAuthority::Client
+        );
         assert_eq!(source.revision, revision);
         assert!(
             source
@@ -2388,6 +2403,405 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         assert!(client.wait().await.unwrap().success());
         service.shutdown().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn workspace_catalog_authority_separates_unclaimed_authoring_claimed_unavailable_and_live_client()
+ {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{
+            ErrorData, JsonRpcVersion, Method, MethodResult, Request, RequestId, Response,
+            WorkspaceCatalogAuthority,
+        },
+    };
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use std::path::Path;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 2).await;
+        let workspace = fixture.workspaces[0].clone();
+        std::fs::create_dir_all(workspace.join(".agents/skills/authored-skill")).unwrap();
+        std::fs::write(
+            workspace.join(".agents/mcp.toml"),
+            "[mcp_servers.authored]\nurl = \"http://127.0.0.1:9\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join(".agents/skills/authored-skill/SKILL.md"),
+            "---\nname: authored-skill\ndescription: Authored skill\n---\nBody\n",
+        )
+        .unwrap();
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+
+        let mcp_read = |session_id: &SessionId, dir: &Path| Method::McpSourceRead {
+            target: SourceTarget::Workspace {
+                directory: dir.to_path_buf(),
+            },
+            execution_session: session_id.clone(),
+        };
+        let skills_list = |session_id: &SessionId, dir: &Path| Method::SkillsList {
+            target: SourceTarget::Workspace {
+                directory: dir.to_path_buf(),
+            },
+            execution_session: Some(session_id.clone()),
+            offset: 0,
+            limit: 32,
+            expected_revision: None,
+        };
+
+        // 1. Confirmed unclaimed Session with no Client -> Authoring authority.
+        let MethodResult::McpSource { authority, source } = call(
+            &connection,
+            1,
+            mcp_read(&fixture.sessions[0].id, &workspace),
+        )
+        .await
+        else {
+            panic!("expected McpSource for unclaimed session");
+        };
+        assert_eq!(authority, WorkspaceCatalogAuthority::Authoring);
+        assert!(source.is_none());
+
+        let MethodResult::Skills { page, authority } = call(
+            &connection,
+            2,
+            skills_list(&fixture.sessions[0].id, &workspace),
+        )
+        .await
+        else {
+            panic!("expected Skills for unclaimed session");
+        };
+        assert_eq!(authority, WorkspaceCatalogAuthority::Authoring);
+        assert!(page.data.iter().any(|s| s.catalog.name == "authored-skill"));
+
+        // 2. Claimed Session whose Client is unavailable -> ExecutionUnavailable (no fallback).
+        let _reserved = fixture
+            .manager
+            .reserve_local_execution(&fixture.sessions[0].id)
+            .await
+            .unwrap();
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(3),
+                call: mcp_read(&fixture.sessions[0].id, &workspace),
+            })
+            .await;
+        let Response::Failure(failure) = response else {
+            panic!("claimed Session without live Client must refuse McpSourceRead");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(4),
+                call: skills_list(&fixture.sessions[0].id, &workspace),
+            })
+            .await;
+        let Response::Failure(failure) = response else {
+            panic!("claimed Session without live Client must refuse SkillsList");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        // Unsettled durable RecoveryFence without an in-memory slot also refuses fallback.
+        let (fenced_binding, _) =
+            rustx_execution_server::Binding::reserve(rustx_execution_server::Reservation {
+                session: rustx_execution_protocol::SessionId::new(fixture.sessions[1].id.as_str()),
+                environment: rustx_execution_protocol::EnvironmentId::new("env"),
+                instance: rustx_execution_protocol::ClientInstanceId::new("lost-instance"),
+                generation: rustx_execution_protocol::Generation::new(std::num::NonZeroU64::MIN),
+                workspace: fixture.workspaces[1].clone(),
+                required_capabilities: std::collections::BTreeSet::new(),
+            })
+            .unwrap();
+        let durable_fence = fenced_binding
+            .retain_recovery_fence(fixture.manager.configuration.runtime_root())
+            .unwrap();
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(5),
+                call: mcp_read(&fixture.sessions[1].id, &fixture.workspaces[1]),
+            })
+            .await;
+        let Response::Failure(failure) = response else {
+            panic!("durable recovery fence must refuse McpSourceRead");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(6),
+                call: skills_list(&fixture.sessions[1].id, &fixture.workspaces[1]),
+            })
+            .await;
+        let Response::Failure(failure) = response else {
+            panic!("durable recovery fence must refuse SkillsList");
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        drop(durable_fence);
+        let _ = fixture.host.drain().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn selective_python_watch_fallback_skips_healthy_siblings() {
+    use crate::capabilities::ToolSourceId;
+    use rustx_execution_protocol::{
+        Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, ControlHelloReply,
+        DataHelloReply, PeerHello,
+        mcp::PythonSourceRequest,
+        transport::{read_record, write_record},
+    };
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use std::sync::Mutex;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let tools_root = fixture.workspaces[0].join(".agents/tools");
+        let healthy = tools_root.join("healthy-pkg");
+        std::fs::create_dir_all(&healthy).unwrap();
+        std::fs::write(healthy.join("server.py"), "VERSION = 1\n").unwrap();
+        std::fs::write(healthy.join("requirements.txt"), []).unwrap();
+
+        let incomplete = tools_root.join("incomplete-pkg");
+        std::fs::create_dir_all(&incomplete).unwrap();
+        std::fs::write(incomplete.join("server.py"), "VERSION = 1\n").unwrap();
+        std::fs::write(incomplete.join("requirements.txt"), []).unwrap();
+        for index in 0..=rustx_execution_protocol::mcp::MAX_SOURCE_WATCH_DIRECTORIES {
+            std::fs::create_dir_all(incomplete.join(format!("d{index:03}"))).unwrap();
+        }
+        std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 1\n").unwrap();
+
+        let endpoint = fixture
+            .manager
+            .reserve_local_execution(&fixture.sessions[0].id)
+            .await
+            .unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let proxy_path = scratch.path().canonicalize().unwrap().join("proxy.sock");
+        let proxy = std::os::unix::net::UnixListener::bind(&proxy_path).unwrap();
+        let mut bootstrap: Bootstrap =
+            read_record(&mut std::fs::File::open(endpoint.bootstrap_path()).unwrap()).unwrap();
+        let BootstrapEndpoint::Unix {
+            socket_path: server_socket,
+        } = bootstrap.endpoint
+        else {
+            panic!("local execution endpoint");
+        };
+        bootstrap.endpoint = BootstrapEndpoint::Unix {
+            socket_path: proxy_path,
+        };
+        let bundle = scratch.path().join("binding");
+        let mut bundle_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&bundle)
+            .unwrap();
+        write_record(&mut bundle_file, &bootstrap).unwrap();
+        drop(bundle_file);
+
+        let binary = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        let mut client = tokio::process::Command::new(binary)
+            .arg("--binding-file")
+            .arg(bundle.canonicalize().unwrap())
+            .arg("--workspace")
+            .arg(endpoint.workspace())
+            .current_dir("/")
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+
+        let crate::local_runtime::session_runtime_manager::ExecutionListener::Unix(server_listener) =
+            endpoint.listener()
+        else {
+            panic!("Unix listener");
+        };
+        let server_listener = server_listener.try_clone().unwrap();
+        let capture_counts = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+        let counts_wire = capture_counts.clone();
+        let endpoint_ref = endpoint.clone();
+        let (live_tx, live_rx) = tokio::sync::oneshot::channel();
+        let proxy_join = std::thread::spawn(move || {
+            let (mut data_peer, _) = proxy.accept().unwrap();
+            let mut data_server = std::os::unix::net::UnixStream::connect(&server_socket).unwrap();
+            let (server_data_accepted, _) = server_listener.accept().unwrap();
+            let endpoint_data = endpoint_ref.clone();
+            let admit_data =
+                std::thread::spawn(move || endpoint_data.admit_local_stream(server_data_accepted));
+            let hello: PeerHello = read_record(&mut data_peer).unwrap();
+            write_record(&mut data_server, &hello).unwrap();
+            let reply: DataHelloReply = read_record(&mut data_server).unwrap();
+            write_record(&mut data_peer, &reply).unwrap();
+            admit_data.join().unwrap().unwrap();
+
+            let (mut ctrl_peer, _) = proxy.accept().unwrap();
+            let mut ctrl_server = std::os::unix::net::UnixStream::connect(&server_socket).unwrap();
+            let (server_ctrl_accepted, _) = server_listener.accept().unwrap();
+            let endpoint_ctrl = endpoint_ref.clone();
+            let admit_ctrl =
+                std::thread::spawn(move || endpoint_ctrl.admit_local_stream(server_ctrl_accepted));
+            let hello: PeerHello = read_record(&mut ctrl_peer).unwrap();
+            write_record(&mut ctrl_server, &hello).unwrap();
+            let reply: ControlHelloReply = read_record(&mut ctrl_server).unwrap();
+            write_record(&mut ctrl_peer, &reply).unwrap();
+            admit_ctrl.join().unwrap().unwrap();
+            let _ = live_tx.send(());
+
+            let mut data_peer_rx = data_peer.try_clone().unwrap();
+            let mut data_server_tx = data_server.try_clone().unwrap();
+            let request_fwd = std::thread::spawn(move || {
+                while let Ok(req) = read_record::<ClientRequest>(&mut data_server) {
+                    if let ClientRequest::PythonSource(PythonSourceRequest::Capture {
+                        name, ..
+                    }) = &req
+                    {
+                        *counts_wire.lock().unwrap().entry(name.clone()).or_insert(0) += 1;
+                    }
+                    if write_record(&mut data_peer, &req).is_err() {
+                        break;
+                    }
+                }
+            });
+            let reply_fwd = std::thread::spawn(move || {
+                while let Ok(rep) = read_record::<ClientReply>(&mut data_peer_rx) {
+                    if write_record(&mut data_server_tx, &rep).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut ctrl_peer_rx = ctrl_peer.try_clone().unwrap();
+            let mut ctrl_server_tx = ctrl_server.try_clone().unwrap();
+            let ctrl_s2c = std::thread::spawn(move || {
+                let _ = std::io::copy(&mut ctrl_server, &mut ctrl_peer);
+            });
+            let ctrl_c2s = std::thread::spawn(move || {
+                let _ = std::io::copy(&mut ctrl_peer_rx, &mut ctrl_server_tx);
+            });
+            let _ = request_fwd.join();
+            let _ = reply_fwd.join();
+            let _ = ctrl_s2c.join();
+            let _ = ctrl_c2s.join();
+        });
+        live_rx.await.unwrap();
+
+        fixture.load(0).await.unwrap().unwrap();
+        let id = &fixture.sessions[0].id;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let healthy_source = ToolSourceId::ManagedPython("healthy-pkg".into());
+        let incomplete_source = ToolSourceId::ManagedPython("incomplete-pkg".into());
+        let digest = |snapshot: &crate::runtime::resources::RuntimeResourceSnapshot,
+                      source: &ToolSourceId| {
+            snapshot.managed_python_catalog().packages()[source]
+                .as_ref()
+                .unwrap()
+                .source_digest()
+                .to_owned()
+        };
+        let initial_healthy = digest(&runtime.runtime_resources(), &healthy_source);
+        let initial_incomplete = digest(&runtime.runtime_resources(), &incomplete_source);
+        assert_eq!(capture_counts.lock().unwrap().get("healthy-pkg"), Some(&1));
+        assert_eq!(
+            capture_counts.lock().unwrap().get("incomplete-pkg"),
+            Some(&1)
+        );
+
+        let (registered, observed) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                registered.send(()).unwrap();
+            },
+        );
+        let stop = tokio_util::sync::CancellationToken::new();
+        let watch = tokio::spawn({
+            let manager = fixture.manager.clone();
+            let stop = stop.clone();
+            async move { manager.run_source_watch(stop).await }
+        });
+        observed.await.unwrap();
+        // Initial watch registration changes the watch plan and performs one full resync.
+        let healthy_after_register = *capture_counts.lock().unwrap().get("healthy-pkg").unwrap();
+        let incomplete_after_register = *capture_counts
+            .lock()
+            .unwrap()
+            .get("incomplete-pkg")
+            .unwrap();
+        assert_eq!(healthy_after_register, 2);
+        assert_eq!(incomplete_after_register, 2);
+
+        let (fallback_tx, fallback_rx) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_python_fallback_checked",
+            move || {
+                fallback_tx.send(()).unwrap();
+            },
+        );
+        fallback_rx.await.unwrap();
+        assert_eq!(
+            capture_counts.lock().unwrap().get("healthy-pkg"),
+            Some(&healthy_after_register)
+        );
+        assert_eq!(
+            capture_counts.lock().unwrap().get("incomplete-pkg"),
+            Some(&(incomplete_after_register + 1))
+        );
+        assert_eq!(
+            digest(&runtime.runtime_resources(), &healthy_source),
+            initial_healthy
+        );
+        assert_eq!(
+            digest(&runtime.runtime_resources(), &incomplete_source),
+            initial_incomplete
+        );
+
+        // Modify an unwatched nested file inside incomplete-pkg and verify only it updates.
+        let mut changes = fixture.manager.configuration_changes();
+        let (resynced_tx, resynced_rx) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                resynced_tx.send(()).unwrap();
+            },
+        );
+        std::fs::write(incomplete.join("d000/helper.py"), "HELPER = 2\n").unwrap();
+        resynced_rx.await.unwrap();
+        while digest(&runtime.runtime_resources(), &incomplete_source) == initial_incomplete {
+            changes.changed().await.unwrap();
+        }
+        assert_eq!(
+            capture_counts.lock().unwrap().get("healthy-pkg"),
+            Some(&healthy_after_register)
+        );
+        assert_eq!(
+            capture_counts.lock().unwrap().get("incomplete-pkg"),
+            Some(&(incomplete_after_register + 2))
+        );
+        assert_eq!(digest(&runtime.runtime_resources(), &healthy_source), initial_healthy);
+        assert_ne!(digest(&runtime.runtime_resources(), &incomplete_source), initial_incomplete);
+
+        stop.cancel();
+        watch.await.unwrap().unwrap();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+        let _ = proxy_join.join();
     }))
     .await;
 }
