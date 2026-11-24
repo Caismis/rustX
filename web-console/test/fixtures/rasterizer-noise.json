@@ -59843,5 +59843,21 @@
         ]
       ]
     ]
+  },
+  {
+    "reference": "trajectory-inspector-390-dark-linux.png",
+    "evidence": "Push-run on head 399956c7c (2026-11-24), Browser acceptance shard first attempt (re-run passed): one changed pixel at (28,233), max channel delta 4, strict exact match otherwise. Identical site to the light variant's already-registered region — the details-resize handle's left elevation boundary at 390px, where the boundary pixel rasterizes as an antialiased blend between the two side colors (reference (45,56,78) between left (31,31,32) and right (46,58,81) at (27..29,233)). The dark palette widens the same coverage oscillation to delta 4 vs the light variant's delta 1. Actual capture RGBA not retained in the failure report; the bound is the reported maximum. The re-run passed byte-exact, confirming host-dependent rasterizer variance at this boundary, not a layout or content change. No rectangle, adjacent pixel or global threshold applies.",
+    "referenceSha256": "7b48b9688315936d2851403c5b10c711e8f84b5123701b02a031ab3281f6a169",
+    "regions": [
+      {
+        "label": "Details panel left-edge coverage",
+        "x": 28,
+        "y": 233,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 4
+      }
+    ]
   }
 ]
