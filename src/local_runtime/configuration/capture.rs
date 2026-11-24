@@ -970,8 +970,12 @@ impl UserConfigManager {
                 if let Ok(package) = outcome {
                     manifest.update(package.source_digest().as_bytes());
                     manifest.update(
-                        serde_json::to_vec(&(package.permissions(), package.tool_permissions()))
-                            .map_err(|error| error.to_string())?,
+                        serde_json::to_vec(&(
+                            package.permissions(),
+                            package.tool_permissions(),
+                            &package.watch_directories,
+                        ))
+                        .map_err(|error| error.to_string())?,
                     );
                 }
             }
@@ -1373,7 +1377,7 @@ fn read_bound_document(
         .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
 }
 
-pub(in crate::local_runtime) fn read_bound_mcp(
+pub(crate) fn read_bound_mcp(
     endpoint: &LocalExecutionEndpoint,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let name = super::super::mcp_resources::WORKSPACE_DOCUMENT;

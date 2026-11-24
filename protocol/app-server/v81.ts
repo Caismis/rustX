@@ -1281,6 +1281,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'mcp/sourceRead';
+      params: {
+        target: SourceTarget;
+        execution_session: SessionId;
+      };
+    }
+  | {
       method: 'mcp/probe';
       params: {
         target: SourceTarget;
@@ -3277,6 +3284,10 @@ export type MethodResult =
   | {
       outcome: ModelProbeOutcome;
       type: 'model_probe';
+    }
+  | {
+      source: SourceView;
+      type: 'mcp_source';
     }
   | {
       result: McpProbeResult;
@@ -20644,6 +20655,27 @@ export interface EffectiveCollection {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceView".
+ */
+export interface SourceView {
+  path: string;
+  revision: string;
+  authored?: {
+    [k: string]: McpView;
+  } | null;
+  diagnostic?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpView".
+ */
+export interface McpView {
+  definition: McpAuthoring;
+  retained_env: string[];
+  retained_headers: string[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "McpProbeResult".
  */
 export interface McpProbeResult {
@@ -20810,8 +20842,8 @@ export interface SourceSettings {
   provenance: {
     [k: string]: Origin;
   };
-  user: SourceView;
-  workspace?: SourceView | null;
+  user: SourceView2;
+  workspace?: SourceView2 | null;
   /**
    * The latest automatic repair observation of the User source in this
    * process. Absent when the finite ledger retains none — never needed,
@@ -20831,11 +20863,11 @@ export interface SourceSettings {
    */
   repair_sequence: string;
   user_resource_root: string;
-  global_guidance?: SourceView2 | null;
+  global_guidance?: SourceView3 | null;
   workspace_resource_root?: string | null;
   runtime_root: string;
-  user_mcp: SourceView3;
-  workspace_mcp?: SourceView3 | null;
+  user_mcp: SourceView;
+  workspace_mcp?: SourceView | null;
   agents: AgentSourceView[];
 }
 /**
@@ -20973,9 +21005,9 @@ export interface ModelProfileView {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceView".
+ * via the `definition` "SourceView2".
  */
-export interface SourceView {
+export interface SourceView2 {
   path: string;
   revision: string;
   authored?: RuntimeLayer | null;
@@ -21029,34 +21061,13 @@ export interface ConfigRepairReceipt {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceView2".
- */
-export interface SourceView2 {
-  path: string;
-  revision: string;
-  authored?: string | null;
-  diagnostic?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceView3".
  */
 export interface SourceView3 {
   path: string;
   revision: string;
-  authored?: {
-    [k: string]: McpView;
-  } | null;
+  authored?: string | null;
   diagnostic?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "McpView".
- */
-export interface McpView {
-  definition: McpAuthoring;
-  retained_env: string[];
-  retained_headers: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

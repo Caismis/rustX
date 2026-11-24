@@ -69,7 +69,8 @@ pub use bootstrap::PublishedBundle;
 pub use connection::{
     CommitCancelled, ContinuationPage, DirectoryListing, DocumentPage, LinesPage, LocalConnection,
     PhysicalError, PreparedMutation, ProcessOutcomeUnknown, RangeRead, RefusedEdit,
-    ResourceResolution, SearchResult, WatchOutcomeUnknown, WriteOutcomeUnknown,
+    ResourceResolution, SearchResult, UnsentMcpExchange, WatchOutcomeUnknown, WatchRetiring,
+    WriteOutcomeUnknown,
 };
 pub use control::ControlHandle;
 

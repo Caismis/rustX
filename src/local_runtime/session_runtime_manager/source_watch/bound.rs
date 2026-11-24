@@ -98,7 +98,7 @@ impl SessionRuntimeManager {
         while workers.join_next().await.is_some() {}
     }
 
-    fn workspace_watch_plan(&self, session: &SessionId, workspace: &Path) -> WatchPlan {
+    fn workspace_watch_plan(&self, session: &SessionId, workspace: &Path) -> (WatchPlan, bool) {
         let bindings = self
             .sessions
             .configuration_bindings
@@ -121,7 +121,30 @@ impl SessionRuntimeManager {
         for name in ["agents", "workflows", "tools", "skills"] {
             plan.entry(agents.join(name)).or_insert(None);
         }
-        plan
+        let mut incomplete = false;
+        if let Some(config) = bindings.get(session) {
+            let python = &config.managed_python;
+            incomplete = !python.discovery_diagnostics.is_empty();
+            for (source, location) in &python.locations {
+                if location.scope != crate::runtime::resources::SourceScope::Workspace {
+                    continue;
+                }
+                plan.entry(location.path.clone()).or_insert(None);
+                let directories = python
+                    .packages()
+                    .get(source)
+                    .and_then(|outcome| outcome.as_ref().ok())
+                    .and_then(|package| package.watch_directories.as_deref());
+                if let Some(directories) = directories {
+                    for directory in directories {
+                        plan.entry(location.path.join(directory)).or_insert(None);
+                    }
+                } else {
+                    incomplete = true;
+                }
+            }
+        }
+        (plan, incomplete)
     }
 }
 
@@ -135,6 +158,7 @@ fn named(plan: &mut WatchPlan, parent: PathBuf, names: impl IntoIterator<Item = 
 struct Watches {
     registered: BTreeMap<PathBuf, (PathBuf, WatchId)>,
     plan: WatchPlan,
+    retiring: BTreeSet<WatchId>,
     incomplete: bool,
 }
 
@@ -143,20 +167,22 @@ impl Watches {
         &mut self,
         endpoint: &LocalExecutionEndpoint,
         lane: &ControlHandle,
-        plan: WatchPlan,
+        (plan, incomplete): (WatchPlan, bool),
     ) -> io::Result<bool> {
         let changed = plan != self.plan;
         self.plan = plan;
-        self.incomplete = self.plan.len() > MAX_CONFIGURATION_WATCHES;
+        self.incomplete =
+            incomplete || self.plan.len() > MAX_CONFIGURATION_WATCHES || !self.retiring.is_empty();
         let expired = self
             .registered
-            .keys()
-            .filter(|path| !self.plan.contains_key(*path))
-            .cloned()
+            .iter()
+            .filter(|(path, (_, id))| !self.plan.contains_key(*path) && !self.retiring.contains(id))
+            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         for path in expired {
             if let Some((_, id)) = self.registered.remove(&path) {
                 endpoint.stop_watch(id, lane)?;
+                self.retiring.remove(&id);
             }
         }
         let mut new_watch = false;
@@ -191,20 +217,20 @@ impl Watches {
 
     fn poll(
         &mut self,
-        endpoint: &LocalExecutionEndpoint,
-        lane: &ControlHandle,
+        mut next: impl FnMut(WatchId, &Path) -> io::Result<rustx_execution_protocol::watch::WatchChange>,
     ) -> io::Result<bool> {
         let mut changed = false;
         let mut retired = Vec::new();
         for (path, (relative, id)) in &self.registered {
-            match endpoint.poll_watch(*id, relative, lane) {
+            match next(*id, relative) {
                 Ok(notice) => {
                     if notice.retired {
                         retired.push(path.clone());
+                        self.retiring.remove(id);
                     }
                     changed |= notice.resync_required
                         || notice.changed_paths.iter().any(|entry| {
-                            let Some(filter) = &self.plan[path] else {
+                            let Some(Some(filter)) = self.plan.get(path) else {
                                 return true;
                             };
                             // On folding volumes the name reported by the watcher
@@ -217,6 +243,13 @@ impl Watches {
                                 })
                             })
                         });
+                }
+                Err(error)
+                    if error.get_ref().is_some_and(|cause| {
+                        cause.is::<rustx_execution_server::WatchRetiring>()
+                    }) =>
+                {
+                    changed |= self.retiring.insert(*id);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => (),
                 Err(error) => return Err(error),
@@ -268,7 +301,14 @@ async fn watch_session(
                 {
                     return Err(io::ErrorKind::NotConnected.into());
                 }
-                let mut changed = watches.poll(&binding, &turn)?;
+                let mut changed = watches.poll(|id, path| binding.poll_watch(id, path, &turn))?;
+                #[cfg(test)]
+                if !watches.retiring.is_empty() {
+                    worker
+                        .configuration
+                        .test_hooks
+                        .reach("bound_watch_retiring");
+                }
                 if changed || now >= check {
                     changed |= watches.register(
                         &binding,
@@ -309,4 +349,56 @@ async fn watch_session(
         }
     })
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustx_execution_protocol::watch::WatchChange;
+    use rustx_execution_server::WatchRetiring;
+
+    #[test]
+    fn native_retirement_starts_resync_before_returning_the_watch_identity() {
+        let path = PathBuf::from("/workspace/physical-skill");
+        let relative = PathBuf::from("physical-skill");
+        let id = WatchId::configuration().unwrap();
+        let mut watches = Watches {
+            plan: WatchPlan::from([(path.clone(), None)]),
+            registered: BTreeMap::from([(path.clone(), (relative.clone(), id))]),
+            ..Watches::default()
+        };
+        let reply = |found, observed: &Path| {
+            assert_eq!(found, id);
+            assert_eq!(observed, relative);
+            Err(io::Error::new(io::ErrorKind::WouldBlock, WatchRetiring))
+        };
+        assert!(
+            !watches
+                .poll(|_, _| Err(io::ErrorKind::WouldBlock.into()))
+                .unwrap()
+        );
+        assert!(watches.retiring.is_empty());
+        assert!(
+            watches.poll(reply).unwrap(),
+            "rescan while the retirement receipt is pending"
+        );
+        assert_eq!(watches.registered[&path], (relative.clone(), id));
+        assert!(watches.retiring.contains(&id));
+        assert!(
+            !watches.poll(reply).unwrap(),
+            "coalesce repeated retirement notices"
+        );
+        assert!(
+            watches
+                .poll(|_, _| Ok(WatchChange {
+                    id,
+                    changed_paths: Vec::new(),
+                    resync_required: true,
+                    retired: true,
+                }))
+                .unwrap()
+        );
+        assert!(watches.retiring.is_empty());
+        assert!(watches.registered.is_empty());
+    }
 }

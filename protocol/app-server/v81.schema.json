@@ -10141,6 +10141,23 @@
         {
           "type": "object",
           "properties": {
+            "source": {
+              "$ref": "#/$defs/SourceView"
+            },
+            "type": {
+              "type": "string",
+              "const": "mcp_source"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "result": {
               "$ref": "#/$defs/McpProbeResult"
             },
@@ -29857,6 +29874,193 @@
         "timed_out"
       ]
     },
+    "SourceView": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "authored": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/McpView"
+          }
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "revision"
+      ]
+    },
+    "McpView": {
+      "type": "object",
+      "properties": {
+        "definition": {
+          "$ref": "#/$defs/McpAuthoring"
+        },
+        "retained_env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retained_headers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "definition",
+        "retained_env",
+        "retained_headers"
+      ]
+    },
+    "McpAuthoring": {
+      "description": "Secret-field presence is retained even for empty tables, so project authority\ncannot be widened by replacing an authored empty table with a default map.",
+      "type": "object",
+      "properties": {
+        "sensitive_env": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvironmentReference"
+          }
+        },
+        "sensitive_headers": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvironmentReference"
+          }
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpTransportType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/McpToolPermissionDocument"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentReference": {
+      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
+      "type": "string",
+      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "McpTransportType": {
+      "description": "The transport an `mcpServers` entry selects explicitly.",
+      "oneOf": [
+        {
+          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
+          "type": "string",
+          "const": "http"
+        },
+        {
+          "description": "A locally launched stdio server.",
+          "type": "string",
+          "const": "stdio"
+        }
+      ]
+    },
+    "McpToolPermissionDocument": {
+      "description": "Exact-tool permission override authored under one MCP server.",
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "description": "Complete three-mode permission object for this exact tool.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "McpProbeResult": {
       "type": "object",
       "properties": {
@@ -30348,12 +30552,12 @@
           }
         },
         "user": {
-          "$ref": "#/$defs/SourceView"
+          "$ref": "#/$defs/SourceView2"
         },
         "workspace": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView"
+              "$ref": "#/$defs/SourceView2"
             },
             {
               "type": "null"
@@ -30393,7 +30597,7 @@
         "global_guidance": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView2"
+              "$ref": "#/$defs/SourceView3"
             },
             {
               "type": "null"
@@ -30410,12 +30614,12 @@
           "type": "string"
         },
         "user_mcp": {
-          "$ref": "#/$defs/SourceView3"
+          "$ref": "#/$defs/SourceView"
         },
         "workspace_mcp": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView3"
+              "$ref": "#/$defs/SourceView"
             },
             {
               "type": "null"
@@ -30613,7 +30817,7 @@
         "id"
       ]
     },
-    "SourceView": {
+    "SourceView2": {
       "type": "object",
       "properties": {
         "path": {
@@ -30840,33 +31044,6 @@
         }
       ]
     },
-    "SourceView2": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "revision": {
-          "type": "string"
-        },
-        "authored": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "diagnostic": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "path",
-        "revision"
-      ]
-    },
     "SourceView3": {
       "type": "object",
       "properties": {
@@ -30878,12 +31055,9 @@
         },
         "authored": {
           "type": [
-            "object",
+            "string",
             "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/McpView"
-          }
+          ]
         },
         "diagnostic": {
           "type": [
@@ -30896,163 +31070,6 @@
         "path",
         "revision"
       ]
-    },
-    "McpView": {
-      "type": "object",
-      "properties": {
-        "definition": {
-          "$ref": "#/$defs/McpAuthoring"
-        },
-        "retained_env": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "retained_headers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "definition",
-        "retained_env",
-        "retained_headers"
-      ]
-    },
-    "McpAuthoring": {
-      "description": "Secret-field presence is retained even for empty tables, so project authority\ncannot be widened by replacing an authored empty table with a default map.",
-      "type": "object",
-      "properties": {
-        "sensitive_env": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/EnvironmentReference"
-          }
-        },
-        "sensitive_headers": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/EnvironmentReference"
-          }
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/McpTransportType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "headers": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {}
-        },
-        "command": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {}
-        },
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "permissions": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResourcePermissionSet"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tools": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/McpToolPermissionDocument"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "EnvironmentReference": {
-      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
-      "type": "string",
-      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$"
-    },
-    "McpTransportType": {
-      "description": "The transport an `mcpServers` entry selects explicitly.",
-      "oneOf": [
-        {
-          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
-          "type": "string",
-          "const": "http"
-        },
-        {
-          "description": "A locally launched stdio server.",
-          "type": "string",
-          "const": "stdio"
-        }
-      ]
-    },
-    "McpToolPermissionDocument": {
-      "description": "Exact-tool permission override authored under one MCP server.",
-      "type": "object",
-      "properties": {
-        "permissions": {
-          "description": "Complete three-mode permission object for this exact tool.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResourcePermissionSet"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
     },
     "AgentSourceView": {
       "type": "object",
@@ -40022,6 +40039,36 @@
                 "target",
                 "model",
                 "source"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Read a redacted Workspace MCP document from its authenticated Client.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/sourceRead"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "execution_session": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "execution_session"
               ]
             }
           },

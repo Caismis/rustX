@@ -381,7 +381,7 @@ pub(crate) struct Operations {
 }
 
 #[cfg(test)]
-type CaptureHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+pub(crate) type CaptureHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
 
 // Keep the capture ahead of its worker guard in the drop order, including
 // when the runtime discards the START future before polling it.
@@ -1291,11 +1291,15 @@ impl Operations {
 
     #[cfg(test)]
     fn hold_capture(&self, key: &ProcessOperationKey) {
-        let hold = self.capture_holds.lock().unwrap().remove(&key.operation);
-        if let Some((entered, resume)) = hold {
+        if let Some((entered, resume)) = self.take_capture_hold(key.operation) {
             entered.send(()).unwrap();
             resume.recv().unwrap();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_capture_hold(&self, id: OperationId) -> Option<CaptureHold> {
+        self.capture_holds.lock().unwrap().remove(&id)
     }
 
     fn bash_capture(&self, key: ProcessOperationKey) -> ProcessReply {
@@ -2671,6 +2675,113 @@ mod tests {
     }
 
     #[test]
+    fn python_source_capture_keeps_revocation_open_before_first_chunk() {
+        use rustx_execution_protocol::mcp::{
+            PythonSourceReply, PythonSourceRequest, PythonSourceScope,
+        };
+
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+        use rustx_execution_transport::RecordChannel;
+        use std::os::unix::net::UnixStream;
+
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = std::fs::canonicalize(directory.path()).unwrap();
+        let package = workspace.join(".agents/tools/fixture");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("server.py"),
+            b"# capture a real source chunk\n",
+        )
+        .unwrap();
+        std::fs::write(package.join("requirements.txt"), b"# no packages\n").unwrap();
+        let admission = admission(&workspace);
+        let key = fresh_key(&admission);
+        let operations = Arc::new(Operations::new(admission).unwrap());
+        let mut catalog = crate::managed_python::Catalog::new(&workspace);
+        let cleanup = catalog.cleanup();
+        let (entered, started) = std::sync::mpsc::channel();
+        let (release, parked) = std::sync::mpsc::channel();
+        operations
+            .capture_holds
+            .lock()
+            .unwrap()
+            .insert(key.operation, (entered, parked));
+        assert!(matches!(
+            catalog.exchange(
+                PythonSourceRequest::Capture {
+                    key,
+                    scope: PythonSourceScope::Workspace,
+                    name: "fixture".into(),
+                },
+                &operations,
+            ),
+            PythonSourceReply::Capturing
+        ));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let readable = RecordChannel::unix(server.try_clone().unwrap())
+            .shutdown_handle()
+            .unwrap();
+        let (data, _server_data) = UnixStream::pair().unwrap();
+        let worker = crate::client_control_worker(
+            RecordChannel::unix(client),
+            Arc::new(crate::mutation::Arbitration::new()),
+            RecordChannel::unix(data).shutdown_handle().unwrap(),
+            operations.clone(),
+            Arc::new(crate::watch::Watches::new()),
+            Arc::new(Mutex::new(crate::saves::Saves::new(
+                operations.admission.clone(),
+            ))),
+            cleanup.clone(),
+            Arc::default(),
+        );
+        let poll: ControlPoll = read_record(&mut server).unwrap();
+        write_record(
+            &mut server,
+            &ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request: Some(ControlRequest::Revoke),
+            },
+        )
+        .unwrap();
+        let wait = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        wait.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), operations.revoke.cancelled())
+                .await
+                .unwrap();
+        });
+        assert_eq!(operations.settle(Duration::ZERO), 1);
+        assert!(cleanup.close(), "the capture has reserved no bytes yet");
+        assert!(
+            !readable.readable_now().unwrap(),
+            "Revoke has no terminal poll while capture holds the guard"
+        );
+        release.send(()).unwrap();
+        let poll: ControlPoll = read_record(&mut server).unwrap();
+        assert_eq!(poll.receipt, Some(ControlReply::Revoked));
+        write_record(
+            &mut server,
+            &ControlTurn {
+                sequence: poll.sequence,
+                health: poll.health,
+                request: None,
+            },
+        )
+        .unwrap();
+        assert!(worker.stop() == crate::ControlEnd::Revoked);
+        assert!(cleanup.close());
+        operations.shutdown().unwrap();
+    }
+
+    #[test]
     fn dropping_a_worker_without_physical_proof_keeps_revoke_unconfirmed() {
         let directory = tempfile::tempdir().unwrap();
         let ops = Operations::new(admission(directory.path())).unwrap();
@@ -4033,6 +4144,7 @@ mod tests {
                 Arc::new(crate::watch::Watches::new()),
                 Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
                 crate::managed_python::SourceCleanup::default(),
+                Arc::default(),
             );
             server
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -4201,6 +4313,7 @@ mod tests {
             Arc::new(crate::watch::Watches::new()),
             Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
             crate::managed_python::SourceCleanup::default(),
+            Arc::default(),
         );
         server
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -4263,6 +4376,7 @@ mod tests {
         ops.shutdown().unwrap();
     }
 
+    #[allow(clippy::too_many_lines)] // Keep the capture gate and physical receipt in the same scenario.
     fn revoke_during_capture_handoff(discard: bool) {
         use rustx_execution_protocol::transport::{read_record, write_record};
         use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
@@ -4329,6 +4443,7 @@ mod tests {
             Arc::new(crate::watch::Watches::new()),
             Arc::new(Mutex::new(crate::saves::Saves::new(ops.admission.clone()))),
             crate::managed_python::SourceCleanup::default(),
+            Arc::default(),
         );
         control_server
             .set_read_timeout(Some(Duration::from_secs(5)))

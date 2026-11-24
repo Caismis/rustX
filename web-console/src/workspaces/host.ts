@@ -74,12 +74,16 @@ export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   picker: { kind: 'native' } | { kind: 'configured' | 'browser'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
 export interface WorkspaceSelectionIntent { client: string; sequence: number }
-export type SessionLocation = { authorized: false; reason: 'denied' | 'unavailable' } | { authorized: true; workspaceId?: string };
+export type SessionLocation =
+  | { authorized: false; reason: 'denied' }
+  | { authorized: false; reason: 'unavailable'; clientCatalogWorkspaceId?: string }
+  | { authorized: true; workspaceId?: string };
 /** Validate the current positional contract before any display or admission consumer. */
 export function validateLocations(value: unknown, count: number): asserts value is SessionLocation[] {
   if (!Array.isArray(value) || value.length !== count || value.some(row => !row ||
     (row.authorized !== true && row.authorized !== false) ||
-    (row.authorized === false && !['denied', 'unavailable'].includes(row.reason)) ||
+    (row.authorized === false && (!['denied', 'unavailable'].includes(row.reason)
+      || (row.clientCatalogWorkspaceId !== undefined && (row.reason !== 'unavailable' || typeof row.clientCatalogWorkspaceId !== 'string')))) ||
     (row.authorized === true && row.workspaceId !== undefined && typeof row.workspaceId !== 'string'))) {
     throw new Error('Invalid Workspace classification');
   }

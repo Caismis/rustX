@@ -168,6 +168,11 @@ async fn drain_reports_an_admitted_client_with_lost_control_as_unconfirmed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_accepts_the_original_receipt_after_revoke_lane_loss() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::drain_accepts_the_original_receipt_after_revoke_lane_loss()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::detach::refused_register_does_not_allocate_a_cancellation_tombstone()).await;
 }

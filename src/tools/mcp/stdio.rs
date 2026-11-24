@@ -160,6 +160,7 @@ impl Session {
     pub(super) async fn open(
         scope: &SessionExecutionScope,
         workspace: &Path,
+        source_id: &str,
         launch: Launch,
         cancellation: &CancellationSignal,
         violation: Arc<ProtocolViolationRecorder>,
@@ -172,7 +173,7 @@ impl Session {
             closed: AtomicBool::new(false),
             violation,
         });
-        let admitted = owner.await_admission(launch, cancellation).await;
+        let admitted = owner.await_admission(source_id, launch, cancellation).await;
         match admitted {
             Ok(admission) => {
                 let transport = PeerTransport::new(owner.clone());
@@ -189,6 +190,7 @@ impl Session {
 
     async fn await_admission(
         &self,
+        source_id: &str,
         launch: Launch,
         signal: &CancellationSignal,
     ) -> Result<ClientTransportAdmission, McpError> {
@@ -196,6 +198,7 @@ impl Session {
         let deadline = Instant::now() + STARTUP;
         let mut request = Request::Open {
             key: self.binding.key.clone(),
+            source_id: source_id.to_owned(),
             launch,
         };
         loop {
@@ -371,20 +374,18 @@ impl Session {
         let mut data = Vec::new();
         let mut idle = POLL;
         loop {
+            use crate::local_runtime::session_runtime_manager::ReceiveExchange;
             let reply = self
                 .binding
-                .exchange(
-                    Request::Receive {
-                        key: self.binding.key.clone(),
-                        sequence: sequence.into(),
-                        offset: (data.len() as u64).into(),
-                    },
+                .receive(
+                    sequence,
+                    data.len() as u64,
                     Instant::now() + EXCHANGE,
                     &cancellation,
                 )
                 .await;
             match reply {
-                Ok(Reply::Page {
+                ReceiveExchange::Reply(Reply::Page {
                     data_base64, last, ..
                 }) => {
                     let Ok(bytes) = decode(&data_base64, MAX_RAW_CHUNK_BYTES) else {
@@ -417,7 +418,7 @@ impl Session {
                         sequence = next;
                     }
                 }
-                Ok(Reply::Pending) => {
+                ReceiveExchange::Reply(Reply::Pending) | ReceiveExchange::Deferred => {
                     tokio::select! {
                         biased;
                         () = stop.cancelled() => return,
@@ -425,11 +426,15 @@ impl Session {
                     }
                     idle = idle.saturating_mul(2).min(MAX_IDLE_POLL);
                 }
-                Ok(Reply::Failed(Failure::InvalidRecord)) => {
+                ReceiveExchange::Reply(Reply::Failed(Failure::InvalidRecord)) => {
                     self.violation.record_client_rejection();
                     return;
                 }
-                _ => return,
+                ReceiveExchange::Failed(error) => {
+                    tracing::debug!(%error, "stdio MCP receive ended");
+                    return;
+                }
+                ReceiveExchange::Reply(_) => return,
             }
         }
     }

@@ -98,6 +98,14 @@ impl ConnectionOwner {
         inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(connection)
     }
 
+    pub(super) fn permits_dispatch(&self, connection: &ConnectionId) -> bool {
+        let inner = self.inner();
+        !inner.closing
+            && inner.settlement != PhysicalSettlement::Confirmed
+            && inner.phase == BindingPhase::Live
+            && inner.connection.as_ref() == Some(connection)
+    }
+
     /// Ends the live pair identified by its data lane.
     ///
     /// Only the currently live data connection can detach the binding:
@@ -239,6 +247,7 @@ struct Inner {
     /// the attempt that superseded it.
     next_attempt: u64,
     recovery: Option<RecoveryProof>,
+    closing: bool,
 }
 
 struct RecoveryProof {
@@ -270,6 +279,8 @@ fn recovery_admission_is_closed_at_the_fixed_deadline() {
     let loss = Instant::now();
     state.detach(loss);
     let cutoff = loss + SAME_INSTANCE_RECOVERY_WINDOW;
+    state.closing = true;
+    state.detach(loss + Duration::from_secs(1));
     assert_eq!(
         Binding::check_phase_at(&state, cutoff.checked_sub(Duration::from_nanos(1)).unwrap()),
         Ok(())
@@ -337,7 +348,9 @@ impl Inner {
 
     fn detach(&mut self, now: Instant) {
         self.phase = BindingPhase::Detached;
-        if let Some(proof) = &mut self.recovery {
+        if let Some(proof) = &mut self.recovery
+            && (!self.closing || proof.deadline.is_none())
+        {
             proof.deadline = Some(now + rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW);
         }
     }
@@ -440,6 +453,7 @@ impl Binding {
                     pending: None,
                     next_attempt: 0,
                     recovery: None,
+                    closing: false,
                 }),
                 pair_ready: Condvar::new(),
             }),
@@ -581,6 +595,9 @@ impl Binding {
     }
 
     fn check_phase_at(inner: &Inner, now: Instant) -> Result<(), Reject> {
+        if inner.settlement == PhysicalSettlement::Confirmed {
+            return Err(Reject::Revoked);
+        }
         match inner.phase {
             BindingPhase::Reserved => Ok(()),
             BindingPhase::Detached
@@ -785,8 +802,11 @@ impl Binding {
         if peer_gone {
             return Err(Reject::InvalidPairing);
         }
+        let closing = inner.closing;
         if let Some(proof) = &mut inner.recovery {
-            proof.deadline = None;
+            if !closing {
+                proof.deadline = None;
+            }
         } else {
             let credential = hello
                 .credential
@@ -896,8 +916,14 @@ impl Binding {
     /// Reports an unconfirmed revocation if a previously admitted Client
     /// lost the control path or did not return its receipt by the deadline.
     pub fn settle_revocation_by(&self, deadline: Instant) -> io::Result<()> {
-        let control = {
+        let (control, deadline) = {
             let mut inner = self.inner.inner();
+            inner.closing = true;
+            let deadline = inner
+                .recovery
+                .as_ref()
+                .and_then(|proof| proof.deadline)
+                .map_or(deadline, |cutoff| deadline.min(cutoff));
             match &inner.settlement {
                 PhysicalSettlement::NeverAdmitted => {
                     inner.phase = BindingPhase::Revoked;
@@ -906,23 +932,73 @@ impl Binding {
                     return Ok(());
                 }
                 PhysicalSettlement::Confirmed => return Ok(()),
-                PhysicalSettlement::Unconfirmed { .. } => {
-                    inner.control.as_ref().map(|lane| lane.handle.clone())
-                }
+                PhysicalSettlement::Unconfirmed { .. } => (
+                    inner
+                        .control
+                        .as_ref()
+                        .map(|lane| (lane.connection.clone(), lane.handle.clone())),
+                    deadline,
+                ),
             }
         };
         let result = control
+            .as_ref()
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotConnected,
                     "admitted Client has no control lane or physical settlement receipt",
                 )
             })
-            .and_then(|control| control.request_revoke_by(deadline));
+            .and_then(|(_, control)| control.request_revoke_by(deadline));
+        if result
+            .as_ref()
+            .is_err_and(rustx_execution_protocol::transport::recoverable_lane_loss)
+            && let Some((connection, _)) = control
+        {
+            let mut inner = self.inner.inner();
+            if inner.settlement != PhysicalSettlement::Confirmed
+                && inner
+                    .control
+                    .as_ref()
+                    .is_some_and(|lane| lane.connection == connection)
+            {
+                let handles = inner.end_pair(true);
+                drop(inner);
+                handles.shutdown();
+            }
+        }
         if self.revocation_confirmed() {
             return Ok(());
         }
         result
+    }
+
+    /// Close normal admission while retaining the original instance's cleanup window.
+    pub fn begin_revocation(&self) {
+        let mut inner = self.inner.inner();
+        inner.closing = true;
+        if inner.settlement == PhysicalSettlement::NeverAdmitted {
+            inner.phase = BindingPhase::Revoked;
+            inner.pending = None;
+            self.inner.pair_ready.notify_all();
+        }
+    }
+
+    /// The original instance's last possible cleanup admission.
+    #[must_use]
+    pub fn revocation_recovery_deadline(&self) -> Option<Instant> {
+        let inner = self.inner.inner();
+        if inner.settlement == PhysicalSettlement::Confirmed {
+            return None;
+        }
+        inner.recovery.as_ref().and_then(|proof| proof.deadline)
+    }
+
+    /// An authenticated cleanup attempt can still arrive or be in pairing.
+    #[must_use]
+    pub fn awaiting_revocation_recovery(&self) -> bool {
+        self.revocation_recovery_deadline()
+            .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     /// Whether this binding's control lane supplied a validated Revoke receipt.

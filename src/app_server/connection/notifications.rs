@@ -109,13 +109,29 @@ impl AppServerConnection {
     /// permit. Re-addressing an admitted source changes nothing it delivers.
     pub(super) async fn observe_repair_source(&self, method: &Method) {
         let directory = match method {
-            Method::McpCatalog { target, .. }
-            | Method::SkillsList { target, .. }
-            | Method::SkillsRead { target, .. }
+            Method::McpCatalog {
+                target,
+                execution_session: None,
+                ..
+            }
+            | Method::SkillsList {
+                target,
+                execution_session: None,
+                ..
+            }
+            | Method::SkillsRead {
+                target,
+                execution_session: None,
+                ..
+            }
             | Method::SourcesRead { target }
             | Method::SourcesWrite { target, .. }
             | Method::ConfigurationReconcile { target }
-            | Method::McpProbe { target, .. } => target
+            | Method::McpProbe {
+                target,
+                execution_session: None,
+                ..
+            } => target
                 .validate()
                 .ok()
                 .and_then(|()| target.workspace().map(std::path::Path::to_path_buf)),

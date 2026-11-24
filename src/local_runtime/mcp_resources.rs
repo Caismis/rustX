@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 pub(super) const MAX_MCP_DEFINITIONS: usize = 128;
-pub(super) const WORKSPACE_DOCUMENT: &str = ".agents/mcp.toml";
+pub(crate) const WORKSPACE_DOCUMENT: &str = ".agents/mcp.toml";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct McpCatalog {

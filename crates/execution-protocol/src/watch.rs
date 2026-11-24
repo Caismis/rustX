@@ -86,8 +86,12 @@ pub enum WatchReply {
     },
     /// Coalesced changes since the last poll.
     Changed(WatchChange),
-    /// Genuine admission or lookup refusal. A Poll with `Busy` means the
-    /// exact watcher is retiring and still owns native cleanup.
+    /// Coverage is lost while the exact watcher still owns native cleanup.
+    Retiring {
+        /// Identifies the request.
+        id: WatchId,
+    },
+    /// Genuine admission or lookup refusal.
     Refused {
         /// Identifies the request.
         id: WatchId,

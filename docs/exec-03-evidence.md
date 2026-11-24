@@ -744,3 +744,22 @@ runs with their original interpreter and witness assertions.
 
 The fixture and evidence follow-ups require their own exact-head FULL
 and Merge verification. Native macOS verification is deferred.
+
+## Review fixes after b91af242
+
+| Boundary | Regression |
+|---|---|
+| Managed Python physical ownership | `python_source_capture_keeps_revocation_open_before_first_chunk` parks the actual capture before its first allocation. Revocation retains the worker while the byte charge is zero. |
+| Delegated MCP source identity | `child_stdio_uses_parent_identity_and_keeps_unconfirmed_cleanup` opens two grants with identical launch parameters and checks cross-source tool and resource denial and Open replay. |
+| Stdio Receive backpressure | `child_relay_reaps_its_running_stdio_session_on_the_original_client` holds the local writer and then the parent data connection. The sole real process emits one reply, delivered at the original cursor after both refused polls. |
+| Recoverable Revoke | `revoke_lane_cuts_keep_only_the_original_cleanup_authority` checks three control disconnect cuts. `real_client_recovers_after_losing_its_revoke_receipt` cuts a real Client's final poll. `drain_accepts_the_original_receipt_after_revoke_lane_loss` covers Host drain and the recovered final receipt. |
+| Durable recovery publication | `unpublished_owner_never_fences_an_unrelated_workspace` observes another Workspace during private staging, simulates an interrupted publication, and verifies that a committed owner remains exclusive. |
+| Watch retirement and catalog coverage | `replacing_a_skill_refreshes_the_catalog_while_native_watch_retirement_is_held` runs an isolated Client with the old descriptor held during retirement. The Server publishes the replacement Skill while the gate is held. `pending_native_retirement_keeps_independent_watches_live` and `native_retirement_starts_resync_before_returning_the_watch_identity` cover the native slot and bound observer transitions. |
+| Managed Python observation | `client_package_watch_refreshes_permissions_and_nested_source_from_the_same_binding` edits the permissions document and a nested Python module independently. It checks the digests and permissions before, during and after an admitted Attempt. |
+| Bound Web resource reads | `bound-resources.test.tsx` mounts the resource surface with a Client-only Skill, a different Server MCP revision and a late reply after Session switch. `bound_workspace_mcp_catalog_uses_client_definitions_and_server_network` exercises the real mount-split source read and probe with an absent Server directory and a Server decoy. |
+
+Execution revision 7 rejects revision 6 on both lanes. The App Server's
+v81 contract adds `mcp/sourceRead` to return a redacted Client document and
+its probe revision. The Product Host can identify an exact registration
+when its path is absent. Physical Host operations remain denied, and
+the App Server admits the bound read against the selected Session.

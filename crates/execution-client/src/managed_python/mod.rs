@@ -59,6 +59,7 @@ pub(crate) struct PythonToolPackage {
     name: String,
     root: PathBuf,
     files: Vec<PathBuf>,
+    watch_directories: Option<Vec<PathBuf>>,
     source: Arc<PythonSource>,
     pub(super) source_digest: String,
     requirements: Vec<String>,
@@ -154,6 +155,7 @@ pub(super) fn discover_package(
     name: &str,
     cancellation: &ProcessSignal,
     quota: Arc<AtomicU64>,
+    #[cfg(test)] first_chunk: Option<crate::process::CaptureHold>,
 ) -> Result<(PythonToolPackage, Option<Vec<u8>>), PythonToolError> {
     let invalid = |message: String| {
         PythonToolError::InvalidPackage(format!("package {name:?} ({}): {message}", root.display()))
@@ -178,7 +180,7 @@ pub(super) fn discover_package(
         PythonToolError::InvalidPackage(message) => invalid(message),
         other => other,
     })?;
-    let mut files = collect_files(root, cancellation)?;
+    let (mut files, watch_directories) = collect_files(root, cancellation)?;
     // Membership is already complete. Reject malformed winning candidates
     // before creating capture storage or reading any supporting asset bytes.
     if !files.iter().any(|path| path == Path::new(SERVER_FILE)) {
@@ -208,13 +210,21 @@ pub(super) fn discover_package(
     } else {
         None
     };
-    let (source, source_digest, requirements) =
-        capture_package_source(root, &files, cancellation, quota, requirements_error)?;
+    let (source, source_digest, requirements) = capture_package_source(
+        root,
+        &files,
+        cancellation,
+        quota,
+        requirements_error,
+        #[cfg(test)]
+        first_chunk,
+    )?;
     Ok((
         PythonToolPackage {
             name: name.to_owned(),
             root: root.to_path_buf(),
             files,
+            watch_directories,
             source: Arc::new(source),
             source_digest,
             requirements,
@@ -231,6 +241,7 @@ fn capture_package_source(
     cancellation: &ProcessSignal,
     bytes: Arc<AtomicU64>,
     requirements_error: impl Fn(PythonToolError) -> PythonToolError,
+    #[cfg(test)] mut first_chunk: Option<crate::process::CaptureHold>,
 ) -> Result<(PythonSource, String, Vec<String>), PythonToolError> {
     let mut quota = SnapshotQuota { bytes, owned: 0 };
     let mut source_file = tempfile::tempfile().map_err(io_error)?;
@@ -249,6 +260,12 @@ fn capture_package_source(
         hash.update((name.len() as u64).to_be_bytes());
         hash.update(name);
         let evidence = stream(&directory, path, cancellation, |bytes| {
+            #[cfg(test)]
+            if let Some((entered, resume)) = first_chunk.take() {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+            }
+            check_cancelled(cancellation)?;
             quota.reserve(bytes.len() as u64)?;
             source_file.write_all(bytes)?;
             if path == Path::new(REQUIREMENTS_FILE)
@@ -288,15 +305,37 @@ fn capture_package_source(
     Ok((source, source_digest, requirements))
 }
 
+struct WatchDirectories {
+    paths: Option<Vec<PathBuf>>,
+    encoded_bytes: usize,
+}
+
+impl WatchDirectories {
+    fn record(&mut self, path: &Path) {
+        use rustx_execution_protocol::mcp::{MAX_SOURCE_WATCH_BYTES, MAX_SOURCE_WATCH_DIRECTORIES};
+        if let Some(paths) = &mut self.paths {
+            self.encoded_bytes += path.as_os_str().len().saturating_mul(6) + 8;
+            if paths.len() < MAX_SOURCE_WATCH_DIRECTORIES
+                && self.encoded_bytes <= MAX_SOURCE_WATCH_BYTES
+            {
+                paths.push(path.to_path_buf());
+            } else {
+                self.paths = None;
+            }
+        }
+    }
+}
+
 /// Enumerate metadata through anchored directory handles, without opening links.
 fn collect_files(
     root: &Path,
     cancellation: &ProcessSignal,
-) -> Result<Vec<PathBuf>, PythonToolError> {
+) -> Result<(Vec<PathBuf>, Option<Vec<PathBuf>>), PythonToolError> {
     fn walk(
         directory: &PackageDirectory,
         prefix: &Path,
         files: &mut Vec<PathBuf>,
+        watches: &mut WatchDirectories,
         remaining: &mut usize,
         depth: usize,
         cancellation: &ProcessSignal,
@@ -307,6 +346,7 @@ fn collect_files(
                 "package nesting exceeds 64".into(),
             ));
         }
+        watches.record(prefix);
         for name in directory.names(1024).map_err(io_error)? {
             *remaining = remaining.checked_sub(1).ok_or_else(|| {
                 PythonToolError::InvalidPackage("package exceeds 4096 entries".into())
@@ -318,7 +358,15 @@ fn collect_files(
                 ));
             }
             if let Ok(child) = directory.child(name.as_os_str()) {
-                walk(&child, &path, files, remaining, depth + 1, cancellation)?;
+                walk(
+                    &child,
+                    &path,
+                    files,
+                    watches,
+                    remaining,
+                    depth + 1,
+                    cancellation,
+                )?;
             } else {
                 // Includes symlinks, FIFOs and unsupported entry kinds: the
                 // opened descriptor, not a prior path check, decides.
@@ -330,16 +378,24 @@ fn collect_files(
     }
     let directory = PackageDirectory::open(root).map_err(io_error)?;
     let mut files = Vec::new();
+    let mut watches = WatchDirectories {
+        paths: Some(Vec::new()),
+        encoded_bytes: 0,
+    };
     walk(
         &directory,
         Path::new(""),
         &mut files,
+        &mut watches,
         &mut 4096,
         0,
         cancellation,
     )?;
     files.sort();
-    Ok(files)
+    if let Some(paths) = &mut watches.paths {
+        paths.sort();
+    }
+    Ok((files, watches.paths))
 }
 
 pub(super) fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
@@ -1000,7 +1056,7 @@ fn read_prepared_state(
         )));
     }
     let source_root = state_dir.join(SOURCE_DIRECTORY);
-    let files = collect_files(&source_root, cancellation)?;
+    let (files, _) = collect_files(&source_root, cancellation)?;
     if source_digest(&source_root, &files, cancellation)? != manifest.source_digest {
         return Err(PythonToolError::Storage(format!(
             "prepared state source {} does not hash back to its manifest",
@@ -1613,7 +1669,7 @@ mod tests {
     use super::*;
 
     fn source(root: &Path, name: &str) -> (PythonToolPackage, Option<Vec<u8>>) {
-        discover_package(root, name, &ProcessSignal::new(), Arc::default()).unwrap()
+        discover_package(root, name, &ProcessSignal::new(), Arc::default(), None).unwrap()
     }
 
     fn authored(root: &Path) {

@@ -327,6 +327,77 @@ fn same_instance_recovery_preserves_the_process_and_output_cursor() {
 }
 
 #[test]
+fn real_client_recovers_after_losing_its_revoke_receipt() {
+    use rustx_execution_protocol::transport::{read_record, write_record};
+    use rustx_execution_protocol::{
+        ControlHelloReply, ControlPoll, ControlReply, ControlRequest, ControlTurn, PeerHello,
+    };
+    use rustx_execution_server::ChannelAccept;
+    use std::os::unix::net::UnixStream;
+
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    assert!(matches!(
+        rig.binding.accept_local(accept(&rig, &mut child)).unwrap(),
+        ChannelAccept::Pending
+    ));
+
+    let mut client_control = accept(&rig, &mut child);
+    let (mut proxy, server_control) = UnixStream::pair().unwrap();
+    for lane in [&client_control, &proxy] {
+        lane.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    }
+    let hello: PeerHello = read_record(&mut client_control).unwrap();
+    write_record(&mut proxy, &hello).unwrap();
+    let ChannelAccept::Live(mut old) = rig.binding.accept_local(server_control).unwrap() else {
+        panic!("the real Client control Hello must pair");
+    };
+    write_record(
+        &mut client_control,
+        &read_record::<ControlHelloReply>(&mut proxy).unwrap(),
+    )
+    .unwrap();
+    let original = old.admission().clone();
+    std::thread::scope(|scope| {
+        let settle = scope.spawn(|| {
+            rig.binding
+                .settle_revocation_by(Instant::now() + Duration::from_secs(5))
+        });
+        loop {
+            let poll = read_record::<ControlPoll>(&mut client_control).unwrap();
+            assert!(poll.receipt.is_none());
+            write_record(&mut proxy, &poll).unwrap();
+            let turn = read_record::<ControlTurn>(&mut proxy).unwrap();
+            write_record(&mut client_control, &turn).unwrap();
+            if turn.request == Some(ControlRequest::Revoke) {
+                break;
+            }
+        }
+        let poll = read_record::<ControlPoll>(&mut client_control).unwrap();
+        assert_eq!(poll.receipt, Some(ControlReply::Revoked));
+        assert!(!rig.binding.revocation_confirmed());
+        // The Client's physical proof exists, but the Server never saw it.
+        drop((proxy, client_control));
+        assert!(settle.join().unwrap().is_err());
+    });
+    assert!(rig.binding.may_recover());
+    assert!(old.ping().is_err());
+    let mut recovered = admit_pair(&rig, &mut child);
+    assert_eq!(recovered.admission(), &original);
+    assert_ne!(recovered.connection_id(), old.connection_id());
+    assert_eq!(
+        recovered.ping().unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    rig.binding
+        .settle_revocation_by(Instant::now() + Duration::from_secs(5))
+        .unwrap();
+    assert!(rig.binding.revocation_confirmed());
+    assert!(!rig.binding.may_recover());
+    expect_success(&mut child);
+}
+
+#[test]
 fn either_one_way_control_failure_recovers_the_same_authenticated_instance() {
     use rustx_execution_server::ChannelAccept;
     use std::net::Shutdown;
@@ -2111,10 +2182,18 @@ fn client_applied_control_wins_before_file_publication() {
                 commit_count.set(commit_count.get() + 1);
             })
             .unwrap_err();
-        assert_eq!(commit_count.get(), 1);
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-        let receipt = error.get_ref().expect("typed cancellation receipt");
-        assert!(receipt.is::<rustx_execution_server::CommitCancelled>());
+        if revoke {
+            assert_eq!(commit_count.get(), 0, "closed admission sends no commit");
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::NotConnected
+            ));
+        } else {
+            assert_eq!(commit_count.get(), 1);
+            assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+            let receipt = error.get_ref().expect("typed cancellation receipt");
+            assert!(receipt.is::<rustx_execution_server::CommitCancelled>());
+        }
         assert!(fs::read_dir(&rig.workspace_path).unwrap().next().is_none());
 
         connection.close();

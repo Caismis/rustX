@@ -147,6 +147,7 @@ pub struct PythonToolPackage {
     files: Vec<PathBuf>,
     source: PackageSource,
     source_digest: String,
+    pub(crate) watch_directories: Option<Vec<PathBuf>>,
     /// The normalized dependency lines of `requirements.txt` (comments and
     /// blank lines removed), in file order.
     requirements: Vec<String>,
@@ -319,6 +320,7 @@ impl PythonToolPackage {
             files: Vec::new(),
             source: PackageSource::Unprepared,
             source_digest: String::new(),
+            watch_directories: None,
             requirements: Vec::new(),
             permissions,
             tool_permissions,
@@ -331,6 +333,7 @@ impl PythonToolPackage {
         source_digest: String,
         permissions: Option<&[u8]>,
         source: Arc<ClientSource>,
+        watch_directories: Option<Vec<PathBuf>>,
     ) -> Result<Self, PythonToolError> {
         validate_identifier(&name)?;
         let (permissions, tool_permissions) = permissions.map_or_else(
@@ -345,6 +348,7 @@ impl PythonToolPackage {
             files: Vec::new(),
             source: PackageSource::Client(source),
             source_digest,
+            watch_directories,
             requirements: Vec::new(),
             permissions,
             tool_permissions,
@@ -501,6 +505,7 @@ pub(crate) fn discover_package(
         files,
         source: PackageSource::Local(Arc::new(source)),
         source_digest,
+        watch_directories: None,
         requirements,
         permissions,
         tool_permissions,
@@ -595,6 +600,7 @@ impl PartialEq for PythonToolPackage {
             && self.root == other.root
             && self.files == other.files
             && self.source_digest == other.source_digest
+            && self.watch_directories == other.watch_directories
             && self.requirements == other.requirements
             && self.permissions == other.permissions
             && self.tool_permissions == other.tool_permissions

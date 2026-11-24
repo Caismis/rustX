@@ -315,7 +315,8 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('same Host pro
     // Same Product Host process throughout: its identity alone would have admitted this.
     expect(f.lists).toEqual([f.lists[0], f.lists[0]]);
     expect(f.accepted).toHaveBeenCalledTimes(1);
-    expect(f.classified[1]).toEqual({ authorityId: f.lists[0], locations: [{ authorized: false, reason: rootChanges[change].reason }] });
+    const catalog = change === 'deleted' ? { clientCatalogWorkspaceId: await f.workspaceId() } : {};
+    expect(f.classified[1]).toEqual({ authorityId: f.lists[0], locations: [{ authorized: false, reason: rootChanges[change].reason, ...catalog }] });
     expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }
@@ -340,7 +341,8 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('Fork uses the
     final.release();
     await expect(fork).rejects.toThrow(`no longer authorized by this Product Host (${rootChanges[change].reason})`);
     expect(new Set(f.lists).size).toBe(1);
-    expect(f.classified.at(-1)?.locations).toEqual([{ authorized: false, reason: rootChanges[change].reason }]);
+    const catalog = change === 'deleted' ? { clientCatalogWorkspaceId: await f.workspaceId() } : {};
+    expect(f.classified.at(-1)?.locations).toEqual([{ authorized: false, reason: rootChanges[change].reason, ...catalog }]);
     expect(server.requests.filter(row => row.request.method === 'thread/fork')).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }

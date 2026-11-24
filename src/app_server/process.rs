@@ -87,7 +87,7 @@ pub(crate) struct AppServerArgs {
     /// Deliver it out of band and keep it outside the Client environment.
     #[arg(long, requires = "execution_bootstrap_out")]
     execution_settlement_grant_out: Option<PathBuf>,
-    /// The public `wss://…/execution/v6` ingress endpoint published in
+    /// The public `wss://…/execution/v7` ingress endpoint published in
     /// the bundle instead of the loopback address.
     #[arg(long, requires = "execution_ws_listen")]
     execution_public_url: Option<String>,
@@ -524,7 +524,6 @@ async fn run(options: Request) -> Result<(), String> {
     let deadline = tokio::time::Instant::from_std(shutdown_deadline);
     host.begin_drain_by(shutdown_deadline);
     reaper_stop.cancel();
-    remote_stop.cancel();
     eprintln!("rustx app-server: Draining; new semantic admission closed");
     let graceful = async {
         let client_exit = async {
@@ -560,8 +559,11 @@ async fn run(options: Request) -> Result<(), String> {
                     }
                 }
             }
-            // The accept loop stops on drain even when no Client connected.
+            // Keep the listener available for the already admitted Client's
+            // cleanup authentication until the binding settlement budget ends.
             if let Some(accept) = remote_accept.take() {
+                let _ = host.settle_execution().await;
+                remote_stop.cancel();
                 accept
                     .await
                     .map_err(|error| format!("execution listener drain failed: {error}"))?;

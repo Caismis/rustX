@@ -535,7 +535,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v6"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v7"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -691,11 +691,11 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 
-    assert_eq!(PROTOCOL_VERSION, 6);
+    assert_eq!(PROTOCOL_VERSION, 7);
     let (binding, credential) = Binding::reserve(reservation()).unwrap();
     let hello = valid_hello(&credential);
     let mut old = hello.clone();
-    old.version = 5;
+    old.version = 6;
     let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
     write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
     write_record(
@@ -1250,13 +1250,7 @@ fn a_pending_watch_retirement_keeps_the_data_lane_open() {
         retired: false,
     };
     let expected = [
-        (
-            leaf,
-            WatchReply::Refused {
-                id: leaf,
-                kind: ReadError::Busy,
-            },
-        ),
+        (leaf, WatchReply::Retiring { id: leaf }),
         (directory, WatchReply::Changed(active.clone())),
         (leaf, WatchReply::Changed(retired.clone())),
     ];
@@ -1270,13 +1264,9 @@ fn a_pending_watch_retirement_keeps_the_data_lane_open() {
         assert_eq!(request, ClientRequest::Ping);
         write_record(&mut peer, &ClientReply::Pong).unwrap();
     });
-    assert_eq!(
-        connection
-            .poll_watch(leaf, Path::new("leaf"))
-            .unwrap_err()
-            .kind(),
-        io::ErrorKind::WouldBlock
-    );
+    let retiring = connection.poll_watch(leaf, Path::new("leaf")).unwrap_err();
+    assert_eq!(retiring.kind(), io::ErrorKind::WouldBlock);
+    assert!(retiring.get_ref().unwrap().is::<crate::WatchRetiring>());
     assert_eq!(
         connection
             .poll_watch(directory, Path::new("directory"))
@@ -3300,7 +3290,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v6"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v7"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {
@@ -3873,6 +3863,117 @@ fn a_lost_control_lane_detaches_the_pair_and_blocks_new_dispatch() {
     assert_eq!(binding.status().phase, BindingPhase::Detached);
     assert!(connection.ping().is_err() || binding.control().is_none());
     drop(connection);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Keep all three cuts on the same authenticated recovery path.
+fn revoke_lane_cuts_keep_only_the_original_cleanup_authority() {
+    enum Cut {
+        Queued,
+        Selected,
+        Sent,
+    }
+
+    fn admit(
+        binding: &Binding,
+        hello: &Hello,
+    ) -> (LocalConnection, UnixStream, UnixStream, PairingNonce) {
+        let (mut data, data_server) = UnixStream::pair().unwrap();
+        write_record(&mut data, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(data_server).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let challenge = read_record::<DataHelloReply>(&mut data)
+            .unwrap()
+            .unwrap()
+            .challenge;
+        let (mut control, control_server) = UnixStream::pair().unwrap();
+        control
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write_record(&mut control, &control_hello(hello, challenge.clone())).unwrap();
+        let ChannelAccept::Live(connection) = binding.accept_local(control_server).unwrap() else {
+            panic!("admit both authenticated lanes");
+        };
+        read_record::<ControlHelloReply>(&mut control)
+            .unwrap()
+            .unwrap();
+        (connection, data, control, challenge)
+    }
+
+    for cut in [Cut::Queued, Cut::Selected, Cut::Sent] {
+        let (binding, launch) = reserved(BTreeSet::from([Capability::Connection]));
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let fence = binding.retain_recovery_fence(&root).unwrap();
+        let (mut old, _data, mut control, challenge) = admit(&binding, &launch);
+        let handle = binding.control().unwrap();
+        let mut recovery = launch.clone();
+        recovery.credential = launch.credential.recovery_credential(&challenge);
+        binding.begin_revocation();
+        assert_eq!(
+            old.ping().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let limit = Instant::now() + Duration::from_secs(5);
+        thread::scope(|scope| {
+            let revoked = scope.spawn(|| binding.settle_revocation_by(limit));
+            while handle.shared.lock().queue.is_empty() {
+                assert!(Instant::now() < limit);
+                thread::yield_now();
+            }
+            if matches!(cut, Cut::Queued) {
+                drop(control);
+            } else {
+                let (enter, selected) = mpsc::channel();
+                let (resume, release) = mpsc::channel();
+                if matches!(cut, Cut::Selected) {
+                    *handle.shared.before_revoke_send.lock().unwrap() = Some((enter, release));
+                }
+                write_record(
+                    &mut control,
+                    &ControlPoll {
+                        sequence: 1.into(),
+                        receipt: None,
+                        health: 91.into(),
+                    },
+                )
+                .unwrap();
+                if matches!(cut, Cut::Selected) {
+                    selected.recv_timeout(Duration::from_secs(3)).unwrap();
+                    drop(control);
+                    resume.send(()).unwrap();
+                } else {
+                    let turn: ControlTurn = read_record(&mut control).unwrap();
+                    assert_eq!(turn.request, Some(ControlRequest::Revoke));
+                    drop(control);
+                }
+            }
+            assert!(revoked.join().unwrap().is_err());
+        });
+        assert!(binding.may_recover());
+        assert!(binding.awaiting_revocation_recovery());
+        assert!(!binding.revocation_confirmed());
+        assert!(binding.release_recovery_fence(&fence).is_err());
+
+        let (mut current, _data, control, _) = admit(&binding, &recovery);
+        assert_ne!(old.connection_id(), current.connection_id());
+        assert_eq!(
+            current.ping().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        thread::scope(|scope| {
+            scope.spawn(move || control_peer_loop(&mut RecordChannel::unix(control)));
+            binding
+                .settle_revocation_by(Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            binding.fence().shutdown();
+        });
+        assert!(binding.revocation_confirmed());
+        assert!(!binding.awaiting_revocation_recovery());
+        binding.release_recovery_fence(&fence).unwrap();
+    }
 }
 
 #[test]

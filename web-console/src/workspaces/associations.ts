@@ -11,8 +11,15 @@ export interface DisplayAssociation {
   /** Native activity metadata retained with the bounded association, across list searches. */
   readonly updatedAt?: number;
   readonly confirmed?: { readonly workspaceId?: string };
+  /** An exact registration for bound catalog reads even while the Host path is absent. */
+  readonly clientCatalogWorkspaceId?: string;
   readonly status: AssociationStatus;
 }
+export function clientCatalogWorkspace(entry: DisplayAssociation | undefined): string | undefined {
+  if (entry?.status === 'ready') return entry.confirmed?.workspaceId;
+  if (entry?.status === 'unavailable') return entry.clientCatalogWorkspaceId;
+}
+
 interface Entry extends DisplayAssociation { readonly revision: number }
 export interface WorkspaceMutation {
   readonly scope: WorkspaceAuthorityScope;
@@ -191,8 +198,11 @@ export class WorkspaceAssociations {
       }
       this.catalog = catalog; this.catalogStatus = 'ready';
       const ids = new Set(catalog.workspaces.map(row => row.id));
-      for (const [id, entry] of this.entries) if (entry.confirmed?.workspaceId && !ids.has(entry.confirmed.workspaceId)) {
-        this.entries.set(id, { ...entry, confirmed: undefined, revision: -1, status: 'pending' });
+      for (const [id, entry] of this.entries) {
+        const workspace = entry.confirmed?.workspaceId ?? entry.clientCatalogWorkspaceId;
+        if (workspace && !ids.has(workspace)) {
+          this.entries.set(id, { ...entry, confirmed: undefined, clientCatalogWorkspaceId: undefined, revision: -1, status: 'pending' });
+        }
       }
       this.publish(); this.schedule();
     }).catch(() => {
@@ -229,7 +239,10 @@ export class WorkspaceAssociations {
         const locations = await this.authority.classify(batch.map(row => row.cwd), endpoint, authority, controller.signal);
         if (!current()) return;
         validateLocations(locations, batch.length);
-        if (locations.some(location => location.authorized && location.workspaceId !== undefined && !catalog.workspaces.some(row => row.id === location.workspaceId))) throw new Error('Invalid Workspace classification');
+        if (locations.some(location => {
+          const workspace = location.authorized ? location.workspaceId : location.reason === 'unavailable' ? location.clientCatalogWorkspaceId : undefined;
+          return workspace !== undefined && !catalog.workspaces.some(row => row.id === workspace);
+        })) throw new Error('Invalid Workspace classification');
         results.push(...locations);
       }
       if (!current()) return;
@@ -241,6 +254,8 @@ export class WorkspaceAssociations {
         if (old?.cwd !== row.cwd || old.revision === revision) return;
         next.set(row.id, { cwd: row.cwd, updatedAt: old.updatedAt, revision,
           confirmed: result.authorized ? { workspaceId: result.workspaceId } : result.reason === 'unavailable' ? old?.confirmed : undefined,
+          ...(!result.authorized && result.reason === 'unavailable' && result.clientCatalogWorkspaceId
+            ? { clientCatalogWorkspaceId: result.clientCatalogWorkspaceId } : {}),
           status: result.authorized ? 'ready' : result.reason === 'unavailable' ? 'unavailable' : 'revoked' });
       });
       this.entries = next; this.publish();
@@ -261,6 +276,8 @@ export class WorkspaceAssociations {
   private publish() {
     const entries = new Map<string, DisplayAssociation>();
     for (const [id, entry] of this.entries) entries.set(id, { cwd: entry.cwd, updatedAt: entry.updatedAt, confirmed: entry.confirmed,
+      ...(this.connected && this.catalogStatus === 'ready' && entry.clientCatalogWorkspaceId
+        ? { clientCatalogWorkspaceId: entry.clientCatalogWorkspaceId } : {}),
       status: !this.connected ? 'disconnected' : this.catalogStatus === 'unavailable' ? 'unavailable'
         : this.catalogStatus !== 'ready' && entry.confirmed ? 'refreshing' : entry.status });
     // Historical entries retain evidence but cannot report current read demand.

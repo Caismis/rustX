@@ -20,7 +20,7 @@ use crate::EXECUTION_PATH;
 ///
 /// Supported forms are deliberately narrow — `ws://IP[:PORT]` only for a
 /// literal loopback IP, `wss://IP[:PORT]` for any literal IP, path always
-/// `/execution/v6`, no userinfo, query, or fragment. Hostnames are
+/// `/execution/v7`, no userinfo, query, or fragment. Hostnames are
 /// unsupported: a numeric IP keeps resolution inside the bounded connect
 /// budget and pairs with an IP-SAN certificate.
 #[derive(Debug)]
@@ -74,12 +74,12 @@ impl ExecutionUrl {
             return Err(invalid("the endpoint must be a ws:// or wss:// URL"));
         };
         let Some((authority, path)) = rest.split_once('/') else {
-            return Err(invalid("the path must be /execution/v6"));
+            return Err(invalid("the path must be /execution/v7"));
         };
         // Exact match also rejects `?query` and `#fragment` — both would
         // leave bytes after the path.
         if path != EXECUTION_PATH.strip_prefix('/').unwrap_or_default() {
-            return Err(invalid("the path must be /execution/v6"));
+            return Err(invalid("the path must be /execution/v7"));
         }
         if authority.is_empty() {
             return Err(invalid("a numeric host is required"));

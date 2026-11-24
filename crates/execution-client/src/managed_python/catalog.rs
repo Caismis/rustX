@@ -278,23 +278,32 @@ impl Catalog {
         );
         drop(captures);
         let quota = self.captures.bytes.clone();
-        if !operations.start_auxiliary_owned(move |_| async move {
-            let _worker_capacity = worker_capacity;
-            let prepared = tokio::task::spawn_blocking(move || {
-                discover_package(&root.join(&name), &name, &signal, quota).map(
-                    |(package, permissions)| Frozen {
+        #[cfg(test)]
+        let hold = operations.take_capture_hold(id);
+        if !operations.start_auxiliary_owned(move |mut worker| async move {
+            worker.physical_settlement(false);
+            let _ = tokio::task::spawn_blocking(move || {
+                let outcome = match discover_package(
+                    &root.join(&name),
+                    &name,
+                    &signal,
+                    quota,
+                    #[cfg(test)]
+                    hold,
+                ) {
+                    Ok((package, permissions)) => Ok(Frozen {
                         package,
                         permissions: permissions.map(|document| STANDARD.encode(document)),
-                    },
-                )
+                    }),
+                    Err(super::PythonToolError::InvalidPackage(_)) => Err(ReadError::Invalid),
+                    Err(_) => Err(ReadError::Unavailable),
+                };
+                *result.lock().expect("Python source capture") = Some(outcome);
+                drop(result);
+                drop(worker_capacity);
+                worker.physical_settlement(true);
             })
             .await;
-            let outcome = match prepared {
-                Ok(Ok(prepared)) => Ok(prepared),
-                Ok(Err(super::PythonToolError::InvalidPackage(_))) => Err(ReadError::Invalid),
-                Ok(Err(_)) | Err(_) => Err(ReadError::Unavailable),
-            };
-            *result.lock().expect("Python source capture") = Some(outcome);
         }) {
             self.captures.release(id);
             return PythonSourceReply::Refused(ReadError::Unavailable);
@@ -380,6 +389,7 @@ impl Capture {
             Some(Ok(frozen)) => PythonSourceReply::Captured {
                 digest: frozen.package.source_digest.clone(),
                 permissions_base64: frozen.permissions.clone(),
+                watch_directories: frozen.package.watch_directories.clone(),
             },
             Some(Err(error)) => PythonSourceReply::Refused(*error),
             None => PythonSourceReply::Capturing,

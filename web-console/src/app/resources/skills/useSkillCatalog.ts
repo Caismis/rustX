@@ -1,17 +1,17 @@
 import {useEffect,useState} from 'react';
-import type {SkillDescriptor,SourceScope,SourceSettings} from '../../../../../protocol/app-server/v81';
+import type {SkillDescriptor,SourceScope,SourceSettings,SourceTarget} from '../../../../../protocol/app-server/v81';
 import type {AppServerClient} from '../../../client/app-server';
 
 /** Native discovery and display information share a paginated catalog revision. */
-export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind,refresh=0,executionSession?:string) {
- const directory=scope==='workspace'&&source.target.kind==='workspace'?source.target.directory:undefined;
+export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings|undefined,enabled:boolean,scope:SourceScope,refresh=0,executionSession?:string,target:SourceTarget|undefined=source?.target) {
+ const directory=scope==='workspace'&&target?.kind==='workspace'?target.directory:undefined;
  const session=scope==='workspace'?executionSession:undefined;
  const generation=client?.getSnapshot().generation;
- const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;directory?:string;session?:string;generation:number;refresh:number;skills:SkillDescriptor[];error?:string}>();
+ const [result,setResult]=useState<{source?:SourceSettings;scope:SourceScope;directory?:string;session?:string;generation:number;refresh:number;skills:SkillDescriptor[];error?:string}>();
  useEffect(()=>{
-  if(!enabled||!client)return;
+  if(!enabled||!client||(scope==='workspace'&&!directory))return;
   let alive=true;
-  const target=scope==='user'?{kind:'user' as const}:source.target;
+  const target:SourceTarget=scope==='user'?{kind:'user'}:{kind:'workspace',directory:directory!};
   const generation=client.getSnapshot().generation;
   const current=()=>alive&&client.getSnapshot().generation===generation;
   void (async()=>{

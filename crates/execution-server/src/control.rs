@@ -11,6 +11,8 @@ pub(super) struct ControlShared {
     capacity: Condvar,
     #[cfg(test)]
     pub(super) before_capacity_wait: Mutex<Option<mpsc::Sender<()>>>,
+    #[cfg(test)]
+    pub(super) before_revoke_send: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 pub(super) struct ControlState {
@@ -50,6 +52,8 @@ impl ControlShared {
             capacity: Condvar::new(),
             #[cfg(test)]
             before_capacity_wait: Mutex::new(None),
+            #[cfg(test)]
+            before_revoke_send: Mutex::new(None),
         }
     }
 
@@ -512,7 +516,6 @@ impl ControlWorker {
             .name("execution-control".to_owned())
             .spawn(move || {
                 let mut next_sequence = 1u64;
-                let mut revoking = false;
                 let recoverable = loop {
                     let deadline = shared
                         .revoke_deadline()
@@ -541,13 +544,39 @@ impl ControlWorker {
                         break false;
                     }
                     next_sequence = next_sequence.saturating_add(1);
+                    let settling = matches!(&poll.receipt, Some(ControlReply::Revoked));
+                    let mut ack = Ok(());
                     if !shared.resolve(poll.receipt, || {
                         worker_owner.confirm_revocation(&connection);
+                        let final_turn = ControlTurn {
+                            sequence: poll.sequence,
+                            health: poll.health,
+                            request: None,
+                        };
+                        ack = encode_record(&final_turn).and_then(|encoded| {
+                            channel.send(
+                                &encoded,
+                                Some(deadline.min(Instant::now() + CONTROL_FRAME_TIMEOUT)),
+                            )
+                        });
                     }) {
                         break false;
                     }
+                    if settling {
+                        if ack.is_err() {
+                            break false;
+                        }
+                        continue;
+                    }
                     let request = shared.next_command();
-                    revoking |= matches!(&request, Some(ControlRequest::Revoke));
+                    #[cfg(test)]
+                    if matches!(&request, Some(ControlRequest::Revoke))
+                        && let Some((entered, release)) =
+                            shared.before_revoke_send.lock().unwrap().take()
+                    {
+                        let _ = entered.send(());
+                        let _ = release.recv();
+                    }
                     let turn = ControlTurn {
                         sequence: poll.sequence,
                         health: poll.health,
@@ -569,7 +598,7 @@ impl ControlWorker {
                     // the pair: the seized data handle interrupts any
                     // blocked exchange, and no dispatch starts again.
                     worker_owner
-                        .detach_control(&connection, recoverable && !revoking)
+                        .detach_control(&connection, recoverable)
                         .shutdown();
                 }
                 shared.terminate(io::Error::new(

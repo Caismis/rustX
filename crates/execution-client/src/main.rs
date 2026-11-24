@@ -36,6 +36,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fs};
@@ -367,13 +368,15 @@ fn serve_session(
                     changes: changes::Changes::default(),
                     next_ticket: None,
                 };
+                let revocation = Arc::new(ClientRevocation::default());
+                let mut recovery_cutoff = None;
+                let mut watches = Arc::new(watch::Watches::new());
                 loop {
                     let arbitration = Arc::new(mutation::Arbitration::new());
                     let shutdown = pair
                         .data
                         .shutdown_handle()
                         .map_err(|error| handshake_error(&error))?;
-                    let watches = Arc::new(watch::Watches::new());
                     let control = client_control_worker(
                         pair.control,
                         arbitration.clone(),
@@ -382,6 +385,7 @@ fn serve_session(
                         watches.clone(),
                         saves.clone(),
                         state.python.cleanup(),
+                        revocation.clone(),
                     );
                     let outcome = serve(
                         &mut pair.data,
@@ -392,13 +396,17 @@ fn serve_session(
                         &watches,
                         &saves,
                         &mut state,
+                        &revocation,
                     );
-                    let cutoff =
-                        Instant::now() + rustx_execution_protocol::DETACHED_CLIENT_RETENTION;
+                    let now = Instant::now();
+                    let cutoff = now + rustx_execution_protocol::DETACHED_CLIENT_RETENTION;
                     let control_end = control.stop();
                     pair.data.shutdown();
-                    if !watches.shutdown() {
-                        break Err(String::from("unresolved watch cleanup"));
+                    if !revocation.started() {
+                        if !watches.shutdown() {
+                            break Err(String::from("unresolved watch cleanup"));
+                        }
+                        watches = Arc::new(watch::Watches::new());
                     }
                     if control_end == ControlEnd::Revoked {
                         break Ok(());
@@ -408,6 +416,12 @@ fn serve_session(
                     {
                         break Err(String::from("execution pair violated the protocol"));
                     }
+                    let cutoff = if revocation.started() {
+                        *recovery_cutoff.get_or_insert(cutoff)
+                    } else {
+                        recovery_cutoff = None;
+                        cutoff
+                    };
                     match recover_pair(&reconnect, &admission, cutoff) {
                         Ok(Some(recovered)) => pair = recovered,
                         Ok(None) => break Ok(()),
@@ -540,6 +554,23 @@ struct ClientControlWorker {
     join: std::thread::JoinHandle<ControlEnd>,
 }
 
+/// One admitted instance's terminal cut survives authenticated re-pairing.
+#[derive(Default)]
+struct ClientRevocation(AtomicU8);
+
+impl ClientRevocation {
+    const CLOSING: u8 = 1;
+    const SETTLED: u8 = 2;
+
+    fn started(&self) -> bool {
+        self.0.load(Ordering::Acquire) >= Self::CLOSING
+    }
+
+    fn settled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::SETTLED
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ControlEnd {
     Detached,
@@ -605,6 +636,7 @@ fn settle_revocation(
     settled
 }
 
+#[allow(clippy::too_many_arguments)]
 fn client_control_worker(
     mut channel: RecordChannel,
     arbitration: std::sync::Arc<mutation::Arbitration>,
@@ -613,6 +645,7 @@ fn client_control_worker(
     watches: std::sync::Arc<watch::Watches>,
     saves: std::sync::Arc<std::sync::Mutex<saves::Saves>>,
     python: managed_python::SourceCleanup,
+    revocation: Arc<ClientRevocation>,
 ) -> ClientControlWorker {
     let worker_arbitration = arbitration.clone();
     let join = std::thread::Builder::new()
@@ -636,6 +669,7 @@ fn client_control_worker(
                 let Some(health) = fresh_nonce() else {
                     return ControlEnd::Invalid;
                 };
+                let final_receipt = matches!(&receipt, Some(ControlReply::Revoked));
                 let poll = ControlPoll {
                     sequence: DecimalU64::new(sequence),
                     receipt: receipt.take(),
@@ -658,6 +692,13 @@ fn client_control_worker(
                     operations.revoke();
                     return ControlEnd::Invalid;
                 }
+                if final_receipt {
+                    return if turn.request.is_none() {
+                        ControlEnd::Revoked
+                    } else {
+                        ControlEnd::Invalid
+                    };
+                }
                 sequence = sequence.saturating_add(1);
                 let Some(request) = turn.request else {
                     // Idle lane: pace the next poll — the worker wake
@@ -667,7 +708,6 @@ fn client_control_worker(
                     }
                     continue;
                 };
-                let done = matches!(request, ControlRequest::Revoke);
                 let reply = match request {
                     ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
                     ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
@@ -675,14 +715,22 @@ fn client_control_worker(
                         disposition: worker_arbitration.cancel(ticket),
                     },
                     ControlRequest::Revoke => {
-                        if !settle_revocation(
-                            &worker_arbitration,
-                            &operations,
-                            &watches,
-                            &saves,
-                            &python,
-                        ) {
-                            return ControlEnd::Revoked;
+                        if !revocation.settled() {
+                            revocation
+                                .0
+                                .store(ClientRevocation::CLOSING, Ordering::Release);
+                            if !settle_revocation(
+                                &worker_arbitration,
+                                &operations,
+                                &watches,
+                                &saves,
+                                &python,
+                            ) {
+                                return ControlEnd::Detached;
+                            }
+                            revocation
+                                .0
+                                .store(ClientRevocation::SETTLED, Ordering::Release);
                         }
                         ControlReply::Revoked
                     }
@@ -696,30 +744,6 @@ fn client_control_worker(
                     },
                 };
                 receipt = Some(reply);
-                if done {
-                    // One final poll delivers the `Revoked` receipt —
-                    // the Server awaits it before its fence lands.
-                    let Some(health) = fresh_nonce() else {
-                        return ControlEnd::Revoked;
-                    };
-                    let poll = ControlPoll {
-                        sequence: DecimalU64::new(sequence),
-                        receipt,
-                        health,
-                    };
-                    let deadline = std::time::Instant::now() + CONTROL_FRAME_TIMEOUT;
-                    if let Ok(encoded) = encode_record(&poll)
-                        && channel.send(&encoded, Some(deadline)).is_ok()
-                    {
-                        // The Server now owns orderly data close. Keep the
-                        // control socket alive until that close reaches serve,
-                        // or interrupt the data lane at the bounded deadline.
-                        let _ = worker_arbitration.wait_worker(
-                            deadline.saturating_duration_since(std::time::Instant::now()),
-                        );
-                    }
-                    return ControlEnd::Revoked;
-                }
                 // A delivered request earns its receipt promptly — the
                 // very next poll, not the idle cadence.
             }
@@ -863,6 +887,7 @@ fn serve(
     watches: &watch::Watches,
     saves: &Mutex<saves::Saves>,
     state: &mut DataState,
+    revocation: &ClientRevocation,
 ) -> io::Result<()> {
     let mut writes = mutation::Writes::new(arbitration.clone());
     if let Some(ticket) = state.next_ticket {
@@ -878,6 +903,7 @@ fn serve(
         saves,
         state,
         &mut writes,
+        revocation,
     );
     state.next_ticket = Some(writes.ticket_sequence());
     outcome
@@ -894,9 +920,19 @@ fn serve_requests(
     saves: &Mutex<saves::Saves>,
     state: &mut DataState,
     writes: &mut mutation::Writes,
+    revocation: &ClientRevocation,
 ) -> io::Result<()> {
     loop {
         let request = channel.receive::<ClientRequest>(None)?;
+        if revocation.started() {
+            channel.send(
+                &encode_record(&ClientReply::Error {
+                    kind: ReadError::Unavailable,
+                })?,
+                Some(Instant::now() + PAGE_REQUEST_TIMEOUT),
+            )?;
+            continue;
+        }
         let reply = match request {
             ClientRequest::Ping => ClientReply::Pong,
             ClientRequest::WorkspacePythonStatus => {

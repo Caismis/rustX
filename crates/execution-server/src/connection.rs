@@ -141,6 +141,34 @@ pub struct SearchResult {
     pub short_lines: bool,
 }
 
+/// This watch no longer covers its path and retains its native cleanup slot.
+#[derive(Debug)]
+pub struct WatchRetiring;
+
+impl std::fmt::Display for WatchRetiring {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("watch cleanup is pending")
+    }
+}
+
+impl std::error::Error for WatchRetiring {}
+
+/// This MCP request was refused before it could reach the Execution Client.
+#[derive(Debug)]
+pub struct UnsentMcpExchange(io::Error);
+
+impl std::fmt::Display for UnsentMcpExchange {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for UnsentMcpExchange {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 enum ExchangeFailure {
     Refused(io::Error),
     Unknown(io::Error),
@@ -194,7 +222,7 @@ impl LocalConnection {
                 Ok(())
             };
         };
-        if owner.is_live(&self.connection) {
+        if owner.permits_dispatch(&self.connection) {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -373,16 +401,15 @@ impl LocalConnection {
                 .receive(deadline)
                 .map_err(ExchangeFailure::Unknown);
         }
+        let reply_deadline = deadline.map(|limit| limit + delegation::DATA_REPLY_BUDGET);
         match self
             .channel
-            .receive(deadline)
+            .receive(reply_deadline)
             .map_err(ExchangeFailure::Unknown)?
         {
             delegation::DataReply::Client(reply) => Ok(reply),
-            delegation::DataReply::Rejected(
-                refusal @ (delegation::Refusal::Busy | delegation::Refusal::Denied),
-            ) => Err(ExchangeFailure::Refused(refusal.into())),
-            delegation::DataReply::Rejected(error) => Err(ExchangeFailure::Unknown(error.into())),
+            delegation::DataReply::Rejected(error) => Err(ExchangeFailure::Refused(error.into())),
+            delegation::DataReply::Unknown(error) => Err(ExchangeFailure::Unknown(error.into())),
         }
     }
 
@@ -839,8 +866,14 @@ impl LocalConnection {
             } => Some((*sequence, *offset)),
             _ => None,
         };
-        let reply =
-            self.exchange_admitted(&ClientRequest::Mcp(request), Some(deadline), admit, || ())?;
+        let reply = self
+            .exchange_classified(&ClientRequest::Mcp(request), Some(deadline), admit, || ())
+            .map_err(|failure| match failure {
+                ExchangeFailure::Refused(error) => {
+                    io::Error::new(error.kind(), UnsentMcpExchange(error))
+                }
+                ExchangeFailure::Unknown(error) => error,
+            })?;
         if let ClientReply::Mcp(response) = reply
             && response.key == key
             && match &response.reply {
@@ -1076,14 +1109,8 @@ impl LocalConnection {
         )?;
         let notice = match result {
             ClientReply::Watch(WatchReply::Changed(notice)) if notice.id == id => notice,
-            ClientReply::Watch(WatchReply::Refused {
-                id: echoed,
-                kind: ReadError::Busy,
-            }) if echoed == id => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "watch cleanup is pending",
-                ));
+            ClientReply::Watch(WatchReply::Retiring { id: echoed }) if echoed == id => {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, WatchRetiring));
             }
             ClientReply::Watch(WatchReply::Refused { id: echoed, kind }) if echoed == id => {
                 return Err(read_error(kind));

@@ -79,9 +79,15 @@ impl StoreFixture {
         std::fs::create_dir(&authored).unwrap();
         std::fs::write(authored.join(SERVER_FILE), b"mcp = None\n").unwrap();
         std::fs::write(authored.join(REQUIREMENTS_FILE), b"").unwrap();
-        let package = discover_package(&authored, "fixture", &ProcessSignal::new(), Arc::default())
-            .unwrap()
-            .0;
+        let package = discover_package(
+            &authored,
+            "fixture",
+            &ProcessSignal::new(),
+            Arc::default(),
+            None,
+        )
+        .unwrap()
+        .0;
         let (notifications, stages) = mpsc::unbounded_channel();
         let runner = Arc::new(GatedRunner {
             count: AtomicUsize::new(0),

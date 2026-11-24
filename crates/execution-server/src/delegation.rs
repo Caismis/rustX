@@ -73,10 +73,14 @@ pub struct DataRequest {
     pub remaining_ms: u32,
 }
 
+/// Separate wire return time from the physical dispatch budget.
+pub const DATA_REPLY_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum DataReply {
     Client(ClientReply),
     Rejected(Refusal),
+    Unknown(Refusal),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

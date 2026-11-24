@@ -18,6 +18,10 @@ pub const MAX_SEND_BYTES: usize = 512 * 1024;
 /// Pending outbound records per session.
 pub const MAX_PENDING_SENDS: usize = 4;
 
+/// Maximum package directories and encoded path bytes in a capture receipt.
+pub const MAX_SOURCE_WATCH_DIRECTORIES: usize = 128;
+pub const MAX_SOURCE_WATCH_BYTES: usize = 16 * 1024;
+
 /// The two authored source roots provisioned by the Client's host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -67,6 +71,9 @@ pub enum PythonSourceReply {
     Captured {
         digest: String,
         permissions_base64: Option<String>,
+        /// Package-relative directories, including the empty package root.
+        /// Absence means native watch coverage needs periodic recapture.
+        watch_directories: Option<Vec<PathBuf>>,
     },
     /// Capture was released; the published cache is a separate owner.
     Released,
@@ -85,10 +92,15 @@ impl fmt::Debug for PythonSourceReply {
             Self::Captured {
                 digest,
                 permissions_base64,
+                watch_directories,
             } => formatter
                 .debug_struct("Captured")
                 .field("digest", digest)
                 .field("has_permissions", &permissions_base64.is_some())
+                .field(
+                    "watch_directories",
+                    &watch_directories.as_ref().map(Vec::len),
+                )
                 .finish(),
             Self::Released => formatter.write_str("Released"),
             Self::Refused(error) => formatter.debug_tuple("Refused").field(error).finish(),
@@ -144,6 +156,8 @@ pub enum Request {
     Open {
         /// Full binding identity plus a fresh operation ID.
         key: ProcessOperationKey,
+        /// Canonical source identity for this frozen grant.
+        source_id: String,
         /// Frozen Client-side inputs.
         launch: Launch,
     },

@@ -17,7 +17,7 @@
 mod mcp;
 mod output;
 mod sibling;
-pub(crate) use mcp::StdioMcpBinding;
+pub(crate) use mcp::{ReceiveExchange, StdioMcpBinding};
 pub(crate) use output::OutputBinding;
 pub(crate) use sibling::{SiblingClient, launch_sibling};
 
@@ -276,7 +276,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v6`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v7`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -490,14 +490,26 @@ impl LocalExecutionEndpoint {
                 self.connection_released.notify_waiters();
                 let cleanup_only = matches!(
                     *self.settlement.lock().expect("execution settlement"),
-                    Settlement::Closing
+                    Settlement::Closing | Settlement::Revoking
                 );
                 if cleanup_only {
                     // A logically closed owner can accept its old Client only
                     // to obtain physical cleanup. dispatch_open stays false.
                     let cutoff = Instant::now()
                         + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
-                    if let Err(failure) = self.fence_connection_by(cutoff) {
+                    let mut result = self.fence_connection_by(cutoff);
+                    // A prior lane may have failed while this authenticated pair
+                    // was being committed. Join that attempt before using the new lane.
+                    if result.is_err()
+                        && self.reservation().binding.control().is_some()
+                        && matches!(
+                            *self.settlement.lock().expect("execution settlement"),
+                            Settlement::Closing
+                        )
+                    {
+                        result = self.fence_connection_by(cutoff);
+                    }
+                    if let Err(failure) = result {
                         tracing::warn!(%failure, "recovered Client cleanup is unconfirmed");
                     }
                     return EndpointAdmission::Rejected(rustx_execution_protocol::Reject::Revoked);
@@ -1433,6 +1445,7 @@ impl LocalExecutionEndpoint {
     fn close_dispatch(&self) {
         let mut settlement = self.settlement.lock().expect("execution settlement");
         if matches!(*settlement, Settlement::Open) {
+            self.reservation().binding.begin_revocation();
             *settlement = Settlement::Closing;
         }
         self.connection_released.notify_waiters();
@@ -1446,6 +1459,38 @@ impl LocalExecutionEndpoint {
             .map_err(io::Error::other)?
     }
 
+    pub(super) async fn settle_for_drain(self: Arc<Self>, deadline: Instant) -> io::Result<()> {
+        let endpoint = self.clone();
+        let bound = Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
+        let attempt =
+            tokio::task::spawn_blocking(move || endpoint.fence_connection_by(deadline.min(bound)))
+                .await
+                .map_err(io::Error::other)?;
+        if attempt.is_ok() {
+            return attempt;
+        }
+        loop {
+            let changed = self.connection_released.notified();
+            let cutoff = {
+                let state = self.settlement.lock().expect("execution settlement");
+                if let Settlement::Finished(outcome) = &*state {
+                    return settlement_result(outcome);
+                }
+                match self.reservation().binding.revocation_recovery_deadline() {
+                    Some(window) => deadline.min(window),
+                    None if matches!(*state, Settlement::Revoking) => deadline,
+                    None => return attempt,
+                }
+            };
+            if tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), changed)
+                .await
+                .is_err()
+            {
+                return attempt;
+            }
+        }
+    }
+
     /// Own or join this incarnation's terminal settlement. The result
     /// survives deletion cancellation and remains available to Host drain.
     /// No caller holds a registry lock while waiting for this receipt.
@@ -1455,6 +1500,7 @@ impl LocalExecutionEndpoint {
             match &*state {
                 Settlement::Open | Settlement::Closing => {
                     let binding = &self.reservation().binding;
+                    binding.begin_revocation();
                     if binding.may_recover() {
                         // A live-instance credential can still identify the
                         // cleanup owner. Keep the durable fence and allow
@@ -1473,8 +1519,17 @@ impl LocalExecutionEndpoint {
         }
         let result = self.revoke_and_close(deadline).map_err(Arc::new);
         let outcome = settlement_result(&result);
-        *self.settlement.lock().expect("execution settlement") = Settlement::Finished(result);
+        let mut state = self.settlement.lock().expect("execution settlement");
+        *state = if result.is_err() && self.reservation().binding.awaiting_revocation_recovery() {
+            Settlement::Closing
+        } else {
+            if result.is_err() {
+                self.close_transport();
+            }
+            Settlement::Finished(result)
+        };
         self.settlement_changed.notify_all();
+        self.connection_released.notify_waiters();
         outcome
     }
 
@@ -1486,6 +1541,12 @@ impl LocalExecutionEndpoint {
         loop {
             if let Settlement::Finished(result) = &*state {
                 return settlement_result(result);
+            }
+            if matches!(*state, Settlement::Closing) {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Client revocation requires recovery",
+                ));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -1506,9 +1567,8 @@ impl LocalExecutionEndpoint {
 
     fn revoke_and_close(&self, deadline: Instant) -> io::Result<()> {
         let binding = &self.reservation().binding;
-        let result = binding.settle_revocation_by(deadline);
+        binding.settle_revocation_by(deadline)?;
         self.close_transport();
-        result?;
         if let Some(fence) = &self.recovery_fence {
             binding.release_recovery_fence(fence)?;
         }
@@ -4456,7 +4516,8 @@ mod tests {
             failures,
             ["Client revocation is unconfirmed: control command outlived its budget"]
         );
-        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Detached);
+        assert!(endpoint.binding().awaiting_revocation_recovery());
         release.send(()).unwrap();
     }
 

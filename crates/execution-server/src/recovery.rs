@@ -8,7 +8,7 @@ use std::path::Path;
 
 use nix::fcntl::{AtFlags, OFlag, openat};
 use nix::sys::stat::{Mode, fstat, fstatat, mkdirat};
-use nix::unistd::{UnlinkatFlags, unlinkat};
+use nix::unistd::{LinkatFlags, UnlinkatFlags, linkat, unlinkat};
 use sha2::{Digest, Sha256};
 
 use super::binding::ConnectionOwner;
@@ -20,6 +20,8 @@ pub use domain::LocalDomainGrant;
 const DIRECTORY: &str = "execution-pending";
 const MAX_MARKER_BYTES: usize = 8192;
 const MAX_INVENTORY_ENTRIES: usize = 4096;
+const STAGED_OWNER: &str = ".staged-owner";
+const PUBLICATION_LOCK: &str = ".publication-lock";
 
 fn pending_directory(root: &File) -> io::Result<File> {
     let directory = File::from(openat(
@@ -40,6 +42,64 @@ fn pending_directory(root: &File) -> io::Result<File> {
 
 fn marker_name(session: &rustx_execution_protocol::SessionId) -> std::ffi::OsString {
     format!("{:x}.json", Sha256::digest(session.as_str())).into()
+}
+
+fn publish_marker(
+    directory: &File,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+    #[cfg(test)] before_publish: impl FnOnce() -> io::Result<()>,
+) -> io::Result<File> {
+    if bytes.len() > MAX_MARKER_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "execution recovery owner exceeds its size bound",
+        ));
+    }
+    let lock = File::from(openat(
+        directory,
+        PUBLICATION_LOCK,
+        OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+        Mode::from_bits_truncate(0o600),
+    )?);
+    if !lock.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid execution recovery publication lock",
+        ));
+    }
+    lock.lock()?;
+    // Only publishers use this lock. The single staging name is ignored by
+    // readers and can be safely unlinked after a crash, even after linkat.
+    match unlinkat(directory, STAGED_OWNER, UnlinkatFlags::NoRemoveDir) {
+        Ok(()) | Err(nix::errno::Errno::ENOENT) => (),
+        Err(error) => return Err(error.into()),
+    }
+    let mut file = File::from(openat(
+        directory,
+        STAGED_OWNER,
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )?);
+    let published = (|| {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        #[cfg(test)]
+        before_publish()?;
+        // Publish the complete record without replacing an admitted owner.
+        linkat(
+            directory,
+            STAGED_OWNER,
+            directory,
+            name,
+            LinkatFlags::empty(),
+        )?;
+        directory.sync_all()
+    })();
+    let _ = unlinkat(directory, STAGED_OWNER, UnlinkatFlags::NoRemoveDir);
+    published?;
+    Ok(file)
 }
 
 /// An exclusive durable reservation for one Session's possible physical work.
@@ -158,35 +218,14 @@ impl RecoveryFence {
         let directory = pending_directory(&root)?;
         root.sync_all()?;
         let name = marker_name(&admission.session);
-        let mut file = std::fs::File::from(
-            openat(
-                &directory,
-                name.as_os_str(),
-                OFlag::O_WRONLY
-                    | OFlag::O_CREAT
-                    | OFlag::O_EXCL
-                    | OFlag::O_NOFOLLOW
-                    | OFlag::O_CLOEXEC,
-                Mode::from_bits_truncate(0o600),
-            )
-            .map_err(|error| {
-                if error == nix::errno::Errno::EEXIST {
-                    io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        "previous Session execution domain requires physical settlement",
-                    )
-                } else {
-                    error.into()
-                }
-            })?,
-        );
-        // Preserve an unknown marker on I/O failure. A fresh Server must
-        // fail closed even if the record could not be fully encoded.
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         let bytes = serde_json::to_vec(admission)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        directory.sync_all()?;
+        let file = publish_marker(
+            &directory,
+            &name,
+            &bytes,
+            #[cfg(test)]
+            || Ok(()),
+        )?;
         Ok(RecoveryFence {
             owner,
             file,
@@ -331,5 +370,71 @@ impl RecoveryFence {
         self.directory.sync_all()?;
         self.domain.cleanup(&self.directory)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustx_execution_protocol::{
+        Admission, ClientInstanceId, EnvironmentId, Generation, PROTOCOL_VERSION, SessionId,
+        process::ServerIncarnation,
+    };
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    #[test]
+    fn unpublished_owner_never_fences_an_unrelated_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join(DIRECTORY))
+            .unwrap();
+        let directory = pending_directory(&File::open(root.path()).unwrap()).unwrap();
+        let other = root.path().join("other-workspace");
+        let admission = Admission {
+            version: PROTOCOL_VERSION,
+            server_incarnation: ServerIncarnation::generate(),
+            session: SessionId::new("published"),
+            environment: EnvironmentId::new("environment"),
+            instance: ClientInstanceId::new("client"),
+            generation: Generation::new(std::num::NonZeroU64::MIN),
+            workspace: root.path().join("owner-workspace"),
+        };
+        let name = marker_name(&admission.session);
+        let bytes = serde_json::to_vec(&admission).unwrap();
+        assert_eq!(
+            publish_marker(&directory, &name, &bytes, || {
+                assert!(!RecoveryFence::workspace_pending(root.path(), &other).unwrap());
+                assert!(!RecoveryFence::session_pending(root.path(), &admission.session).unwrap());
+                Err(io::ErrorKind::Interrupted.into())
+            })
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::Interrupted
+        );
+        // Simulate a crash leaving a partial staging file and opening a
+        // fresh descriptor, with no admission ever exposed by that writer.
+        std::fs::write(root.path().join(DIRECTORY).join(STAGED_OWNER), b"{").unwrap();
+        RecoveryFence::require_session_settled(root.path(), &admission.session).unwrap();
+        assert!(!RecoveryFence::workspace_pending(root.path(), &other).unwrap());
+        drop(publish_marker(&directory, &name, &bytes, || Ok(())).unwrap());
+        assert!(RecoveryFence::workspace_pending(root.path(), &admission.workspace).unwrap());
+        assert!(!RecoveryFence::workspace_pending(root.path(), &other).unwrap());
+        assert_eq!(
+            RecoveryFence::require_session_settled(root.path(), &admission.session)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            publish_marker(&directory, &name, b"another owner", || Ok(()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(DIRECTORY).join(name)).unwrap(),
+            bytes
+        );
     }
 }

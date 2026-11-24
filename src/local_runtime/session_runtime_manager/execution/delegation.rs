@@ -141,6 +141,7 @@ struct Authority {
 }
 
 struct ChildMcpSource {
+    id: String,
     launch: McpLaunch,
     tools: BTreeSet<String>,
     resources: bool,
@@ -149,7 +150,7 @@ struct ChildMcpSource {
 struct ChildMcpOperation {
     key: ProcessOperationKey,
     physical: ProcessOperationKey,
-    sources: Vec<usize>,
+    source: usize,
     retained: bool,
 }
 
@@ -229,6 +230,7 @@ impl ChildExecutionRelay {
                     })
                     .collect();
                 Some(ChildMcpSource {
+                    id: id.to_string(),
                     launch,
                     tools,
                     resources: resolved.resource_sources.contains(id),
@@ -341,71 +343,78 @@ impl Authority {
 
     fn permits_mcp(&self, endpoint: &LocalExecutionEndpoint, request: &McpRequest) -> bool {
         let key = request.key();
-        if let McpRequest::Open { launch, .. } = request {
+        let operations = self.mcp_operations.lock().expect("child MCP identities");
+        let existing = operations.get(&key.operation);
+        if let McpRequest::Open {
+            source_id, launch, ..
+        } = request
+        {
             return endpoint
                 .process_key(key.operation)
                 .is_ok_and(|current| current == *key)
-                && self
-                    .mcp_sources
-                    .iter()
-                    .any(|source| source.launch == *launch);
+                && self.mcp_source(source_id, launch).is_some_and(|source| {
+                    existing.is_none_or(|op| op.key == *key && op.source == source)
+                });
         }
-        let operations = self.mcp_operations.lock().expect("child MCP identities");
-        let Some(operation) = operations
-            .get(&key.operation)
-            .filter(|operation| operation.key == *key)
-        else {
+        let Some(operation) = existing.filter(|operation| operation.key == *key) else {
             return false;
         };
         if let McpRequest::Send { data_base64, .. } = request {
-            return self.permits_mcp_message(&operation.sources, data_base64);
+            return self.permits_mcp_message(operation.source, data_base64);
         }
         true
+    }
+
+    fn mcp_source(&self, id: &str, launch: &McpLaunch) -> Option<usize> {
+        self.mcp_sources
+            .iter()
+            .position(|source| source.id == id && source.launch == *launch)
     }
 
     fn mcp_physical_request(&self, request: &McpRequest) -> io::Result<McpRequest> {
         let key = request.key();
         let mut operations = self.mcp_operations.lock().expect("child MCP identities");
-        let physical = if let Some(operation) = operations.get(&key.operation) {
-            if let McpRequest::Open { launch, .. } = request
-                && !operation
-                    .sources
-                    .iter()
-                    .any(|index| self.mcp_sources[*index].launch == *launch)
-            {
-                return Err(io::ErrorKind::PermissionDenied.into());
+        let existing = operations.get(&key.operation);
+        let physical = if let McpRequest::Open {
+            source_id, launch, ..
+        } = request
+        {
+            let source = self
+                .mcp_source(source_id, launch)
+                .ok_or(io::ErrorKind::PermissionDenied)?;
+            if let Some(operation) = existing {
+                if operation.key != *key || operation.source != source {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                operation.physical.clone()
+            } else {
+                if operations.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                let mut physical = key.clone();
+                physical.operation = OperationId::new();
+                operations.insert(
+                    key.operation,
+                    ChildMcpOperation {
+                        key: key.clone(),
+                        physical: physical.clone(),
+                        source,
+                        retained: false,
+                    },
+                );
+                physical
             }
-            operation.physical.clone()
         } else {
-            let McpRequest::Open { launch, .. } = request else {
-                return Err(io::ErrorKind::PermissionDenied.into());
-            };
-            if operations.len() >= MAX_PROCESS_IDENTITIES_PER_GENERATION {
-                return Err(io::ErrorKind::WouldBlock.into());
-            }
-            let mut physical = key.clone();
-            physical.operation = OperationId::new();
-            let sources = self
-                .mcp_sources
-                .iter()
-                .enumerate()
-                .filter_map(|(index, source)| (source.launch == *launch).then_some(index))
-                .collect();
-            operations.insert(
-                key.operation,
-                ChildMcpOperation {
-                    key: key.clone(),
-                    physical: physical.clone(),
-                    sources,
-                    retained: false,
-                },
-            );
-            physical
+            existing
+                .filter(|operation| operation.key == *key)
+                .ok_or(io::ErrorKind::PermissionDenied)?
+                .physical
+                .clone()
         };
         Ok(request.clone().with_key(physical))
     }
 
-    fn permits_mcp_message(&self, sources: &[usize], encoded: &str) -> bool {
+    fn permits_mcp_message(&self, source: usize, encoded: &str) -> bool {
         use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
         if encoded.len() > rustx_execution_protocol::mcp::MAX_SEND_BYTES.div_ceil(3) * 4 {
             return false;
@@ -423,24 +432,18 @@ impl Authority {
             return true;
         };
         match message.request {
-            ClientRequest::CallToolRequest(call) => sources.iter().any(|index| {
-                self.mcp_sources[*index]
-                    .tools
-                    .contains(call.params.name.as_ref())
-            }),
+            ClientRequest::CallToolRequest(call) => self.mcp_sources[source]
+                .tools
+                .contains(call.params.name.as_ref()),
             ClientRequest::ListResourcesRequest(_)
             | ClientRequest::ListResourceTemplatesRequest(_)
-            | ClientRequest::ReadResourceRequest(_) => sources
-                .iter()
-                .any(|index| self.mcp_sources[*index].resources),
+            | ClientRequest::ReadResourceRequest(_) => self.mcp_sources[source].resources,
             ClientRequest::ListToolsRequest(_)
             | ClientRequest::SubscriptionsListenRequest(_)
             | ClientRequest::PingRequest(_) => true,
             ClientRequest::GetTaskRequest(_)
             | ClientRequest::UpdateTaskRequest(_)
-            | ClientRequest::CancelTaskRequest(_) => sources
-                .iter()
-                .any(|index| !self.mcp_sources[*index].tools.is_empty()),
+            | ClientRequest::CancelTaskRequest(_) => !self.mcp_sources[source].tools.is_empty(),
             _ => false,
         }
     }
@@ -804,42 +807,47 @@ fn run_data(
                     | ClientRequest::CommitWrite { .. }
             );
             let crossed = Cell::new(false);
-            let result = owner.with_bounded_data_connection(deadline, |connection| {
-                let physical;
-                let dispatched = if let ClientRequest::Mcp(command) = &request {
-                    physical = ClientRequest::Mcp(authority.mcp_physical_request(command)?);
-                    &physical
-                } else {
-                    &request
-                };
-                let mut reply = connection.forward_delegated(
-                    dispatched,
-                    deadline,
-                    authority.commit_size(&request),
-                    || {
-                        if Instant::now() >= deadline {
-                            return Err(io::ErrorKind::TimedOut.into());
+            let result = owner
+                .with_bounded_data_connection(deadline, |connection| {
+                    Ok((|| {
+                        let physical;
+                        let dispatched = if let ClientRequest::Mcp(command) = &request {
+                            physical = ClientRequest::Mcp(authority.mcp_physical_request(command)?);
+                            &physical
+                        } else {
+                            &request
+                        };
+                        let mut reply = connection.forward_delegated(
+                            dispatched,
+                            deadline,
+                            authority.commit_size(&request),
+                            || {
+                                if Instant::now() >= deadline {
+                                    return Err(io::ErrorKind::TimedOut.into());
+                                }
+                                authority
+                                    .stop
+                                    .with_active(|| crossed.set(true))
+                                    .ok_or(io::ErrorKind::Interrupted.into())
+                            },
+                        )?;
+                        if let (ClientRequest::Mcp(logical), ClientReply::Mcp(response)) =
+                            (&request, &mut reply)
+                        {
+                            response.key = logical.key().clone();
                         }
-                        authority
-                            .stop
-                            .with_active(|| crossed.set(needs_receipt))
-                            .ok_or(io::ErrorKind::Interrupted.into())
-                    },
-                )?;
-                if let (ClientRequest::Mcp(logical), ClientReply::Mcp(response)) =
-                    (&request, &mut reply)
-                {
-                    response.key = logical.key().clone();
-                }
-                if let Err(error) = authority.retain_reply(&request, &reply) {
-                    connection.disconnect();
-                    return Err(error);
-                }
-                Ok(reply)
-            });
+                        if let Err(error) = authority.retain_reply(&request, &reply) {
+                            connection.disconnect();
+                            return Err(error);
+                        }
+                        Ok(reply)
+                    })())
+                })
+                .and_then(std::convert::identity);
             match result {
                 Ok(reply) => {
-                    unconfirmed |= crossed.get()
+                    unconfirmed |= needs_receipt
+                        && crossed.get()
                         && matches!(
                             reply,
                             ClientReply::CommitUnknown { .. }
@@ -850,15 +858,24 @@ fn run_data(
                 Err(error) => {
                     // The send gate runs after encoding and admission. In
                     // particular, a refused deadline/permit cannot leave debt.
-                    unconfirmed |= crossed.get();
-                    DataReply::Rejected(error.into())
+                    unconfirmed |= needs_receipt && crossed.get();
+                    if crossed.get() {
+                        DataReply::Unknown(error.into())
+                    } else {
+                        DataReply::Rejected(error.into())
+                    }
                 }
             }
         } else {
             DataReply::Rejected(Refusal::Denied)
         };
         if encode_record(&reply)
-            .and_then(|encoded| channel.send(&encoded, Some(deadline)))
+            .and_then(|encoded| {
+                channel.send(
+                    &encoded,
+                    Some(deadline + rustx_execution_server::delegation::DATA_REPLY_BUDGET),
+                )
+            })
             .is_err()
         {
             break;
@@ -1044,6 +1061,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Verify both source grants and retain the same physical identities.
     fn child_stdio_uses_parent_identity_and_keeps_unconfirmed_cleanup() {
         let key = ProcessOperationKey {
             incarnation: ServerIncarnation::generate(),
@@ -1066,25 +1084,36 @@ mod tests {
             tools: BTreeSet::new(),
             operations: Mutex::default(),
             tickets: Mutex::default(),
-            mcp_sources: vec![ChildMcpSource {
-                launch: launch.clone(),
-                tools: BTreeSet::from(["inspect".into()]),
-                resources: false,
-            }],
+            mcp_sources: vec![
+                ChildMcpSource {
+                    id: "a".into(),
+                    launch: launch.clone(),
+                    tools: BTreeSet::from(["inspect".into()]),
+                    resources: false,
+                },
+                ChildMcpSource {
+                    id: "b".into(),
+                    launch: launch.clone(),
+                    tools: BTreeSet::from(["mutate".into()]),
+                    resources: true,
+                },
+            ],
             mcp_operations: Mutex::default(),
             stop: rustx_process_supervisor::signal::ProcessSignal::new(),
         };
         let open = McpRequest::Open {
             key: key.clone(),
+            source_id: "a".into(),
             launch: launch.clone(),
         };
         let physical = authority.mcp_physical_request(&open).unwrap();
         assert_ne!(physical.key().operation, key.operation);
         assert_eq!(authority.mcp_physical_request(&open).unwrap(), physical);
-        let mut changed = launch;
+        let mut changed = launch.clone();
         changed.args.push("different".into());
         let conflicting = McpRequest::Open {
             key: key.clone(),
+            source_id: "a".into(),
             launch: changed,
         };
         assert_eq!(
@@ -1115,8 +1144,35 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name}})).unwrap()
         )
         };
-        assert!(authority.permits_mcp_message(&[0], &message("inspect")));
-        assert!(!authority.permits_mcp_message(&[0], &message("mutate")));
+        let open_other = McpRequest::Open {
+            key: key.clone(),
+            source_id: "b".into(),
+            launch,
+        };
+        assert_eq!(
+            authority
+                .mcp_physical_request(&open_other)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let mut other_key = key.clone();
+        other_key.operation = OperationId::new();
+        let other = authority
+            .mcp_physical_request(&open_other.with_key(other_key.clone()))
+            .unwrap();
+        assert_ne!(physical.key(), other.key());
+        let resources = base64::engine::general_purpose::STANDARD
+            .encode(br#"{"jsonrpc":"2.0","id":3,"method":"resources/list"}"#);
+        let operations = authority.mcp_operations.lock().unwrap();
+        let a = operations[&key.operation].source;
+        let b = operations[&other_key.operation].source;
+        assert!(authority.permits_mcp_message(a, &message("inspect")));
+        assert!(!authority.permits_mcp_message(a, &message("mutate")));
+        assert!(!authority.permits_mcp_message(a, &resources));
+        assert!(!authority.permits_mcp_message(b, &message("inspect")));
+        assert!(authority.permits_mcp_message(b, &message("mutate")));
+        assert!(authority.permits_mcp_message(b, &resources));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1134,12 +1190,24 @@ mod tests {
         let observer_socket = root.join("started.sock");
         let observer = tokio::net::UnixListener::bind(&observer_socket).unwrap();
         let server_code = r"
-import socket, sys
+import json, socket, sys
 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
     proof.connect(sys.argv[1])
     proof.sendall(b'started')
     for line in sys.stdin:
-        pass
+        message = json.loads(line)
+        if message.get('method') == 'server/discover':
+            result = {
+                'resultType': 'complete', 'supportedVersions': ['2026-07-28'],
+                'capabilities': {}, 'ttlMs': 0, 'cacheScope': 'private',
+                '_meta': {'io.modelcontextprotocol/serverInfo': {'name': 'delegated', 'version': '1'}}
+            }
+        elif message.get('method') == 'ping':
+            proof.sendall(b'ping')
+            result = {}
+        else:
+            continue
+        print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
 ";
         let source = crate::runtime::identity::McpServerId::new("delegated-stdio");
         let authored = McpServerBinding {
@@ -1174,6 +1242,7 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
             .unwrap()
             .mcp_sources
             .push(ChildMcpSource {
+                id: source.to_string(),
                 launch: launch.clone(),
                 tools: BTreeSet::from(["inspect".into()]),
                 resources: false,
@@ -1224,6 +1293,7 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
             .exchange(
                 McpRequest::Open {
                     key: binding.key.clone(),
+                    source_id: source.to_string(),
                     launch,
                 },
                 Instant::now() + LOCAL_HANDSHAKE_TIMEOUT,
@@ -1240,6 +1310,112 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proof:
         started.read_exact(&mut marker).await.unwrap();
         assert_eq!(&marker, b"started");
 
+        let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+        loop {
+            let state = binding
+                .exchange(
+                    McpRequest::State {
+                        key: binding.key.clone(),
+                    },
+                    deadline,
+                    &cancellation,
+                )
+                .await
+                .unwrap();
+            match state {
+                McpReply::Opening => tokio::task::yield_now().await,
+                McpReply::Ready { .. } => break,
+                other => panic!("the real stdio process did not become Ready: {other:?}"),
+            }
+        }
+        let ping = base64::engine::general_purpose::STANDARD
+            .encode(br#"{"jsonrpc":"2.0","id":41,"method":"ping"}"#);
+        assert_eq!(
+            binding
+                .exchange(
+                    McpRequest::Send {
+                        key: binding.key.clone(),
+                        data_base64: ping,
+                    },
+                    deadline,
+                    &cancellation
+                )
+                .await
+                .unwrap(),
+            McpReply::Queued
+        );
+        let mut echo = [0; 4];
+        started.read_exact(&mut echo).await.unwrap();
+        assert_eq!(&echo, b"ping");
+
+        // First block local child admission. Then block the physical data lane
+        // in the parent so Receive crosses only the delegated return channel.
+        let writer = child
+            .endpoint()
+            .unwrap()
+            .agent_writer
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        assert!(matches!(
+            binding.receive(1, 0, Instant::now(), &cancellation).await,
+            super::super::ReceiveExchange::Deferred
+        ));
+        drop(writer);
+        let parent = execution.scope.endpoint().unwrap();
+        let (held, holding) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let parking = tokio::task::spawn_blocking(move || {
+            parent
+                .hold_data_exchange_for_test(|| {
+                    held.send(()).unwrap();
+                    resume.recv().unwrap();
+                })
+                .unwrap();
+        });
+        holding.await.unwrap();
+        let reply = binding
+            .receive(
+                1,
+                0,
+                Instant::now() + std::time::Duration::from_millis(150),
+                &cancellation,
+            )
+            .await;
+        assert!(matches!(reply, super::super::ReceiveExchange::Deferred));
+        release.send(()).unwrap();
+        parking.await.unwrap();
+        let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+        loop {
+            match binding.receive(1, 0, deadline, &cancellation).await {
+                super::super::ReceiveExchange::Reply(McpReply::Page {
+                    sequence,
+                    offset,
+                    data_base64,
+                    last,
+                }) => {
+                    assert_eq!((sequence.get(), offset.get(), last), (1, 0, true));
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data_base64)
+                        .unwrap();
+                    let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(
+                        response,
+                        serde_json::json!({"jsonrpc":"2.0","id":41,"result":{}})
+                    );
+                    break;
+                }
+                super::super::ReceiveExchange::Reply(McpReply::Pending) => {
+                    tokio::task::yield_now().await;
+                }
+                _ => panic!("the original stdio cursor was lost"),
+            }
+        }
+        assert!(matches!(
+            binding.receive(2, 0, deadline, &cancellation).await,
+            super::super::ReceiveExchange::Reply(McpReply::Pending),
+        ));
         cleanup.after_child_reaped().await.unwrap();
         let mut ended = [0; 1];
         assert_eq!(

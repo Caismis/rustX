@@ -163,6 +163,7 @@ fn capture_bound_package(
             Reply::Captured {
                 digest,
                 permissions_base64,
+                watch_directories,
             } => {
                 let valid = digest.strip_prefix("sha256:").is_some_and(|hash| {
                     hash.len() == 64
@@ -170,7 +171,7 @@ fn capture_bound_package(
                             .bytes()
                             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 });
-                if !valid {
+                if !valid || !valid_watch_directories(watch_directories.as_deref()) {
                     return Err(unavailable());
                 }
                 let permissions = permissions_base64
@@ -190,6 +191,7 @@ fn capture_bound_package(
                     digest,
                     permissions.as_deref(),
                     owner,
+                    watch_directories,
                 );
             }
             Reply::Refused(rustx_execution_protocol::ReadError::Invalid) => {
@@ -200,6 +202,32 @@ fn capture_bound_package(
             _ => return Err(unavailable()),
         }
     }
+}
+
+fn valid_watch_directories(directories: Option<&[std::path::PathBuf]>) -> bool {
+    use rustx_execution_protocol::mcp::{MAX_SOURCE_WATCH_BYTES, MAX_SOURCE_WATCH_DIRECTORIES};
+    directories.is_none_or(|paths| {
+        paths
+            .first()
+            .is_some_and(|root| root.as_os_str().is_empty())
+            && paths.len() <= MAX_SOURCE_WATCH_DIRECTORIES
+            && paths.windows(2).all(|pair| pair[0] < pair[1])
+            && paths.iter().all(|path| {
+                path.to_str().is_some_and(|value| {
+                    value.is_empty() || {
+                        !value.contains('\0')
+                            && value
+                                .split('/')
+                                .all(|part| !matches!(part, "" | "." | ".."))
+                    }
+                })
+            })
+            && paths
+                .iter()
+                .map(|path| path.as_os_str().len().saturating_mul(6) + 8)
+                .sum::<usize>()
+                <= MAX_SOURCE_WATCH_BYTES
+    })
 }
 
 /// Discovers the declarations of the selected scopes without starting Python.

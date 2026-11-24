@@ -745,7 +745,16 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       this.cwd(location);
       const workspaceId = registration?.id;
       return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
-    } catch { return { authorized: false, reason: 'unavailable' }; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // A previously registered path can identify a native Session's Client
+        // catalog. This carries no authority for the Host to access the path.
+        const root = this.roots.find(root => root.cwd === cwd);
+        const registration = this.registrations.find(row => row.folder ? row.folder.path === cwd : row.location === root?.id);
+        if (registration) return { authorized: false, reason: 'unavailable', clientCatalogWorkspaceId: registration.id };
+      }
+      return { authorized: false, reason: 'unavailable' };
+    }
   }
 }
 

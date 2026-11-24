@@ -1,7 +1,7 @@
 import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
-  SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
+  SourceMutation, SourceScope, SourceSettings, SourceTarget, UnitApplication,
 } from '../../../../protocol/app-server/v81';
 import type { ConnectionState } from '../../client/contracts';
 
@@ -171,7 +171,7 @@ export type EffectiveState = 'available' | 'redacted' | 'unset' | 'invalid' | 'u
 export interface AuthoredFacts { state: AuthoredState; value?: unknown; diagnostic?: string }
 export interface EffectiveFacts { state: EffectiveState; value?: unknown; diagnostic?: string }
 export interface UnitFacts { authored: AuthoredFacts; effective: EffectiveFacts; origin: UnitOrigin }
-export function sourceView(source: SourceSettings | undefined, scope: SourceScope): SourceView | undefined {
+export function sourceView(source: SourceSettings | undefined, scope: SourceScope): SourceSettings['user'] | undefined {
   if (!source) return undefined;
   return scope === 'user' ? source.user : source.workspace ?? undefined;
 }

@@ -4,7 +4,7 @@ use rustx_execution_protocol::{
     mcp::{Reply, Request},
     process::{OperationId, ProcessOperationKey},
 };
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use super::{
     Arc, DataCapacity, ExecutionCancellation, Instant, LocalExecutionEndpoint,
@@ -86,12 +86,62 @@ impl SessionExecutionScope {
     }
 }
 
+pub(crate) enum ReceiveExchange {
+    Reply(Reply),
+    Deferred,
+    Failed(io::Error),
+}
+
 impl StdioMcpBinding {
+    pub(crate) async fn receive(
+        &self,
+        sequence: u64,
+        offset: u64,
+        deadline: Instant,
+        cancellation: &ExecutionCancellation,
+    ) -> ReceiveExchange {
+        let attempted = Arc::new(AtomicBool::new(false));
+        let request = Request::Receive {
+            key: self.key.clone(),
+            sequence: sequence.into(),
+            offset: offset.into(),
+        };
+        match self
+            .exchange_inner(request, deadline, cancellation, Some(attempted.clone()))
+            .await
+        {
+            Ok(reply) => ReceiveExchange::Reply(reply),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) && (!attempted.load(Ordering::Acquire)
+                    || error.get_ref().is_some_and(|source| {
+                        source.is::<rustx_execution_server::UnsentMcpExchange>()
+                    })) =>
+            {
+                ReceiveExchange::Deferred
+            }
+            Err(error) => ReceiveExchange::Failed(error),
+        }
+    }
+
     pub(crate) async fn exchange(
         &self,
         request: Request,
         deadline: Instant,
         cancellation: &ExecutionCancellation,
+    ) -> io::Result<Reply> {
+        self.exchange_inner(request, deadline, cancellation, None)
+            .await
+    }
+
+    async fn exchange_inner(
+        &self,
+        request: Request,
+        deadline: Instant,
+        cancellation: &ExecutionCancellation,
+        attempted: Option<Arc<AtomicBool>>,
     ) -> io::Result<Reply> {
         let opens_session = matches!(request, Request::Open { .. });
         let dispatch = self.dispatch.clone();
@@ -101,19 +151,32 @@ impl StdioMcpBinding {
             DataCapacity::WaitForSlot,
             deadline,
             move |endpoint, data, writer, deadline, cancellation| {
-                let _writer = writer;
-                endpoint.with_connection(Some(data), true, |connection| {
-                    connection.mcp_by(request, deadline, || {
-                        cancellation
-                            .with_active(|| {
-                                if opens_session && !dispatch.admit_open() {
-                                    return Err(cancelled_before_dispatch());
-                                }
-                                Ok(())
-                            })
-                            .ok_or_else(cancelled_before_dispatch)?
-                    })
-                })
+                let _permits = (data, writer);
+                let mut request = Some(request);
+                tokio::runtime::Handle::current().block_on(endpoint.wait_for_connection(
+                    deadline,
+                    |connection| {
+                        if let Some(attempted) = &attempted {
+                            attempted.store(true, Ordering::Release);
+                        }
+                        let request = request.take().expect("dispatch once on the current pair");
+                        // The outer result belongs to obtaining the connection.
+                        // Treat the exchange result independently of contention.
+                        Ok(connection.mcp_by(request, deadline, || {
+                            if Instant::now() >= deadline {
+                                return Err(io::ErrorKind::TimedOut.into());
+                            }
+                            cancellation
+                                .with_active(|| {
+                                    if opens_session && !dispatch.admit_open() {
+                                        return Err(cancelled_before_dispatch());
+                                    }
+                                    Ok(())
+                                })
+                                .ok_or_else(cancelled_before_dispatch)?
+                        }))
+                    },
+                ))?
             },
         )
         .await

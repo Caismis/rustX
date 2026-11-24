@@ -38,10 +38,27 @@ struct Entry {
     delta: Arc<Mutex<Pending>>,
 }
 
-struct Finished(mpsc::Sender<()>);
+struct Finished {
+    receipt: mpsc::Sender<()>,
+    #[cfg(all(target_os = "linux", feature = "test-support"))]
+    retirement_gate: Option<(File, PathBuf)>,
+}
+
 impl Drop for Finished {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        #[cfg(all(target_os = "linux", feature = "test-support"))]
+        if let Some((descriptor, socket)) = self.retirement_gate.take() {
+            use std::io::{Read as _, Write as _};
+            if let Ok(mut gate) = std::os::unix::net::UnixStream::connect(socket) {
+                let _ = gate.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = gate.set_write_timeout(Some(Duration::from_secs(10)));
+                if gate.write_all(b"retiring").is_ok() {
+                    let _ = gate.read_exact(&mut [0]);
+                }
+            }
+            drop(descriptor);
+        }
+        let _ = self.receipt.send(());
     }
 }
 
@@ -168,7 +185,19 @@ impl Watches {
         let delta = Arc::new(Mutex::new(Pending::default()));
         let pending = delta.clone();
         let (sender, finished) = mpsc::channel();
-        let finished_sender = Finished(sender);
+        let finished_sender = Finished {
+            receipt: sender,
+            #[cfg(all(target_os = "linux", feature = "test-support"))]
+            retirement_gate: if id.is_configuration()
+                && std::env::var_os("RUSTX_TEST_WATCH_RETIREMENT_PATH").as_deref()
+                    == Some(path.as_os_str())
+                && let Some(socket) = std::env::var_os("RUSTX_TEST_WATCH_RETIREMENT_SOCKET")
+            {
+                Some((file.try_clone()?, PathBuf::from(socket)))
+            } else {
+                None
+            },
+        };
         let event_root = workspace.to_path_buf();
         let event_path = path.clone();
         let mut state = self.active.lock().expect("watch registry");
@@ -284,10 +313,7 @@ impl Watches {
                     state.stopping.remove(&id);
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    return WatchReply::Refused {
-                        id,
-                        kind: ReadError::Busy,
-                    };
+                    return WatchReply::Retiring { id };
                 }
                 Err(mpsc::TryRecvError::Disconnected) => return WatchReply::Unknown { id },
             }
@@ -362,11 +388,7 @@ mod tests {
             let notice = watches.poll(root, id);
             match &notice {
                 WatchReply::Changed(change) if want(change) => return change.clone(),
-                WatchReply::Changed(_)
-                | WatchReply::Refused {
-                    id: _,
-                    kind: ReadError::Busy,
-                } => (),
+                WatchReply::Changed(_) | WatchReply::Retiring { .. } => (),
                 _ => panic!("watch disappeared before a physical change was reported: {notice:?}"),
             }
             assert!(
@@ -406,10 +428,7 @@ mod tests {
             .finished = pending;
         fs::rename(&path, base.join("previous")).unwrap();
         fs::write(&path, b"replacement").unwrap();
-        let busy = WatchReply::Refused {
-            id: leaf,
-            kind: ReadError::Busy,
-        };
+        let busy = WatchReply::Retiring { id: leaf };
         assert_eq!(watches.poll(&root, leaf), busy);
         assert_eq!(watches.poll(&root, leaf), busy);
         assert_eq!(

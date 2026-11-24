@@ -178,9 +178,10 @@ impl ProspectiveSessionConfig {
         }) {
             return false;
         }
-        if demand_a.iter().any(|id| {
-            self.managed_python.packages().get(id) != other.managed_python.packages().get(id)
-        }) {
+        // Runtime generations retain the complete frozen package catalog.
+        // A new snapshot can incorporate an undemanded package without
+        // preparing it, and gives later admissions the current source bytes.
+        if self.managed_python != other.managed_python {
             return false;
         }
         let selected = |source: &Self| {

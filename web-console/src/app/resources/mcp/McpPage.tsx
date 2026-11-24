@@ -8,8 +8,9 @@ import { transferActions } from '../shared/ResourceTransfer';
 import { Button } from '../../../presentation/primitives/Button';
 import { Menu } from '../../../presentation/primitives/Menu';
 import { IconDownloadOutline16, IconEditOutline16, IconEllipsisOutline16, IconPlusOutline16, IconShieldOutline16 } from '../../../presentation/primitives/icons';
+import { resourceCapability } from '../../settings/capability';
 import { documentAuthoring } from '../../settings/projection';
-import { extensionEntries } from '../shared/inventory';
+import { extensionEntries, type ExtensionEntry } from '../shared/inventory';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
 import { ResourceCard, ResourceGroup } from '../shared/ResourceCards';
 import type { McpEditorDraft, McpFocus } from '../types';
@@ -46,30 +47,37 @@ export function McpDetail({ source, scope, revision, focus, editorDraft, onEdito
   </section>;
 }
 
-export function McpPage({ source, scope, revision, onFocus, query, view, group, probeStates = {}, testConnection, probeAvailable = false, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
+export function McpPage({ source, workspaceDocument, scope, revision, onFocus, query, view, group, probeStates = {}, testConnection, probeAvailable = false, onTransfer, transferDisabled, workspaceAvailability, canOverride, onOverride }: {
   probeStates?: Record<string, ProbeState>;
   testConnection?: (id: string) => void; probeAvailable?: boolean;
-  source: SourceSettings; scope: SourceScope; revision?: string;
-  onFocus: (focus: McpFocus) => void; query: string; view: CatalogView; group?: string;
+  source?: SourceSettings; workspaceDocument?: SourceSettings['user_mcp']; scope: SourceScope; revision?: string;
+  onFocus?: (focus: McpFocus) => void; query: string; view: CatalogView; group?: string;
   onTransfer?: (scope: SourceScope, name: string, revision: string, operation: TransferOperation) => void;
   canOverride?: (name: string) => boolean; onOverride?: (name: string) => void;
   workspaceAvailability?: (name: string, valid?: boolean) => ReactNode;
   transferDisabled?: boolean;
 }) {
   const tx = useTranslation();
-  const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
-  const entries = extensionEntries(source, scope, 'mcp', 'owned');
+  const sourceDocument = source && (scope === 'user' ? source.user_mcp : source.workspace_mcp);
+  const viewDocument = workspaceDocument ?? sourceDocument;
+  const document = documentAuthoring(viewDocument);
+  const entries: readonly ExtensionEntry[] = workspaceDocument
+    ? Object.keys(workspaceDocument.authored ?? {}).map(name => ({
+      family: 'mcp', name, path: workspaceDocument.path, owner: 'workspace',
+      relationship: 'authored', diagnostics: [], capability: resourceCapability('mcp'),
+    }))
+    : extensionEntries(source, scope, 'mcp', 'owned');
   const needle = query.trim().toLocaleLowerCase();
   const matches = entries.map(entry => {
-    const config = (entry.owner === 'user' ? source.user_mcp : source.workspace_mcp)?.authored?.[entry.name]?.definition;
+    const config = viewDocument?.authored?.[entry.name]?.definition;
     const description = config ? config.url ? `http · ${config.url}` : `stdio · ${[config.command, ...(config.args ?? [])].join(' ')}` : '';
     return {...entry, description};
   }).filter(entry => `${entry.name} ${entry.description} ${entry.path}`.toLocaleLowerCase().includes(needle));
   const renderCard = (entry: typeof matches[number]) => <ResourceCard key={entry.name}
     name={entry.name} label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} icon={<McpStatusIcon entry={entry} probe={probeStates[entry.name]} />}
-    description={entry.description} diagnostic={entry.diagnostics[0]} onOpen={() => onFocus({kind:'mcp', name:entry.name})}
-    availability={workspaceAvailability?.(entry.name, entry.valid) ?? (revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} />)}
-    menu={<CardMenu label={tx('resources:card.actions', { p0: entry.name })}
+    description={entry.description} diagnostic={entry.diagnostics[0]} onOpen={onFocus && (() => onFocus({kind:'mcp', name:entry.name}))}
+    availability={workspaceAvailability?.(entry.name, entry.valid) ?? (source && revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} />)}
+    menu={onFocus && <CardMenu label={tx('resources:card.actions', { p0: entry.name })}
       items={[{ id: 'edit', label: tx('resources:card.edit'), icon: <IconEditOutline16 /> },
         ...(canOverride?.(entry.name) ? [{ id: 'override', label: tx('resources:card.override'), icon: <IconEditOutline16 /> }] : []),
         ...(onTransfer ? transferActions(tx, scope, !!transferDisabled || document.state !== 'structured' || !Object.hasOwn(document.document, entry.name)) : [])]}
@@ -81,8 +89,8 @@ export function McpPage({ source, scope, revision, onFocus, query, view, group, 
     actions={<>
       <Button size="sm" variant="outline" disabled={!probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'}
         aria-label={`${tx('settings:mcp.test-connection')} ${entry.name}`} onClick={() => testConnection?.(entry.name)}>{tx('settings:mcp.test-connection')}</Button>
-      <Button size="sm" variant="ghost" aria-label={`${tx('resources:mcp.permissions')} ${entry.name}`}
-        onClick={() => onFocus({kind:'mcp', name:entry.name, mode:'permissions'})}><IconShieldOutline16 /></Button>
+      {onFocus && <Button size="sm" variant="ghost" aria-label={`${tx('resources:mcp.permissions')} ${entry.name}`}
+        onClick={() => onFocus({kind:'mcp', name:entry.name, mode:'permissions'})}><IconShieldOutline16 /></Button>}
     </>} />;
 
   if (group && needle && !matches.length) return null;

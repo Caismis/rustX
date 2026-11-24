@@ -180,7 +180,7 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   const admission = new WorkspaceSessionAdmission(new WorkspaceAuthority(host), client);
   expect(await (await admission.admit('native-session', () => true) as import('../src/client/contracts').OperationAdmission).validate(new AbortController().signal)).toBe(true);
   rmSync(a, { recursive: true });
-  expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable' }]);
+  expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable', clientCatalogWorkspaceId: workspace.id }]);
   await expect(admission.admit('native-session', () => true)).rejects.toThrow('not authorized');
   mkdirSync(a); await host.removeWorkspace(await host.listWorkspaces(), workspace.id);
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: true }]);

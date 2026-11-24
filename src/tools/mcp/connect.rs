@@ -213,6 +213,7 @@ impl McpServerRuntime {
                 let (owner, transport, admission) = super::stdio::Session::open(
                     scope,
                     workspace.root(),
+                    server_id.as_str(),
                     launch,
                     &cancellation,
                     protocol_violation.clone(),

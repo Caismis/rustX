@@ -1823,6 +1823,118 @@ async fn session_inputs_commit_together_and_require_permission_for_a_replaced_wo
     })).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_package_watch_refreshes_permissions_and_nested_source_from_the_same_binding() {
+    use crate::capabilities::ToolSourceId;
+    use crate::runtime::permission::ResourcePermissionValue;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let root = fixture.workspaces[0].join(".agents/tools/watched");
+        std::fs::create_dir_all(root.join("implementation/empty")).unwrap();
+        std::fs::write(root.join("server.py"), "from implementation import tool\n").unwrap();
+        let code = root.join("implementation/tool.py");
+        std::fs::write(&code, "VERSION = 1\n").unwrap();
+        std::fs::write(root.join("requirements.txt"), []).unwrap();
+        let permission = root.join("permissions.toml");
+        let write_permission = |value| {
+            std::fs::write(
+                &permission,
+                format!("[permissions]\nplan='deny'\nautomatic='{value}'\nfull_access='allow'\n"),
+            )
+            .unwrap();
+        };
+        write_permission("ask");
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = &fixture.sessions[0].id;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let source = ToolSourceId::ManagedPython("watched".into());
+        let observe = |snapshot: &crate::runtime::resources::RuntimeResourceSnapshot| {
+            let package = snapshot.managed_python_catalog().packages()[&source]
+                .as_ref()
+                .unwrap();
+            (
+                package.source_digest().to_owned(),
+                package.permissions().unwrap().automatic,
+            )
+        };
+        let (registered, observed) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                registered.send(()).unwrap();
+            },
+        );
+        let stop = tokio_util::sync::CancellationToken::new();
+        let watch = tokio::spawn({
+            let manager = fixture.manager.clone();
+            let stop = stop.clone();
+            async move { manager.run_source_watch(stop).await }
+        });
+        observed.await.unwrap();
+        let (original, automatic) = observe(&runtime.runtime_resources());
+        assert_eq!(automatic, ResourcePermissionValue::Ask);
+        let mut changes = fixture.manager.configuration_changes();
+        write_permission("deny");
+        while observe(&runtime.runtime_resources()).1 != ResourcePermissionValue::Deny {
+            changes.changed().await.unwrap();
+        }
+        let frozen = runtime.runtime_resources();
+        assert_eq!(
+            observe(&frozen),
+            (original.clone(), ResourcePermissionValue::Deny)
+        );
+
+        let mut settlement = super::SettlementReceiptWait::capture(&runtime);
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let running = runtime
+            .configuration_cut()
+            .admitted_attempt
+            .expect("the first request is admitted");
+        let (resynced, recaptured) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "bound_configuration_watch_resynced",
+            move || {
+                resynced.send(()).unwrap();
+            },
+        );
+        std::fs::write(&code, "VERSION = 2\n").unwrap();
+        recaptured.await.unwrap();
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(
+            staged.units[&ApplyUnit::Capabilities],
+            UnitApplication::Ready
+        );
+        assert_eq!(
+            runtime.configuration_cut().admitted_attempt,
+            Some(running.clone())
+        );
+        assert_eq!(observe(&runtime.runtime_resources()), observe(&frozen));
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        let next = observe(&runtime.runtime_resources());
+        assert_ne!(next.0, original);
+        assert_eq!(next.1, ResourcePermissionValue::Deny);
+        assert_eq!(observe(&frozen), (original, ResourcePermissionValue::Deny));
+
+        runtime.submit_inbound(input("request-B")).unwrap();
+        fixture.gates[1].wait_entered().await;
+        assert_ne!(runtime.configuration_cut().admitted_attempt, Some(running));
+        assert_eq!(observe(&runtime.runtime_resources()), next);
+        fixture.gates[1].release();
+        settlement.wait().await;
+        assert_eq!(fixture.provider.request_bodies().len(), 2);
+        stop.cancel();
+        watch.await.unwrap().unwrap();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
@@ -2055,6 +2167,89 @@ async fn client_source_watch_reloads_guidance_and_skill_metadata_after_registrat
     .await;
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn replacing_a_skill_refreshes_the_catalog_while_native_watch_retirement_is_held() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    Box::pin(bounded(async {
+        let test_client = std::env::var_os("RUSTX_WATCH_RETIREMENT_PROOF_CLIENT").unwrap();
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let mount = tempfile::tempdir().unwrap();
+        let physical = mount.path().join("physical");
+        std::fs::rename(workspace, &physical).unwrap();
+        let skills = physical.join(".agents/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let target = physical.join("physical-skill");
+        let replacement = physical.join("replacement-skill");
+        for (folder, description) in [(&target, "Original"), (&replacement, "Replacement")] {
+            std::fs::create_dir(folder).unwrap();
+            std::fs::write(folder.join("SKILL.md"), format!("---\nname: watched\ndescription: {description}\n---\nBody\n")).unwrap();
+        }
+        std::os::unix::fs::symlink("../../physical-skill", skills.join("watched")).unwrap();
+        std::os::unix::fs::symlink(test_client, mount.path().join("fixture-client")).unwrap();
+        let retirement = tokio::net::UnixListener::bind(mount.path().join("retirement")).unwrap();
+        let launcher = mount.path().join("client");
+        std::fs::write(&launcher, r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+unset RUSTX_CLIENT_DOMAIN_STAGING
+export RUSTX_TEST_WATCH_RETIREMENT_PATH=physical-skill
+export RUSTX_TEST_WATCH_RETIREMENT_SOCKET="$bin/retirement"
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}" --bind "$bin/physical" "$4" -- "$bin/fixture-client" "$@"
+"#).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let description = || runtime.runtime_resources().capability().skills().packages()[0].description().to_owned();
+        assert_eq!(description(), "Original");
+        let (registered, ready) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert("bound_configuration_watch_resynced", move || registered.send(()).unwrap());
+        let stop = tokio_util::sync::CancellationToken::new();
+        let watcher = tokio::spawn({
+            let manager = fixture.manager.clone();
+            let stop = stop.clone();
+            async move { manager.run_source_watch(stop).await }
+        });
+        ready.await.unwrap();
+        let (invalidated, noticed) = tokio::sync::oneshot::channel();
+        fixture.manager.configuration.test_hooks.insert("bound_watch_retiring", move || invalidated.send(()).unwrap());
+        let mut changes = fixture.manager.configuration_changes();
+        // Both the Skills collection and its symbolic link stay unchanged.
+        rustix::fs::renameat_with(rustix::fs::CWD, &target, rustix::fs::CWD,
+            &replacement, rustix::fs::RenameFlags::EXCHANGE).unwrap();
+        let (mut held, _) = retirement.accept().await.unwrap();
+        let mut marker = [0; 8];
+        held.read_exact(&mut marker).await.unwrap();
+        assert_eq!(&marker, b"retiring");
+        noticed.await.unwrap();
+        while description() != "Replacement" {
+            changes.changed().await.unwrap();
+        }
+        let endpoint = fixture.manager.execution_endpoint(&fixture.sessions[0].id).unwrap();
+        endpoint.control().unwrap().health().unwrap();
+        assert_eq!(held.try_read(&mut [0]).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        held.write_all(b"r").await.unwrap();
+        drop(held);
+        // The refreshed catalog can register another watcher of the same path.
+        let retirements = tokio::spawn(async move {
+            while let Ok((mut gate, _)) = retirement.accept().await {
+                let _ = gate.write_all(b"r").await;
+            }
+        });
+        stop.cancel();
+        watcher.await.unwrap().unwrap();
+        assert!(!workspace.exists());
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+        retirements.abort();
+    })).await;
+}
+
 #[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
@@ -2082,11 +2277,88 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         let resources = overlay.join(".agents");
         std::fs::create_dir_all(&resources).unwrap();
         std::fs::write(resources.join("mcp.toml"), &document).unwrap();
-        let revision = crate::local_runtime::settings::revision(Some(document.as_bytes()));
         let launcher = workspace_overlay_launcher(physical.path());
         let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
+        let MethodResult::McpSource { source } = call(
+            &connection,
+            98,
+            Method::McpSourceRead {
+                target: SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+                execution_session: fixture.sessions[0].id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("bound Workspace MCP source");
+        };
+        assert_eq!(
+            source.revision,
+            crate::local_runtime::settings::revision(Some(document.as_bytes()))
+        );
+        assert_eq!(source.path, workspace.join(".agents/mcp.toml"));
+        assert_eq!(
+            source
+                .authored
+                .unwrap()
+                .into_keys()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+            ["inventory"],
+        );
+        let revision = source.revision;
+        assert!(!workspace.exists());
+        std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+        let decoy = b"[mcp_servers.decoy]\nurl='http://127.0.0.1:1'\n";
+        std::fs::write(workspace.join(".agents/mcp.toml"), decoy).unwrap();
+        assert_ne!(
+            revision,
+            crate::local_runtime::settings::revision(Some(decoy))
+        );
+        let MethodResult::McpSource { source } = call(
+            &connection,
+            100,
+            Method::McpSourceRead {
+                target: SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+                execution_session: fixture.sessions[0].id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("Client source with a Server decoy");
+        };
+        assert_eq!(source.revision, revision);
+        assert!(
+            source
+                .authored
+                .unwrap()
+                .keys()
+                .all(|id| id.as_str() != "decoy")
+        );
+        let MethodResult::McpProbe { result: probe } = call(
+            &connection,
+            101,
+            Method::McpProbe {
+                target: SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+                execution_session: Some(fixture.sessions[0].id.clone()),
+                id: crate::runtime::identity::McpServerId::new("inventory"),
+                expected_revision: revision.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("Client revision probe");
+        };
+        assert_eq!(probe.outcome, McpProbeOutcome::Reachable);
+        assert_eq!(probe.revision, revision);
+        assert_eq!(control.catalog_reads(), 1);
         let MethodResult::McpProbe { result } = call(
             &connection,
             99,
@@ -2107,9 +2379,12 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         assert_eq!(result.outcome, McpProbeOutcome::Reachable);
         assert_eq!(result.revision, revision);
         assert_eq!(result.page.unwrap().tools.len(), 5);
-        assert_eq!(control.catalog_reads(), 1);
+        assert_eq!(control.catalog_reads(), 2);
         assert_eq!(control.accepted_calls(), 0);
-        assert!(!workspace.exists());
+        assert_eq!(
+            std::fs::read(workspace.join(".agents/mcp.toml")).unwrap(),
+            decoy
+        );
         assert_eq!(fixture.host.drain().await, [] as [String; 0]);
         assert!(client.wait().await.unwrap().success());
         service.shutdown().await;

@@ -177,6 +177,7 @@ impl Family<'_> {
             | Method::SkillsList { .. }
             | Method::SkillsRead { .. }
             | Method::SourcesRead { .. }
+            | Method::McpSourceRead { .. }
             | Method::McpProbe { .. }
             | Method::ModelProbe { .. }
             | Method::SourcesPage { .. }

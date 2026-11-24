@@ -14,6 +14,7 @@ use rustx_execution_protocol::{
     ControlTurn, DecimalU64, ProcessCancelDisposition,
 };
 use std::io;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
@@ -503,6 +504,9 @@ pub(crate) async fn lost_control_is_unconfirmed_in_host_drain() {
     bounded(closed).await.unwrap();
     assert!(endpoint.control().is_none());
     assert_eq!(fixture.host.file_observers().available_permits(), 32);
+    // This test withholds recovery. An elapsed drain budget must report the
+    // missing receipt while the old instance is still alive.
+    fixture.host.begin_drain_by(Instant::now());
     let failures = bounded(fixture.host.drain()).await;
     assert_eq!(
         failures,
@@ -521,6 +525,74 @@ pub(crate) async fn lost_control_is_unconfirmed_in_host_drain() {
         )
     ));
     assert!(bounded(child.wait()).await.unwrap().success());
+}
+
+pub(crate) async fn drain_accepts_the_original_receipt_after_revoke_lane_loss() {
+    use crate::local_runtime::session_runtime_manager::EndpointAdmission;
+    let fixture = Fixture::with_session_count(None, 1).await;
+    let (
+        ProxiedClient {
+            data: (mut data_peer, mut data_server),
+            control: (mut control_peer, mut control_server),
+            endpoint,
+            mut child,
+            _scratch,
+        },
+        listener,
+    ) = proxied_client_with_listener(&fixture).await;
+    let data = tokio::spawn(async move {
+        assert_eq!(data_server.read(&mut [0]).await.unwrap(), 0);
+        let _ = data_peer.shutdown().await;
+    });
+    let control = tokio::spawn(async move {
+        loop {
+            let poll: ControlPoll = receive(&mut control_peer).await.unwrap();
+            if poll.receipt == Some(ControlReply::Revoked) {
+                return;
+            }
+            send(&mut control_server, &poll).await.unwrap();
+            let turn: ControlTurn = receive(&mut control_server).await.unwrap();
+            send(&mut control_peer, &turn).await.unwrap();
+        }
+    });
+    let drain = tokio::spawn({
+        let host = fixture.host.clone();
+        async move { host.drain().await }
+    });
+    bounded(control).await.unwrap();
+    bounded(data).await.unwrap();
+    assert!(!drain.is_finished());
+    assert!(child.try_wait().unwrap().is_none());
+    let ((mut peer, mut server), admitted) = forward_execution_lane(&listener, &endpoint).await;
+    assert!(matches!(
+        admitted.await.unwrap().unwrap(),
+        EndpointAdmission::Pending
+    ));
+    let data = tokio::spawn(async move {
+        assert_eq!(server.read(&mut [0]).await.unwrap(), 0);
+        let _ = peer.shutdown().await;
+    });
+    let ((mut peer, mut server), admitted) = forward_execution_lane(&listener, &endpoint).await;
+    let control = tokio::spawn(async move {
+        loop {
+            let poll: ControlPoll = receive(&mut peer).await.unwrap();
+            send(&mut server, &poll).await.unwrap();
+            let turn: ControlTurn = receive(&mut server).await.unwrap();
+            send(&mut peer, &turn).await.unwrap();
+            if poll.receipt == Some(ControlReply::Revoked) {
+                assert!(turn.request.is_none());
+                return;
+            }
+        }
+    });
+    assert!(matches!(
+        bounded(admitted).await.unwrap().unwrap(),
+        EndpointAdmission::Rejected(rustx_execution_protocol::Reject::Revoked)
+    ));
+    bounded(control).await.unwrap();
+    bounded(data).await.unwrap();
+    assert!(bounded(child.wait()).await.unwrap().success());
+    assert_eq!(bounded(drain).await.unwrap(), [] as [String; 0]);
 }
 
 pub(crate) async fn refused_register_does_not_allocate_a_cancellation_tombstone() {
@@ -606,13 +678,16 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
 
     let fixture = Fixture::with_session_count(None, 2).await;
     let sibling = fixture.load(1).await.unwrap().unwrap().client();
-    let ProxiedClient {
-        data: (mut data_peer, mut data_server),
-        control: (mut control_peer, mut control_server),
-        endpoint: _endpoint,
-        mut child,
-        _scratch,
-    } = proxied_client(&fixture).await;
+    let (
+        ProxiedClient {
+            data: (mut data_peer, mut data_server),
+            control: (mut control_peer, mut control_server),
+            endpoint,
+            mut child,
+            _scratch,
+        },
+        listener,
+    ) = proxied_client_with_listener(&fixture).await;
     let data = tokio::spawn(async move {
         let _ = tokio::io::copy_bidirectional(&mut data_peer, &mut data_server).await;
     });
@@ -677,13 +752,22 @@ pub(crate) async fn delete_revoke_does_not_pin_residency_or_forget_failure() {
             .is_err()
     );
 
+    fixture.host.begin_drain_by(Instant::now());
     let failures = bounded(fixture.host.drain()).await;
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert!(
         failures[0].contains("Client revocation is unconfirmed"),
         "{failures:?}"
     );
-    let _ = bounded(child.wait()).await.unwrap();
+    endpoint.cut_pair();
+    let (_lanes, refused) = forward_execution_lane(&listener, &endpoint).await;
+    assert!(matches!(
+        refused.await.unwrap().unwrap(),
+        crate::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+            rustx_execution_protocol::Reject::Revoked
+        )
+    ));
+    assert!(bounded(child.wait()).await.unwrap().success());
     bounded(data).await.unwrap();
 }
 
@@ -759,11 +843,13 @@ pub(crate) async fn an_offline_deleted_session_accepts_only_its_original_cleanup
         let mut revoked = 0;
         while let Ok(poll) = receive::<ControlPoll>(&mut control_peer).await {
             send(&mut control_server, &poll).await.unwrap();
+            let turn = receive::<ControlTurn>(&mut control_server).await.unwrap();
             if poll.receipt == Some(ControlReply::Revoked) {
+                assert!(turn.request.is_none());
+                send(&mut control_peer, &turn).await.unwrap();
                 revoked += 1;
                 break;
             }
-            let turn = receive::<ControlTurn>(&mut control_server).await.unwrap();
             assert!(turn.request.as_ref().is_none_or(|request| matches!(
                 request,
                 rustx_execution_protocol::ControlRequest::Revoke
@@ -882,8 +968,9 @@ pub(crate) async fn queued_capture_discard_hands_off_to_binding_revocation() {
                 seen.send(()).unwrap();
                 held.await.unwrap();
                 send(&mut control_server, &poll).await.unwrap();
-                // The Client's final poll does not wait for another turn.
-                let _ = receive::<ControlTurn>(&mut control_server).await;
+                let ack = receive::<ControlTurn>(&mut control_server).await.unwrap();
+                assert!(ack.request.is_none());
+                send(&mut control_peer, &ack).await.unwrap();
                 return;
             }
             if send(&mut control_server, &poll).await.is_err() {
@@ -1317,7 +1404,9 @@ fn park_revoked_receipt(
                 seen.send(()).unwrap();
                 held.await.unwrap();
                 send(&mut server, &poll).await.unwrap();
-                let _ = receive::<ControlTurn>(&mut server).await;
+                let ack = receive::<ControlTurn>(&mut server).await.unwrap();
+                assert!(ack.request.is_none());
+                send(&mut client, &ack).await.unwrap();
                 return;
             }
             send(&mut server, &poll).await.unwrap();

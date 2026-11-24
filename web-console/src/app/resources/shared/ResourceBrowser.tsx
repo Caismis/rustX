@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSelector } from '@xstate/react';
-import type { SkillDescriptor, SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v81';
+import type { SkillDescriptor, SourceScope, SourceSettings, SourceTarget, TransferOperation } from '../../../../../protocol/app-server/v81';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
@@ -28,13 +28,13 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
   return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
 }
 
-export function ResourceBrowser({ client, source, scope, revision, query, view, refresh, onRefresh, workspaceLabel, executionSession,
-  bindDisplayWrite, bindDelete, onTransfer, transferDisabled }: {
-  client: AppServerClient; source: SourceSettings; scope: SourceScope; revision?: string;
+export function ResourceBrowser({ client, source, target, scope, revision, query, view, refresh, onRefresh, workspaceLabel, executionSession,
+  bindDisplayWrite, bindDelete, onTransfer, transferDisabled, readOnly = false }: {
+  client: AppServerClient; source?: SourceSettings; target: SourceTarget; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
-  transferDisabled: boolean; workspaceLabel?: string; executionSession?: string;
+  transferDisabled: boolean; readOnly?: boolean; workspaceLabel?: string; executionSession?: string;
   query: string; view: CatalogView; refresh: number; onRefresh: () => void;
 }) {
   const tx = useTranslation();
@@ -44,7 +44,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
   const [deleting, setDeleting] = useState<{ title: string; owner: SourceScope; path: string; remove: () => Promise<void> }>();
   const settings = useSettingsActor();
   const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
-  const effective = useSkillCatalog(client, source, true, scope, refresh + localRefresh, executionSession);
+  const effective = useSkillCatalog(client, source, true, scope, refresh + localRefresh, executionSession, target);
   const global = useSkillCatalog(client, source, scope === 'workspace', 'user', refresh + localRefresh);
   const listed = effective?.skills ?? [];
   // The effective catalog drives selection. Global's own catalog keeps shadowed
@@ -83,7 +83,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     const display = skill?.display;
     const operationRevision = skill?.operation_revision;
     const name = display?.authored.display_name ?? row.name;
-    const items: CardMenuItems = [
+    const items: CardMenuItems = readOnly ? [] : [
       ...(display?.revision ? [{ id: 'edit', label: tx('resources:skills.edit-display'), icon: <IconEditOutline16 /> }] : []),
       ...(operationRevision && onTransfer ? transferActions(tx, row.owner, transferDisabled || !effective || !!effective.error
         || effective.pending || !global || !!global.error || global.pending) : []),
@@ -107,13 +107,13 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
             onTransfer(row.owner, row.name, operationRevision, id === 'copy-scope' ? 'copy' : 'move', taken);
           }
         }} />}
-      availability={revision !== undefined && selectable.has(key) && skill?.disable_model_invocation === false
+      availability={source && revision !== undefined && selectable.has(key) && skill?.disable_model_invocation === false
         && <ResourceAvailability family="skill" name={row.name} valid={row.valid} source={source} scope={scope} revision={revision}
           skillNames={skillNames} skillEnabledByDefault={skill.enabled_by_default} />} />;
   };
 
   return <>
-    {revision !== undefined && <SkillSelectionPolicy source={source} scope={scope} revision={revision} skillNames={skillNames} />}
+    {source && revision !== undefined && <SkillSelectionPolicy source={source} scope={scope} revision={revision} skillNames={skillNames} />}
     {catalogError && <p role="alert">{catalogError}</p>}
     <ResourceGroup label={tx('resources:scope.owned')} count={owned.length} view={view}
       empty={<p role="status">{tx(needle ? 'resources:no-results' : !effective ? 'resources:loading' : 'resources:empty')}</p>}>
@@ -123,7 +123,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
       {inherited.map(renderCard)}
     </ResourceGroup>}
     {focus && <SkillDetail key={JSON.stringify([focus.owner, focus.name, executionSession])} client={client}
-      target={focus.owner === 'user' ? userTarget : source.target} executionSession={focus.owner === 'workspace' ? executionSession : undefined}
+      target={focus.owner === 'user' ? userTarget : target} executionSession={focus.owner === 'workspace' ? executionSession : undefined}
       name={focus.name} display={descriptors.get(rowKey(focus.owner, focus.name))?.display} close={() => setFocus(undefined)} />}
     {editing?.skill.display && <SkillDisplayDialog name={editing.skill.catalog.name} display={editing.skill.display}
       close={() => setEditing(undefined)} save={async (authored, upload) => {

@@ -3,7 +3,7 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
-pub(in crate::local_runtime) mod capture;
+pub(crate) mod capture;
 pub mod effective_observation;
 pub mod generation;
 pub mod observation;

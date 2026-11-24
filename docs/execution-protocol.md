@@ -116,7 +116,7 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client opens a pair with a revision 6 Hello. It retains
+The Client opens a pair with a revision 7 Hello. It retains
 `physical_settlement_proven` in terminal process snapshots and requires the
 same-instance recovery handshake after a transport loss. Managed Python
 source capture and generic stdio launch carry exact binding identity in
@@ -284,10 +284,18 @@ any phase, and `Live` always means a *committed pair* of lanes.
   flight and the next poll with its frame deadline give a 4.1-second
   detection-skew budget. Revoke continues to use its absolute command
   deadline. Neither delayed polling nor a failed handshake renews recovery.
-- Logical Session deletion closes the execution route immediately and can
-  retain a durable cleanup-pending record while the original Client is
-  detached. A same-instance pair admitted to this closed route receives
-  Revoke only. A validated receipt permits the durable cleanup retry.
+- Logical Session deletion and Host drain close business admission
+  immediately. A transport loss before sending Revoke or before obtaining
+  its receipt keeps the same instance's cleanup admission under the fixed
+  recovery window. Host drain accepts cleanup only until its overall
+  shutdown deadline. The recovered Client returns its previously proved
+  physical settlement or finishes the remaining cleanup. The Server
+  acknowledges the final control poll before closing the pair.
+- The Session recovery owner is written to a bounded private staging file,
+  synced, published atomically without replacement and directory-synced
+  before first admission. Inventory readers only observe committed owners.
+  An interrupted publication leaves no partial owner for another Workspace
+  to read.
 
 ### Independent Linux local settlement
 
@@ -494,7 +502,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v6` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v7` path. A port may be omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -548,7 +556,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v6]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v7]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1007,9 +1015,10 @@ and after attaching. `Watch::Poll` returns a coalesced, source-relative
 delta of at most 16 paths and 16 KiB of escaped path bytes. Each Client
 binding holds at most 32 observers. An unavailable or changed identity
 starts retirement. A poll that has yet to obtain native cleanup proof
-returns `Busy` for the exact watch identity, with the slot still owned by
-that observer. Subsequent polls can collect the empty retired resync hint
-after the receipt arrives. Other observers and the data lane remain live.
+returns `Retiring` for the exact watch identity. The Client retains its
+slot while native cleanup is pending. A bound configuration observer
+resyncs on the first retirement notice and periodically while coverage
+remains incomplete. The final retired resync hint confirms slot release.
 
 `StopWatch` uses the independent control lane. Its exact keyed receipt
 distinguishes physical cleanup from an unknown result. A detached or
@@ -1109,9 +1118,11 @@ and [EXEC-03 evidence](exec-03-evidence.md).
 ### Client-owned stdio MCP
 
 The Server admits the configured source and freezes its credential resolution.
-An `Open` names one operation on the exact authenticated Session binding and
-supplies the selected Client program, Workspace-relative cwd, explicit
-environment and allowed protocol versions. The Client validates the cwd in
+An `Open` names one operation and its canonical source identity on the
+exact authenticated Session binding, then supplies the selected Client
+program, Workspace-relative cwd, explicit environment and allowed protocol
+versions. The parent validates the exact frozen SourceId grant of a
+delegated Open and uses that grant for tools, resources and replay checks. The Client validates the cwd in
 its Workspace, supervises the physical process and negotiates the physical MCP
 session. The control directory for both supervision sockets is private to the
 Client. Cancellation and the business START frame share the process gate.
@@ -1119,6 +1130,9 @@ The Server receives the negotiated peer metadata and next unused request ID,
 then uses the existing ToolCall, Tasks and interaction owners. A process close
 is acknowledged only after supervision proves physical settlement. A transport
 failure after dispatch leaves the effect unknown and does not replay the call.
+A Receive that was refused before dispatch retains its existing sequence and
+offset. A delegated relay has a separate bounded reply budget to report such
+refusals after the physical dispatch budget expires.
 
 One effective capability generation admits up to eight Client-owned stdio
 sources, including Managed Python. A binding retains at most sixteen physical
@@ -1453,7 +1467,14 @@ resource resolution. Each reply carries at most 32 hops of up to 4,096
 UTF-8 bytes each. An unresolved resource can also name the first absent or
 obstructed component beneath a verified Workspace directory. Configuration
 watches cover these paths, the intermediate links, and the resolved ignore-file
-target. Both lanes reject revision 5 at handshake.
+target.
+
+Execution revision 7 adds source IDs to stdio MCP Open, typed watch
+retirement, and bounded directory dependencies to Python capture receipts.
+Client package coverage includes the package root and all observed nested
+directories up to 128 paths and 16 KiB of escaped path bytes. If full
+coverage cannot be registered, the configuration observer periodically
+recaptures. Both lanes reject revision 6 at handshake.
 
 Each capture key includes the original Session binding identity. The Client
 allows at most 128 names per authored scope, 256 retained capture identities,

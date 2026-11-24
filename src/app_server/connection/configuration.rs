@@ -41,7 +41,7 @@ impl AppServerConnection {
             .map_err(|_| domain(ErrorData::OperationFailed))?
     }
 
-    async fn skill_endpoint(
+    async fn bound_catalog_endpoint(
         &self,
         target: &crate::local_runtime::configuration::settings::SourceTarget,
         session: Option<&crate::local_runtime::session::SessionId>,
@@ -112,7 +112,7 @@ impl AppServerConnection {
                 expected_revision,
             } => {
                 let endpoint = self
-                    .skill_endpoint(&target, execution_session.as_ref())
+                    .bound_catalog_endpoint(&target, execution_session.as_ref())
                     .await?;
                 let page = self
                     .host
@@ -139,7 +139,7 @@ impl AppServerConnection {
                 expected_revision,
             } => {
                 let endpoint = self
-                    .skill_endpoint(&target, execution_session.as_ref())
+                    .bound_catalog_endpoint(&target, execution_session.as_ref())
                     .await?;
                 let content = self
                     .host
@@ -288,6 +288,32 @@ impl AppServerConnection {
             } => {
                 let outcome = self.host.manager().probe_model(target, model, source).await;
                 Ok(MethodResult::ModelProbe { outcome })
+            }
+            Method::McpSourceRead {
+                target,
+                execution_session,
+            } => {
+                let endpoint = self
+                    .bound_catalog_endpoint(&target, Some(&execution_session))
+                    .await?
+                    .ok_or_else(|| domain(ErrorData::ExecutionUnavailable))?;
+                let source = tokio::task::spawn_blocking(move || {
+                    let document =
+                        crate::local_runtime::configuration::capture::read_bound_mcp(&endpoint)
+                            .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+                    let path = endpoint
+                        .workspace()
+                        .join(crate::local_runtime::mcp_resources::WORKSPACE_DOCUMENT);
+                    Ok::<_, RpcError>(
+                        crate::local_runtime::configuration::settings::mcp_document_view(
+                            path,
+                            document.as_deref(),
+                        ),
+                    )
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))??;
+                Ok(MethodResult::McpSource { source })
             }
             Method::McpProbe {
                 target,

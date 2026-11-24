@@ -98,8 +98,11 @@ impl Sessions {
         operations: &Arc<Operations>,
         python: &managed_python::Catalog,
     ) -> Reply {
-        if let Request::Open { launch, .. } = request {
-            return self.open(key.operation, launch, operations, python);
+        if let Request::Open {
+            source_id, launch, ..
+        } = request
+        {
+            return self.open(key.operation, &source_id, launch, operations, python);
         }
         let Some(entry) = self.entries.get_mut(&key.operation) else {
             return Reply::Failed(Failure::Unavailable);
@@ -132,13 +135,17 @@ impl Sessions {
     fn open(
         &mut self,
         id: OperationId,
+        source_id: &str,
         launch: Launch,
         operations: &Arc<Operations>,
         python: &managed_python::Catalog,
     ) -> Reply {
-        let Ok(bytes) = serde_json::to_vec(&launch) else {
+        let Ok(bytes) = serde_json::to_vec(&(source_id, &launch)) else {
             return Reply::Failed(Failure::Invalid);
         };
+        if source_id.is_empty() {
+            return Reply::Failed(Failure::Invalid);
+        }
         let fingerprint: [u8; 32] = Sha256::digest(bytes).into();
         if let Some(registered) = self.entries.get(&id) {
             return if registered.fingerprint() == &fingerprint {

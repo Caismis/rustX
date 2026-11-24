@@ -103,3 +103,16 @@ cargo test -p rustx --all-features --locked --lib \
 cargo test -p rustx --all-features --locked --lib \
     bound_workspace_mcp_catalog_uses_client_definitions_and_server_network \
     -- --ignored --nocapture
+retirement_client=$(cargo build -p rustx-execution-client --features test-support --locked \
+    --bin rustx-execution-client --message-format=json | python3 -c '
+import json, sys
+for line in sys.stdin:
+    row = json.loads(line)
+    if row.get("reason") == "compiler-artifact" and row.get("executable"):
+        print(row["executable"])
+')
+test -x "$retirement_client"
+RUSTX_WATCH_RETIREMENT_PROOF_CLIENT="$retirement_client" \
+    cargo test -p rustx --all-features --locked --lib \
+    replacing_a_skill_refreshes_the_catalog_while_native_watch_retirement_is_held \
+    -- --ignored --nocapture

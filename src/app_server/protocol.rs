@@ -1103,6 +1103,12 @@ pub enum Method {
         model: crate::model::catalog::ModelRef,
         source: crate::local_runtime::model_probe::ModelProbeSource,
     },
+    /// Read a redacted Workspace MCP document from its authenticated Client.
+    #[serde(rename = "mcp/sourceRead")]
+    McpSourceRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        execution_session: crate::local_runtime::session::SessionId,
+    },
     /// Finite configuration connectivity check; never an Agent connection.
     #[serde(rename = "mcp/probe")]
     McpProbe {
@@ -1403,6 +1409,7 @@ impl Method {
             | Self::ConversationWorkflowRunSnapshotHeader { .. }
             | Self::ConversationWorkflowRunSnapshotChunk { .. }
             | Self::ConversationWorkflowTraceNode { .. }
+            | Self::McpSourceRead { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
@@ -2017,6 +2024,14 @@ pub enum MethodResult {
     },
     ModelProbe {
         outcome: crate::local_runtime::model_probe::ModelProbeOutcome,
+    },
+    McpSource {
+        source: crate::local_runtime::configuration::settings::SourceView<
+            std::collections::BTreeMap<
+                crate::runtime::identity::McpServerId,
+                crate::local_runtime::configuration::settings::McpView,
+            >,
+        >,
     },
     McpProbe {
         result: crate::local_runtime::mcp_probe::McpProbeResult,

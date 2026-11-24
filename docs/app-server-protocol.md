@@ -623,7 +623,7 @@ A mutation whose response is lost has an **unknown outcome**: no transport retri
 Reconnect with initialize/attach/checkpoint/subscribe and inspect authoritative state.
 
 The Web typed request layer gives `thread/resume`, `agent/wait`, `job/wait`,
-`context/compact`, `mcp/probe` and `configuration/sourceWrite` no generic response deadline. Their native
+`context/compact`, `mcp/sourceRead`, `mcp/probe` and `configuration/sourceWrite` no generic response deadline. Their native
 initialization, admission or settlement owners govern the wait. In particular,
 attachment preparation before submission remains unarmed even after 60 seconds;
 first submission arms the native absolute MCP readiness deadline. Web cannot
@@ -1687,6 +1687,13 @@ identities. New literal `env` or `headers` values are rejected by native authori
 even for direct generic RPC callers. A retained key cannot also be replaced;
 omitting it removes it. Native source provisioning remains outside this Web
 contract, and general protocol diagnostics omit authoring payloads.
+
+`mcp/sourceRead` reads the redacted Workspace MCP document and its exact
+revision from the Client authorized by `execution_session` and `target`.
+The reply is `mcp_source`. That same Session and revision are the inputs to
+a Workspace `mcp/probe`. Bound Skill browsing uses its Session with
+`skills/list` and `skills/read`. These reads stay available without a Server
+Workspace authoring projection. User authoring remains source-scoped.
 
 `mcp/probe` accepts `target`, `id`, and `expected_revision`. It checks exactly
 that authored MCP source using native credentials and the source's working

@@ -8,7 +8,7 @@ import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { sameEndpoint } from '../../workspaces/endpoint';
-import type { WorkspaceAssociations } from '../../workspaces/associations';
+import { clientCatalogWorkspace, type WorkspaceAssociations } from '../../workspaces/associations';
 import { useTranslation } from '../../locale/react';
 import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../presentation/catalog/CatalogControls';
 import catalogCss from '../../presentation/catalog/Catalog.module.css';
@@ -54,15 +54,31 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const chosen = useRef(!!initialWorkspace);
   const workspaces = catalog?.workspaces ?? [];
+  const linked = useSyncExternalStore(associations.subscribe, associations.getSnapshot);
+  const sessionAssociation = executionSession && linked.entries.get(executionSession.id);
+  const clientWorkspace = clientCatalogWorkspace(sessionAssociation);
   useEffect(() => {
-    if (!chosen.current && workspaces.length) { chosen.current = true; setWorkspace(workspaces[0].id); }
-  }, [workspaces]);
+    if (chosen.current) return;
+    if (clientWorkspace && workspaces.some(row => row.id === clientWorkspace)) {
+      chosen.current = true; setWorkspace(clientWorkspace); setTab('workspace');
+    } else if (workspaces.length && (!executionSession || (sessionAssociation?.status !== 'pending' && !!sessionAssociation))) {
+      chosen.current = true; setWorkspace(workspaces[0].id);
+    }
+  }, [clientWorkspace, executionSession, sessionAssociation, workspaces]);
   const workspace = workspaces.find(row => row.id === workspaceId);
   const showingWorkspace = tab === 'workspace';
   const target = showingWorkspace && workspaceId ? workspaceSettingsTarget(workspaceId, workspace?.displayName ?? workspaceId) : userSettingsTarget;
   const available = !showingWorkspace || !!workspace;
+  const catalogModule = module === 'mcp' || module === 'skills';
+  const bound = catalogModule && showingWorkspace && workspace && workspaceId && executionSession
+    && clientWorkspace === workspaceId
+    && sessionAssociation?.cwd === executionSession.cwd
+    && linked.catalog?.authorityId === catalog?.authorityId && sameEndpoint(linked.catalog?.endpoint, catalog?.endpoint)
+    ? executionSession : undefined;
+  const awaitingAssociation = catalogModule && showingWorkspace && !!executionSession && workspaceId === initialWorkspace
+    && (!sessionAssociation || sessionAssociation.status === 'pending' || sessionAssociation.status === 'refreshing');
   const hostOwner = catalog && JSON.stringify([catalog.authorityId, catalog.endpoint]);
-  const { actor, transport } = useSettingsTarget(client, target, host, visible && available, showingWorkspace ? hostOwner : undefined);
+  const { actor, transport } = useSettingsTarget(client, target, host, visible && available && !bound && !awaitingAssociation, showingWorkspace ? hostOwner : undefined);
   const { actor: globalActor } = useSettingsTarget(client, userSettingsTarget, host, visible && showingWorkspace && module !== 'skills');
   const globalObservation = useSelector(globalActor, state => state.context.observation);
   const globalSource = useSelector(globalActor, state => state.context.observation ?? state.context.staleObservation);
@@ -79,7 +95,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
   const [transferIntent, setTransferIntent] = useState<TransferIntent>();
-  const [skillCatalogRefresh, setSkillCatalogRefresh] = useState(0);
+  const [catalogRefresh, setCatalogRefresh] = useState(0);
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
   const mcpDrafts = useRef(new Map<string, { draft: McpEditorDraft; hostOwner?: string }>());
   const [resourceFocus, setResourceFocus] = useState<string>();
@@ -90,13 +106,49 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [presentedOwner, setPresentedOwner] = useState(owner);
   const [presentedHost, setPresentedHost] = useState(hostOwner);
   const agentEditor = module === 'subagents' && (newAgent !== undefined || resourceFocus !== undefined);
-  const detail = !!mcpFocus;
-  const probeSession = target.kind === 'user' || executionSession?.cwd === directory ? executionSession?.id : undefined;
-  const probes = useMcpProbes(client, host, target, observation, visible && available && module === 'mcp' && !mcpFocus, associations, probeSession);
+  const detail = !!mcpFocus && (!bound || detailScope === 'user');
+  const boundSession = bound?.id;
+  const boundDirectory = bound?.cwd;
+  const probeSession = target.kind === 'user' ? executionSession?.id : boundSession;
+  const boundTarget = boundDirectory ? { kind: 'workspace' as const, directory: boundDirectory } : undefined;
+  const boundKey = JSON.stringify([owner, hostOwner, transport.generation, workspaceId, workspace?.location, boundSession, boundDirectory, catalogRefresh]);
+  const activeBoundKey = useRef(boundKey);
+  activeBoundKey.current = boundKey;
+  const [boundObservation, setBoundObservation] = useState<{ key: string; source?: SourceSettings['user_mcp']; error?: string }>();
+  const boundSource = boundObservation?.key === boundKey ? boundObservation : undefined;
+  useEffect(() => {
+    if (!visible || module !== 'mcp' || !boundSession || !boundDirectory || transport.connection !== 'connected') return;
+    const hostAuthority = authority.capture();
+    const before = client.getSnapshot();
+    const registration = hostAuthority?.catalog.workspaces.find(row => row.id === workspaceId);
+    if (!registration || !sameEndpoint(before.endpoint, hostAuthority?.scope.endpoint)) return;
+    let currentRead = true;
+    const current = () => {
+      const live = client.getSnapshot();
+      const association = associations.getSnapshot().entries.get(boundSession);
+      const row = authority.getCatalog()?.workspaces.find(entry => entry.id === workspaceId);
+      return currentRead && activeBoundKey.current === boundKey && !!hostAuthority?.current()
+        && row?.location === registration.location
+        && clientCatalogWorkspace(association) === workspaceId && association?.cwd === boundDirectory
+        && live.connection === 'connected' && live.generation === before.generation
+        && live.endpoint === before.endpoint && live.authorityRevision === before.authorityRevision;
+    };
+    const controller = new AbortController();
+    void client.request({ method: 'mcp/sourceRead', params: {
+      target: { kind: 'workspace', directory: boundDirectory }, execution_session: boundSession,
+    } }, 'mcp_source', undefined, current, controller.signal).then(({ source }) => {
+      if (current()) setBoundObservation({ key: boundKey, source });
+    }, error => {
+      if (current()) setBoundObservation({ key: boundKey, error: String(error) });
+    });
+    return () => { currentRead = false; controller.abort(); };
+  }, [associations, authority, boundDirectory, boundKey, boundSession, client, module, transport.connection, visible, workspaceId]);
+  const probes = useMcpProbes(client, host, target, observation, visible && available && module === 'mcp' && !mcpFocus,
+    associations, probeSession, boundTarget && { target: boundTarget, document: boundSource?.source });
   const scope = target.kind;
   const config = configAuthoring(source, scope);
   const revision = config.state === 'structured' ? config.revision : undefined;
-  const editable = available && !!observation && !readError && transport.connection === 'connected';
+  const editable = available && !bound && !awaitingAssociation && !!observation && !readError && transport.connection === 'connected';
   const title = tx(`resources:${module}.title`);
   const scopeLabel = showingWorkspace ? workspace?.displayName : tx('resources:scope.global');
   const resetScope = () => {
@@ -164,8 +216,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const mcpDraftKey = mcpFocus ? JSON.stringify([owner, editorTarget.kind === 'workspace' ? lifetime : 'user', editorSource?.target, mcpFocus.name ?? null]) : undefined;
   const editorConfig = configAuthoring(editorSource, editorTarget.kind);
   const refresh = () => {
-    actor.send({ type: 'REFRESH' });
-    if (module === 'skills') setSkillCatalogRefresh(value => value + 1);
+    if (!bound) actor.send({ type: 'REFRESH' });
+    if (catalogModule) setCatalogRefresh(value => value + 1);
     if (showingWorkspace && module !== 'skills') globalActor.send({ type: 'REFRESH' });
   };
   const bindSkillWrite = (skill: SkillDescriptor, expected_revision?: string) => {
@@ -244,7 +296,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   };
 
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}
-    data-lifecycle={available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading'} hidden={!visible} inert={!visible}>
+    data-lifecycle={boundTarget ? (module === 'skills' || boundSource?.source ? 'ready' : boundSource?.error ? 'failed' : 'loading')
+      : available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading'} hidden={!visible} inert={!visible}>
     {agentEditor ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}><SettingsFeedback active={visible}>
       {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
       {editorAvailable && editorSource ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
@@ -301,13 +354,22 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
                 disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></Button>
             </div>
           </div>
-          {!available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>
+          {boundTarget && module === 'skills' ? <SettingsActorContext value={actor}>
+            <ResourceBrowser key={boundSession} client={client} target={boundTarget} scope="workspace" query={query} view={view}
+              refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={boundSession}
+              bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} transferDisabled readOnly />
+          </SettingsActorContext> : boundTarget && module === 'mcp' ? (
+            boundSource?.source ? <McpPage workspaceDocument={boundSource.source} scope="workspace" query={query} view={view}
+              probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />
+              : boundSource?.error ? <p className={catalogCss.banner} role="alert">{boundSource.error}</p>
+                : <p className={catalogCss.state} role="status">{tx('resources:loading')}</p>
+          ) : awaitingAssociation ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p>
+          : !available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>
             {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
-                {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                  query={query} view={view} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
-                  executionSession={scope === 'workspace' && executionSession?.cwd === directory ? executionSession?.id : undefined}
+                {module === 'skills' ? <ResourceBrowser client={client} source={source} target={source.target} scope={scope} revision={revision}
+                  query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
                   bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}
