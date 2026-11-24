@@ -11,7 +11,7 @@
 //! wraps it with the attempt cancellation reason, and the background
 //! registry owns its own background cancellation state.
 //!
-//! `AgentCancellation`: crate::agent::cancellation::AgentCancellation
+//! `AgentCancellation`: `crate::agent::cancellation::AgentCancellation`
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -116,6 +116,7 @@ pub struct CompactionCommitGrant {
     operation_id: rustx_identity::CompactionOperationId,
 }
 impl CompactionCommitGrant {
+    #[must_use]
     pub fn operation_id(&self) -> &rustx_identity::CompactionOperationId {
         &self.operation_id
     }
@@ -278,6 +279,7 @@ impl ExecutionCancellation {
         )
     }
 
+    #[must_use]
     pub fn native_status(
         &self,
         phase: crate::tools::types::ToolCancellationPhase,

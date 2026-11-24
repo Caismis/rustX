@@ -174,10 +174,10 @@ pub fn append_content_modalities<'a>(
                             require(crate::model::capabilities::Modality::Text);
                         }
                         UserContentBlock::Image(_) => {
-                            require(crate::model::capabilities::Modality::Image)
+                            require(crate::model::capabilities::Modality::Image);
                         }
                         UserContentBlock::File(_) => {
-                            require(crate::model::capabilities::Modality::File)
+                            require(crate::model::capabilities::Modality::File);
                         }
                     }
                 }
@@ -186,13 +186,13 @@ pub fn append_content_modalities<'a>(
                 for content in assistant {
                     match content {
                         AssistantContentBlock::Image(_) => {
-                            require(crate::model::capabilities::Modality::Image)
+                            require(crate::model::capabilities::Modality::Image);
                         }
                         AssistantContentBlock::Text(_)
                         | AssistantContentBlock::Refusal(_)
                         | AssistantContentBlock::Reasoning(_)
                         | AssistantContentBlock::ToolCall(_) => {
-                            require(crate::model::capabilities::Modality::Text)
+                            require(crate::model::capabilities::Modality::Text);
                         }
                     }
                 }
@@ -201,10 +201,10 @@ pub fn append_content_modalities<'a>(
                 for content in &result.content {
                     match content {
                         ToolResultContent::Image(_) => {
-                            require(crate::model::capabilities::Modality::Image)
+                            require(crate::model::capabilities::Modality::Image);
                         }
                         ToolResultContent::File(_) => {
-                            require(crate::model::capabilities::Modality::File)
+                            require(crate::model::capabilities::Modality::File);
                         }
                         ToolResultContent::Text(_) | ToolResultContent::Json { .. } => {
                             require(crate::model::capabilities::Modality::Text);

@@ -24,6 +24,7 @@ pub struct Guard {
 }
 impl Guard {
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn uninstalled() -> Self {
         Self {
             installed: None,

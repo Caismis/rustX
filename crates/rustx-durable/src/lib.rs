@@ -69,6 +69,15 @@
 //! acceptance **C** ([`PublicationStore::commit_canonical_publication`]),
 //! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
+// Workspace-internal crates: error and panic conditions are documented in
+// prose rather than `# Errors`/`# Panics` sections, and blanket must_use on
+// internal APIs adds noise without callers.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
+
 pub mod artifacts;
 pub mod auxiliary;
 pub mod background_facts;

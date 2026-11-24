@@ -259,6 +259,7 @@ pub fn agent_read(
     Ok(at_cut(connection, through)?.local.view)
 }
 
+#[must_use]
 pub fn requires_statistics(event: &RuntimeEventEnvelope) -> bool {
     if event.attempt_id.is_none() {
         return false;

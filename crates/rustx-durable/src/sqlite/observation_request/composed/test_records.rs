@@ -2,9 +2,11 @@
 //! and recompute exact stored hashes without assuming a textual storage codec.
 use super::{Augmentation, Root, Template, record};
 
+#[must_use]
 pub fn inspect_node_record(bytes: &[u8]) -> serde_json::Value {
     serde_json::to_value(record::decode::<Augmentation>(bytes).unwrap()).unwrap()
 }
+#[must_use]
 pub fn encode_test_node_record(value: serde_json::Value) -> Vec<u8> {
     record::encode(
         &serde_json::from_value::<Augmentation>(value).unwrap(),
@@ -12,15 +14,19 @@ pub fn encode_test_node_record(value: serde_json::Value) -> Vec<u8> {
     )
     .unwrap()
 }
+#[must_use]
 pub fn inspect_root_record(bytes: &[u8]) -> serde_json::Value {
     serde_json::to_value(record::decode::<Root>(bytes).unwrap()).unwrap()
 }
+#[must_use]
 pub fn encode_test_root_record(value: serde_json::Value) -> Vec<u8> {
     record::encode(&serde_json::from_value::<Root>(value).unwrap(), 16384).unwrap()
 }
+#[must_use]
 pub fn inspect_template_record(bytes: &[u8]) -> serde_json::Value {
     serde_json::to_value(record::decode::<Template>(bytes).unwrap()).unwrap()
 }
+#[must_use]
 pub fn encode_test_template_record(value: serde_json::Value) -> Vec<u8> {
     record::encode(&serde_json::from_value::<Template>(value).unwrap(), 65536).unwrap()
 }

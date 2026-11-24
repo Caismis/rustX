@@ -32,6 +32,7 @@ pub struct PackageDirectory {
 }
 
 impl PackageDirectory {
+    #[must_use]
     pub fn descriptor(&self) -> &OwnedFd {
         &self.fd
     }

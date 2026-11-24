@@ -1,5 +1,14 @@
 //! Shared bounded reads of authored files, independent of their format.
 
+// Workspace-internal crates: error and panic conditions are documented in
+// prose rather than `# Errors`/`# Panics` sections, and blanket must_use on
+// internal APIs adds noise without callers.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
+
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -41,6 +50,7 @@ pub fn json_fits(value: &impl serde::Serialize, limit: usize) -> bool {
 pub const MAX_RESOURCE_BYTES: u64 = 1024 * 1024;
 
 /// Whether `bytes` fit the authored file bound.
+#[must_use]
 pub fn within_bound(bytes: &[u8]) -> bool {
     u64::try_from(bytes.len()).is_ok_and(|length| length <= MAX_RESOURCE_BYTES)
 }

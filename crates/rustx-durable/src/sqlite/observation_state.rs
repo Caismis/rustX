@@ -16,6 +16,7 @@ fn kind(domain: &str) -> Result<&'static str, ConversationStoreError> {
         )),
     }
 }
+#[must_use]
 pub fn goal_key(reference: &rustx_types::goal::GoalRef) -> String {
     format!("goal/{}/{}", reference.id, reference.revision)
 }
@@ -99,6 +100,7 @@ impl schemars::JsonSchema for BorrowedTodo<'_> {
         <rustx_types::tools::todo::TodoSnapshot as schemars::JsonSchema>::json_schema(generator)
     }
 }
+#[must_use]
 pub fn todo_value(
     message: &rustx_types::message::types::MessageBlock,
 ) -> Option<&serde_json::Value> {

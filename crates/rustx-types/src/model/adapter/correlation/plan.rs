@@ -290,6 +290,7 @@ impl Plan {
         Ok(())
     }
 
+    #[must_use]
     pub fn label(&self, coordinate: (u32, u32)) -> &str {
         &self.calls[*self
             .coordinates
@@ -297,9 +298,11 @@ impl Plan {
             .expect("translated call coordinate")]
         .label
     }
+    #[must_use]
     pub fn matches(&self, input: &crate::model::selected_input::SelectedModelInput) -> bool {
         self.prefix.len() == input.len() && self.prefix.matches(input)
     }
+    #[must_use]
     pub fn result_label<'a>(&'a self, message: usize, raw: &'a str) -> &'a str {
         self.results
             .get(&message)
@@ -313,6 +316,7 @@ impl Plan {
             .filter(move |call| boundary != Some(call.coordinate.0 as usize))
             .map(|call| call.label.as_ref())
     }
+    #[must_use]
     pub fn coordinates(&self) -> std::collections::BTreeMap<(u32, u32), String> {
         self.calls
             .iter()

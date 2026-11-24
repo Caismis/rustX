@@ -9,6 +9,7 @@ pub enum Raw<'a> {
     RequestOnly,
 }
 impl<'a> Raw<'a> {
+    #[must_use]
     pub fn frozen(original: &'a FrozenModelInput, view: &'a TraceInputProvenance) -> Self {
         match original {
             FrozenModelInput::Original(value) => Self::Original(value, view),

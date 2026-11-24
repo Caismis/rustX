@@ -171,6 +171,7 @@ impl ActivityFold {
         self.decode_ms = self.decode_ms.saturating_add(execution.decode_ms);
         self.decode_tokens = self.decode_tokens.saturating_add(execution.decode_tokens);
     }
+    #[must_use]
     pub fn summary(&self) -> Option<ConversationTiming> {
         #[allow(clippy::cast_precision_loss)] // Display ratio, as in the per-response rate.
         let output_tokens_per_second = (self.decode_ms > 0)

@@ -94,6 +94,7 @@ pub struct WorkflowBlockInstance {
 impl WorkflowBlockInstance {
     /// True when block nesting matches the compiler/executor contract: root plus up to
     /// `MAX_BLOCK_DEPTH` two-segment nested bodies (`invocations.len() == blocks.len() / 2 + 1`).
+    #[must_use]
     pub fn has_valid_nesting(&self) -> bool {
         self.definition.blocks.len().is_multiple_of(2)
             && self.definition.blocks.len() <= 2 * MAX_BLOCK_DEPTH
@@ -158,6 +159,7 @@ impl fmt::Display for WorkflowNodeInstance {
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
+#[must_use]
 pub fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance {
     WorkflowNodeInstance {
         block: WorkflowBlockInstance {
@@ -182,6 +184,7 @@ pub fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance {
 /// A root block as a Loop or Iteration body: no input or output, no Return,
 /// and its Start renamed `loop_start` so it hides no root node.
 #[cfg(any(test, feature = "test-fixtures"))]
+#[must_use]
 pub fn test_body(block: &Value) -> Value {
     let rename = |id: &str, start: &str| {
         if id == start {

@@ -379,6 +379,7 @@ pub struct PendingHeader {
 /// Any other correlation, including a longer prefix or a suffix outside the
 /// public id grammar, projects nothing. This is not inferred from message
 /// identity, request identity, or preview text.
+#[must_use]
 pub fn app_server_input_id(correlation: Option<&str>) -> Option<String> {
     let id = correlation?.strip_prefix("app-server:")?;
     crate::inbox::valid_public_input_id(id).then(|| id.to_owned())

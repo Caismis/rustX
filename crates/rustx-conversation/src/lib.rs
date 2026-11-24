@@ -10,6 +10,15 @@
 //! attempts and `AgentExecution` owns it while running. It caches retained Original
 //! facts, never gives Derived projected content a canonical `MessageId`.
 
+// Workspace-internal crates: error and panic conditions are documented in
+// prose rather than `# Errors`/`# Panics` sections, and blanket must_use on
+// internal APIs adds noise without callers.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
+
 pub mod bodies;
 pub mod ledger;
 pub mod selection;
@@ -70,6 +79,7 @@ impl From<SurfaceError> for ConversationError {
 pub struct PreparedCanonicalBatch(Vec<MessageBlock>);
 
 impl PreparedCanonicalBatch {
+    #[must_use]
     pub fn messages(&self) -> &[MessageBlock] {
         &self.0
     }

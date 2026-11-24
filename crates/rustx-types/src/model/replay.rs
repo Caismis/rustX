@@ -13,6 +13,7 @@ pub struct ReplayOrigin {
     pub model: String,
 }
 
+#[must_use]
 pub fn binding_id(provider: &str, endpoint: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();

@@ -129,6 +129,7 @@ pub fn inspection_result(store: &SqliteConversationStore, request: &RequestSnaps
         .unwrap();
 }
 
+#[must_use]
 pub fn deny_inspection_original_columns(
     context: rusqlite::hooks::AuthContext<'_>,
 ) -> rusqlite::hooks::Authorization {

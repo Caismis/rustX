@@ -1592,6 +1592,7 @@ pub fn audit_blocks(
     })
 }
 
+#[must_use]
 pub fn audit_summary(
     audit: &rustx_publication::PublicationAudit,
 ) -> crate::PublicationAuditSummary {
@@ -1648,9 +1649,11 @@ impl<'read, 'connection> ValidatedCut<'read, 'connection> {
         }
         Ok(self.transaction)
     }
+    #[must_use]
     pub fn expected(&self) -> &ObservationReadCut {
         self.expected
     }
+    #[must_use]
     pub fn actual(&self) -> &ObservationReadCut {
         &self.actual
     }
@@ -1671,6 +1674,7 @@ impl PartialEq for TranscriptRowProof {
 }
 
 impl TranscriptRowProof {
+    #[must_use]
     pub fn matches_descriptor(&self, source: &TranscriptDescriptorSource<'_>) -> bool {
         self.cursor == source.cursor
             && self.kind == source.kind
@@ -1679,9 +1683,11 @@ impl TranscriptRowProof {
             && self.journal == source.journal
             && self.bytes == source.bytes
     }
+    #[must_use]
     pub fn descriptor(&self) -> std::sync::Arc<TranscriptDescriptor> {
         self.descriptor.clone()
     }
+    #[must_use]
     pub fn cursor(&self) -> u64 {
         self.cursor
     }

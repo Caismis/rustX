@@ -89,6 +89,7 @@ pub struct PublicationMetadata<'a> {
     pub name: &'a str,
 }
 impl PublicationMetadata<'_> {
+    #[must_use]
     pub fn tagged(&self) -> TaggedPublication<'_> {
         TaggedPublication {
             kind: "tool_call",
@@ -112,6 +113,7 @@ pub struct AuditMetadata<'a> {
     pub complete: &'a bool,
 }
 impl AuditMetadata<'_> {
+    #[must_use]
     pub fn tagged(&self) -> TaggedAudit<'_> {
         TaggedAudit {
             kind: "proposed_tool_call",

@@ -652,6 +652,7 @@ pub enum ContextKind {
 }
 
 impl ContextKind {
+    #[must_use]
     pub fn native_contribution_owner(
         &self,
     ) -> Option<(
@@ -758,6 +759,7 @@ pub struct ReasoningBlock {
 
 impl ReasoningBlock {
     /// Native replay requires positive attribution on both sides.
+    #[must_use]
     pub fn belongs_to(&self, origin: Option<&crate::model::replay::ReplayOrigin>) -> bool {
         self.origin
             .as_ref()

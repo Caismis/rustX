@@ -507,6 +507,7 @@ impl RequestSnapshot {
     }
 
     /// Checks native scalar metadata against the certified unfinished flat SHA.
+    #[must_use]
     pub fn selected_fingerprint_matches(&self) -> bool {
         let Some(messages) = self.input.semantic_digest() else {
             return false;

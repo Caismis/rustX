@@ -8,6 +8,14 @@
 //! non-reused attempt domain in `InteractionId::for_attempt`.
 
 #![allow(rustdoc::broken_intra_doc_links)]
+// Workspace-internal crates: error and panic conditions are documented in
+// prose rather than `# Errors`/`# Panics` sections, and blanket must_use on
+// internal APIs adds noise without callers.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 
 use serde::{Deserialize, Serialize};
 
@@ -313,6 +321,7 @@ id_type! {
 
 impl ToolCallId {
     /// Private live-source association; equality of semantic IDs remains textual.
+    #[must_use]
     pub fn shared_source_token(&self) -> usize {
         std::sync::Arc::as_ptr(&self.0).cast::<()>() as usize
     }

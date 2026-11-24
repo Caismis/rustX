@@ -7,6 +7,7 @@ use rustx_types::model::input::ModelInputMessage;
 use rustx_types::model::types::ModelProtocol;
 
 /// The provider-neutral protocol label of one historical invocation.
+#[must_use]
 pub const fn protocol_label(protocol: ModelProtocol) -> &'static str {
     match protocol {
         ModelProtocol::OpenAiChatCompletions => "openai_chat_completions",
@@ -175,6 +176,7 @@ fn derived_message(
         truncated: truncated || provenance_truncated,
     }
 }
+#[must_use]
 pub fn request_message(
     message: &ModelInputMessage,
     scope: &rustx_types::runtime::identity::ConversationId,
@@ -183,6 +185,7 @@ pub fn request_message(
 }
 /// The native reconstruction/commit owner has already validated this dependency.
 /// Reusing its exact immutable reference avoids hashing the canonical body for display.
+#[must_use]
 pub fn request_message_with_original(
     message: &ModelInputMessage,
     scope: &rustx_types::runtime::identity::ConversationId,

@@ -30,6 +30,7 @@ pub use inspection::{adoption_page, capture_definitions, tool_definition};
 pub use request::{context, index_context, predecessor, retry_failure};
 
 impl TraceFactKind {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AttemptStarted => "attempt_started",
@@ -103,17 +104,20 @@ impl TraceFactKind {
         Self::ConfigurationApplied,
         Self::ToolCallRequested,
     ];
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.as_str() == value)
     }
     /// The kinds that open a Trace record: the one classification every
     /// Trace query and count uses.
+    #[must_use]
     pub fn anchors() -> Vec<Self> {
         Self::ALL
             .into_iter()
             .filter(|kind| kind.is_anchor())
             .collect()
     }
+    #[must_use]
     pub const fn is_anchor(self) -> bool {
         matches!(
             self,
@@ -514,6 +518,7 @@ fn value_source(
     })
 }
 
+#[must_use]
 pub fn required(event: &rustx_types::events::types::RuntimeEventEnvelope) -> bool {
     match &event.event {
         rustx_types::events::types::RuntimeEvent::ModelRequestStarted { owner, .. }

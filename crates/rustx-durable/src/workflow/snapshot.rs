@@ -106,6 +106,7 @@ pub fn compute_snapshot_digest(
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
+#[must_use]
 pub fn test_run_snapshot(workflow_id: WorkflowId) -> std::sync::Arc<WorkflowRunDefinitionSnapshot> {
     let document: WorkflowFileDocument = serde_json::from_str(include_str!(
         "../../tests/fixtures/workflow/visual-authoring.json"

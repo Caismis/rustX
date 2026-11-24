@@ -4,6 +4,7 @@ pub const REQUEST_FIELD_COUNT: u64 = 23;
 use super::{TraceRequestDetail, TraceRequestMessage, TraceRequestPredecessor, TraceText};
 use crate::model::snapshot::RequestSnapshot;
 use rustx_types::model::input::ModelInputMessage;
+#[must_use]
 pub fn input_message(
     scope: &rustx_types::runtime::identity::ConversationId,
     message: &ModelInputMessage,
@@ -247,6 +248,7 @@ pub fn request_detail<M>(snapshot: &RequestSnapshot, messages: M) -> RequestInsp
 }
 
 /// The closing brace is omitted when composing the captured prefix with a suffix.
+#[must_use]
 pub fn request_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
     RequestInspection {
         snapshot,
@@ -255,6 +257,7 @@ pub fn request_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 
     }
 }
 /// The fixed placeholder prefix used to verify persisted suffix geometry.
+#[must_use]
 pub fn request_stable_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
     RequestInspection {
         snapshot,
@@ -263,6 +266,7 @@ pub fn request_stable_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_
     }
 }
 /// Stable scalar source with the same field ordinals and schema as the full source.
+#[must_use]
 pub fn request_stable(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
     RequestInspection {
         snapshot,
@@ -274,6 +278,7 @@ pub fn request_stable(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 
 /// The independently frozen native configuration already binds the prompt and
 /// tools. The remaining allowlisted scalar fields complete a sharing key; this
 /// representation is never a public Source and never contains configuration bodies.
+#[must_use]
 pub fn request_stable_binding(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
     RequestInspection {
         snapshot,
@@ -288,9 +293,11 @@ pub struct BorrowedFailure<'a> {
     message: BorrowedText<'a>,
 }
 impl BorrowedFailure<'_> {
+    #[must_use]
     pub fn message(&self) -> &str {
         self.message.text
     }
+    #[must_use]
     pub fn header(&self) -> super::TraceRequestFailure {
         super::TraceRequestFailure {
             kind: self.kind.clone(),
@@ -307,6 +314,7 @@ pub struct RequestOutcomeSource<'a> {
     pub failure: Option<BorrowedFailure<'a>>,
     pub generation: Option<super::TraceGeneration>,
 }
+#[must_use]
 pub fn request_outcome(
     event: &rustx_types::events::types::RuntimeEvent,
 ) -> Option<RequestOutcomeSource<'_>> {

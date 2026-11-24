@@ -74,6 +74,7 @@ pub struct ReadItem {
 }
 impl ReadItem {
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn value(&self) -> &ResponsePageItem {
         self.value
             .as_ref()

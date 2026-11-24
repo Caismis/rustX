@@ -11,3 +11,6 @@ chrono = { version = "0.4", features = ["serde"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 rustx-types = { path = "../rustx-types" }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+
+[lints]
+workspace = true

@@ -91,6 +91,15 @@
 //! stream-local block/tool/name identity, arguments require Started, and
 //! Completion advances it exactly once to Completed.
 
+// Workspace-internal crates: error and panic conditions are documented in
+// prose rather than `# Errors`/`# Panics` sections, and blanket must_use on
+// internal APIs adds noise without callers.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
+
 pub mod carryover;
 pub mod coalescer;
 pub mod frame;

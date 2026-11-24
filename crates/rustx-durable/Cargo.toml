@@ -44,3 +44,6 @@ rustx-identity = { path = "../rustx-identity", features = ["test-fixtures"] }
 test-hooks = ["test-fixtures"]
 issue-387-profile = ["rustx-types/issue-387-profile"]
 test-fixtures = ["rustx-types/test-fixtures", "rustx-identity/test-fixtures"]
+
+[lints]
+workspace = true

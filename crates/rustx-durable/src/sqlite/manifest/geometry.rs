@@ -86,6 +86,7 @@ fn insert(entries: &mut BTreeMap<Key, u64>, key: Key, length: u64) {
 }
 impl Session {
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn for_test() -> Self {
         let cache = Cache::new(Arc::new(AtomicU64::new(0)));
         cache.enable();
@@ -111,6 +112,7 @@ impl Session {
                     self.cache.source_epoch.load(Ordering::Acquire),
                 )
     }
+    #[must_use]
     pub fn get(&self, key: &Key) -> Option<u64> {
         if !self.valid() {
             return None;

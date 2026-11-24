@@ -307,26 +307,31 @@ impl ModelCompat {
 
     /// Resolve optional authoring overrides once, before an invocation is
     /// frozen. Endpoint/model rules never change an explicit declaration.
+    #[must_use]
     pub fn chat_max_tokens_field_is_explicit(self) -> bool {
         self.explicit_fields & Self::CHAT_MAX_TOKENS_EXPLICIT != 0
             || self.chat_max_tokens_field != ChatMaxTokensField::default()
     }
 
+    #[must_use]
     pub fn chat_stream_usage_is_explicit(self) -> bool {
         self.explicit_fields & Self::CHAT_STREAM_USAGE_EXPLICIT != 0
             || self.chat_stream_usage != ChatStreamUsage::default()
     }
 
+    #[must_use]
     pub fn chat_reasoning_replay_is_explicit(self) -> bool {
         self.explicit_fields & Self::CHAT_REASONING_REPLAY_EXPLICIT != 0
             || self.chat_reasoning_replay.is_some()
     }
 
+    #[must_use]
     pub fn chat_tool_protocol_is_explicit(self) -> bool {
         self.explicit_fields & Self::CHAT_TOOL_PROTOCOL_EXPLICIT != 0
             || self.chat_tool_protocol != ChatToolProtocol::default()
     }
 
+    #[must_use]
     pub fn responses_storage_is_explicit(self) -> bool {
         self.explicit_fields & Self::RESPONSES_STORAGE_EXPLICIT != 0
             || self.responses_storage != ResponsesStorageMode::default()

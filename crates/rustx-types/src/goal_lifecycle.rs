@@ -67,6 +67,7 @@ pub enum GoalWrite {
     },
 }
 
+#[must_use]
 pub fn reject(reason: &str, current: Option<&GoalSnapshot>) -> Box<GoalRejection> {
     Box::new(GoalRejection {
         reason: reason.to_owned(),
@@ -74,6 +75,7 @@ pub fn reject(reason: &str, current: Option<&GoalSnapshot>) -> Box<GoalRejection
     })
 }
 
+#[must_use]
 pub fn validate_text(text: &str) -> bool {
     !text.trim().is_empty() && text.len() <= MAX_OBJECTIVE_BYTES
 }
@@ -174,6 +176,7 @@ pub fn transition(current: Option<&GoalSnapshot>, write: GoalWrite) -> GoalResul
 }
 
 impl GoalWrite {
+    #[must_use]
     pub fn change(&self) -> GoalChange {
         match self {
             Self::Create { .. } => GoalChange::Create,
@@ -189,6 +192,7 @@ impl GoalWrite {
     }
 }
 
+#[must_use]
 pub fn journal_envelope(
     conversation_id: &rustx_identity::ConversationId,
     fact: GoalFact,

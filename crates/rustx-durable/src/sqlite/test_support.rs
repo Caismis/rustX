@@ -2,7 +2,7 @@
 
 use crate::model::snapshot::RequestSnapshot;
 use crate::observation::EnvelopeNativeObservation;
-use crate::sqlite::*;
+use crate::sqlite::{HiddenContextAuditFixture, LineageSeed, SqliteConversationStore};
 use crate::{
     CanonicalStore, JournalStore, ObservationStore, ProjectionStore, PublicationStore, RequestStore,
 };
@@ -40,6 +40,7 @@ use rustx_types::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use rustx_types::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 use std::sync::Arc;
 
+#[must_use]
 pub fn draft(text: &str) -> InboundDraft {
     InboundDraft {
         message_id: None,
@@ -53,6 +54,7 @@ pub fn draft(text: &str) -> InboundDraft {
     }
 }
 
+#[must_use]
 pub fn store() -> SqliteConversationStore {
     SqliteConversationStore::in_memory(ConversationId::new(
         "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
@@ -60,6 +62,7 @@ pub fn store() -> SqliteConversationStore {
     .unwrap()
 }
 
+#[must_use]
 pub fn user_message(id: &str, text: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {
         id: MessageId::new(id),
@@ -72,6 +75,7 @@ pub fn user_message(id: &str, text: &str) -> MessageBlock {
     })
 }
 
+#[must_use]
 pub fn request_context_message(id: &str, text: &str) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {
         id: MessageId::new(id),
@@ -84,6 +88,7 @@ pub fn request_context_message(id: &str, text: &str) -> MessageBlock {
     })
 }
 
+#[must_use]
 pub fn agent_status_message(
     id: &str,
     generated_at: DateTime<Utc>,
@@ -103,6 +108,7 @@ pub fn agent_status_message(
     })
 }
 
+#[must_use]
 pub fn assistant_message(id: &str, text: &str) -> MessageBlock {
     MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new(id),
@@ -112,6 +118,7 @@ pub fn assistant_message(id: &str, text: &str) -> MessageBlock {
     })
 }
 
+#[must_use]
 pub fn envelope(
     conversation_id: &ConversationId,
     event_id: &str,
@@ -132,6 +139,7 @@ pub fn envelope(
     }
 }
 
+#[must_use]
 pub fn invocation() -> ModelInvocationConfig {
     ModelInvocationConfig {
         replay_binding: Some("test-binding".into()),
@@ -172,6 +180,7 @@ pub fn freeze_test_input(
         .unwrap();
 }
 
+#[must_use]
 pub fn test_request_snapshot(
     revision: rustx_conversation::SurfaceRevision,
     invocation: ModelInvocationConfig,
@@ -205,6 +214,7 @@ pub fn test_request_snapshot(
 /// the progress test which owns it. The request identity is intentionally
 /// the only progress input: the store, not this helper, assigns the
 /// durable Todo origin at commit time.
+#[must_use]
 pub fn progress_request_snapshot(
     attempt_id: &str,
     turn: &str,
@@ -237,6 +247,7 @@ pub fn progress_request_snapshot(
     )
 }
 
+#[must_use]
 pub fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
     let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936190");
     let store = Arc::new(SqliteConversationStore::in_memory(id).unwrap());
@@ -289,6 +300,7 @@ pub fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
     }
 }
 
+#[must_use]
 pub fn status_start_snapshot_for(
     attempt_id: &str,
     turn: &str,
@@ -337,6 +349,7 @@ pub fn status_start_snapshot_for(
 }
 
 /// A request-start snapshot with a caller-chosen ordered context id set.
+#[must_use]
 pub fn context_start_snapshot(
     revision: rustx_conversation::SurfaceRevision,
     request_context_ids: Vec<MessageId>,
@@ -387,6 +400,7 @@ pub fn test_bind_contribution(
     });
 }
 
+#[must_use]
 pub fn status_start_snapshot(
     revision: rustx_conversation::SurfaceRevision,
     message_id: MessageId,
@@ -527,6 +541,7 @@ pub fn non_success_publication(
     )
 }
 
+#[must_use]
 pub fn workflow_terminal_fixture(
     node_instance: &rustx_types::runtime::workflow::WorkflowNodeInstance,
     normal: bool,
@@ -722,6 +737,7 @@ impl SqliteConversationStore {
 
 /// A private-authority document fixture: the journal stores the owner's
 /// opaque serialization plus its credential escrow verbatim.
+#[must_use]
 pub fn admit_authority_doc() -> crate::store::journal::PrivateAgentAuthority {
     crate::store::journal::PrivateAgentAuthority {
         authority: serde_json::json!({
@@ -739,6 +755,7 @@ pub fn admit_authority_doc() -> crate::store::journal::PrivateAgentAuthority {
     }
 }
 
+#[must_use]
 pub fn child_conversation_id(key: &str) -> rustx_types::runtime::identity::ConversationId {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(key.as_bytes());
@@ -790,6 +807,7 @@ pub fn response_complete(store: &SqliteConversationStore, attempt: &AttemptId) {
         ))
         .unwrap();
 }
+#[allow(clippy::too_many_lines)]
 pub fn append_completed_turns(
     store: &SqliteConversationStore,
     first: usize,
@@ -1194,6 +1212,7 @@ pub fn checkpoint_commit_fixture(
 
 // ---- shared observation test builders (moved from observation/tests/*) ----
 
+#[must_use]
 pub fn derived_enrichment_proposal() -> (MessageBlock, ToolCall) {
     let call = ToolCall {
         id: ToolCallId::new("derived-tool-call"),
@@ -1210,6 +1229,7 @@ pub fn derived_enrichment_proposal() -> (MessageBlock, ToolCall) {
     )
 }
 
+#[must_use]
 pub fn original_success_tool_result() -> ToolExecutionResult {
     use rustx_types::tools::types::ToolResultContent;
     ToolExecutionResult {
@@ -1232,6 +1252,7 @@ pub fn original_success_tool_result() -> ToolExecutionResult {
     }
 }
 
+#[must_use]
 pub fn original_tool_before_result() -> (SqliteConversationStore, AttemptId, MessageBlock, ToolCall)
 {
     let store = store();
@@ -1265,6 +1286,7 @@ pub fn original_tool_before_result() -> (SqliteConversationStore, AttemptId, Mes
     (store, attempt, proposal, call)
 }
 
+#[must_use]
 pub fn member_completed_lineage(original: &str) -> LineageSeed {
     use crate::reading::{
         ConversationTurnId, InheritedTurnOutcome, TurnExecution, TurnReadingProvenance,
@@ -1441,6 +1463,7 @@ pub fn occupancy_origin_compact(
     store.commit_projection(input).unwrap().completed
 }
 
+#[must_use]
 pub fn occupancy_origin_native(
     model: &str,
     input_tokens: u64,
@@ -1476,6 +1499,7 @@ pub fn occupancy_origin_cut(
     }
 }
 
+#[must_use]
 pub fn statistics_inherited_seed() -> LineageSeed {
     let inherited = crate::reading::TurnReadingProvenance {
         id: crate::reading::ConversationTurnId {
@@ -1501,6 +1525,7 @@ pub fn statistics_inherited_seed() -> LineageSeed {
     .unwrap()
 }
 
+#[must_use]
 pub fn inherited_seed(count: usize, measured_last: bool) -> LineageSeed {
     use crate::reading::{
         ConversationTurnId, InheritedTurnOutcome, TurnExecution, TurnReadingProvenance,
@@ -1551,6 +1576,7 @@ pub fn inherited_seed(count: usize, measured_last: bool) -> LineageSeed {
 }
 
 // Fixed native read evidence does not replace original paired membership.
+#[must_use]
 pub fn deny_selected_original_columns(
     context: rusqlite::hooks::AuthContext<'_>,
 ) -> rusqlite::hooks::Authorization {
@@ -1575,6 +1601,7 @@ pub fn deny_selected_original_columns(
     }
 }
 
+#[must_use]
 pub fn deny_trace_original_columns(
     context: rusqlite::hooks::AuthContext<'_>,
 ) -> rusqlite::hooks::Authorization {
@@ -1600,6 +1627,7 @@ pub fn deny_trace_original_columns(
     }
 }
 
+#[must_use]
 pub fn trace_arguments_reference(
     fields: &[crate::observation::trace::TraceFieldSource],
 ) -> rustx_types::observation::content::ContentRef {
@@ -1618,6 +1646,7 @@ pub fn trace_arguments_reference(
     .clone()
 }
 
+#[must_use]
 pub fn projection_receipt_witness(
     receipt: &crate::projection::ProjectionCommitReceipt,
 ) -> &crate::observation::ObservationEventWitness {

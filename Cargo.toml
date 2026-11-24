@@ -11,6 +11,20 @@ publish = false
 [workspace]
 members = [".", "crates/*"]
 
+[workspace.lints.rust]
+# The runtime process-supervision capability and the per-invocation Bash
+# supervisor perform a small bounded set of explicitly allowed OS shims:
+# the runtime layer's one-time prctl(PR_SET_CHILD_SUBREAPER) activation,
+# the supervisor's PR_SET_CHILD_SUBREAPER, the SIGTERM no-op handler
+# installation, prctl(PR_SET_NO_NEW_PRIVS), and
+# seccomp(SECCOMP_SET_MODE_FILTER) with a stack-local sock_fprog. Raw syscall
+# execution otherwise exists only in test-local seccomp regressions.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
 [features]
 mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
 # Issue #387 measurement-only counters (reservation / conflict / legacy-layout
@@ -162,19 +176,8 @@ minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machine
 minijinja-contrib = { version = "2", features = ["pycompat"] }
 pep440_rs = "0.7.3"
 
-[lints.rust]
-# The runtime process-supervision capability and the per-invocation Bash
-# supervisor perform a small bounded set of explicitly allowed OS shims:
-# the runtime layer's one-time prctl(PR_SET_CHILD_SUBREAPER) activation,
-# the supervisor's PR_SET_CHILD_SUBREAPER, the SIGTERM no-op handler
-# installation, prctl(PR_SET_NO_NEW_PRIVS), and
-# seccomp(SECCOMP_SET_MODE_FILTER) with a stack-local sock_fprog. Raw syscall
-# execution otherwise exists only in test-local seccomp regressions.
-unsafe_code = "deny"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+[lints]
+workspace = true
 
 [dev-dependencies]
 rusqlite = { version = "0.40.2", features = ["trace"] }

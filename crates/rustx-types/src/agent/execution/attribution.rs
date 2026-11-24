@@ -81,6 +81,7 @@ pub struct NativeWork {
     pub hash_bytes: u64,
 }
 impl SourceWork {
+    #[must_use]
     pub fn since(&self, previous: &Self) -> Self {
         Self {
             samples: self.samples - previous.samples,
@@ -98,6 +99,7 @@ impl SourceWork {
     }
 }
 impl ContextWork {
+    #[must_use]
     pub fn since(&self, previous: &Self) -> Self {
         Self {
             anchor_roots: self.anchor_roots - previous.anchor_roots,
@@ -108,6 +110,7 @@ impl ContextWork {
     }
 }
 impl NativeWork {
+    #[must_use]
     pub fn since(&self, previous: &Self) -> Self {
         Self {
             preparation_items: self.preparation_items - previous.preparation_items,
@@ -195,6 +198,7 @@ pub fn start() -> Guard {
 }
 
 impl Guard {
+    #[must_use]
     pub fn snapshot(&self) -> AgentRequestProfile {
         *self.profile.lock().unwrap()
     }

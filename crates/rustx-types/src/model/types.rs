@@ -38,6 +38,7 @@ pub fn append_semantic_message(
     append_semantic_view(digest, &message.view());
 }
 
+#[must_use]
 pub fn semantic_view_fingerprint(view: &crate::model::projected::ModelMessageView<'_>) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
@@ -269,18 +270,7 @@ impl ModelRequest {
         let mut boundary = None;
         for index in self
             .messages
-            .iter()
-            .enumerate()
-            .filter_map(|(index, message)| {
-                let mut matches = message.canonical_id() == Some(&source.assistant.message_id);
-                if let ModelInputMessage::Derived(message) = message {
-                    matches |= message
-                        .sources
-                        .iter()
-                        .any(|derived| derived.message_id == source.assistant.message_id);
-                }
-                matches.then_some(index)
-            })
+            .continuation_candidates(&source.assistant.message_id)
         {
             let message = &self.messages[index];
             let scoped = match message {
@@ -342,6 +332,7 @@ impl ModelRequest {
         self.semantic_input_fingerprint_with_messages(&self.messages.semantic_fingerprint())
     }
 
+    #[must_use]
     pub fn semantic_input_fingerprint_with_messages(&self, messages: &str) -> String {
         fingerprint_metadata(&(
             messages,
@@ -609,5 +600,92 @@ mod continuation_work_tests {
         };
         wrong.content.clear();
         assert!(!CanonicalMessageRef::of(&scope, &output).matches(&MessageBlock::Assistant(wrong)));
+    }
+
+    /// Repeated continuation validation must not rescan or rehash the covered
+    /// prefix: the candidate index and the incremental semantic digest live in
+    /// the selected input's shared preparation cell.
+    #[test]
+    fn continuation_validation_is_incremental_across_calls_and_appends() {
+        let mut request = crate::model::snapshot::tests::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "prefix",
+        );
+        let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
+            opaque: serde_json::json!({"type":"redacted_thinking","data":"a".repeat(8192)}).into(),
+        });
+        let output = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("accepted"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
+                text: None,
+                provider_state: Some(state.clone()),
+            })],
+        });
+        for index in 0..128 {
+            let MessageBlock::Assistant(mut unrelated) = output.clone() else {
+                unreachable!()
+            };
+            unrelated.id = MessageId::new(format!("unrelated-{index}"));
+            request
+                .messages
+                .push(ModelInputMessage::Canonical(MessageBlock::Assistant(
+                    unrelated,
+                )));
+        }
+        let scope = ConversationId::generate();
+        let source = AcceptedOutputContinuationSource::from_accepted_output(
+            RequestId::new("previous"),
+            &scope,
+            request.messages.semantic_fingerprint(),
+            &output,
+        )
+        .unwrap();
+        request.continuation = Some(state);
+        request.continuation_source = Some(source);
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(output.clone()));
+        // First validation warms the incremental state: the covered prefix is
+        // the 129 owners accepted before the produced output.
+        assert_eq!(request.continuation_boundary().unwrap(), Some(129));
+        // The marginal cost of one more call hashes only the matched candidate;
+        // it never re-scans or rehashes the covered prefix.
+        take_hash_work();
+        assert_eq!(request.continuation_boundary().unwrap(), Some(129));
+        let one_call = take_hash_work();
+        assert!(one_call.0 > 0 && one_call.1 > 0);
+        // Request prepare and snapshot freeze re-enter this path repeatedly.
+        take_hash_work();
+        for _ in 0..4 {
+            assert_eq!(request.continuation_boundary().unwrap(), Some(129));
+            assert!(!request.reconcile_continuation().unwrap());
+        }
+        assert_eq!(take_hash_work(), (8 * one_call.0, 8 * one_call.1));
+        // Appending a suffix does not raise the marginal validation cost.
+        let MessageBlock::Assistant(mut suffix) = output.clone() else {
+            unreachable!()
+        };
+        suffix.id = MessageId::new("suffix");
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(MessageBlock::Assistant(
+                suffix,
+            )));
+        take_hash_work();
+        assert_eq!(request.continuation_boundary().unwrap(), Some(129));
+        assert_eq!(take_hash_work(), one_call);
+        // A covered-prefix edit revokes the incremental caches: the request
+        // fixture fingerprint no longer matches the covered input.
+        let mut changed = request.clone();
+        changed.messages[0] = crate::model::snapshot::tests::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "changed prefix",
+        )
+        .messages[0]
+            .clone();
+        assert!(changed.continuation_boundary().is_err());
     }
 }

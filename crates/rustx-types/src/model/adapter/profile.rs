@@ -100,6 +100,7 @@ thread_local! {
 
 pub struct NativeScope(Option<NativeContext>);
 impl NativeScope {
+    #[must_use]
     pub fn new(request_id: &str, input: InputLayout) -> Self {
         if !enabled() {
             return Self(None);
@@ -148,6 +149,7 @@ struct ActivePhase {
     work: Rc<RefCell<Work>>,
     started: Instant,
 }
+#[must_use]
 pub fn phase(phase: Phase) -> PhaseScope {
     phase_in(phase, CONTEXT.with(|slot| slot.borrow().clone()))
 }

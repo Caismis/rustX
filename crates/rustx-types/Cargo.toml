@@ -54,3 +54,6 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "
 # enter_ownership_commit) through the workspace dependency.
 issue-387-profile = []
 test-fixtures = ["dep:rmcp"]
+
+[lints]
+workspace = true

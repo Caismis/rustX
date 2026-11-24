@@ -6,6 +6,7 @@ use crate::tools::types::ToolResultContent;
 /// An unchanged projection may retain its provenance; changes must append only
 /// supported request-time transformations and preserve every non-media value.
 #[allow(clippy::too_many_lines)] // One exhaustive pure semantic media transformation validation.
+#[must_use]
 pub fn valid(
     expected: &ProjectedMessage,
     actual: &ProjectedMessage,

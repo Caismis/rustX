@@ -76,12 +76,14 @@ fn invalid(reason: SessionFileReadFailure, message: &'static str) -> io::Error {
         AccessFailure { reason, message },
     )
 }
+#[must_use]
 pub fn unavailable() -> io::Error {
     invalid(
         SessionFileReadFailure::Unavailable,
         "original Session filesystem unavailable",
     )
 }
+#[must_use]
 pub fn read_failure(error: &io::Error) -> SessionFileReadFailure {
     if let Some(failure) = error
         .get_ref()

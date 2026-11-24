@@ -1578,16 +1578,18 @@ fn check(
             }
         }
     }
+    // Member assignment is verified per platform against FULL, the complete
+    // profile: a member kind a FAST step alone covers is not assigned.
     let test_platforms: BTreeSet<Platform> = executing.iter().map(|step| step.platform).collect();
     for (member, kinds) in members {
         for platform in &test_platforms {
             let covered: BTreeSet<Kind> = executing
                 .iter()
-                .filter(|step| step.platform == *platform && step.member_step())
                 .filter(|step| {
-                    step.member_packages.iter().any(|name| name == member)
-                        || (step.scope == PackageScope::Workspace
-                            && !step.member_excludes.iter().any(|name| name == member))
+                    step.platform == *platform
+                        && step.profile == Profile::Full
+                        && step.member_step()
+                        && step_covers_member(step, member)
                 })
                 .flat_map(|step| step.member_kinds.iter().copied())
                 .collect();
@@ -1595,7 +1597,7 @@ fn check(
                 if !covered.contains(kind) {
                     report.findings.push(format!(
                         "workspace member `{member}` {kind:?} tests are selected by no executing \
-                         member step on {platform}; assign them to a lane"
+                         FULL member step on {platform}; assign them to a lane"
                     ));
                 }
             }
@@ -1650,6 +1652,23 @@ fn check(
                     && step.member_kinds.contains(&Kind::Lib)
             })
             .collect();
+        // The universe is every member lib target cargo metadata lists,
+        // enumerated from `members` itself — not only the members the
+        // surviving FULL steps happen to name — so a dropped or excluding
+        // FULL step still fails closed instead of shrinking the demand.
+        for (member, kinds) in members {
+            if !kinds.contains(&Kind::Lib) {
+                continue;
+            }
+            match discovery.member_lib_runnable(member, &[], &[]) {
+                Ok((names, _)) => {
+                    universe.entry(member).or_default().extend(names);
+                }
+                Err(problem) => report
+                    .findings
+                    .push(format!("member `{member}` lib: {problem}")),
+            }
+        }
         for step in &full_member_steps {
             let arguments = step.libtest(&step.filters, &step.skips);
             for member in members.keys().filter(|name| step_covers_member(step, name)) {
@@ -1671,18 +1690,18 @@ fn check(
                 }
             }
         }
-        if host == Platform::Linux {
-            for (member, universe) in &universe {
-                let covered = full_covered.get(member).cloned().unwrap_or_default();
-                let missing: Vec<&String> = universe.difference(&covered).collect();
-                if !missing.is_empty() {
-                    report.findings.push(format!(
-                        "{} runnable test(s) of member `{member}` lib on linux are executed by \
-                         no FULL member step, e.g. {:?}",
-                        missing.len(),
-                        &missing[..missing.len().min(5)]
-                    ));
-                }
+        // Runnable-name completeness is host-native discovery, so it runs
+        // once on whichever platform this check executes on.
+        for (member, universe) in &universe {
+            let covered = full_covered.get(member).cloned().unwrap_or_default();
+            let missing: Vec<&String> = universe.difference(&covered).collect();
+            if !missing.is_empty() {
+                report.findings.push(format!(
+                    "{} runnable test(s) of member `{member}` lib on {host} are executed by \
+                     no FULL member step, e.g. {:?}",
+                    missing.len(),
+                    &missing[..missing.len().min(5)]
+                ));
             }
         }
         for step in &member_steps {
@@ -2589,6 +2608,63 @@ jobs:
             .replace("VERIFICATION_PROFILE: fast", "VERIFICATION_PROFILE: full")
             .replace("--locked'", "--locked -- member::unit'");
         let findings = member_findings(&workflow);
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "of member `rustx-foo` lib on linux are executed by no FULL member step"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_dropped_full_member_step_is_not_substituted_by_fast() {
+        // The universe is enumerated from cargo metadata's member list, not
+        // from the members the surviving FULL steps name: with only FAST
+        // covering the member, its lib is still demanded under FULL.
+        let findings = member_findings(MEMBER_FAST);
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "workspace member `rustx-foo` Lib tests are selected by no executing FULL \
+                 member step on linux"
+            ),
+            1
+        );
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "of member `rustx-foo` lib on linux are executed by no FULL member step"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_full_step_excluding_a_member_leaves_its_lib_uncovered() {
+        // FULL --exclude drops rustx-foo while FAST still covers it: the
+        // metadata-derived universe reports the member's lib missing from
+        // FULL instead of shrinking to the selected steps.
+        let full = MEMBER_FAST
+            .replace("  fast:", "  full:")
+            .replace("['fast']", "['full']")
+            .replace("VERIFICATION_PROFILE: fast", "VERIFICATION_PROFILE: full")
+            .replace(
+                "--exclude rustx --lib",
+                "--exclude rustx --exclude rustx-foo --lib",
+            );
+        let fast = MEMBER_FAST
+            .replace("--locked'", "--locked -- --skip ::scale::'")
+            .replace("\njobs:", "");
+        let findings = member_findings(&format!("{full}{fast}"));
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "workspace member `rustx-foo` Lib tests are selected by no executing FULL \
+                 member step on linux"
+            ),
+            1
+        );
         assert_eq!(
             findings_containing(
                 &findings,

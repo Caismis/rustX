@@ -21,6 +21,7 @@ use crate::inbox::InboundDraft;
 /// time, so a mismatched `EventId`/`SubagentId` pair can never enter
 /// durable authority and a terminal can never resolve an ownership fact
 /// that does not belong to the requested child.
+#[must_use]
 pub fn subagent_ownership_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-committed-event:{subagent_id}"))
 }
@@ -96,17 +97,20 @@ pub fn ownership_event(
 /// The live settlement path and startup recovery share this exact key, so
 /// an ambiguous commit observed as an error resolves as an idempotent
 /// retry and the two paths can never publish twice.
+#[must_use]
 pub fn terminal_correlation(subagent_id: &SubagentId) -> String {
     format!("subagent-terminal:{subagent_id}")
 }
 
 /// The deterministic message identity of a subagent terminal publication.
+#[must_use]
 pub fn terminal_message_id(subagent_id: &SubagentId) -> MessageId {
     MessageId::new(format!("subagent-{subagent_id}-terminal"))
 }
 
 /// The deterministic message identity of the runtime-authored terminal
 /// notice accompanying a successful terminal publication (Issue #192).
+#[must_use]
 pub fn terminal_notice_message_id(subagent_id: &SubagentId) -> MessageId {
     MessageId::new(format!("subagent-{subagent_id}-terminal-notice"))
 }
@@ -115,6 +119,7 @@ pub fn terminal_notice_message_id(subagent_id: &SubagentId) -> MessageId {
 /// notice. It shares the terminal publication's exactly-once durable
 /// transaction, so the bounded retry rebuilds it byte-identically and an
 /// ambiguous commit resolves as the idempotent correlation retry.
+#[must_use]
 pub fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
     format!("subagent-terminal-notice:{subagent_id}")
 }
@@ -122,6 +127,7 @@ pub fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
 /// Runtime-owned correlation for one final report. Stable Agent identity and
 /// finite activation identity are explicit and never supplied by child content.
 /// The store validates this exact notice in the same transaction as the report.
+#[must_use]
 pub fn terminal_notice_text(agent_id: &AgentId, subagent_id: &SubagentId, agent: &str) -> String {
     format!(
         "Agent {agent_id} activation {subagent_id} (profile \"{agent}\") completed; the message that follows \
@@ -138,6 +144,7 @@ pub fn terminal_notice_text(agent_id: &AgentId, subagent_id: &SubagentId, agent:
 /// `UserSource::Runtime` inbound item committed in the **same** durable
 /// transaction as the terminal publication, ordered strictly before the
 /// report: the terminal result remains the last item of the publication.
+#[must_use]
 pub fn terminal_notice(
     agent_id: &AgentId,
     subagent_id: &SubagentId,
@@ -157,6 +164,7 @@ pub fn terminal_notice(
 }
 
 /// The deterministic event identity of a subagent terminal publication.
+#[must_use]
 pub fn terminal_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-terminal-event:{subagent_id}"))
 }
@@ -164,10 +172,12 @@ pub fn terminal_event_id(subagent_id: &SubagentId) -> EventId {
 /// The deterministic event identity of a Workflow-owned child terminal
 /// settlement. This is a lifecycle fact only: unlike a normal subagent
 /// terminal publication it has no parent message or delivery correlation.
+#[must_use]
 pub fn terminal_settlement_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-terminal-settled-event:{subagent_id}"))
 }
 
+#[must_use]
 pub fn admission_event_id(
     activation_id: &SubagentId,
     phase: &rustx_types::events::types::AgentActivationAdmissionPhase,
@@ -184,6 +194,7 @@ pub fn admission_event_id(
     EventId::new(format!("agent-admission:{activation_id}:{phase}"))
 }
 
+#[must_use]
 pub fn admission_event(
     conversation_id: &ConversationId,
     agent_id: &AgentId,
@@ -214,10 +225,12 @@ pub fn admission_event(
 /// The deterministic event identity of a committed Workflow Agent value.
 /// This fact is committed in the same transaction as the corresponding
 /// `SubagentTerminalSettled` lifecycle fact.
+#[must_use]
 pub fn physical_settlement_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-physical-settlement:{subagent_id}"))
 }
 
+#[must_use]
 pub fn physical_settlement_event(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -241,6 +254,7 @@ pub fn physical_settlement_event(
     }
 }
 
+#[must_use]
 pub fn workflow_output_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("workflow-agent-output-event:{subagent_id}"))
 }
@@ -249,6 +263,7 @@ pub fn workflow_output_event_id(subagent_id: &SubagentId) -> EventId {
 /// The result is consumed by `WorkflowRuntime` through the native registry, so
 /// no parent inbound item is created and no notification-delivery phase is
 /// introduced.
+#[must_use]
 pub fn terminal_settlement(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -280,6 +295,7 @@ pub fn terminal_settlement(
 /// evidence for the immutable `WorkflowRun` snapshot; it is not canonical
 /// parent conversation content and never instructs recovery to replay a run.
 #[allow(clippy::too_many_arguments)] // one typed Workflow terminal fact
+#[must_use]
 pub fn workflow_output_event(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -315,6 +331,7 @@ pub fn workflow_output_event(
 /// durable authority for every normal `SubagentTerminalPublished` fact
 /// (Issue #192).
 #[allow(clippy::too_many_arguments)] // One terminal publication carries exact identity, content and physical proof.
+#[must_use]
 pub fn terminal_publication(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,

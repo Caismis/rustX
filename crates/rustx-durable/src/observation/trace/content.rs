@@ -60,6 +60,7 @@ fn file_artifact(file: &FileReference) -> TraceArtifact {
 }
 
 /// Projects canonical User content blocks.
+#[must_use]
 pub fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBlock>, bool) {
     let mut truncated = content.len() > TRACE_DETAIL_BLOCKS;
     let mut blocks = Vec::new();
@@ -97,6 +98,7 @@ pub fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBlock>, boo
 }
 
 /// Projects canonical Assistant content blocks.
+#[must_use]
 pub fn assistant_blocks(content: &[AssistantContentBlock]) -> (Vec<TraceContentBlock>, bool) {
     let mut truncated = content.len() > TRACE_DETAIL_BLOCKS;
     let mut blocks = Vec::new();
@@ -203,6 +205,7 @@ const fn cancellation_phase_label(
 }
 
 /// Projects canonical Tool result content blocks.
+#[must_use]
 pub fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceContentBlock>, bool) {
     let mut truncated = result.content.len() > TRACE_DETAIL_BLOCKS;
     let mut blocks = Vec::new();
@@ -241,11 +244,13 @@ pub fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceContentBloc
 
 /// Projects one canonical Tool message as a request-context item.
 /// Returns None when a mandatory correlation identity exceeds the bound.
+#[must_use]
 pub fn tool_result_block(message: &ToolMessageBlock) -> Option<TraceContentBlock> {
     projected_tool_result_block(&message.tool_call_id, &message.tool_id, &message.result)
 }
 
 /// Render typed model-visible content without assigning execution identity or statistics.
+#[must_use]
 pub fn projected_tool_result_block(
     call_id: &rustx_types::runtime::identity::ToolCallId,
     tool_id: &rustx_types::runtime::identity::ToolId,

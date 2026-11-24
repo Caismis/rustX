@@ -667,6 +667,7 @@ fn bound_status_text(text: &str) -> String {
     bounded.push_str(marker);
     bounded
 }
+#[must_use]
 pub fn published_snapshot(
     message: &MessageBlock,
 ) -> Option<Result<TodoSnapshot, TodoRebuildError>> {
@@ -717,6 +718,7 @@ pub fn last_snapshot(history: &[MessageBlock]) -> Option<Result<TodoSnapshot, To
 }
 
 /// Whether `candidate` can reach itself through the graph it would create.
+#[must_use]
 pub fn closes_cycle(snapshot: &TodoSnapshot, candidate: &TodoTask) -> bool {
     let mut seen = HashSet::new();
     let mut frontier = candidate.blocked_by.clone();

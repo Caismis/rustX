@@ -103,6 +103,7 @@ pub struct CapacityReservationGate {
 
 impl ConversationCapacity {
     #[cfg(any(test, feature = "test-fixtures"))]
+    #[must_use]
     pub fn hold_after_process_general_for_test(&self) -> CapacityReservationGate {
         let (entered, observed) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
@@ -120,6 +121,7 @@ impl ConversationCapacity {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
+    #[must_use]
     pub fn reservation_contention_for_test(&self) -> tokio::sync::oneshot::Receiver<()> {
         let (entered, observed) = tokio::sync::oneshot::channel();
         *self
@@ -129,6 +131,7 @@ impl ConversationCapacity {
         observed
     }
 
+    #[must_use]
     pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.process.changed.subscribe()
     }

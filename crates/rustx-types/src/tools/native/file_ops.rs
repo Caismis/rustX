@@ -33,6 +33,7 @@ pub enum NativeFileOperation {
 ///
 /// Returns `None` for any non-file native tool, any non-native tool, and any
 /// native file call whose recorded arguments do not identify a path.
+#[must_use]
 pub fn native_file_operation(call: &ToolCall) -> Option<NativeFileOperation> {
     let tool_id = call.tool_id.as_str();
     if tool_id == READ_TOOL_ID {
@@ -46,6 +47,7 @@ pub fn native_file_operation(call: &ToolCall) -> Option<NativeFileOperation> {
     }
 }
 /// argument contract.
+#[must_use]
 pub fn file_path_argument(arguments: &serde_json::Value) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct PathOnly {
@@ -56,14 +58,17 @@ pub fn file_path_argument(arguments: &serde_json::Value) -> Option<String> {
         .map(|decoded| decoded.path)
 }
 /// The path argument of the native `read` tool's recorded arguments.
+#[must_use]
 pub fn read_operation_path(arguments: &serde_json::Value) -> Option<String> {
     file_path_argument(arguments)
 }
 /// The path argument of the native `edit` tool's recorded arguments.
+#[must_use]
 pub fn edit_operation_path(arguments: &serde_json::Value) -> Option<String> {
     file_path_argument(arguments)
 }
 /// The path argument of the native `write` tool's recorded arguments.
+#[must_use]
 pub fn write_operation_path(arguments: &serde_json::Value) -> Option<String> {
     file_path_argument(arguments)
 }

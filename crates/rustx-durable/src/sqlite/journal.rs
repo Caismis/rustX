@@ -1235,6 +1235,7 @@ pub fn validate_attempt_start_uniqueness(
     Ok(())
 }
 
+#[must_use]
 pub fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static str {
     match event {
         RuntimeEvent::ToolCallRequested { .. } => "ToolCallRequested",
@@ -1318,6 +1319,7 @@ pub fn find_event_json_by_id(
 /// Compares a retried event with its durable copy. Event Journal sequence is
 /// store-allocated and therefore intentionally excluded; every other field
 /// is part of the producer's frozen terminal transition identity.
+#[must_use]
 pub fn same_event_ignoring_sequence(
     existing: &RuntimeEventEnvelope,
     requested: &RuntimeEventEnvelope,
@@ -1391,6 +1393,7 @@ pub fn load_user_notification_tx(
 
 /// Whether an event has a transcript-visible or otherwise compound durable
 /// owner that must return through a purpose-specific transition.
+#[must_use]
 pub fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
     matches!(
         event,
@@ -1592,6 +1595,7 @@ pub fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     keys
 }
 
+#[must_use]
 pub fn is_terminal(event: &RuntimeEvent) -> bool {
     matches!(
         event,

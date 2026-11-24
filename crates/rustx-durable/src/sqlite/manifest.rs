@@ -606,6 +606,7 @@ impl Owner {
         })
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn uninstalled() -> Arc<Self> {
         Self::new()
     }

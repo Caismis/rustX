@@ -295,6 +295,7 @@ impl std::error::Error for ModelCatalogError {}
 
 impl ModelRef {
     /// Borrow the validated native identity without formatting an owned String.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

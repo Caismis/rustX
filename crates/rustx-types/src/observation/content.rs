@@ -24,6 +24,7 @@ pub enum ContentRepresentation {
 }
 impl ContentRepresentation {
     /// Private storage/cache key; serde retains the descriptive public name.
+    #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::Utf8Text => "t",
@@ -45,6 +46,7 @@ pub enum CanonicalContentComponent {
     MessageMetadata,
 }
 impl CanonicalContentComponent {
+    #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::Payload => "canonical",
@@ -72,6 +74,7 @@ pub enum CanonicalContentLocator {
     },
 }
 impl CanonicalContentLocator {
+    #[must_use]
     pub fn key(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::ByMessageId { message_id } => {
@@ -129,6 +132,7 @@ impl ContentSource {
     /// The store key of the catalog a configuration change fact retains.
     pub const CONFIGURATION_CATALOG: &'static str = "configuration_catalog";
 
+    #[must_use]
     pub fn key(&self) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
         match self {
             Self::CanonicalMessageBlock {

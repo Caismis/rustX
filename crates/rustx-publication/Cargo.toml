@@ -14,3 +14,6 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

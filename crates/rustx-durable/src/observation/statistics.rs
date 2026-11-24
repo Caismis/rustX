@@ -85,6 +85,7 @@ impl StatisticsFold {
         Ok(view)
     }
 
+    #[must_use]
     pub fn reference_events(
         events: &[rustx_types::events::types::RuntimeEventEnvelope],
     ) -> AgentStatistics {

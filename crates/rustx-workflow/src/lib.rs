@@ -2,6 +2,15 @@
 //! diagnostic vocabulary shared by the runtime engine and the durable
 //! journal. No execution, compilation driver or runtime evidence lives here.
 
+// Workspace-internal crates: error and panic conditions are documented in
+// prose rather than `# Errors`/`# Panics` sections, and blanket must_use on
+// internal APIs adds noise without callers.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
+
 pub mod code_language;
 pub mod compile_error;
 pub mod definition;

@@ -813,6 +813,10 @@ impl UserConfigManager {
             Mode::from_raw_mode((tree.root_mode & 0o777) as _),
         )
         .map_err(|_| SettingsError::Committed)?;
+        // The chmod rewrites the published directory's own inode: sync that
+        // inode through the held descriptor before the mode is durable.
+        super::super::settings::sync(installed_directory.descriptor(), &installed)
+            .map_err(|_| SettingsError::Committed)?;
         let visible = self
             .discover_skill_scope(&destination_target, &destination_collection)
             .packages

@@ -25,13 +25,16 @@ fn gates() -> &'static Mutex<BTreeMap<Key, Gate>> {
     GATES.get_or_init(Mutex::default)
 }
 
+#[must_use]
 pub fn pending() -> bool {
     !gates().lock().unwrap().is_empty()
 }
 pub struct ActiveProbe(Option<Key>);
+#[must_use]
 pub fn activate(id: &str, probe: AuxiliaryStartProbe) -> ActiveProbe {
     ActiveProbe(ACTIVE.with(|slot| slot.replace(Some((id.to_owned(), probe)))))
 }
+#[must_use]
 pub fn for_event(
     event: &rustx_types::events::types::RuntimeEventEnvelope,
     probe: AuxiliaryStartProbe,
@@ -51,6 +54,7 @@ impl Drop for ActiveProbe {
 }
 /// Return true only when this exact real statement consumed its gate. The
 /// caller still obtains cancellation exclusively from the native writer scope.
+#[must_use]
 pub fn progress() -> bool {
     let Some(key) = ACTIVE.with(|slot| slot.borrow().clone()) else {
         return false;
@@ -96,6 +100,7 @@ impl super::SqliteConversationStore {
             [], |row| Ok((row.get(0)?, [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?])),
         ).unwrap()
     }
+    #[must_use]
     pub fn hold_auxiliary_start_probe_for_test(
         request: String,
         probe: AuxiliaryStartProbe,

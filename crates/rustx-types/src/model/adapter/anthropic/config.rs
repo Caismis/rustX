@@ -58,6 +58,7 @@ impl AnthropicAdapterConfig {
     }
 
     /// Consumes the configuration into its parts.
+    #[must_use]
     pub fn into_parts(self) -> (String, String, String, Option<ReqwestClient>) {
         (
             self.api_key,

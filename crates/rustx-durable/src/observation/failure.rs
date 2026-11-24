@@ -27,6 +27,7 @@ pub enum RuntimeClientAttemptFailure {
     },
 }
 /// Borrow only diagnostics into a finite display; original fields retain their J source.
+#[must_use]
 pub fn finite_attempt_failure(
     failure: &rustx_types::events::types::AttemptFailure,
 ) -> (RuntimeClientAttemptFailure, bool) {

@@ -3,11 +3,6 @@
 //! latest input and share immutable owners with it. Edits and old cuts are misses.
 use std::sync::Arc;
 
-#[cfg(test)]
-use sha2::Digest;
-#[cfg(test)]
-use sha2::Sha256;
-
 use crate::model::SelectedModelInput;
 use crate::model::catalog::Modality;
 pub(crate) use rustx_types::model::adapter::correlation::Prefix;
@@ -19,18 +14,9 @@ struct Admission {
     images: usize,
 }
 
-#[cfg(test)]
-#[derive(Clone, Default)]
-struct SemanticPrefix {
-    prefix: Prefix,
-    sha: Sha256,
-}
-
 #[derive(Default)]
 pub(crate) struct RequestCache {
     admission: Admission,
-    #[cfg(test)]
-    semantic: SemanticPrefix,
     pub(super) correlation: rustx_types::model::adapter::correlation::CorrelationSlot,
     pub(super) chat: Option<super::openai::chat_completions::ChatPrefix>,
     pub(super) responses: Option<super::openai::responses::ResponsesPrefix>,
@@ -45,19 +31,6 @@ impl std::fmt::Debug for RequestCache {
     }
 }
 impl RequestCache {
-    #[cfg(test)]
-    fn fingerprint(&mut self, input: &SelectedModelInput, count: usize) -> String {
-        let prefix = input.range(0..count);
-        let cache = &mut self.semantic;
-        if !cache.prefix.matches(&prefix) {
-            *cache = SemanticPrefix::default();
-        }
-        for message in prefix.iter().skip(cache.prefix.len()) {
-            crate::model::types::append_semantic_message(&mut cache.sha, message);
-        }
-        cache.prefix = Prefix::capture(&prefix);
-        format!("{:x}", cache.sha.clone().finalize())
-    }
     pub(super) fn admission(&mut self, input: &SelectedModelInput) -> (Vec<Modality>, usize) {
         let cache = &mut self.admission;
         if !cache.prefix.matches(input) {
@@ -148,8 +121,8 @@ pub(crate) fn take_work() -> Work {
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// Locks the selected input's opaque preparation cell and exposes the
-/// engine-side [`RequestCache`] stored inside it.
+/// Locks the selected input's preparation cell and exposes the engine-side
+/// [`RequestCache`] stored inside it.
 pub(crate) fn lock(messages: &crate::model::SelectedModelInput) -> Guard<'_> {
     Guard {
         guard: messages
@@ -159,15 +132,16 @@ pub(crate) fn lock(messages: &crate::model::SelectedModelInput) -> Guard<'_> {
     }
 }
 
-/// Deref'd view of the [`RequestCache`] living in the opaque preparation cell.
+/// Deref'd view of the [`RequestCache`] living in the preparation cell.
 pub(crate) struct Guard<'a> {
-    guard: std::sync::MutexGuard<'a, Option<Box<dyn std::any::Any + Send>>>,
+    guard: std::sync::MutexGuard<'a, rustx_types::model::selected_input::InputPreparation>,
 }
 
 impl std::ops::Deref for Guard<'_> {
     type Target = RequestCache;
     fn deref(&self) -> &RequestCache {
         self.guard
+            .engine
             .as_ref()
             .and_then(|cell| cell.downcast_ref::<RequestCache>())
             .expect("preparation cell holds RequestCache")
@@ -177,13 +151,9 @@ impl std::ops::Deref for Guard<'_> {
 impl std::ops::DerefMut for Guard<'_> {
     fn deref_mut(&mut self) -> &mut RequestCache {
         self.guard
+            .engine
             .get_or_insert_with(|| Box::new(RequestCache::default()))
             .downcast_mut::<RequestCache>()
             .expect("preparation cell holds RequestCache")
     }
-}
-
-#[cfg(test)]
-pub(crate) fn prefix_fingerprint(input: &SelectedModelInput, count: usize) -> String {
-    lock(input).fingerprint(input, count)
 }

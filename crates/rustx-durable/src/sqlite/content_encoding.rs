@@ -34,6 +34,7 @@ pub fn put_native<T: Serialize + schemars::JsonSchema>(
 /// Live prefixes retain each revision separately. Raw Tool arguments also keep
 /// their independent bytes: a missing frontier must still reveal retained raw
 /// evidence instead of silently selecting reserialized canonical arguments.
+#[must_use]
 pub fn inline_first(kind: &str, representation: ContentRepresentation) -> bool {
     !matches!(kind, "live" | "live_block_metadata")
         && matches!(

@@ -52,6 +52,7 @@ impl fmt::Display for WorkflowCompileError {
 impl std::error::Error for WorkflowCompileError {}
 
 impl WorkflowCompileError {
+    #[must_use]
     pub fn at(self, prefix: impl AsRef<str>) -> Self {
         match self {
             Self::At { path, cause } => Self::At {

@@ -24,6 +24,7 @@ pub struct RuntimeClientDeliveryHead {
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub next_offset: Option<u64>,
 }
+#[must_use]
 pub fn frontier(head: &RuntimeClientDeliveryHead) -> super::cut::CollectionFrontier {
     super::cut::CollectionFrontier {
         domain: head.domain.clone(),

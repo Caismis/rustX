@@ -56,6 +56,7 @@ pub enum ScheduleTiming {
     },
 }
 impl ScheduleTiming {
+    #[must_use]
     pub fn input_bounded(&self) -> bool {
         match self {
             Self::Cron {
@@ -113,6 +114,7 @@ fn add_seconds(at: DateTime<Utc>, seconds: i64) -> Result<DateTime<Utc>, String>
         .ok_or_else(|| "schedule time exhausted".into())
 }
 impl ScheduleSpec {
+    #[must_use]
     pub fn completion_reason(&self) -> ScheduleCompletionReason {
         match self {
             Self::At { .. } => ScheduleCompletionReason::OneShotAdmitted,
@@ -181,6 +183,7 @@ pub struct ScheduleTriggerId {
     pub occurrence_utc: DateTime<Utc>,
 }
 impl ScheduleTriggerId {
+    #[must_use]
     pub fn correlation(&self) -> String {
         format!(
             "scheduler:{}:{}:{}",
@@ -189,6 +192,7 @@ impl ScheduleTriggerId {
             self.occurrence_utc.to_rfc3339()
         )
     }
+    #[must_use]
     pub fn message_id(&self) -> MessageId {
         MessageId::new(format!(
             "scheduler:{}:{}",

@@ -62,6 +62,7 @@ pub fn read(
     }))
 }
 
+#[must_use]
 pub fn bounded_text(message: &MessageBlock) -> Option<String> {
     let MessageBlock::User(user) = message else {
         return None;

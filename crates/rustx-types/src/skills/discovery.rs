@@ -25,10 +25,12 @@ pub struct Collection {
     pub error: Option<std::io::Error>,
 }
 
+#[must_use]
 pub fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension == "md")
 }
 
+#[must_use]
 pub fn hidden(name: &std::ffi::OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b".") || name == "node_modules"
 }
@@ -44,6 +46,7 @@ pub fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
     Ok(canonical)
 }
 
+#[must_use]
 pub fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
     let mut scanner = Scanner {
         signal,

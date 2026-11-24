@@ -35,6 +35,7 @@ impl CanonicalMessageRef {
     }
 }
 /// One native serialization implementation for canonical body authentication.
+#[must_use]
 pub fn canonical_body_identity(
     message: &MessageBlock,
 ) -> (usize, sha2::digest::Output<sha2::Sha256>) {
@@ -57,6 +58,7 @@ impl Default for DigestWriter {
     }
 }
 impl DigestWriter {
+    #[must_use]
     pub fn finish(self) -> (usize, sha2::digest::Output<sha2::Sha256>) {
         use sha2::Digest;
         (self.bytes, self.digest.finalize())

@@ -24,6 +24,7 @@ use rustx_types::runtime::identity::{
 pub struct TraceCursor(pub String);
 
 impl TraceCursor {
+    #[must_use]
     pub fn at(sequence: u64) -> Self {
         Self(format!("trace:{sequence}"))
     }

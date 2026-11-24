@@ -109,6 +109,7 @@ pub struct ContinuationTaskPointer {
     pub source_sequence: u64,
 }
 
+#[must_use]
 pub fn message_task_kind(
     message: &rustx_types::message::types::MessageBlock,
 ) -> Option<TaskProvenanceKind> {

@@ -199,6 +199,7 @@ fn prefix(text: &str) -> &str {
 }
 /// The static name is derived from the same event vocabulary as the native
 /// tag. No event payload is encoded merely to identify its variant.
+#[must_use]
 pub fn native_kind(value: &rustx_types::events::types::RuntimeEvent) -> &str {
     value.as_ref()
 }

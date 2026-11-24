@@ -49,6 +49,7 @@ fn invalid(message: &'static str) -> io::Error {
 
 impl Credential {
     #[cfg(any(test, feature = "test-fixtures"))]
+    #[must_use]
     pub fn with_clock(self, clock: std::sync::Arc<std::sync::atomic::AtomicI64>) -> Self {
         Self(Mode::Clock(Box::new(self), clock))
     }
@@ -116,6 +117,7 @@ impl Credential {
         }))
     }
 
+    #[must_use]
     pub fn validate(&self, token: &str) -> bool {
         let Ok(duration) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else {
@@ -176,6 +178,7 @@ impl Credential {
         }
     }
 
+    #[must_use]
     pub fn offered(&self, offered: &[&str], prefix: &str) -> bool {
         let mut values = offered
             .iter()
@@ -186,6 +189,7 @@ impl Credential {
         values.next().is_none() && self.validate(value)
     }
 
+    #[must_use]
     pub fn same_secret(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
             (Mode::Capability(a), Mode::Capability(b)) => {

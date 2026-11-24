@@ -16,3 +16,6 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "
 # Monolith cfg(test) code reaches the test-only composed identities
 # (TestAlpha/TestBeta) through the workspace dependency.
 test-fixtures = []
+
+[lints]
+workspace = true

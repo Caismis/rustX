@@ -30,6 +30,7 @@ pub struct RuntimeClientMessageDescriptor {
     pub collections: Vec<super::cut::CollectionFrontier>,
 }
 impl RuntimeClientMessageDescriptor {
+    #[must_use]
     pub fn from_header(header: &crate::observation::MessageHeader) -> Option<Self> {
         Some(Self {
             deliveries: header.deliveries.clone(),

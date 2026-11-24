@@ -216,6 +216,7 @@ fn witness(
         .transpose()
 }
 
+#[must_use]
 pub fn result_header(
     result: &rustx_types::tools::types::ToolExecutionResult,
 ) -> crate::observation::NativeToolResultHeader {
@@ -250,6 +251,7 @@ fn committed_result(
     serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))
 }
 
+#[must_use]
 pub fn name_preview(name: &str) -> &str {
     let mut end = name.len().min(256);
     while !name.is_char_boundary(end) {

@@ -27,6 +27,7 @@ fn identity(
         attempt_id_source: (attempt.as_str().len() > 512).then_some(source),
     }
 }
+#[must_use]
 pub fn required(event: &RuntimeEventEnvelope) -> bool {
     event.attempt_id.is_some()
         && matches!(

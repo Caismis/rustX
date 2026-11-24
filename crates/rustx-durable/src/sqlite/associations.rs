@@ -35,6 +35,7 @@ pub struct Binding {
     pub stored_boundary: Option<u32>,
 }
 impl Binding {
+    #[must_use]
     pub fn coordinates(
         &self,
         snapshot: &crate::model::snapshot::RequestSnapshot,

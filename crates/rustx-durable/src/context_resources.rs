@@ -74,6 +74,7 @@ pub struct TrajectoryTool {
 }
 
 /// Reject a compaction read that exceeded its declared bound.
+#[must_use]
 pub fn bound(message: &str) -> ConversationStoreError {
     ConversationStoreError::ResourceBoundExceeded(message.to_owned())
 }
@@ -107,6 +108,7 @@ pub fn bounded_encoded_len(
 }
 
 /// old request measurement; source/destination Journal domains are never compared.
+#[must_use]
 pub fn inherit(
     turns: &[crate::reading::TurnReadingProvenance],
     canonical: &[rustx_types::message::types::MessageBlock],

@@ -23,6 +23,7 @@ pub fn record(original: usize, semantic: usize) {
 }
 
 /// Take and reset the accumulated counts.
+#[must_use]
 pub fn take() -> (usize, usize) {
     HASH_WORK.with(|n| n.replace((0, 0)))
 }

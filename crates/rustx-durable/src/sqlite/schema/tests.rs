@@ -727,6 +727,7 @@ fn checkpoint_window_preserves_a_slow_reader_and_closes_cleanly() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn trace_schema_indexes_are_required_and_queries_use_them() {
     use crate::presentation::{FactQuery, FactScope};
     let id = ConversationId::new("conv_ab18a567-5190-73a5-8156-2e8693be6392");

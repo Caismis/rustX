@@ -104,6 +104,7 @@ pub struct NamedChanges {
 }
 
 impl NamedChanges {
+    #[must_use]
     pub fn between<T: PartialEq>(
         before: &BTreeMap<String, T>,
         after: &BTreeMap<String, T>,

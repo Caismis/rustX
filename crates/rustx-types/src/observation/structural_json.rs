@@ -825,6 +825,7 @@ fn cached_codec<T>(create: impl FnOnce() -> plan::Plan) -> std::sync::Arc<plan::
         .clone()
 }
 
+#[must_use]
 pub fn codec<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
     cached_codec::<T>(|| {
         let schema =
@@ -832,17 +833,20 @@ pub fn codec<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
         plan::Plan::new(&schema, &schema)
     })
 }
+#[must_use]
 pub fn codec_from_bytes<T: schemars::JsonSchema>(bytes: &[u8]) -> std::sync::Arc<plan::Plan> {
     cached_codec::<T>(|| plan::Plan::from_bytes(bytes))
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
+#[must_use]
 pub fn schema_root<T: schemars::JsonSchema>() -> std::sync::Arc<Value> {
     std::sync::Arc::new(
         serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema"),
     )
 }
 
+#[must_use]
 pub fn root<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
     codec::<T>()
 }
@@ -1474,7 +1478,10 @@ mod tests {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 mod test_seams {
-    use super::*;
+    use super::{
+        BorrowedEncoded, LEGACY_PLAN, LEGACY_PROPERTY_LOOKUP, MAP_KEY_WORK, PROPERTY_WORK,
+        Serialize, Value,
+    };
     pub type PropertyEncoding = (
         Result<Vec<u8>, String>,
         Vec<(Option<bool>, Option<Vec<u8>>)>,

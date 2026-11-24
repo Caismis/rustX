@@ -147,6 +147,7 @@ impl Seal {
             .ok_or_else(invalid)?;
         Ok(expected)
     }
+    #[must_use]
     pub fn verification(&self) -> Verification {
         Verification {
             aggregate: manifest_hash(self.length, self.count),

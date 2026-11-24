@@ -29,6 +29,7 @@ struct CloseState {
 
 impl CloseProbe {
     /// A probe whose close reports an unproven physical settlement.
+    #[must_use]
     pub fn failing(diagnostic: &str) -> Self {
         Self {
             state: Mutex::new(CloseState {
@@ -43,6 +44,7 @@ impl CloseProbe {
     /// returned and before the retirement registry publishes the failure.
     /// This is the deterministic race seam for the generation completion
     /// happens-before contract.
+    #[must_use]
     pub fn failing_before_failure_publication(diagnostic: &str) -> Self {
         Self {
             state: Mutex::new(CloseState {
@@ -55,6 +57,7 @@ impl CloseProbe {
     }
 
     /// A probe whose close parks until [`CloseProbe::release`].
+    #[must_use]
     pub fn parking() -> Self {
         Self {
             state: Mutex::new(CloseState {
@@ -65,6 +68,7 @@ impl CloseProbe {
         }
     }
 
+    #[must_use]
     pub fn parking_with_failure(diagnostic: &str) -> Self {
         Self {
             state: Mutex::new(CloseState {
@@ -1085,6 +1089,7 @@ impl Drop for TaskRequestBarrierGuard {
 
 impl TaskRequestBarrier {
     /// Installs a barrier that parks every `method` request of `server`.
+    #[must_use]
     pub fn install(server: &str, method: &'static str) -> (Arc<Self>, TaskRequestBarrierGuard) {
         Self::install_from(server, method, 1)
     }

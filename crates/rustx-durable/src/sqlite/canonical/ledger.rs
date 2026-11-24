@@ -580,6 +580,7 @@ pub fn append_message_ledger(
 /// Context messages remain durable model history but are deliberately absent
 /// from the normal transcript. Canonical conversation messages,
 /// Assistant generations, and Tool results are visible semantic content.
+#[must_use]
 pub fn transcript_visible_message(message: &MessageBlock) -> bool {
     !matches!(
         message,

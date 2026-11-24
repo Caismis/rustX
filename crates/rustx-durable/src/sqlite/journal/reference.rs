@@ -58,6 +58,7 @@ pub fn require_interaction_envelope<'a>(
     Ok((attempt_id, turn_id))
 }
 
+#[must_use]
 pub fn native_approval_key(id: &rustx_types::tools::types::ToolInvocationId) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(serde_json::to_vec(id).expect("invocation identity"));

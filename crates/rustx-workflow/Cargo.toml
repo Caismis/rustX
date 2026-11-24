@@ -17,3 +17,6 @@ serde_yaml_ng = "0.10.0"
 schemars = { version = "1", features = ["chrono04"] }
 sha2 = "0.10"
 imbl = { version = "7.0.0", features = ["serde"] }
+
+[lints]
+workspace = true

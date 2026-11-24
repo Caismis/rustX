@@ -285,11 +285,13 @@ fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreErro
 // Keep numeric values as guarded expressions too: a naked json_extract can
 // make SQLite fetch the original overflow body instead of its index value.
 const COMPLETION_FIELDS: &str = "CASE WHEN typeof(json_extract(event_json,'$.schema_version'))='integer' THEN json_extract(event_json,'$.schema_version') END,CASE WHEN typeof(json_extract(event_json,'$.conversation_id'))='text' AND octet_length(json_extract(event_json,'$.conversation_id'))<=128 THEN json_extract(event_json,'$.conversation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.activation_id'))='integer' THEN json_extract(event_json,'$.event.activation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.checkpoint_id'))='text' AND octet_length(json_extract(event_json,'$.event.checkpoint_id'))<=1024 THEN json_extract(event_json,'$.event.checkpoint_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.generation'))='integer' THEN json_extract(event_json,'$.event.generation') END";
+#[must_use]
 pub fn completion_index_sql() -> String {
     format!(
         "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE event_kind='compaction_completed'"
     )
 }
+#[must_use]
 pub fn completion_query() -> &'static str {
     static QUERY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         format!(

@@ -10,6 +10,7 @@ const SESSION_PREVIEW_LIMIT: usize = 120;
 /// row shows for an unnamed Session. Non-text content contributes nothing:
 /// a Session opened with only an image has no first line to show, and saying
 /// so with `None` is more honest than inventing one.
+#[must_use]
 pub fn preview_of(message: &UserMessageBlock) -> Option<String> {
     // Only the first normalized 121 characters can affect the exact 120
     // character preview. Stream the native blocks without joining their bodies.

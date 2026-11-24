@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Constructs only finite identity metadata under the Projection boundary.
 /// Full immutable native bodies are source-owned and read independently.
 #[cfg(any(test, feature = "test-hooks"))]
+#[must_use]
 pub fn interaction_header(
     value: &rustx_types::runtime::interaction::RoutedInteraction,
 ) -> super::interaction::RuntimeClientInteractionHeader {

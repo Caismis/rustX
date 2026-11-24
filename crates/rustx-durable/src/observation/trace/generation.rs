@@ -4,6 +4,7 @@ use rustx_types::model::generation_evidence::GenerationEvidence;
 use rustx_types::model::types::ModelUsage;
 
 /// Derives display metrics from settled evidence and this request's usage.
+#[must_use]
 pub fn generation_metrics(
     evidence: GenerationEvidence,
     usage: Option<&ModelUsage>,

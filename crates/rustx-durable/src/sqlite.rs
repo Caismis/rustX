@@ -999,6 +999,7 @@ impl SqliteConversationStore {
             .fetch_add(count, Ordering::SeqCst);
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
         test_support::hidden_context_audit_fixture()
     }

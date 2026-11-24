@@ -17,6 +17,7 @@ thread_local! { static ENABLED: Cell<bool> = const { Cell::new(true) }; }
 
 /// Suspends the full-fold oracle on this thread while the guard lives, for
 /// tests that measure the bounded work of the runtime open path itself.
+#[must_use]
 pub fn suspend_frontier_oracle() -> impl Drop {
     struct Restore(bool);
     impl Drop for Restore {

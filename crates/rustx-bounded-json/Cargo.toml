@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+
+[lints]
+workspace = true

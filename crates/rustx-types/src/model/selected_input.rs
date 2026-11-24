@@ -28,6 +28,7 @@ pub fn take_node_work() -> (usize, usize, usize, usize) {
 pub struct PreparationReads(Option<usize>);
 #[cfg(any(test, feature = "test-fixtures"))]
 impl PreparationReads {
+    #[must_use]
     pub fn new() -> Self {
         let outermost = READ_SCOPE_DEPTH.with(|depth| {
             let previous = depth.get();
@@ -94,6 +95,7 @@ pub fn take_prefix_work() -> (usize, usize) {
 #[cfg(any(test, feature = "test-fixtures"))]
 impl SelectedModelInput {
     /// Test seam: expose the shared manifest for work-bound assertions.
+    #[must_use]
     pub fn manifest(&self) -> &SelectedInputManifest {
         &self.0
     }
@@ -766,6 +768,7 @@ impl SelectedInputManifest {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+    #[must_use]
     pub fn semantic_digest(&self) -> Option<String> {
         self.semantic
             .as_ref()
@@ -899,38 +902,106 @@ fn actual(node: &InputNode, index: usize) -> &ModelInputMessage {
         }
     }
 }
+/// Positions of every occurrence derived from one produced message, carried
+/// forward across immutable input appends so continuation validation only
+/// touches the appended suffix.
+#[derive(Default)]
+struct ContinuationIndex {
+    prefix: crate::model::adapter::correlation::Prefix,
+    positions: imbl::HashMap<crate::runtime::identity::MessageId, imbl::Vector<usize>>,
+}
+/// Incremental SHA-256 of the semantic encoding, carried forward across
+/// appends instead of rehashing the covered prefix.
+#[derive(Default)]
+struct SemanticPrefix {
+    prefix: crate::model::adapter::correlation::Prefix,
+    sha: Sha256,
+}
+/// Provider-independent incremental state carried by a selected input's
+/// lineage (`range`, `messages_with_preparation`): the continuation candidate
+/// index and incremental semantic prefix digest shared by runtime, durable and
+/// adapter validation, plus the engine-owned transient request cache.
+#[derive(Default)]
+pub struct InputPreparation {
+    continuation: ContinuationIndex,
+    semantic: SemanticPrefix,
+    /// Provider-specific request state owned by the engine adapter.
+    pub engine: Option<Box<dyn std::any::Any + Send>>,
+}
+impl std::fmt::Debug for InputPreparation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InputPreparation")
+            .field("covered_items", &self.continuation.prefix.len())
+            .finish_non_exhaustive()
+    }
+}
 /// Shared materialized view of the same ordered occurrence nodes.
 /// Cold provider requests may own actual-only leaves; native persistence requires
 /// their explicit scoped freeze before accepting them as immutable evidence.
 #[derive(Debug, Clone, Default)]
-pub struct SelectedModelInput(
-    pub SelectedInputManifest,
-    Arc<Mutex<Option<Box<dyn std::any::Any + Send>>>>,
-);
+pub struct SelectedModelInput(pub SelectedInputManifest, Arc<Mutex<InputPreparation>>);
 impl PartialEq for SelectedModelInput {
     fn eq(&self, other: &Self) -> bool {
         self.same_input(other)
     }
 }
 impl SelectedModelInput {
-    pub fn preparation(&self) -> &Arc<Mutex<Option<Box<dyn std::any::Any + Send>>>> {
+    #[must_use]
+    pub fn preparation(&self) -> &Arc<Mutex<InputPreparation>> {
         &self.1
+    }
+
+    /// Model positions whose canonical identity is produced by `id`.
+    pub(crate) fn continuation_candidates(
+        &self,
+        id: &crate::runtime::identity::MessageId,
+    ) -> imbl::Vector<usize> {
+        let mut preparation = self.1.lock().expect("input preparation cache");
+        let cache = &mut preparation.continuation;
+        if !cache.prefix.matches(self) {
+            *cache = ContinuationIndex::default();
+        }
+        for (index, message) in self.iter().enumerate().skip(cache.prefix.len()) {
+            if let Some(canonical) = message.canonical_id() {
+                cache
+                    .positions
+                    .entry(canonical.clone())
+                    .or_default()
+                    .push_back(index);
+            }
+            if let ModelInputMessage::Derived(derived) = message {
+                for source in &derived.sources {
+                    cache
+                        .positions
+                        .entry(source.message_id.clone())
+                        .or_default()
+                        .push_back(index);
+                }
+            }
+        }
+        cache.prefix = crate::model::adapter::correlation::Prefix::capture(self);
+        cache.positions.get(id).cloned().unwrap_or_default()
     }
 
     /// SHA-256 of the semantic encoding of the first `count` items.
     #[must_use]
     pub(crate) fn prefix_semantic_fingerprint(&self, count: usize) -> String {
-        use sha2::Digest;
         let prefix = self.range(0..count);
-        let mut sha = sha2::Sha256::new();
-        for message in prefix.iter() {
-            crate::model::types::append_semantic_message(&mut sha, message);
+        let mut preparation = self.1.lock().expect("input preparation cache");
+        let cache = &mut preparation.semantic;
+        if !cache.prefix.matches(&prefix) {
+            *cache = SemanticPrefix::default();
         }
-        format!("{:x}", sha.finalize())
+        for message in prefix.iter().skip(cache.prefix.len()) {
+            crate::model::types::append_semantic_message(&mut cache.sha, message);
+        }
+        cache.prefix = crate::model::adapter::correlation::Prefix::capture(&prefix);
+        format!("{:x}", cache.sha.clone().finalize())
     }
 
     /// Lease one exact actual allocation from this immutable selection.
     #[cfg(any(test, feature = "test-fixtures"))]
+    #[must_use]
     pub fn shared(&self, index: usize) -> Arc<ModelInputMessage> {
         assert!(index < self.len(), "native input index");
         shared_actual(self.0.root.as_ref().expect("nonempty input"), index)
@@ -987,6 +1058,7 @@ impl SelectedModelInput {
     }
     /// Native relationship validation survives only a certified unchanged prefix
     /// followed by the actual producer's new canonical Context messages.
+    #[must_use]
     pub fn follows_native_history(&self, history: &SelectedInputManifest) -> bool {
         let (Some(selected), Some(baseline)) = (&self.0.origin, &history.origin) else {
             return false;
@@ -1169,6 +1241,7 @@ impl SelectedModelInput {
     }
     /// Wire certificates require shared immutable owners. Value equality alone
     /// does not distinguish JSON numbers such as -0.0 and 0.0.
+    #[must_use]
     pub fn shares_prefix(&self, root: Option<&Arc<InputNode>>) -> bool {
         let count = root.map_or(0, |node| node.count);
         count <= self.len() && prefix_equal(self.0.root.as_ref(), root, count, true)
@@ -1262,6 +1335,7 @@ impl SelectedInputManifest {
         SelectedModelInput(self.clone(), Arc::default())
     }
     /// Keep active execution caches out of frozen manifest/snapshot owners.
+    #[must_use]
     pub fn messages_with_preparation(&self, previous: &SelectedModelInput) -> SelectedModelInput {
         SelectedModelInput(self.clone(), previous.1.clone())
     }

@@ -126,6 +126,7 @@ impl CapabilityAvailability {
         }
         std::sync::Arc::make_mut(&mut self.states).insert(source, state)
     }
+    #[must_use]
     pub fn at(&self, ordinal: usize) -> Option<(&ToolSourceId, &CapabilitySourceState)> {
         let key = self.ordinals.get(ordinal)?;
         self.states.get_key_value(key)

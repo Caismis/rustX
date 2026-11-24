@@ -37,6 +37,7 @@ impl PartialEq for PreparedTranscriptRow {
     }
 }
 impl PreparedTranscriptRow {
+    #[must_use]
     pub fn new(conversation: ConversationId, value: Arc<RuntimeClientTranscriptEntry>) -> Self {
         let (body, decoration) = body::Owner::new(conversation, Arc::clone(&value));
         Self(Arc::new(Row {
@@ -48,20 +49,24 @@ impl PreparedTranscriptRow {
     }
     /// Called after the native reader has revalidated body and response proof.
     /// This exact immutable row is shared with current and retained read pages.
+    #[must_use]
     pub fn native_entry(&self) -> Arc<RuntimeClientTranscriptEntry> {
         Arc::clone(&self.0.native)
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn value(&self) -> RuntimeClientTranscriptEntry {
         self.0.body.entry(&self.0.decoration)
     }
     /// Materialize the descriptor body after its exact native bytes are read
     /// again. Tool and response decoration must still come from the current read.
+    #[must_use]
     pub fn undecorated_value(&self) -> RuntimeClientTranscriptEntry {
         self.0.body.undecorated_entry()
     }
     /// Called only after a native reader proved the current body bytes again.
     /// Current response decoration never inherits the older owner's authority.
+    #[must_use]
     pub fn with_decoration(&self, value: &Arc<RuntimeClientTranscriptEntry>) -> Self {
         Self(Arc::new(Row {
             body: self.0.body.clone(),
@@ -71,9 +76,11 @@ impl PreparedTranscriptRow {
         }))
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn same_body(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0.body, &other.0.body)
     }
+    #[must_use]
     pub fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -155,6 +162,7 @@ impl PartialEq for PreparedTranscriptHead {
     }
 }
 impl PreparedTranscriptHead {
+    #[must_use]
     pub fn new(rows: Vec<PreparedTranscriptRow>) -> Self {
         let total = rows.len();
         Self(Arc::new(Head {
@@ -163,6 +171,7 @@ impl PreparedTranscriptHead {
             prepared: OnceLock::new(),
         }))
     }
+    #[must_use]
     pub fn from_entries(
         conversation: &ConversationId,
         entries: &[Arc<RuntimeClientTranscriptEntry>],
@@ -237,6 +246,7 @@ impl PreparedTranscriptHead {
             *self = next;
         }
     }
+    #[must_use]
     pub fn same_owners(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
             || (self.0.total == other.0.total
@@ -252,6 +262,7 @@ impl PreparedTranscriptHead {
 
 pub struct CapturedTranscript<'a>(Cow<'a, CapturedRows>);
 impl CapturedTranscript<'_> {
+    #[must_use]
     pub fn into_entries(self) -> Vec<Arc<RuntimeClientTranscriptEntry>> {
         match self.0 {
             Cow::Borrowed(rows) => rows.iter().map(|row| row.entry()).collect(),

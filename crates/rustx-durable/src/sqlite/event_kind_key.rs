@@ -30,6 +30,7 @@ macro_rules! sql {
 pub const NATIVE: &str = sql!("event_kind");
 pub const OBSERVATION: &str = sql!("observation_kind");
 
+#[must_use]
 pub fn parameter(kind: &str) -> Value {
     let code = match kind {
         "inbound_turn_adopted" => 1,

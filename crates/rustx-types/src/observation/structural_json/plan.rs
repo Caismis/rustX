@@ -32,6 +32,7 @@ pub enum WireNumber {
 
 /// The numeric domain is derived once from the Rust-owned schema, including
 /// the explicit bound that distinguishes exact identities from safe quantities.
+#[must_use]
 pub fn unsigned(schema: &Value) -> Unsigned {
     match schema["format"].as_str() {
         Some("uint64")
@@ -186,13 +187,16 @@ struct Builder {
     shapes: HashMap<String, u32>,
 }
 impl Plan {
+    #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
         rmp_serde::from_slice(bytes).expect("generated numeric codec descriptor")
     }
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         rmp_serde::to_vec(self).expect("numeric codec descriptor")
     }
 
+    #[must_use]
     pub fn new(schema: &Value, root: &Value) -> Self {
         let mut builder = Builder {
             nodes: vec![Node::default()],
@@ -211,6 +215,7 @@ impl Plan {
             root,
         }
     }
+    #[must_use]
     pub fn root(&self) -> View<'_> {
         View::Compiled(self, self.root)
     }
@@ -341,6 +346,7 @@ pub enum View<'a> {
     },
 }
 impl<'a> View<'a> {
+    #[must_use]
     pub fn property_named(self, key: &str) -> Option<Self> {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
@@ -352,6 +358,7 @@ impl<'a> View<'a> {
                 .map(|schema| Self::Interpreted { schema, root }),
         }
     }
+    #[must_use]
     pub fn additional(self) -> Option<Self> {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
@@ -364,6 +371,7 @@ impl<'a> View<'a> {
                 .map(|schema| Self::Interpreted { schema, root }),
         }
     }
+    #[must_use]
     pub fn array_item(self, index: usize) -> Option<Self> {
         match self {
             Self::Compiled(plan, node) => {
@@ -385,6 +393,7 @@ impl<'a> View<'a> {
             }
         }
     }
+    #[must_use]
     pub fn matches_tagged(self, value: &Value) -> bool {
         let mut tagged = false;
         let mut index = 0;
@@ -486,6 +495,7 @@ impl<'a> View<'a> {
         }
         Ok(())
     }
+    #[must_use]
     pub fn is_null(self) -> bool {
         match self {
             Self::Compiled(_, index) => index == 0,
@@ -493,6 +503,7 @@ impl<'a> View<'a> {
             Self::Interpreted { schema, .. } => schema.is_null(),
         }
     }
+    #[must_use]
     pub fn unsigned(self) -> Unsigned {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize].unsigned,
@@ -500,6 +511,7 @@ impl<'a> View<'a> {
             Self::Interpreted { schema, root } => unsigned(resolve(schema, root)),
         }
     }
+    #[must_use]
     pub fn signed_safe(self) -> bool {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize].signed_safe,
@@ -510,6 +522,7 @@ impl<'a> View<'a> {
             ),
         }
     }
+    #[must_use]
     pub fn property(self, index: usize) -> Option<(&'a str, Self)> {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize]
@@ -530,6 +543,7 @@ impl<'a> View<'a> {
                 .map(|(name, schema)| (name.as_str(), Self::Interpreted { schema, root })),
         }
     }
+    #[must_use]
     pub fn tag(self, key: &str) -> Option<&'a Value> {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize]
@@ -542,6 +556,7 @@ impl<'a> View<'a> {
             }
         }
     }
+    #[must_use]
     pub fn branch(self, kind: usize, index: usize) -> Option<Self> {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize].branches[kind]
@@ -556,6 +571,7 @@ impl<'a> View<'a> {
                 .map(|schema| Self::Interpreted { schema, root }),
         }
     }
+    #[must_use]
     pub fn child(self, key: Option<&str>) -> Self {
         match self {
             Self::Compiled(plan, index) => {
@@ -637,6 +653,7 @@ impl<'a> View<'a> {
         }
         Ok(value)
     }
+    #[must_use]
     pub fn has_wire_tag(self, key: &str) -> bool {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
@@ -662,9 +679,11 @@ impl<'a> View<'a> {
             }
         }
     }
+    #[must_use]
     pub fn wire_variant(self, key: &str, value: &Value) -> Option<Self> {
         self.wire_variant_matching(key, &|expected| expected == value)
     }
+    #[must_use]
     pub fn wire_variant_str(self, key: &str, value: &str) -> Option<Self> {
         self.wire_variant_matching(key, &|expected| expected.as_str() == Some(value))
     }
@@ -684,6 +703,7 @@ impl<'a> View<'a> {
         }
         None
     }
+    #[must_use]
     pub fn wire_element(self) -> Self {
         let (plan, index) = match self {
             Self::Compiled(plan, index) => (plan, index),
@@ -708,6 +728,7 @@ impl<'a> View<'a> {
         }
         Self::Compiled(plan, 0)
     }
+    #[must_use]
     pub fn element(self, index: usize) -> Self {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize]

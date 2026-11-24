@@ -21,6 +21,7 @@ use std::sync::Arc;
 use crate::{ConversationStore, ConversationStoreError, TranscriptCommitReceipt, TranscriptCursor};
 
 /// Public input IDs are bounded ASCII tokens supplied by an app-server client.
+#[must_use]
 pub fn valid_public_input_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
@@ -282,11 +283,13 @@ impl ConversationStoreBinding {
     }
 
     /// Returns the full authority to the owning conversation runtime.
+    #[must_use]
     pub fn full_store(&self) -> Arc<dyn ConversationStore> {
         Arc::clone(&self.store)
     }
 
     /// Derives the narrow producer capability from this same authority.
+    #[must_use]
     pub fn inbound_capability(&self) -> Arc<dyn ConversationInboundCapability> {
         Arc::new(StoreInboundCapability {
             store: Arc::clone(&self.store),

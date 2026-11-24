@@ -141,6 +141,7 @@ pub fn bounded_clone<T: Serialize + DeserializeOwned>(value: &T, limit: usize) -
 }
 /// Opaque JSON is never rewritten with the typed protocol's integer codec.
 /// A browser-unsafe integer is deferred to its exact authoritative UTF-8 bytes.
+#[must_use]
 pub fn bounded_json_fits(value: &serde_json::Value, limit: usize) -> bool {
     fn safe(value: &serde_json::Value, remaining: &mut usize) -> bool {
         if *remaining == 0 {
@@ -174,6 +175,7 @@ pub fn bounded_json_fits(value: &serde_json::Value, limit: usize) -> bool {
         }
 }
 
+#[must_use]
 pub fn bounded_json_value(value: &serde_json::Value, limit: usize) -> Option<serde_json::Value> {
     bounded_json_fits(value, limit).then(|| value.clone())
 }

@@ -114,6 +114,7 @@ pub fn summary_prepared(
         },
     )
 }
+#[must_use]
 pub fn required(event: &RuntimeEventEnvelope) -> bool {
     if event.attempt_id.is_none() {
         return false;
@@ -854,6 +855,7 @@ pub fn failure_at(
     crate::sqlite::content::attempt_failure_range(connection, event, offset, end)
 }
 
+#[must_use]
 pub fn finite_finish_reason(
     reason: &rustx_types::model::finish::ModelFinishReason,
 ) -> (rustx_types::model::finish::ModelFinishReason, bool) {

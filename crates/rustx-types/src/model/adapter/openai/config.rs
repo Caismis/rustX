@@ -58,6 +58,7 @@ impl OpenAiAdapterConfig {
     }
 
     /// Consumes the configuration into its parts.
+    #[must_use]
     pub fn into_parts(self) -> (String, String, Option<ReqwestClient>) {
         (self.api_key, self.api_base, self.http_client)
     }

@@ -15,6 +15,7 @@ pub struct RuntimeClientContextOccupancy {
     pub breakdown: rustx_types::context::occupancy::ContextBreakdown,
 }
 impl RuntimeClientContextOccupancy {
+    #[must_use]
     pub fn from_native(
         value: &rustx_types::context::occupancy::ContextOccupancy,
         model_source: Option<String>,

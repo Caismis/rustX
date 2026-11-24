@@ -84,6 +84,7 @@ pub struct ParseFailure {
     detail: String,
 }
 impl ParseFailure {
+    #[must_use]
     pub fn into_detail(self) -> String {
         self.detail
     }

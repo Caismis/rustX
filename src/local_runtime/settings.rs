@@ -799,7 +799,10 @@ fn child(
         reason = "the path names the directory in test durability traces"
     )
 )]
-fn sync(directory: &std::os::fd::OwnedFd, path: &Path) -> std::io::Result<()> {
+pub(in crate::local_runtime) fn sync(
+    directory: &std::os::fd::OwnedFd,
+    path: &Path,
+) -> std::io::Result<()> {
     #[cfg(test)]
     durability::syncing(path);
     #[cfg(test)]

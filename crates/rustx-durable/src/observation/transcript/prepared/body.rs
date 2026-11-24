@@ -164,9 +164,11 @@ impl Owner {
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn entry(&self, decoration: &Decoration) -> RuntimeClientTranscriptEntry {
         let mut value = self.value.as_ref().clone();
-        value.turn_process = decoration.turn_process.clone();
+        value.turn_process.clone_from(&decoration.turn_process);
         value.response_pending = decoration.response_pending;
-        value.completed_response = decoration.completed_response.clone();
+        value
+            .completed_response
+            .clone_from(&decoration.completed_response);
         value
     }
     pub fn undecorated_entry(&self) -> RuntimeClientTranscriptEntry {

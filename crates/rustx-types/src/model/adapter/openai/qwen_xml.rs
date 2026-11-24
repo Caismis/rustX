@@ -125,6 +125,7 @@ pub enum QwenReservedEnvelope {
 impl QwenReservedEnvelope {
     /// The envelope's shape, for the runtime diagnostic. It names the
     /// dialect construct rather than echoing the model's own bytes.
+    #[must_use]
     pub const fn shape(self) -> &'static str {
         match self {
             Self::Function => "<function=\u{2026}>\u{2026}</function>",
@@ -283,6 +284,7 @@ impl EmissionScan {
 /// when the output merely mentions, quotes, or discusses the dialect. The
 /// scan is a single bounded forward pass with constant state: it never
 /// backtracks and never materializes the candidate regions.
+#[must_use]
 pub fn tool_protocol_emission(output: &str) -> Option<QwenReservedEnvelope> {
     let mut scan = EmissionScan::default();
     for line in output.lines() {

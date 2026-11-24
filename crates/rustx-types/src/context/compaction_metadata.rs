@@ -45,6 +45,7 @@ use crate::tools::native::file_ops::{NativeFileOperation, native_file_operation}
 /// The merge is lineage set semantics owned by
 /// [`CompactionSummaryMetadata::accumulate`]: union, then modification wins
 /// over read, in deterministic ascending order.
+#[must_use]
 pub fn retired_span_metadata(retired: &[MessageBlock]) -> CompactionSummaryMetadata {
     let mut new_read = Vec::new();
     let mut new_modified = Vec::new();
@@ -75,6 +76,7 @@ pub fn retired_span_metadata(retired: &[MessageBlock]) -> CompactionSummaryMetad
 /// is omitted entirely. They are model-visible context, never a metadata
 /// authority: recovery and lineage read the typed metadata, and nothing ever
 /// parses these sections back into facts.
+#[must_use]
 pub fn render_summary_text(body: &str, metadata: &CompactionSummaryMetadata) -> String {
     let mut text = body.trim_end().to_owned();
     render_section(&mut text, "read-files", metadata.read_files());

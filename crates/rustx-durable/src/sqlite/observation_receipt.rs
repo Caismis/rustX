@@ -404,6 +404,7 @@ pub fn request_start(
         },
     )
 }
+#[must_use]
 pub fn positive_status(
     status: &rustx_types::tools::types::ToolExecutionStatus,
 ) -> rustx_types::tools::types::ToolExecutionStatus {

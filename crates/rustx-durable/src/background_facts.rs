@@ -12,6 +12,7 @@ use rustx_types::{
     tools::background::BackgroundLifecycle,
 };
 
+#[must_use]
 pub fn recovery_terminal_publication(
     conversation_id: &ConversationId,
     execution_id: &ToolExecutionId,
@@ -51,6 +52,7 @@ pub fn recovery_terminal_publication(
     (inbound_draft(notification, correlation), event)
 }
 
+#[must_use]
 pub fn background_publication_event(
     conversation_id: &ConversationId,
     event_id: &EventId,
@@ -78,6 +80,7 @@ pub fn background_publication_event(
     }
 }
 
+#[must_use]
 pub fn inbound_draft(notification: UserMessageBlock, correlation: String) -> InboundDraft {
     let timestamp = notification
         .timestamp
@@ -92,6 +95,7 @@ pub fn inbound_draft(notification: UserMessageBlock, correlation: String) -> Inb
     }
 }
 
+#[must_use]
 pub fn background_terminal_event(
     conversation_id: &ConversationId,
     event_id: &EventId,

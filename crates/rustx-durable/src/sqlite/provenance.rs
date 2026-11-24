@@ -262,6 +262,7 @@ fn payload_digest(kind: &str, ordinal: i64, payload: &str) -> String {
     digest(&format!("rustx-inherited-{kind}\n{ordinal}\n{payload}"))
 }
 
+#[must_use]
 pub fn counts_digest(history: &str, turns: i64, responses: i64) -> String {
     digest(&format!(
         "rustx-inherited-counts\n{history}\n{turns}\n{responses}"

@@ -16,6 +16,7 @@ impl Drop for CompactionCaptureFault {
     }
 }
 #[cfg(any(test, feature = "test-hooks"))]
+#[must_use]
 pub fn compaction_capture_fault() -> CompactionCaptureFault {
     FAIL_COMPACTION_CAPTURE.with(|fault| assert!(!fault.replace(true)));
     CompactionCaptureFault

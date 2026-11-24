@@ -62,6 +62,7 @@ pub struct AutomaticSkillRoot {
 }
 
 impl AutomaticSkillRoot {
+    #[must_use]
     pub fn user(home: &Path) -> Self {
         Self {
             source: SkillSource::User,
@@ -69,6 +70,7 @@ impl AutomaticSkillRoot {
         }
     }
 
+    #[must_use]
     pub fn workspace(workspace: &Path) -> Self {
         Self {
             source: SkillSource::Workspace,

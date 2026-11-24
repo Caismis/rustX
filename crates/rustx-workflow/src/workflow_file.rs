@@ -168,6 +168,7 @@ fn omit_ordinary_ports(block: &mut serde_yaml_ng::Value) {
     }
 }
 
+#[must_use]
 pub fn yaml_expansion_within_bound(bytes: &[u8]) -> bool {
     expansion::within_bound(bytes)
 }

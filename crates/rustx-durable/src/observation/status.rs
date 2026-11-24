@@ -193,10 +193,12 @@ pub struct PostToolBatchOpportunityView {
 /// Builds the structured external status view from the exact composed
 /// status observation; the rendered representation derives from the same
 /// composition through the one canonical renderer.
+#[must_use]
 pub fn status_view(observation: &AgentStatusObservation) -> AgentStatusView {
     prepared_status_view(observation, None)
 }
 /// Prepare finite display metadata before entering the projection synchronization boundary.
+#[must_use]
 pub fn prepared_status_view(
     observation: &AgentStatusObservation,
     source: Option<&crate::StatusObservationSource>,
@@ -211,6 +213,7 @@ pub fn prepared_status_view(
         source,
     )
 }
+#[must_use]
 pub fn prepared_status(
     attempt_id: &rustx_types::runtime::identity::AttemptId,
     turn: u32,

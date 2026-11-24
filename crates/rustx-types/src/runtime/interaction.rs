@@ -85,6 +85,7 @@ impl InteractionExecution {
             Self::Scheduled { .. } => None,
         }
     }
+    #[must_use]
     pub fn namespace(&self) -> String {
         match self {
             Self::Attempt { attempt_id, .. } => format!("attempt:{attempt_id}"),
@@ -98,6 +99,7 @@ impl InteractionExecution {
             },
         }
     }
+    #[must_use]
     pub fn interaction_id(&self, ordinal: u64) -> InteractionId {
         match self {
             Self::Attempt { attempt_id, .. } => InteractionId::for_attempt(attempt_id, ordinal),
@@ -311,6 +313,7 @@ pub enum InteractionOutcome {
 }
 
 impl InteractionOutcome {
+    #[must_use]
     pub fn interrupted(cancellation: &ExecutionCancellation) -> Self {
         match cancellation.native_cause() {
             crate::tools::deadline::ToolCancellationCause::Attempt(reason) => {

@@ -695,6 +695,7 @@ pub fn validate_snapshot_identity(
 /// Binds normalized metadata to the exact immutable selected-input root.
 /// This is an internal storage integrity digest, not a replacement for the
 /// original flat provider-semantic or canonical-body SHA identities.
+#[must_use]
 pub fn stored_snapshot_digest(json: &str, root: Option<manifest::NodeRef>) -> String {
     let mut digest = Sha256::new();
     digest.update(b"rustx-normalized-request-v1\0");

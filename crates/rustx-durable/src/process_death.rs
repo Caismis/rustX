@@ -46,7 +46,7 @@
 //! In each case the parked thread owns the only path that can advance that
 //! plane, so the durable world is frozen for the same reason. The Agent Loop
 //! also exposes one test-only attempt-local boundary,
-//! `after:post_tool_batch_marker`, after a canonical ToolResult batch has
+//! `after:post_tool_batch_marker`, after a canonical `ToolResult` batch has
 //! committed and before the next primary-step preparation. That boundary
 //! parks the loop before it can do more work; unlike the durable boundaries,
 //! its purpose is to prove that process-local eligibility is not reconstructed
@@ -192,6 +192,7 @@ mod imp {
     /// # Panics
     ///
     /// Panics when the child was started without a control socket.
+    #[must_use]
     pub fn recv_line() -> Option<String> {
         let control = control().expect("a FND-06 child owns a control socket");
         let mut reader = control.reader.lock().expect("FND-06 control reader lock");

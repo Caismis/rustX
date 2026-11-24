@@ -171,6 +171,7 @@ fn message_preview(
 /// and runtime/external notifications remain ineligible in every lineage.
 pub const OPENING_PROMPT_FILTER: &str = "EXISTS (SELECT 1 FROM transcript_entries oh INDEXED BY transcript_entries_ledger_idx WHERE oh.ledger_position=l.position AND oh.reference_kind='message' AND oh.reference_id=l.message_id AND json_extract(oh.header_json,'$.opening_prompt')=1)";
 
+#[must_use]
 pub fn local_prompt_sql() -> String {
     adoption_prompt_sql(OPENING_PROMPT_FILTER)
 }

@@ -43,6 +43,7 @@ pub struct ModelTurnStartCommit {
 impl ModelTurnStartCommit {
     /// Proves the immutable prepared values are precisely those validated at commit.
     /// This proof does not reload mutable current history after the start frontier.
+    #[must_use]
     pub fn accepts_prepared(
         &self,
         snapshot: &RequestSnapshot,

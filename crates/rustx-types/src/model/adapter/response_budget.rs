@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 
 pub const AUXILIARY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
+#[must_use]
 pub fn bounded(response: reqwest::Response, limit: usize) -> reqwest::Response {
     let status = response.status();
     let version = response.version();

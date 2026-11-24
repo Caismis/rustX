@@ -11,12 +11,15 @@ pub struct RuntimeClientToolOccurrence {
     pub locator: crate::observation::content::CanonicalContentLocator,
     pub block_index: ContentBlockIndex,
 }
+#[must_use]
 pub fn inline_tool_id(id: &ToolId) -> Option<ToolId> {
     (id.as_str().len() <= 256).then(|| id.clone())
 }
+#[must_use]
 pub fn inline_message_id(identity: &MessageId) -> Option<MessageId> {
     (identity.as_str().len() <= 256).then(|| identity.clone())
 }
+#[must_use]
 pub fn inline_call_id(id: &ToolCallId) -> Option<ToolCallId> {
     (id.as_str().len() <= 256).then(|| id.clone())
 }
@@ -221,6 +224,7 @@ fn tool_state(
     };
     Ok(value)
 }
+#[must_use]
 pub fn has_result_body(result: &rustx_types::tools::types::ToolExecutionResult) -> bool {
     !result.content.is_empty()
         || !result.artifacts.is_empty()
@@ -235,6 +239,7 @@ pub fn defer_result(result: &mut rustx_types::tools::types::ToolExecutionResult)
     result.workflow = None;
     result.managed_output = None;
 }
+#[must_use]
 pub fn content(
     header: &NativeToolObservationHeader,
     view: &ForegroundToolExecution,
@@ -310,6 +315,7 @@ pub fn content(
     }
     result
 }
+#[must_use]
 pub fn collections(header: &NativeToolObservationHeader) -> Vec<super::cut::CollectionFrontier> {
     let Some(result) = header.committed_result.as_ref() else {
         return Vec::new();

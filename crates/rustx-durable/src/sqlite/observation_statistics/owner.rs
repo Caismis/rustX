@@ -82,6 +82,7 @@ impl FoldCache {
         }))
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn uninstalled() -> Arc<Self> {
         Arc::new(Self {
             epoch: AtomicU64::new(0),

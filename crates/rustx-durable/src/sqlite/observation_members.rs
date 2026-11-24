@@ -74,6 +74,7 @@ pub fn members_prepared(
         },
     )
 }
+#[must_use]
 pub fn requires_members(event: &RuntimeEventEnvelope) -> bool {
     event.attempt_id.is_some()
         && matches!(

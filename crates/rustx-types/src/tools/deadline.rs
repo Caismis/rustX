@@ -254,6 +254,7 @@ pub enum ToolSettlementCertainty {
 
 /// The absolute monotonic-clock deadline `duration` after `now_millis`,
 /// saturating at the representable maximum.
+#[must_use]
 pub fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
     let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     now_millis.saturating_add(millis)

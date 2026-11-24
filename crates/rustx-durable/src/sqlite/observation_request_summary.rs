@@ -87,6 +87,7 @@ fn value_digest(hash: &mut Sha256, value: &serde_json::Value) {
     }
 }
 
+#[must_use]
 pub fn tools_digest(tools: &[rustx_types::tools::types::ModelToolDefinition]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update((tools.len() as u64).to_le_bytes());

@@ -1531,6 +1531,7 @@ pub fn append_assistant_history_fixture(
 
 pub const INHERITED_OCCUPANCY_SQL: &str = "SELECT s.bootstrap_initialized,b.message_count,b.history_digest,b.occupancy_json,b.occupancy_digest FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1";
 
+#[must_use]
 pub fn inherited_occupancy_digest(count: u64, history_digest: &str, occupancy: &str) -> String {
     use std::fmt::Write as _;
     let mut hasher = Sha256::new();

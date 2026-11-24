@@ -121,6 +121,7 @@ where
 }
 impl<T> MetadataFragment<T> {
     #[cfg(feature = "issue-387-profile")]
+    #[must_use]
     pub fn allocation_identity(&self) -> (usize, usize) {
         (
             Arc::as_ptr(&self.0) as usize,
@@ -129,14 +130,17 @@ impl<T> MetadataFragment<T> {
     }
 
     #[cfg(feature = "issue-387-profile")]
+    #[must_use]
     pub fn prepared_alternate(&self) -> Option<&Self> {
         self.0.resolved.get()
     }
 
+    #[must_use]
     pub fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn owner_count(&self) -> usize {
         Arc::strong_count(&self.0)
     }
@@ -147,11 +151,13 @@ impl<T> MetadataFragment<T> {
     }
 }
 impl<T: Clone> MetadataFragment<T> {
+    #[must_use]
     pub fn into_owned(self) -> T {
         Arc::try_unwrap(self.0).map_or_else(|owner| owner.value.clone(), |owner| owner.value)
     }
 }
 impl MetadataFragment<ContentBinding> {
+    #[must_use]
     pub fn resolve(&self, reference: &Arc<crate::observation::content::ContentRef>) -> Self {
         if self.content_ref == *reference {
             return self.clone();
@@ -179,6 +185,7 @@ pub struct Size {
     pub exact: Option<usize>,
 }
 impl<T: Serialize + schemars::JsonSchema> MetadataFragment<T> {
+    #[must_use]
     pub fn size(&self) -> Size {
         *self.0.size.get_or_init(|| {
             #[cfg(any(test, feature = "test-hooks"))]

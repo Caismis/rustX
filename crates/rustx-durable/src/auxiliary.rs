@@ -21,6 +21,7 @@ pub struct AuxiliaryTitleSourceBinding {
     pub text: String,
 }
 impl AuxiliaryTitleSourceBinding {
+    #[must_use]
     pub fn new(source: &crate::store::canonical::FirstHumanSource) -> Option<Self> {
         (source.local && source.text.is_some()).then(|| Self {
             conversation_id: source.conversation_id.clone(),
@@ -173,6 +174,7 @@ pub fn settlement_event_id(
     Ok(value)
 }
 
+#[must_use]
 pub fn request_terminal_event_id(request_id: &RequestId, completed: bool) -> EventId {
     EventId::new(format!(
         "auxiliary-request-{}:{request_id}",
@@ -180,10 +182,12 @@ pub fn request_terminal_event_id(request_id: &RequestId, completed: bool) -> Eve
     ))
 }
 
+#[must_use]
 pub fn call_settled_event_id(call_id: &AuxiliaryCallId) -> EventId {
     EventId::new(format!("auxiliary-call-settled:{call_id}"))
 }
 
+#[must_use]
 pub fn retry_event_id(request_id: &RequestId) -> EventId {
     EventId::new(format!("auxiliary-retry-scheduled:{request_id}"))
 }

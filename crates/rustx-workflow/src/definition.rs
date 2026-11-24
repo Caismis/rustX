@@ -220,6 +220,7 @@ pub struct WorkflowReturnOutput {
     pub value_selector: Vec<String>,
 }
 
+#[must_use]
 pub fn empty_object_schema() -> Value {
     serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false})
 }
@@ -322,6 +323,7 @@ impl WorkflowVarType {
 }
 
 /// The value of a Loop: each of its variables by label.
+#[must_use]
 pub fn loop_variables_schema(variables: &[WorkflowLoopVariable]) -> Value {
     serde_json::json!({
         "type": "object",
@@ -802,6 +804,7 @@ where
 }
 
 /// The default total foreground lifetime of one workflow run (10 minutes).
+#[must_use]
 pub const fn default_workflow_timeout_ms() -> u64 {
     600_000
 }

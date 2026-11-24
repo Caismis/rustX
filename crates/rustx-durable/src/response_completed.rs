@@ -232,6 +232,7 @@ fn decorate_projection(
     Ok(())
 }
 
+#[must_use]
 pub fn response_page_selections(
     page: &RuntimeClientTranscriptPage,
 ) -> Vec<crate::observation::ResponsePageSelection> {
@@ -638,6 +639,7 @@ fn inherited_response_view(
     Ok(inherited_response_view_at(response, surface_revision))
 }
 
+#[must_use]
 pub fn inherited_response_view_at(
     response: crate::observation::InheritedResponseSummary,
     surface_revision: SurfaceRevision,
@@ -951,6 +953,7 @@ pub fn observed_response(
         }
     }
 }
+#[must_use]
 pub fn completed_response_view(
     conversation_id: &rustx_identity::ConversationId,
     summary: crate::observation::AttemptExecutionSummary,
@@ -1297,6 +1300,7 @@ fn process_view(
     }))
 }
 
+#[must_use]
 pub fn identity_selection(domain: &str) -> Option<u64> {
     domain
         .strip_prefix("transcript.entries.")?

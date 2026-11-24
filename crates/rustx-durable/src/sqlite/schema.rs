@@ -1052,6 +1052,7 @@ pub fn bind_identity(
 }
 
 impl SqliteConversationStore {
+    #[must_use]
     pub fn with_lifecycle(mut self, guard: Arc<dyn crate::sqlite::OwnershipLock>) -> Self {
         self.lifecycle = Some(guard);
         self

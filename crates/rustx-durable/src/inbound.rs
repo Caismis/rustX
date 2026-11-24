@@ -90,6 +90,7 @@ impl InboundItem {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    #[must_use]
     pub fn from_observation_header(
         revision: u64,
         sequence: u64,
@@ -172,7 +173,6 @@ impl InboundBatch {
     }
 
     /// Consumes the batch and returns its items in order.
-    #[must_use]
     pub fn into_items(self) -> Vec<InboundItem> {
         self.items
     }

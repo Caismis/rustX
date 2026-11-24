@@ -169,14 +169,14 @@ fn read_cut_map_certificates_reuse_unchanged_roots_and_invalidate_mutation() {
     let wire_before = wire(&original);
     value.revision += 1;
     value.through += 1;
-    value.size();
+    let _ = value.size();
     assert_eq!(
         take_work(),
         0,
         "changing only the cut header does not rewalk either map"
     );
     value.domain_revisions.insert("b".into(), u64::MAX);
-    value.size();
+    let _ = value.size();
     assert_eq!(take_work(), 1, "only the changed map is measured again");
     assert_eq!(original.size(), before);
     assert_eq!(wire(&original), wire_before);
@@ -190,7 +190,7 @@ fn read_cut_map_certificates_reuse_unchanged_roots_and_invalidate_mutation() {
             total: 4,
         },
     );
-    value.size();
+    let _ = value.size();
     take_work();
     value.collection_cuts.insert(
         "new".into(),
@@ -199,7 +199,7 @@ fn read_cut_map_certificates_reuse_unchanged_roots_and_invalidate_mutation() {
             total: 6,
         },
     );
-    value.size();
+    let _ = value.size();
     assert_eq!(
         take_work(),
         1,

@@ -102,6 +102,7 @@ impl ToolAssociationHistory {
             &node.value
         })
     }
+    #[must_use]
     pub fn same_prefix(&self, other: &Self) -> bool {
         match (&self.head, &other.head) {
             (None, None) => true,
@@ -161,6 +162,7 @@ impl ToolAssociationHistory {
         self.head = Some(node);
     }
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn native_summary_entries(&self) -> usize {
         self.native
             .lock()
@@ -259,10 +261,12 @@ impl FromIterator<HistoricalToolAssociation> for ToolAssociationHistory {
         history
     }
 }
+#[must_use]
 pub fn origin_key(origin: &ReplayOrigin) -> [u8; 32] {
     let bytes = serde_json::to_vec(origin).expect("replay origin serializes");
     Sha256::digest(bytes).into()
 }
+#[must_use]
 pub fn valid_native_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
@@ -270,6 +274,7 @@ pub fn valid_native_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
+#[must_use]
 pub fn native_origins(
     message: &rustx_types::model::projected::ModelMessageView<'_>,
 ) -> Arc<Vec<[u8; 32]>> {
@@ -310,6 +315,7 @@ pub struct AssociationCoordinates {
     pub wire: Option<WirePolicy>,
 }
 impl AssociationCoordinates {
+    #[must_use]
     pub fn position(&self, index: u32) -> u32 {
         index + u32::from(self.inserted_at.is_some_and(|at| index >= at))
     }

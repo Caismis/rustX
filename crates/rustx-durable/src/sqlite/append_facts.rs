@@ -92,6 +92,7 @@ pub struct Aggregates {
     pub members: Option<Captured<crate::observation::AttemptMemberCounts>>,
 }
 impl Aggregates {
+    #[must_use]
     pub fn member_anchor(&self) -> Option<u64> {
         self.members
             .as_ref()

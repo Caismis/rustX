@@ -66,6 +66,7 @@ struct Header<'a> {
     source_cut: &'a Option<crate::observation::ObservationReadCut>,
 }
 impl CheckpointReadCut {
+    #[must_use]
     pub fn size(&self) -> Size {
         // Deliberately list all public fields: adding a field requires deciding
         // how its exact encoding and safe-integer charge are composed.

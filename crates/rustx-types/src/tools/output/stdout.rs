@@ -14,6 +14,7 @@ struct State {
 }
 
 impl BoundedStdoutCapture {
+    #[must_use]
     pub fn new(limit: usize) -> Self {
         Self(Arc::new(Mutex::new(State {
             bytes: Vec::new(),

@@ -155,6 +155,7 @@ impl LifecycleAdmission {
     /// semantic state. Native configuration preparation and adoption acquire
     /// their own active admission. Close/observer settlement releases this
     /// guard, so drain still cannot publish quiescence early.
+    #[must_use]
     pub fn into_resident_resource(mut self) -> Self {
         let boundary = self
             .inner
@@ -338,6 +339,7 @@ impl ConversationLifecycle {
 
     /// A change token, never a copy of subsystem ownership. An idle probe
     /// must inspect native owners and then validate this token.
+    #[must_use]
     pub fn idle_epoch(&self) -> Option<u64> {
         // An idle probe may run under the coordinator. A writer holding this
         // boundary is busy; waiting for it would also park failure/control
@@ -353,6 +355,7 @@ impl ConversationLifecycle {
 
     /// The native idle claim closes autonomous admission only if no owner
     /// entered since the probe. All admission increments share this boundary.
+    #[must_use]
     pub fn begin_idle_drain(&self, epoch: u64) -> bool {
         let Ok(_boundary) = self.inner.commit_boundary.try_lock() else {
             return false;
@@ -718,11 +721,13 @@ pub enum DurableOperation {
 impl DurableOperation {
     /// Whether a failure of this operation is a transient storage failure
     /// that earns one bounded retry.
+    #[must_use]
     pub fn is_transient(self) -> bool {
         matches!(self, Self::SelectPendingBatch | Self::AdoptPendingBatch)
     }
 
     /// The stable diagnostic name of the operation.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SelectPendingBatch => "select_pending_batch",

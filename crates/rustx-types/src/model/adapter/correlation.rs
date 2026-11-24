@@ -27,17 +27,21 @@ pub struct Prefix {
     root: Option<Arc<InputNode>>,
 }
 impl Prefix {
+    #[must_use]
     pub fn capture(input: &SelectedModelInput) -> Self {
         Self {
             root: input.0.root.clone(),
         }
     }
+    #[must_use]
     pub fn len(&self) -> usize {
         self.root.as_ref().map_or(0, |node| node.count)
     }
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    #[must_use]
     pub fn matches(&self, input: &SelectedModelInput) -> bool {
         input.shares_prefix(self.root.as_ref())
     }
@@ -122,6 +126,7 @@ pub fn prepare_plan(
     plan::prepare(slot, request, boundary)
 }
 
+#[must_use]
 pub fn is_stored(request: &crate::model::types::ModelRequest) -> bool {
     request.protocol() == ModelProtocol::OpenAiResponses
         && matches!(
@@ -287,6 +292,7 @@ mod tests {
     }
 }
 
+#[must_use]
 pub fn resolve_wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
     use sha2::{Digest, Sha256};
     let mut labels = wire_labels(raw);
@@ -316,6 +322,7 @@ pub fn resolve_wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<Strin
     labels
 }
 
+#[must_use]
 pub fn wire_labels(raw: &[String]) -> Vec<String> {
     let mut remaining = std::collections::BTreeMap::<&str, usize>::new();
     for id in raw {
@@ -343,6 +350,7 @@ pub fn wire_labels(raw: &[String]) -> Vec<String> {
         .collect()
 }
 
+#[must_use]
 pub fn valid_wire_id(id: &str, protocol: ModelProtocol) -> bool {
     let limit = if protocol == ModelProtocol::OpenAiChatCompletions {
         40

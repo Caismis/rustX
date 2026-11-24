@@ -71,6 +71,7 @@ impl ClaimedScheduledWorkflow {
     pub fn start(&self) -> &ScheduledWorkflowStart {
         &self.start
     }
+    #[must_use]
     pub fn owner(&self) -> &str {
         match &self.start.head.state {
             ScheduledWorkflowState::Claimed { owner, .. } => owner,

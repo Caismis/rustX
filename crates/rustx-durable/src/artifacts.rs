@@ -81,6 +81,7 @@ pub struct ArtifactStore {
 }
 
 impl ArtifactStore {
+    #[must_use]
     pub fn with_lifecycle(mut self, access: Option<Arc<dyn crate::sqlite::OwnershipLock>>) -> Self {
         self.lifecycle = access;
         self
@@ -503,6 +504,7 @@ pub struct ArtifactReadHandle {
     pub len: u64,
 }
 impl ArtifactReadHandle {
+    #[must_use]
     pub fn verification(&self) -> seal::Verification {
         self.seal.verification()
     }

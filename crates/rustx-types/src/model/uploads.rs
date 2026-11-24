@@ -38,6 +38,7 @@ fn escaped_character(character: char) -> Option<&'static str> {
         _ => None,
     }
 }
+#[must_use]
 pub fn escaped_len(value: &str) -> Option<usize> {
     value.chars().try_fold(0usize, |total, character| {
         total.checked_add(escaped_character(character).map_or(character.len_utf8(), str::len))

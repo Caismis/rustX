@@ -245,6 +245,7 @@ pub struct TraceAdoptionPage {
     pub next_offset: Option<u64>,
 }
 
+#[must_use]
 pub fn trace_fact_requires_publication(event: &rustx_types::events::types::RuntimeEvent) -> bool {
     match event {
         RuntimeEvent::AttemptStarted { .. }

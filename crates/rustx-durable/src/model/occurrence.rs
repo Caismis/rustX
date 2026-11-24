@@ -203,6 +203,7 @@ fn association_policy(
 impl FrozenToolAssociations {
     /// An incremental, conservative JSON bound for native request admission.
     /// The rare near-limit case still uses exact streaming byte accounting.
+    #[must_use]
     pub fn encoded_len_upper_bound(&self) -> Option<usize> {
         if self.is_empty() {
             return Some(2);
@@ -220,6 +221,7 @@ impl FrozenToolAssociations {
             .checked_add(self.len().saturating_sub(1))?
             .checked_add(2)
     }
+    #[must_use]
     pub fn from_history(
         history: ToolAssociationHistory,
         request: RequestId,
@@ -268,6 +270,7 @@ impl FrozenToolAssociations {
             }
         }
     }
+    #[must_use]
     pub fn certifies(
         &self,
         origin: &std::sync::Arc<rustx_types::model::selected_input::SelectionOrigin>,
@@ -500,6 +503,7 @@ pub fn validate_associations(
 
 /// Canonical-only fixtures and callers can bind physical occurrences directly.
 /// Derived pairs require the compiler's explicit bindings; no association is inferred from strings.
+#[must_use]
 pub fn canonical_associations(
     scope: &rustx_types::runtime::identity::ConversationId,
     request_id: &RequestId,

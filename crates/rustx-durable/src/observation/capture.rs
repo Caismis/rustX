@@ -122,11 +122,13 @@ pub struct Capture {
 }
 impl Capture {
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn admission_state(&self) -> (usize, usize, bool) {
         (self.remaining, self.required, self.evicted)
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
+    #[must_use]
     pub fn with_remaining(revision: u64, remaining: usize) -> Self {
         assert!(remaining <= CHECKPOINT_TARGET_BYTES / 8);
         Self {
@@ -184,6 +186,7 @@ impl Capture {
         (std::borrow::Cow::Borrowed(&prepared.value), prepared.fit)
     }
 
+    #[must_use]
     pub fn new(revision: u64) -> Self {
         Self {
             collections: Vec::new(),

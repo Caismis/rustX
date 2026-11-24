@@ -217,6 +217,7 @@ impl FreshConfiguration {
         })
     }
 
+    #[must_use]
     pub fn identity(&self) -> &str {
         &self.digest
     }
@@ -257,6 +258,7 @@ struct ValidatedRequest {
     snapshot: Arc<RequestSnapshot>,
 }
 impl<'transaction, 'connection> Validation<'transaction, 'connection> {
+    #[must_use]
     pub fn new(transaction: &'transaction Transaction<'connection>) -> Self {
         Self {
             transaction,
@@ -264,6 +266,7 @@ impl<'transaction, 'connection> Validation<'transaction, 'connection> {
         }
     }
 
+    #[must_use]
     pub fn transaction(&self) -> &'transaction Transaction<'connection> {
         self.transaction
     }

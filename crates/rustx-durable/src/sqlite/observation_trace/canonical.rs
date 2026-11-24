@@ -177,7 +177,7 @@ fn artifacts(message: &MessageBlock) -> (Vec<TraceArtifact>, bool) {
             for block in tool.result.content.iter().take(32) {
                 match block {
                     rustx_types::tools::types::ToolResultContent::Image(value) => {
-                        push(image(value))
+                        push(image(value));
                     }
                     rustx_types::tools::types::ToolResultContent::File(value) => {
                         push(artifact_file(value));

@@ -178,6 +178,7 @@ pub fn phase(label: &'static str) {
 }
 
 /// Takes the per-phase work recorded since the last [`capture`].
+#[must_use]
 pub fn finish_phases() -> BTreeMap<(&'static str, String), PhaseWork> {
     TRACE.with_borrow_mut(|trace| std::mem::take(&mut trace.phases))
 }

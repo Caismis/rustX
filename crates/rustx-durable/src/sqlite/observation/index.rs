@@ -125,6 +125,7 @@ pub fn append_message_metadata(
     Ok(metadata_deferred)
 }
 
+#[must_use]
 pub fn message_source_label(message: &MessageBlock) -> Option<String> {
     match message {
         MessageBlock::User(user) => Some(
@@ -142,6 +143,7 @@ pub fn message_source_label(message: &MessageBlock) -> Option<String> {
     }
 }
 
+#[must_use]
 pub fn tool_call_count(message: &MessageBlock) -> u64 {
     match message {
         MessageBlock::Assistant(value) => value

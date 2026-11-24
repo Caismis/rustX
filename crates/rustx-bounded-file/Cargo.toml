@@ -14,3 +14,6 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "
 [dev-dependencies]
 nix = { version = "0.31.3", features = ["fs"] }
 tempfile = "3"
+
+[lints]
+workspace = true

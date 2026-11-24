@@ -130,6 +130,7 @@ impl AgentStatus {
     }
 }
 
+#[must_use]
 pub fn bound_background_snapshot(
     mut snapshot: BackgroundExecutionSnapshot,
 ) -> BackgroundExecutionSnapshot {
@@ -176,6 +177,7 @@ fn render_instant(instant: DateTime<Utc>, timezone: Option<Tz>) -> String {
         .to_string()
 }
 
+#[must_use]
 pub fn render_sections(sections: &[AgentStatusSection]) -> String {
     let mut lines = Vec::new();
     for section in sections {
