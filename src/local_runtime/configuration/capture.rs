@@ -296,7 +296,7 @@ impl UserConfigManager {
                     capture,
                     workspace.map_or(ResourceSource::Authored, ResourceSource::Bound),
                     prefetched_python,
-                    &mut observed.skills,
+                    observed,
                 )
             })
             .map_err(|error| error.diagnostic.reason)
@@ -334,8 +334,13 @@ impl UserConfigManager {
         let (layers, documents) = self.capture_layers(request, None, &mut BTreeMap::new())?;
         let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
-        let prospective =
-            self.resolve_resources(request, resolved, ResourceSource::Authored, None, &mut None)?;
+        let prospective = self.resolve_resources(
+            request,
+            resolved,
+            ResourceSource::Authored,
+            None,
+            &mut application::BoundSourceReads::default(),
+        )?;
         self.verify_documents(&documents, &prospective.source_revisions)?;
         Ok(prospective)
     }
@@ -838,7 +843,7 @@ impl UserConfigManager {
         resolved: SourceCapture,
         resource_source: ResourceSource<'_>,
         prefetched_python: Option<crate::runtime::resources::ManagedPythonCatalog>,
-        skill_watches: &mut Option<crate::skills::SkillWatchObservation>,
+        observed: &mut application::BoundSourceReads,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         crate::package_io::check_cancelled(&self.resource_io)
             .map_err(|error| LaunchFailure::from(error.to_string()))?;
@@ -954,30 +959,31 @@ impl UserConfigManager {
             },
             |root| crate::skills::automatic_skill_roots(Some(&host.home_directory), root),
         );
-        let mut discover_skills =
-            || {
-                let discovery = crate::skills::SkillDiscovery::with_config(
-                    crate::skills::SkillDiscoveryConfig {
-                        automatic: skill_sources.clone(),
-                    },
-                )
-                .with_cancellation(self.resource_io.clone());
-                if let Some(endpoint) = workspace_endpoint {
-                    discovery.discover_bound_observed(endpoint, skill_watches).map_err(|error| {
-                    LaunchFailure::at(
-                        Some(
-                            crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root,
-                        ),
-                        "agent.skills",
-                        "Workspace Skill discovery is unavailable from the Execution Client",
-                        "check the bound Workspace and Skill collection",
-                        error.to_string(),
-                    )
+        let mut discover_skills = || {
+            let discovery =
+                crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
+                    automatic: skill_sources.clone(),
                 })
-                } else {
-                    Ok(discovery.discover())
-                }
-            };
+                .with_cancellation(self.resource_io.clone());
+            if let Some(endpoint) = workspace_endpoint {
+                discovery
+                    .discover_bound_observed(endpoint, &mut observed.skills)
+                    .map_err(|error| {
+                        LaunchFailure::at(
+                            Some(
+                                crate::skills::AutomaticSkillRoot::workspace(&locations.workspace)
+                                    .root,
+                            ),
+                            "agent.skills",
+                            "Workspace Skill discovery is unavailable from the Execution Client",
+                            "check the bound Workspace and Skill collection",
+                            error.to_string(),
+                        )
+                    })
+            } else {
+                Ok(discovery.discover())
+            }
+        };
         let skill_discovery = discover_skills()?;
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
@@ -1044,10 +1050,9 @@ impl UserConfigManager {
                     );
                 }
             }
-            revisions.insert(
-                locations.workspace.join(".agents/tools"),
-                format!("sha256:{:x}", manifest.finalize()),
-            );
+            let revision = format!("sha256:{:x}", manifest.finalize());
+            observed.python_manifest = Some(revision.clone());
+            revisions.insert(locations.workspace.join(".agents/tools"), revision);
         }
         let MetadataAdmission {
             definitions,

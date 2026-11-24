@@ -968,3 +968,19 @@ run and the complete external conformance target passed locally.
 - Workspace Skill transfer notices identify the submitted operation, source
   scope and exact destination. A reverse-order component fixture uses two
   uncertain copies of the same Skill with different submitted names.
+
+## Failed capture and settings CAS follow-up
+
+- Bound captures retain the Python source manifest before final document
+  verification. The manifest commits to the observed package digests,
+  permissions and directory dependencies while retaining no new physical
+  package leases. If a recheck repeats the same failure, the application
+  diagnostic can stay unchanged, but the new observation advances the
+  settings fence. Only an unchanged successful capture can reuse both
+  the application and the observation generation.
+- The real Client regression parks a settings write after it reads B.
+  A periodic recheck observes C and hits the same injected final
+  verification failure. The previous application stays current, the
+  stale settings write receives `SessionInputSourceChanged`, and settings
+  remain at their original revision. The next successful recheck adopts
+  the manifest already observed for C on the same pair.

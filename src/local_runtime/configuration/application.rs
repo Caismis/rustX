@@ -174,6 +174,9 @@ pub(crate) struct CapturedApplication {
 pub(crate) struct BoundSourceReads {
     pub(crate) documents: BTreeMap<std::path::PathBuf, String>,
     pub(crate) skills: Option<crate::skills::SkillWatchObservation>,
+    /// Fingerprint of the observed package content, permissions and watch
+    /// dependencies. Kept even if document verification rejects the capture.
+    pub(crate) python_manifest: Option<String>,
 }
 
 struct BoundSourceObservation {
@@ -477,9 +480,9 @@ impl ApplicationState {
         })
     }
 
-    /// Retain the physical observation even when configuration validation
-    /// failed. Automatic observations preserve the generation for identical
-    /// reads and source facts. Explicit observations still allow retries.
+    /// Retain observed facts independently of the application's diagnostic.
+    /// A repeated failure can reuse its semantic application, but cannot
+    /// certify an unchanged source to a settings write already in flight.
     pub(crate) fn publish_bound_observation(
         &mut self,
         scope: String,
@@ -489,18 +492,23 @@ impl ApplicationState {
         lane: rustx_execution_server::ControlHandle,
         mode: BoundObservationMode,
     ) -> bool {
-        if self
+        let previous = self
             .bound_observations
             .get(&scope)
-            .is_some_and(|previous| previous.lane.same_pair(&lane) && previous.reads == reads)
+            .filter(|previous| previous.lane.same_pair(&lane));
+        let same_capture = previous.is_some()
             && self
                 .inputs
                 .get(&scope)
-                .is_some_and(|previous| mode.same_capture(previous, &input))
-        {
+                .is_some_and(|previous| mode.same_capture(previous, &input));
+        let successful = input.as_ref().is_ok_and(|capture| capture.context.is_ok());
+        if same_capture && successful && previous.is_some_and(|previous| previous.reads == reads) {
             return false;
         }
-        self.capture_bound_source(scope.clone(), source, input);
+        let publish = !same_capture || successful;
+        if publish {
+            self.capture_bound_source(scope.clone(), source, input);
+        }
         let generation = self.next_bound_source_generation();
         self.bound_observations.insert(
             scope,
@@ -510,7 +518,7 @@ impl ApplicationState {
                 generation,
             },
         );
-        true
+        publish
     }
 
     pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {

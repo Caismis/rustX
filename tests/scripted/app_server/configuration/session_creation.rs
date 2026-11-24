@@ -3634,6 +3634,158 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_python_recheck_fences_older_session_settings() {
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{ErrorData, JsonRpcVersion, Method, Request, RequestId, Response},
+    };
+    use crate::capabilities::ToolSourceId;
+    use crate::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
+    use crate::runtime::conversation_runtime::Gate;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let (_, incomplete) = python_fallback_packages(&fixture.workspaces[0]);
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let id = fixture.sessions[0].id.clone();
+        let endpoint = fixture.manager.execution_endpoint(&id).unwrap();
+        let lane = endpoint.control().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let source = ToolSourceId::ManagedPython("incomplete-pkg".into());
+        let active_digest = || {
+            runtime
+                .runtime_resources()
+                .managed_python_catalog()
+                .packages()[&source]
+                .as_ref()
+                .unwrap()
+                .source_digest()
+                .to_owned()
+        };
+        let original_digest = active_digest();
+        let recheck = || {
+            tokio::task::spawn_blocking({
+                let manager = fixture.manager.clone();
+                let id = id.clone();
+                let endpoint = endpoint.clone();
+                let lane = lane.clone();
+                let incomplete = std::collections::BTreeSet::from([source.clone()]);
+                move || manager.observe_incomplete_bound_python(&id, &endpoint, lane, &incomplete)
+            })
+        };
+        let observation = || {
+            let application = fixture.manager.applications.lock();
+            let manifest = application
+                .bound_source_reads(id.as_str(), &lane)
+                .unwrap()
+                .python_manifest
+                .clone()
+                .expect("captured Python manifest");
+            (application.bound_source_cut(&id), manifest)
+        };
+        let helper = incomplete.join("d000/helper.py");
+        let hooks = &fixture.manager.configuration.test_hooks;
+
+        std::fs::write(&helper, "HELPER = 2\n").unwrap();
+        hooks.fail_once("bound_workspace_verification_unavailable");
+        assert!(recheck().await.unwrap());
+        let failure = settled(&fixture, 0).await;
+        assert!(matches!(
+            failure.units[&ApplyUnit::Capabilities],
+            UnitApplication::Failed { .. }
+        ));
+        assert!(
+            fixture
+                .manager
+                .applications
+                .lock()
+                .latest_bound_source(id.as_str())
+                .is_none()
+        );
+        let (cut_b, manifest_b) = observation();
+
+        let gate = Arc::new(Gate::default());
+        let _release = gate.arm_scoped();
+        hooks.insert("before_capture_verification", {
+            let gate = gate.clone();
+            move || gate.enter()
+        });
+        let connection = AppServerConnection::new(fixture.host.clone());
+        super::super::protocol::initialize(&connection).await;
+        let (revision, original) = fixture.manager.sessions.read_settings(&id).await.unwrap();
+        let write = tokio::spawn({
+            let session_id = id.clone();
+            async move {
+                connection
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(1),
+                        call: Method::SessionInputsWrite {
+                            session_id,
+                            expected_revision: revision,
+                            session_config: Some(SessionInputChange::Replace(
+                                SessionConfigContent(
+                                    "[tool_deadline_policy]\nhard_deadline_ms=12345\n".into(),
+                                ),
+                            )),
+                            session_resources: None,
+                        },
+                    })
+                    .await
+            }
+        });
+        gate.wait_entered_async().await;
+
+        std::fs::write(&helper, "HELPER = 3\n").unwrap();
+        hooks.fail_once("bound_workspace_verification_unavailable");
+        assert!(
+            !recheck().await.unwrap(),
+            "the identical failure does not republish"
+        );
+        let (cut_c, manifest_c) = observation();
+        assert_ne!(
+            manifest_c, manifest_b,
+            "the failed recheck observed the new package"
+        );
+        assert_eq!(cut_c.0, cut_b.0);
+        assert!(cut_c.1 > cut_b.1);
+        assert_eq!(
+            fixture.manager.configuration_application(&id).unwrap(),
+            failure
+        );
+
+        gate.release();
+        let Response::Failure(rejected) = write.await.unwrap() else {
+            panic!("settings accepted a snapshot predating the failed recheck");
+        };
+        assert_eq!(
+            rejected.error.data,
+            Some(ErrorData::SessionInputSourceChanged)
+        );
+        assert_eq!(
+            fixture.manager.sessions.read_settings(&id).await.unwrap(),
+            (revision, original)
+        );
+        assert_eq!(
+            fixture.manager.configuration_application(&id).unwrap(),
+            failure
+        );
+        assert_eq!(active_digest(), original_digest);
+
+        assert!(recheck().await.unwrap());
+        applied(&fixture, 0).await;
+        assert_eq!(observation().1, manifest_c);
+        assert_ne!(active_digest(), original_digest);
+        assert!(endpoint.control().unwrap().same_pair(&lane));
+        assert_eq!(fixture.provider.request_bodies().len(), 0);
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unchanged_client_observations_do_not_conflict_with_session_settings() {
     use super::super::protocol::{call, initialize};
     use crate::app_server::{
