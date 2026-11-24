@@ -128,9 +128,12 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         use serde_json::{Value, json};
         use sha2::{Digest as _, Sha256};
 
-        async fn send(host: &mut peer::Peer, method: &str, params: Value) -> Response {
+        async fn send(host: &mut peer::Peer, counts: &mut (usize, usize), method: &str, params: Value) -> Response {
             let frame = json!({"jsonrpc": "2.0", "method": format!("item/tool/result/{method}"), "params": params});
-            assert!(frame.to_string().len() + 32 < MAX_MESSAGE_BYTES);
+            let frame_bytes = host.next_request_bytes(frame.clone());
+            assert!(frame_bytes < MAX_MESSAGE_BYTES);
+            counts.0 += 1;
+            counts.1 += frame_bytes;
             host.raw_request(frame).await
         }
 
@@ -184,14 +187,33 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         candidate["callId"] = json!(tool.call_id);
         candidate["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
 
-        let body = format!("installed-head:{}installed-middle{}:installed-tail", "q".repeat(600_000), "z".repeat(600_000));
+        #[cfg(target_os = "linux")]
+        let measurement = std::env::var("RUSTX_HOST_MEASUREMENT_MIB").ok().map(|value| {
+            let mebibytes = value.parse::<usize>().expect("measurement size in MiB");
+            assert!((2..=16).contains(&mebibytes));
+            let proc = std::path::PathBuf::from(format!("/proc/{}", child.id().unwrap()));
+            let write_bytes = |proc: &Path| {
+                std::fs::read_to_string(proc.join("io")).unwrap().lines()
+                    .find_map(|line| line.strip_prefix("write_bytes: "))
+                    .unwrap().parse::<u64>().unwrap()
+            };
+            (mebibytes, write_bytes(&proc), proc, write_bytes)
+        });
+        #[cfg(target_os = "linux")]
+        let padding = measurement.as_ref().map_or(600_000, |(mib, ..)| (mib * 1_048_576 - 64) / 2);
+        #[cfg(not(target_os = "linux"))]
+        let padding = 600_000;
+        let body = format!("installed-head:{}installed-middle{}:installed-tail", "q".repeat(padding), "z".repeat(padding));
         assert!(body.len() > MAX_MESSAGE_BYTES);
         let items = json!([{"typeTag": 1, "length": body.len().to_string()}]);
         let accepted = |response: Response| assert!(matches!(&response, Response::Success(reply)
             if matches!(reply.result, MethodResult::HostUploadAccepted { duplicate: false })), "{response:?}");
-        accepted(send(&mut host, "begin", json!({"candidate":candidate,"items":items,"success":true})).await);
+        let mut counts = (0, 0);
+        #[cfg(target_os = "linux")]
+        let upload_started = std::time::Instant::now();
+        accepted(send(&mut host, &mut counts, "begin", json!({"candidate":candidate,"items":items,"success":true})).await);
         for (sequence, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
-            accepted(send(&mut host, "chunk", json!({
+            accepted(send(&mut host, &mut counts, "chunk", json!({
                 "candidate":candidate,"itemIndex":0,"sequence":(sequence + 1).to_string(),
                 "offset":(sequence * MAX_CHUNK_BYTES).to_string(),
                 "dataBase64":base64::engine::general_purpose::STANDARD.encode(chunk),
@@ -199,12 +221,26 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
             })).await);
         }
         let mut end = json!({"candidate":candidate,"items":items,"success":true,"total":body.len().to_string(),"digest":"0".repeat(64)});
-        assert!(matches!(send(&mut host, "end", end.clone()).await, Response::Failure(error)
+        assert!(matches!(send(&mut host, &mut counts, "end", end.clone()).await, Response::Failure(error)
             if matches!(error.error.data, Some(ErrorData::HostUploadRejected { reason: HostUploadRefusal::DigestMismatch }))));
         let digest: sha2::digest::Output<Sha256> = canonical_digest(&[(1, body.as_bytes())]).into();
         end["digest"] = json!(format!("{digest:x}"));
-        accepted(send(&mut host, "end", end).await);
+        accepted(send(&mut host, &mut counts, "end", end).await);
+        #[cfg(target_os = "linux")]
+        let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
         host.settled(&turn_id).await;
+        #[cfg(target_os = "linux")]
+        if let Some((_, start_writes, proc, write_bytes)) = measurement {
+            let status = std::fs::read_to_string(proc.join("status")).unwrap();
+            let peak_kib = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+                .unwrap().split_ascii_whitespace().next().unwrap().parse::<u64>().unwrap();
+            println!("HOST_MEASUREMENT {}", json!({
+                "body_bytes": body.len(), "request_frames": counts.0, "host_to_server_json_bytes": counts.1,
+                "server_peak_rss_kib": peak_kib, "server_write_bytes": write_bytes(&proc) - start_writes,
+                "upload_ms": upload_ms, "including_settlement_ms": upload_started.elapsed().as_secs_f64() * 1000.0,
+                "client_save_rpcs": 0,
+            }));
+        }
 
         assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0, "no Server Spill before shutdown");
         let requests = provider.requests().await;

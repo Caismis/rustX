@@ -31,7 +31,11 @@ BINARIES = {
 }
 PROCESS_CASES = (
     "standalone_server_reads_cold_sessions_without_workspace_or_helpers",
+    "app_server_concurrent_sessions_finish_across_external_disconnect",
+    "t10_stdio_cli_eof_preserves_gated_attempt_and_original_canonical_commit",
+    "app_server_websocket_drain_supervises_active_root_and_cold_resume",
     "standalone_server_commits_a_model_turn_without_a_client_or_helpers",
+    "app_server_archive_stdio_download_works_without_web_or_runtime_attachment",
     "standalone_server_reports_mcp_overflow_without_launching_a_client_or_spilling",
     "near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client",
     "http_mcp_imports_complete_output_through_the_bound_client",
@@ -46,6 +50,7 @@ HOST_CASES = (
     "host_effect_is_unknown_after_process_death_and_is_never_automatically_replayed",
 )
 LINUX_HOST_CASES = (
+    "generation::deleted_session_recovers_only_for_cleanup_in_the_original_client",
     "generation::a_published_host_output_cannot_cross_a_local_client_generation",
     "generation::host_result_after_client_death_at_private_save_cuts",
     "generation::client_death_after_canonical_host_result_cannot_rewrite_saved_history",
@@ -55,6 +60,7 @@ LINUX_CASES = (
     "local_restart_requires_namespace_settlement_after_server_sigkill",
     "client_sigkill_advances_only_the_original_session_generation",
     "server_sigkill_keeps_prior_client_binding_unavailable_after_restart",
+    "trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session",
 )
 MOUNT_CASES = (
     "explicit_composition_reads_from_client_mount_namespace",

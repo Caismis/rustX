@@ -227,6 +227,8 @@ def main() -> None:
         build_server(server)
     if args.product != "rustx-server":
         build_client(client)
+    if output("git", "rev-parse", "HEAD") != revision or output("git", "status", "--porcelain"):
+        parser.error("The source checkout changed during the build. Rebuild from a clean commit.")
     for product in products:
         package(product, target, server, client, revision, version, machine, epoch)
 

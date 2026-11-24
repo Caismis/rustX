@@ -32,6 +32,8 @@ struct Launch {
     admission: Admission,
     pid: Pid,
     scratch: PathBuf,
+    proxy: UnixListener,
+    server_socket: PathBuf,
 }
 
 mod process_cuts;
@@ -207,10 +209,150 @@ async fn proxy_launch(
             admission,
             pid,
             scratch: client_scratch,
+            proxy,
+            server_socket: socket_path,
         },
         data,
         control,
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleted_session_recovers_only_for_cleanup_in_the_original_client() {
+    use rustx::app_server::session_deletion::SessionDeletionResult;
+    use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let Some(provider) = ProviderEmulator::start("app_server_host_broadcast").await else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        config(root.path(), &workspace, &provider);
+        let probe = workspace.join("probe");
+        std::fs::write(&probe, b"original Workspace").unwrap();
+        let (session, _, _) = create_host_session(root.path(), &workspace).await;
+        let (_bins, binary) = super::super::app_server::isolated_server_pair();
+        let scratch = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let witness_path = scratch.path().join("witness");
+        let witness = UnixListener::bind(&witness_path).unwrap();
+        stage_wrapper(&binary, &witness_path);
+        let mut command = server_command(root.path(), &binary);
+        command
+            .args([
+                "--local-execution-session",
+                session.as_str(),
+                "--local-execution-workspace",
+            ])
+            .arg(&workspace);
+        let (
+            (server, endpoint, diagnostics),
+            (old, (client_data, server_data), (mut control, mut server_control)),
+        ) = tokio::join!(launch(command), proxy_launch(&witness, scratch.path(), 1));
+        let mut peer = Peer::connect(&endpoint).await;
+        let data = tokio::spawn(reject_save_replay(client_data, server_data));
+        let control = tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut control, &mut server_control).await;
+        });
+        let read_probe = || Method::FsReadFile {
+            session_id: session.clone(),
+            path: probe.display().to_string(),
+            offset: 0,
+            max_bytes: 32,
+            expected_revision: None,
+        };
+        assert!(matches!(
+            peer.response(read_probe()).await,
+            Response::Success(_)
+        ));
+        control.abort();
+        assert!(control.await.unwrap_err().is_cancelled());
+        data.await.unwrap();
+
+        let MethodResult::Deletion {
+            result: SessionDeletionResult::Preview { preview },
+        } = peer
+            .rpc(Method::SessionDeletePreview {
+                session_id: session.clone(),
+            })
+            .await
+        else {
+            panic!("deletion preview")
+        };
+        let deleted = peer
+            .rpc(Method::SessionDelete {
+                session_id: session.clone(),
+                expected_target_revision: preview.target_revision,
+            })
+            .await;
+        assert!(matches!(deleted, MethodResult::Deletion {
+            result: SessionDeletionResult::CommittedCleanupPending { session_id },
+        } if session_id == session));
+        let check_catalog = || Method::SessionList {
+            query: None,
+            offset: 0,
+            limit: 32,
+        };
+        let MethodResult::Sessions { sessions, .. } = peer.rpc(check_catalog()).await else {
+            panic!("Session catalog")
+        };
+        assert!(sessions.iter().all(|record| record.id != session));
+        let ((mut client_data, mut server_data), (mut control, mut server_control), recovered) =
+            pair(&old.proxy, &old.server_socket).await;
+        assert_eq!(recovered, old.admission);
+        let data = tokio::spawn(async move {
+            assert_eq!(
+                server_data.read(&mut [0; 1]).await.unwrap(),
+                0,
+                "cleanup never dispatches to the data lane"
+            );
+            let _ = client_data.shutdown().await;
+        });
+        let mut revoked = 0;
+        loop {
+            let poll = read::<ControlPoll>(&mut control).await.unwrap();
+            write(&mut server_control, &poll).await.unwrap();
+            let turn = read::<ControlTurn>(&mut server_control).await.unwrap();
+            if let Some(request) = &turn.request {
+                assert!(matches!(request, ControlRequest::Revoke));
+                revoked += 1;
+            }
+            write(&mut control, &turn).await.unwrap();
+            if poll.receipt == Some(ControlReply::Revoked) {
+                assert!(turn.request.is_none());
+                break;
+            }
+        }
+        assert_eq!(revoked, 1);
+        data.await.unwrap();
+        let recovered = peer
+            .rpc(Method::SessionRecoverDeletion {
+                session_id: session.clone(),
+            })
+            .await;
+        assert!(matches!(recovered, MethodResult::Deletion {
+            result: SessionDeletionResult::Deleted { session_id },
+        } if session_id == session));
+        let MethodResult::Sessions { sessions, .. } = peer.rpc(check_catalog()).await else {
+            panic!("Session catalog after cleanup")
+        };
+        assert!(sessions.iter().all(|record| record.id != session));
+        assert!(matches!(
+            peer.response(read_probe()).await,
+            Response::Failure(_)
+        ));
+        assert_eq!(std::fs::read(&probe).unwrap(), b"original Workspace");
+        assert_eq!(provider.requests().await.len(), 0);
+        assert!(matches!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(witness.poll_accept(cx))).await,
+            std::task::Poll::Pending
+        ));
+        drop(peer);
+        shutdown(server, diagnostics).await;
+    })
+    .await
+    .expect("installed Client cleanup recovery");
 }
 
 async fn observe_save_cut(

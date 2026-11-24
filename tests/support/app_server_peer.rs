@@ -53,6 +53,11 @@ impl Peer {
         self.raw_request(request).await
     }
 
+    pub fn next_request_bytes(&self, mut message: serde_json::Value) -> usize {
+        message["id"] = serde_json::to_value(RequestId::Integer(self.next + 1)).unwrap();
+        message.to_string().len()
+    }
+
     pub async fn raw_request(&mut self, mut message: serde_json::Value) -> Response {
         self.next += 1;
         let id = RequestId::Integer(self.next);

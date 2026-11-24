@@ -299,24 +299,27 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         .unwrap();
 
         let (bin, rustx) = isolated_server_bin();
-        let mut child = Command::new(rustx)
-            .args(["app-server", "--listen", "stdio", "--runtime-root"])
-            .arg(fixture.root.path().join("runtime"))
-            .current_dir(fixture.root.path())
-            .env_clear()
-            .env("HOME", &home)
-            .env("PATH", bin.path())
-            .env("TEST_KEY", "fixture")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let isolated = || {
+            Command::new(&rustx)
+                .args(["app-server", "--listen", "stdio", "--runtime-root"])
+                .arg(fixture.root.path().join("runtime"))
+                .current_dir(fixture.root.path())
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", bin.path())
+                .env("TEST_KEY", "fixture")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap()
+        };
+        let mut child = isolated();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         let session = fixture.sessions[0].clone();
-        let target = attach(&client, session, 2).await;
+        let target = attach(&client, session.clone(), 2).await;
         start_turn(&client, &target, "standalone model request").await;
         let state = settled(&client, &target).await;
         assert!(
@@ -333,10 +336,49 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
                 .count(),
             0
         );
+        let owner = target.conversation_id.clone();
         result(&client, Method::SessionDetach { target }).await;
         client.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
+
+        let history = |session_id| Method::SessionHistory {
+            session_id,
+            node_id: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
+            limit: 8,
+        };
+        let workspace = fixture.root.path().join("a");
+        std::fs::rename(&workspace, fixture.root.path().join("retired")).unwrap();
+        let mut cold = isolated();
+        let client = driver::jsonl(cold.stdout.take().unwrap(), cold.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let MethodResult::SessionHistory {
+            conversation_id,
+            window,
+        } = result(&client, history(session)).await
+        else {
+            panic!("cold history")
+        };
+        assert_eq!(conversation_id, owner);
+        let history_body = serde_json::to_string(&window).unwrap();
+        assert!(history_body.contains("standalone model request"));
+        assert!(history_body.contains("Hello world"));
+        let sibling = result(&client, history(fixture.sessions[1].clone())).await;
+        assert!(
+            !serde_json::to_string(&sibling)
+                .unwrap()
+                .contains("Hello world")
+        );
+        assert_eq!(
+            provider.request_bodies().len(),
+            1,
+            "cold read must not request the model"
+        );
+        assert!(!workspace.exists());
+        client.close().await;
+        detach_then_shutdown(&mut cold).await;
+        assert!(cold.wait().await.unwrap().success());
     })
     .await;
 }
@@ -4367,11 +4409,48 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
 #[tokio::test]
 async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
     use app_server_conformance::AppServerConformanceDriver;
+    use base64::Engine as _;
     use rustx::app_server::protocol::*;
-    use std::io::Read;
+    use rustx::durable::SqliteConversationStore;
+    use rustx::message::{
+        content::ImageReference,
+        types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock},
+    };
+    use rustx::runtime::identity::MessageId;
+    use rustx::tools::artifacts::ArtifactStore;
+    use std::io::{Read, Write as _};
     bounded(async {
         let f = Fixture::new().await;
-        let mut child = f.command("stdio").spawn().unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=").unwrap();
+        let (conversation_id, artifact) = {
+            let controller = SessionController::open(&f.root.path().join("runtime")).unwrap();
+            let access = controller.acquire_session(&f.sessions[0], None).await.unwrap();
+            let conversation_id = access.node.conversation_id.clone();
+            let artifacts = ArtifactStore::new(
+                conversation_id.clone(),
+                access.database_path.parent().unwrap(),
+            ).unwrap();
+            let artifact = artifacts.create_artifact().unwrap();
+            let mut writer = artifacts.open_writer(&artifact).unwrap();
+            writer.write_all(&bytes).unwrap();
+            writer.finish().unwrap();
+            let store = SqliteConversationStore::open(conversation_id.clone(), &access.database_path).unwrap();
+            store.append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("cold-archive-artifact"),
+                content: vec![AssistantContentBlock::Image(ImageReference {
+                    artifact_id: artifact.clone(),
+                    alt: Some("sealed archive image".to_owned()),
+                })],
+            })).unwrap();
+            (conversation_id, artifact)
+        };
+        let workspace = f.root.path().join("a");
+        std::fs::rename(&workspace, f.root.path().join("retired")).unwrap();
+        let (bin, rustx) = isolated_server_bin();
+        let mut child = f.command_with_program(rustx, "stdio")
+            .env("PATH", bin.path())
+            .spawn().unwrap();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         let initialized = client
             .request(serde_json::from_str(INITIALIZE).unwrap())
@@ -4397,8 +4476,8 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
         let response = reqwest::get(&url).await.unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.headers()["content-type"], "application/zip");
-        let bytes = response.bytes().await.unwrap();
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let archive_bytes = response.bytes().await.unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive_bytes)).unwrap();
         let mut manifest = String::new();
         zip.by_name("manifest.json")
             .unwrap()
@@ -4418,6 +4497,18 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
         let conversation = manifest["conversations"][0]["conversation_id"]
             .as_str()
             .unwrap();
+        assert_eq!(conversation, conversation_id.as_str());
+        let entry = format!("artifacts/{conversation}/{artifact}/content");
+        let mut stored = Vec::new();
+        zip.by_name(&entry).unwrap().read_to_end(&mut stored).unwrap();
+        assert_eq!(stored, bytes);
+        assert_eq!(manifest["artifacts"].as_array().unwrap().len(), 1);
+        assert_eq!(manifest["artifacts"][0]["conversation_id"], conversation);
+        assert_eq!(manifest["artifacts"][0]["artifact_id"], artifact.as_str());
+        assert_eq!(manifest["artifacts"][0]["entry"], entry);
+        assert_eq!(manifest["artifacts"][0]["bytes"], bytes.len());
+        assert!(!workspace.exists());
+        assert_standalone_product_files(bin.path());
         let mut auxiliary_audit = String::new();
         zip.by_name(&format!("sessions/{conversation}/auxiliary_audit.jsonl"))
             .unwrap()
