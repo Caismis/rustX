@@ -21,9 +21,13 @@ The installed-product branch starts at `6ca38dc3d3ffe87c9c476a15d10642abab8053ba
 | T49 | `deleted_session_recovers_only_for_cleanup_in_the_original_client` holds a real same-instance reattach until deletion reports cleanup pending. The original Client sends one Revoke receipt. The data lane accepts no requests, the Session stays absent from the catalog, and the original Workspace bytes remain unchanged. The remote SIGKILL fixture covers pending deletion when no authorized receipt is available. |
 | T52 | `standalone_server_validates_large_host_stream_without_a_client` uses a real external WebSocket Host against the standalone Server. It verifies individual frame bounds, wrong-digest refusal, one canonical result, and bounded continuation with truthful unavailable output. |
 | T65 | Installed Linux tests cover strong Server/Client kills and restart fences. macOS death and settlement evidence remains open. |
+| T66 | `exact_store_identity_ignores_origin_and_permissions_but_keeps_runtime_and_source` covers source identity, interpreter and uv path/version, and the FastMCP pin in the Client Store. |
+| T67 | `same_store_joins_one_owner_and_waiter_drop_cannot_release_its_stage` holds the physical build, verifies that a second caller joins it, and observes one build plus physical cleanup when the owner cancels. |
+| T68 | `independent_stores_reuse_the_exclusive_winner_and_refuse_corruption` verifies unchanged corrupt manifest, source, and interpreter entries. `client_package_watch_refreshes_permissions_and_nested_source_from_the_same_binding` verifies that a permission edit leaves the source digest unchanged and a new Attempt observes the adopted snapshot. |
 | T69 | `managed_python_prepares_and_runs_in_the_bound_client_mount` uses real Client-side uv and stdio MCP in a separate mount and verifies that the reusable store survives Session cleanup. |
+| T70 | `independent_stores_reuse_the_exclusive_winner_and_refuse_corruption` verifies an exclusive publication winner and identical inode for both owners. In the installed `doctor_probes_selected_managed_python_in_an_owned_client` test, a new process reopens the same published inode, performs a new stdio handshake and catalog discovery, invokes no tools, and runs neither `uv lock` nor `uv sync` again. |
 
-The remaining T-ID mapping must be reconciled with discovered tests at the final integrated commit. Local and earlier-commit runs cannot serve as that commit's FULL or Merge verification receipt.
+The four evidence ledgers cover all 73 test IDs by number. Open product cases in this table still require their named proof. Local and earlier-commit runs cannot serve as the integrated commit's FULL or Merge verification receipt.
 
 ## Linux Client I/O baseline
 
@@ -63,3 +67,7 @@ RUSTX_HOST_MEASUREMENT_MIB="$mib" /absolute/process-harness --exact \
 RUSTX_HTTP_MCP_MEASUREMENT_BYTES="$((mib * 1048576 - 4096))" /absolute/process-harness --exact \
   app_server::near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client --nocapture
 ```
+
+## Installed Managed Python restart reuse
+
+The Linux diagnostic probe opens the Workspace through an owned Client. A successful cold run writes one `uv lock` and one `uv sync` record after the wheel cache has been populated. The reopened run uses the exact Store entry and writes no additional build record. Both real stdio launches verify the same tool catalog, clean up their diagnostic roots, and leave no Session or business tool call. The installed sample took 6.8 ms for the plan, 2,391.2 ms for cold preparation through discovery and shutdown, and 2,040.0 ms for a fresh process reopening the prepared Store through discovery and shutdown. These are single-fixture elapsed measurements after wheel-cache population. The owner-level race tests above measure build counts and independently fence publication.

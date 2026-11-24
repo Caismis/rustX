@@ -65,6 +65,7 @@ LINUX_CASES = (
 MOUNT_CASES = (
     "explicit_composition_reads_from_client_mount_namespace",
     "managed_python_prepares_and_runs_in_the_bound_client_mount",
+    "doctor_probes_selected_managed_python_in_an_owned_client",
     "stdio_mcp_session_runs_and_publishes_from_the_client_mount_view",
 )
 

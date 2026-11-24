@@ -686,13 +686,26 @@ dependencies = ["fastmcp==4.0.3"]
 #[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
 #[tokio::test]
 async fn doctor_probes_selected_managed_python_in_an_owned_client() {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let uv = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|directory| directory.join("uv"))
         .find(|candidate| candidate.is_file())
         .expect("Managed Python acceptance requires uv");
     let (bin, executable) = isolated_server_pair();
     let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    std::fs::write(
+        uv_path.join("uv"),
+        format!(
+            r#"#!/bin/sh
+case "${{1-}}" in
+    lock|sync) printf '%s\n' "$1" >> "$UV_CACHE_DIR/installed-builds" || exit 1 ;;
+esac
+exec '{}' --offline "$@"
+"#,
+            uv.to_str().unwrap().replace('\'', "'\\''"),
+        ),
+    )
+    .unwrap();
     let client = bin.path().join("rustx-execution-client");
     std::fs::rename(&client, bin.path().join("client-real")).unwrap();
     std::fs::write(
@@ -732,7 +745,12 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
         let store = bin.path().join("client-home/.local/share");
         let paths = [uv_path, PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
         let path = std::env::join_paths(paths).unwrap();
-        for prepare in [false, true] {
+        let store_root = store.join("rustx/environments/python-tools");
+        let builds = store_root.join("uv-cache/installed-builds");
+        let packages = store_root.join("packages");
+        let mut first_install = None;
+        for phase in ["plan", "cold", "reopened"] {
+            let prepare = phase != "plan";
             let mut probe = Command::new(&executable);
             probe
                 .current_dir(&workspace)
@@ -750,7 +768,9 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
             if prepare {
                 probe.arg("--prepare");
             }
+            let started = std::time::Instant::now();
             let output = probe.output().await.unwrap();
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             assert_eq!(output.status.code(), Some(3), "{}\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr), std::fs::read_to_string(bin.path().join("client-stderr")).unwrap_or_default());
             let stdout = std::str::from_utf8(&output.stdout).unwrap();
             let records = stdout.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).collect::<Vec<_>>();
@@ -767,9 +787,26 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
             }
             assert!(!runtime.exists(), "no diagnostic Session entered product history");
             assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0, "the private diagnostic root was removed after settlement");
+            if prepare {
+                assert_eq!(std::fs::read_to_string(&builds).unwrap(), "lock\nsync\n");
+                let installed = std::fs::read_dir(&packages).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+                let [package] = installed.as_slice() else { panic!("one published Environment: {installed:?}") };
+                let metadata = package.metadata().unwrap();
+                let identity = (package.path(), metadata.dev(), metadata.ino());
+                if let Some(original) = &first_install {
+                    assert_eq!(&identity, original, "the new process reused the original published Environment");
+                } else {
+                    first_install = Some(identity);
+                }
+            } else {
+                assert!(!builds.exists(), "the plan did not start a build");
+            }
+            if std::env::var_os("RUSTX_INSTALLED_PRODUCTS").is_some() {
+                println!("MANAGED_PYTHON_MEASUREMENT {}", serde_json::json!({
+                    "phase": phase, "probe_through_shutdown_ms": elapsed_ms,
+                }));
+            }
         }
-        let packages = store.join("rustx/environments/python-tools/packages");
-        assert_eq!(std::fs::read_dir(packages).unwrap().count(), 1);
     })
     .await;
 }
