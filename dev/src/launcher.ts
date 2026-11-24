@@ -10,12 +10,13 @@ import { workspaceRegistry } from './workspace-registry.ts';
 
 export interface WebReady { url: string; endpoint: string; tokenFile: string; hostConfigFile: string; workspaces: string[] }
 
-/** Development composition only. No native settings are read or resolved here. */
+/** Owns the native and UI carrier processes. Native settings stay native. */
 export class Launcher {
   readonly done: Promise<number>;
   readonly #root: string;
   readonly #spawn: Spawn;
   readonly #stateDirectory?: string;
+  readonly #installed: boolean;
   readonly #children: OwnedChild[] = [];
   readonly #abort = new AbortController();
   #resolveDone!: (code: number) => void;
@@ -24,8 +25,8 @@ export class Launcher {
   #started = false;
   #browserTask?: Promise<void>;
 
-  constructor(root: string, spawn: Spawn = spawnOwned, stateDirectory?: string) {
-    this.#root = root; this.#spawn = spawn; this.#stateDirectory = stateDirectory;
+  constructor(root: string, spawn: Spawn = spawnOwned, stateDirectory?: string, installed = false) {
+    this.#root = root; this.#spawn = spawn; this.#stateDirectory = stateDirectory; this.#installed = installed;
     this.done = new Promise(resolve => { this.#resolveDone = resolve; });
   }
   #active() { if (this.#abort.signal.aborted) throw new Error('Development composition is settling'); }
@@ -74,20 +75,25 @@ export class Launcher {
         this.#child({ component: 'app-server', command: args.binary, args: ['app-server', ...native], cwd: process.cwd(), protocolStdio: true, ownerStdin }, true);
         return;
       }
+      const externalTui = args.mode === 'tui' && args.forwarded.includes('--connect');
       // Match Rust's current_exe(): helpers belong beside the resolved
       // executable. Only the combined Web/TUI compositions need them.
       const binaryDirectory = dirname(realpathSync(args.binary));
-      for (const name of ['bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
+      const helpers = ['bash-supervisor', 'interactive-supervisor', 'workflow-renderer'];
+      if (this.#installed) helpers.push('rustx-execution-client');
+      for (const name of externalTui ? [] : helpers) {
         const helper = join(binaryDirectory, name);
         try {
           accessSync(helper, constants.X_OK);
           if (!statSync(helper).isFile()) throw new Error('not a file');
         } catch {
-          throw new Error(`Native helper unavailable: ${helper}. Run cargo build --bins and keep rustx and its native helper binaries together.`);
+          throw new Error(`Native helper unavailable: ${helper}. ${this.#installed ? 'Reinstall the complete rustx bundle.' : 'Run cargo build --bins and keep rustx and its native helper binaries together.'}`);
         }
       }
       if (args.mode === 'tui') {
-        this.#child({ component: 'tui', command: process.execPath, args: [join(this.#root, 'tui/src/main.ts'), '--binary', args.binary, ...args.forwarded], cwd: process.cwd(), terminal: true }, true);
+        const forwardOnly = externalTui || args.forwarded.length === 1 && args.forwarded[0] === '--help';
+        const binding = forwardOnly ? [] : ['--binary', args.binary];
+        this.#child({ component: 'tui', command: process.execPath, args: [join(this.#root, 'tui/src/main.ts'), ...binding, ...args.forwarded], cwd: process.cwd(), terminal: true }, true);
         return;
       }
       for (const workspace of args.workspaces) if (!statSync(workspace).isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);
@@ -99,14 +105,16 @@ export class Launcher {
       const productHostTokenFile = this.#write('product-host-token', productHostToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
         args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
-      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(dirname(args.binary), 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, nativePicker: true, browsePicker: true,
+      // The installed catalog exposes operator-enrolled paths. Do not offer a
+      // directory picker that can enumerate files before a Client is bound.
+      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(binaryDirectory, 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, nativePicker: !this.#installed, browsePicker: !this.#installed,
         ...workspaceRegistry(args.workspaces, args.forwarded, this.#stateDirectory) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;
       do { browserLaunchToken = randomBytes(32).toString('base64url'); } while ([transportToken, productHostToken].includes(browserLaunchToken));
       const bootstrapFile = this.#write('web-bootstrap.json', JSON.stringify({ appServerEndpoint: endpoint, transportTokenFile: tokenFile, browserLaunchToken }));
       const url = await this.#ready(this.#child({ component: 'web', command: process.execPath,
-        args: [join(this.#root, 'web-console/scripts/dev-carrier.ts')], cwd: join(this.#root, 'web-console'),
+        args: [join(this.#root, 'web-console/scripts', this.#installed ? 'installed-carrier.ts' : 'dev-carrier.ts')], cwd: join(this.#root, 'web-console'),
         env: { ...process.env, RUSTX_WORKSPACE_HOST_CONFIG: hostConfigFile, RUSTX_WEB_BOOTSTRAP_CONFIG: bootstrapFile }, readiness: 'web' }));
       const startup = new URL(url); startup.searchParams.set('token', browserLaunchToken);
       return { url: startup.href, endpoint, tokenFile, hostConfigFile, workspaces: args.workspaces };

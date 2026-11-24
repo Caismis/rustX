@@ -16,7 +16,7 @@ import { workspaceRegistry } from '../src/workspace-registry.ts';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const nativeDirectory = mkdtempSync(join(tmpdir(), 'rustx-native-test-'));
 const nativeBinary = join(nativeDirectory, 'rustx');
-for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
+for (const name of ['rustx', 'rustx-execution-client', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
   writeFileSync(join(nativeDirectory, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
 }
 after(() => rmSync(nativeDirectory, { recursive: true, force: true }));
@@ -134,6 +134,26 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.equal(existsSync(scratch), false);
   assert.equal(readFileSync(join(f.a, 'user-owned'), 'utf8'), 'keep');
   assert.equal(await launcher.settle(1), 130);
+});
+
+test('installed Web uses built assets and offers only configured Workspace locations', async t => {
+  const f = fixture(); t.after(f.remove);
+  const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'), true);
+  const starting = launcher.start(f.args);
+  h.calls[0].ready.resolve('ws://127.0.0.1:4242/');
+  await h.count(2);
+  const web = h.calls[1];
+  const config = JSON.parse(readFileSync(web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!, 'utf8'));
+  assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/installed-carrier.ts')]);
+  const host = new LocalWorkspaceHost(config);
+  const catalog = await host.listWorkspaces();
+  assert.equal(catalog.picker.kind, 'configured');
+  await assert.rejects(host.pickWorkspace(catalog), /chooser is unavailable/);
+  await assert.rejects(host.browseWorkspace(catalog, config.roots[0].id, ''), /browsing is unavailable/);
+  await host.close();
+  web.ready.resolve('http://127.0.0.1:4243/'); await starting;
+  const stopping = launcher.settle(0);
+  h.calls.forEach(call => call.reap.resolve()); await stopping;
 });
 
 test('partial startup failure: A ready, B starts/fails, A reaped before scratch disappears', async t => {

@@ -4,8 +4,14 @@ import { Launcher } from './launcher.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 try {
-  const args = parseArguments(process.argv.slice(2), root);
-  const launcher = new Launcher(root);
+  const input = process.argv.slice(2);
+  const installed = input[0] === '--installed';
+  if (installed) {
+    input.shift();
+    if (Number(process.versions.node.split('.')[0]) !== 24) throw new Error('The rustX bundle requires Node.js 24.');
+  }
+  const args = parseArguments(input, root);
+  const launcher = new Launcher(root, undefined, undefined, installed);
   const interrupt = () => { void launcher.settle(130); };
   const hangup = () => { void launcher.settle(129); };
   const terminate = () => { void launcher.settle(143); };

@@ -1,21 +1,26 @@
-//! The rustX process entry point.
+//! Native Server CLI and installed single-machine UI entry point.
 //!
-//! `rustx app-server --listen stdio|ws://IP:PORT` composes the multi-Session
-//! App Server, the only external product control protocol. The configuration
-//! subcommands (`config`, `doctor`, `workflow`, `init`) are offline native
-//! tools. A bare `rustx` prints help and starts nothing.
-//!
-//! Every diagnostic goes to stderr; there is no banner and no `println!`
-//! anywhere in the process. App Server stdout carries protocol records only,
-//! and configuration subcommands own stdout for their bounded reports.
-//!
-//! The internal `rustx --subagent-child` mode (Issue #60) is the one
-//! deliberate exception: there fd 0 is the reliable subagent control IPC
-//! and fd 1/stdout is the protocol-owned, framed Activity observation IPC
-//! (Issue #178) — never human-readable output. Diagnostics still go to
-//! stderr in every mode.
+//! The bundled Web and TUI launchers retain their existing process ownership.
+//! Other commands run natively. Stdout belongs to the selected protocol or
+//! CLI report, including the internal `--subagent-child` process mode.
 
-fn main() -> std::process::ExitCode {
+use std::{os::unix::process::CommandExt, process::ExitCode};
+
+fn main() -> ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [version] if version == "--version" => {
+            println!("rustX {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        [mode, tail @ ..] if mode == "web" || mode == "tui" => {
+            if let Err(error) = launch_ui(mode, tail) {
+                eprintln!("rustx: {error}");
+            }
+            return ExitCode::from(2);
+        }
+        _ => {}
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -23,11 +28,35 @@ fn main() -> std::process::ExitCode {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("rustx: cannot start the async runtime: {error}");
-            return std::process::ExitCode::from(2);
+            return ExitCode::from(2);
         }
     };
-    let code = runtime.block_on(rustx::local_runtime::run_process(
-        std::env::args_os().skip(1),
-    ));
-    std::process::ExitCode::from(u8::try_from(code).unwrap_or(1))
+    let code = runtime.block_on(rustx::local_runtime::run_process(args));
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
+}
+
+fn launch_ui(mode: &std::ffi::OsStr, args: &[std::ffi::OsString]) -> Result<(), String> {
+    let binary = std::env::current_exe().map_err(|error| error.to_string())?;
+    let prefix = binary
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or("cannot determine the installation prefix")?;
+    let launcher = prefix.join("share/rustx/dev/src/main.ts");
+    if !launcher.is_file() {
+        return Err(format!(
+            "UI launcher unavailable at {}. Install the complete rustx bundle.",
+            launcher.display()
+        ));
+    }
+    let error = std::process::Command::new("node")
+        .arg(launcher)
+        .arg("--installed")
+        .arg(mode)
+        .arg("--binary")
+        .arg(binary)
+        .args(args)
+        .exec();
+    Err(format!(
+        "cannot start the UI launcher with Node.js 24: {error}"
+    ))
 }

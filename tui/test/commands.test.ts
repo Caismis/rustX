@@ -1666,6 +1666,17 @@ describe("CLI arguments", () => {
     assert.equal(parsed.sessionName, undefined);
   });
 
+  it("launches the local Client for the same Session the TUI opens", () => {
+    const options = ["--local-execution-workspace", "/work/project"];
+    const parsed = parseArguments(["--binary", "rustx", ...options, "--session", "session-1"]);
+    assert.equal(parsed.mode.kind, "local");
+    if (parsed.mode.kind !== "local") throw new Error("local mode");
+    assert.deepEqual(parsed.mode.launch.localExecution, { workspace: "/work/project", sessionId: "session-1" });
+    assert.equal(parsed.routing.session, "session-1");
+    assert.throws(() => parseArguments(["--binary", "rustx", ...options]), /requires --session/);
+    assert.throws(() => parseArguments(["--connect", "wss://server.test", ...options]), /cannot be combined/);
+  });
+
   it("defaults only local Session cwd from the controlled client cwd", (t) => {
     t.mock.method(process, "cwd", () => "/client/workspace");
     assert.equal(parseArguments(["--binary", "rustx"]).sessionSettings.cwd, "/client/workspace");

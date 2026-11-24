@@ -6,7 +6,7 @@ product Agent Server measurements. Each
 sample starts a new peer process and Client; fixtures are warm-cache. rchar
 counts process-wide logical reads, not disk traffic or source-only reads.
 
-The current results carry `"probe": "paired-v7"`. The data `Hello` receives
+The current results carry `"probe": "paired-v8"`. The data `Hello` receives
 a fresh 256-bit pairing challenge, and the independent `ControlHello` must
 echo it. The Client paces `ControlPoll` and `ControlTurn` for the whole
 session. Older single-lane measurements exclude the control traffic.
@@ -33,8 +33,8 @@ import time
 FRAME = 1024 * 1024
 WIDTH = 128
 MARKER = 'needle:"\\\t' + chr(0x96EA)
-PROBE_REVISION = "paired-v7"
-WIRE_VERSION = 7
+PROBE_REVISION = "paired-v8"
+WIRE_VERSION = 8
 WRITE_CHUNK_BYTES = 64 * 1024
 
 

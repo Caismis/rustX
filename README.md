@@ -55,7 +55,9 @@ schema, exact semantic overlay units, resource shadowing and Save/Reload behavio
 `rustx config check` validates offline; `rustx config show --sources` explains
 prospective resolution. Default durable storage is `~/rustx/runtime`.
 
-See [Local development](DEVELOPMENT.md) for the canonical App Server, TUI, and complete Web launchers. Build the runtime and install the reference TUI:
+See [Installation](docs/installation.md) for the independent Server and Client
+archives and the single-machine Web/TUI bundle. For a source checkout, see
+[Local development](DEVELOPMENT.md) or build the runtime and reference TUI:
 
 ```sh
 cargo build --bins

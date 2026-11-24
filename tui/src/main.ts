@@ -51,6 +51,10 @@ async function connect(parsed: TuiArguments, signal?: AbortSignal): Promise<AppS
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+  if (argv.length === 1 && argv[0] === "--help") {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
   const configuration = configurationCommand(argv);
   if (configuration !== undefined) {
     return forwardConfigurationCommand(configuration);

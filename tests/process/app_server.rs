@@ -44,7 +44,7 @@ impl Fixture {
         let home = root.path().join("home");
         let config = home.join("rustx");
         std::fs::create_dir_all(&config).unwrap();
-        let initialized = Command::new(env!("CARGO_BIN_EXE_rustx"))
+        let initialized = Command::new(server_program())
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_STATE_HOME")
@@ -114,7 +114,7 @@ impl Fixture {
         }
     }
     fn command(&self, listen: &str) -> Command {
-        self.command_with_program(env!("CARGO_BIN_EXE_rustx"), listen)
+        self.command_with_program(server_program(), listen)
     }
     fn command_with_program(&self, program: impl AsRef<std::ffi::OsStr>, listen: &str) -> Command {
         let mut command = Command::new(program);
@@ -144,7 +144,7 @@ impl Fixture {
         (child, endpoint, stderr)
     }
 }
-async fn bounded<T>(future: impl Future<Output = T>) -> T {
+pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(std::time::Duration::from_mins(1), future)
         .await
         .expect("outer liveness guard")
@@ -159,7 +159,7 @@ impl Drop for ReapChild {
     }
 }
 
-fn terminate(child: &Child) {
+pub(super) fn terminate(child: &Child) {
     kill(
         Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
         Signal::SIGTERM,
@@ -275,13 +275,7 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
             std::fs::read_to_string(&stale).unwrap(),
             format!("{}\n", missing.display())
         );
-        assert_eq!(
-            std::fs::read_dir(&bin)
-                .unwrap()
-                .map(|entry| entry.unwrap().file_name())
-                .collect::<Vec<_>>(),
-            ["rustx"]
-        );
+        assert_standalone_product_files(&bin);
     })
     .await;
 }
@@ -325,11 +319,14 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         let target = attach(&client, session, 2).await;
         start_turn(&client, &target, "standalone model request").await;
         let state = settled(&client, &target).await;
-        assert!(state["messages"].to_string().contains("Hello world"));
+        assert!(
+            state["messages"].to_string().contains("Hello world"),
+            "standalone turn did not commit model output: {state}"
+        );
         let requests = provider.request_bodies();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].contains("standalone model request"));
-        assert_eq!(std::fs::read_dir(bin.path()).unwrap().count(), 1);
+        assert_standalone_product_files(bin.path());
         assert_eq!(
             std::fs::read_dir(fixture.root.path().join("a"))
                 .unwrap()
@@ -1145,14 +1142,36 @@ exec "$bin/client-real" "$@"
     .await;
 }
 
-/// A fresh staging directory on the *same filesystem as the staged
-/// sources* so staging is a hard link — no write, so the staged inode
-/// can never still be counted as written at execve. (A tmpfs copy of
-/// the ~600 MB Server binary has a real transient ETXTBSY window under
-/// parallel load: the kernel still counts the just-closed writer when
-/// execve runs.) The returned guard owns the directory; it must outlive
-/// the spawned children.
+fn installed_products() -> Option<PathBuf> {
+    std::env::var_os("RUSTX_INSTALLED_PRODUCTS").map(PathBuf::from)
+}
+
+fn installed_binary(product: &str, name: &str) -> Option<PathBuf> {
+    let binary = installed_products()?.join(product).join("bin").join(name);
+    assert!(binary.is_file(), "installed artifact is absent: {binary:?}");
+    Some(binary)
+}
+
+pub(super) fn server_program() -> PathBuf {
+    installed_binary("rustx-server", "rustx-server")
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_rustx")))
+}
+
+fn staged_execution_client() -> PathBuf {
+    installed_binary("rustx-client", "rustx-client").unwrap_or_else(|| {
+        std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client")
+    })
+}
+
+/// Stage hard links on the same filesystem as the binaries. Copying a
+/// freshly opened executable can race with execve and produce ETXTBSY.
+/// The directory guard must outlive the spawned children.
 fn staged_bin_dir() -> tempfile::TempDir {
+    if let Some(directory) = installed_products() {
+        return tempfile::tempdir_in(directory).unwrap();
+    }
     let base = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
         .parent()
         .unwrap();
@@ -1172,7 +1191,8 @@ fn stage_binary(bin: &std::path::Path, name: &str, source: &std::path::Path) -> 
 
 fn stage_supervisors(bin: &std::path::Path) {
     for supervisor in ["bash-supervisor", "interactive-supervisor"] {
-        let artifact = std::env::current_exe().unwrap().with_file_name(supervisor);
+        let artifact = installed_binary("rustx-client", supervisor)
+            .unwrap_or_else(|| std::env::current_exe().unwrap().with_file_name(supervisor));
         assert!(
             artifact.is_file(),
             "staged supervisor is absent: {artifact:?}"
@@ -1181,8 +1201,28 @@ fn stage_supervisors(bin: &std::path::Path) {
     }
 }
 
-fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn assert_standalone_product_files(bin: &std::path::Path) {
+    let mut files: Vec<_> = std::fs::read_dir(bin)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    files.sort_unstable();
+    let expected: &[&str] = if installed_products().is_some() {
+        &["rustx-server", "workflow-renderer"]
+    } else {
+        &["rustx"]
+    };
+    assert_eq!(files, expected);
+}
+
+pub(super) fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
+    if let Some(artifact) = installed_binary("rustx-server", "rustx-server") {
+        let renderer = installed_binary("rustx-server", "workflow-renderer").unwrap();
+        stage_binary(bin.path(), "workflow-renderer", &renderer);
+        let server = stage_binary(bin.path(), "rustx-server", &artifact);
+        return (bin, server);
+    }
     let rustx = stage_binary(
         bin.path(),
         "rustx",
@@ -1193,6 +1233,22 @@ fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
 
 pub(super) fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
+    if let Some(artifact) = installed_binary("rustx", "rustx") {
+        for companion in [
+            "rustx-execution-client",
+            "bash-supervisor",
+            "interactive-supervisor",
+            "workflow-renderer",
+        ] {
+            stage_binary(
+                bin.path(),
+                companion,
+                &installed_binary("rustx", companion).unwrap(),
+            );
+        }
+        let server = stage_binary(bin.path(), "rustx", &artifact);
+        return (bin, server);
+    }
     // The Client is only ever the artifact preparation staged beside this
     // harness — never a runtime build, a PATH lookup, or a fallback path.
     let client = std::env::current_exe()
@@ -1281,9 +1337,7 @@ fn staged_client_command(
     bundle: &std::path::Path,
     workspace: &std::path::Path,
 ) -> std::process::Command {
-    let executable = std::env::current_exe()
-        .unwrap()
-        .with_file_name("rustx-execution-client");
+    let executable = staged_execution_client();
     assert!(
         executable.is_file(),
         "staged Execution Client is absent: {executable:?}"
@@ -2483,9 +2537,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         let bin = bin_dir.path();
         // The staged sibling is the only trusted source for the real
         // Client — never a runtime build, PATH lookup, or fallback.
-        let staged = std::env::current_exe()
-            .unwrap()
-            .with_file_name("rustx-execution-client");
+        let staged = staged_execution_client();
         assert!(
             staged.is_file(),
             "staged Execution Client is absent: {staged:?}"

@@ -6,6 +6,9 @@ mutations, watches, supervised process execution, bounded same-instance
 recovery, Client-owned storage and stdio MCP, and streamed Hosted reception.
 The [EXEC-01](exec-01-evidence.md), [EXEC-02](exec-02-evidence.md) and
 [EXEC-03](exec-03-evidence.md) ledgers record the evidence and verification gates.
+The [EXEC-04 evidence](exec-04-evidence.md) tracks independent installation and
+installed-product tests. See [the installation guide](installation.md) for
+package contents and startup commands.
 
 This ADR grounds its decisions in the verified server/client separation
 plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
