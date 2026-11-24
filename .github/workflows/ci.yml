@@ -93,27 +93,15 @@ jobs:
           brew install llvm
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
           corepack enable
-      - name: Check native test targets and clippy
-        run: |
-          cargo test --lib --all-features --locked --no-run
-          cargo clippy --all-targets --all-features --locked -- -D warnings
-      - name: Prepare native process harness
-        id: process
-        shell: bash
-        run: |
-          cargo test --test process --all-features --locked --no-run --message-format=json > "$RUNNER_TEMP/process.jsonl"
-          harness="$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "process" and .profile.test and .executable != null) | .executable' "$RUNNER_TEMP/process.jsonl")"
-          test -x "$harness"
-          echo "harness=$harness" >> "$GITHUB_OUTPUT"
-      - name: Build and exercise the independent archives
-        run: |
-          python3 release/package.py all --out "$RUNNER_TEMP/products"
-          python3 release/conformance.py "$RUNNER_TEMP"/products/*.tar.gz --process-harness "${{ steps.process.outputs.harness }}"
-      - name: Save the installed manifests and checksums
+      - name: Verify the three native macOS products
+        run: python3 release/verify_macos.py --out "$RUNNER_TEMP/products"
+      - name: Save verified installation manifests and checksums
         uses: actions/upload-artifact@v4
         with:
-          name: installed-macos-checksums
-          path: ${{ runner.temp }}/products/*.sha256
+          name: installed-macos-manifests
+          path: |
+            ${{ runner.temp }}/products/*.manifest.json
+            ${{ runner.temp }}/products/*.sha256
 
   notifications:
     name: Notification metadata and signing

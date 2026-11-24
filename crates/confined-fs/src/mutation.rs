@@ -53,8 +53,8 @@ struct OwnedEntry {
     /// The open descriptor of the directory containing `name`.
     parent: File,
     name: OsString,
-    device: u64,
-    inode: u64,
+    device: nix::libc::dev_t,
+    inode: nix::libc::ino_t,
     directory: bool,
 }
 
