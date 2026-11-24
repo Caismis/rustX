@@ -5746,6 +5746,15 @@ async fn wait_for_local_execution_receipt(pending: &std::path::Path) {
 }
 
 #[cfg(target_os = "linux")]
+fn assert_no_local_recovery_owner(pending: &std::path::Path) {
+    let entries = std::fs::read_dir(pending)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, [std::ffi::OsString::from(".publication-lock")]);
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
     use rustx::app_server::{
@@ -5918,7 +5927,7 @@ os._exit(os.waitstatus_to_exitcode(status))
         current.close().await;
         detach_then_shutdown(&mut replacement).await;
         assert!(replacement.wait().await.unwrap().success());
-        assert_eq!(std::fs::read_dir(pending).unwrap().count(), 0);
+        assert_no_local_recovery_owner(&pending);
     })
     .await;
 }
@@ -6008,7 +6017,7 @@ os.execv({client:?}, [{client:?}, *sys.argv[1:]])
         driver.close().await;
         detach_then_shutdown(&mut server).await;
         assert!(server.wait().await.unwrap().success());
-        assert_eq!(std::fs::read_dir(pending).unwrap().count(), 0);
+        assert_no_local_recovery_owner(&pending);
     })
     .await;
 }

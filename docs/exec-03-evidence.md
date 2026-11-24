@@ -763,3 +763,27 @@ v81 contract adds `mcp/sourceRead` to return a redacted Client document and
 its probe revision. The Product Host can identify an exact registration
 when its path is absent. Physical Host operations remain denied, and
 the App Server admits the bound read against the selected Session.
+
+### Revision 7 Linux measurements
+
+Three warm-cache samples per workload used independently built release
+executables in separate directories. The stand-alone Client settled Revoke
+with the revision 7 final acknowledgement. The stand-alone Server returned
+one v81 `initialize` reply and exited on explicit owner shutdown. There was
+no paid provider or Client in that Server workload.
+
+| Workload | Data RPCs | Wire bytes sent / received | Median workload time | Peak process RSS |
+|---|---:|---:|---:|---:|
+| Server `initialize` | 1 | 212 / 362 | 781.75 ms including startup | 35,264 KiB |
+| Client ReadLines, 67,108,877 input bytes | 1 | 99 / 265 | 54.99 ms (1,164 MiB/s) | 10,500 KiB |
+| Client Grep, same input | 1 | 149 / 132 | 22.00 ms (2,909 MiB/s) | 11,916 KiB |
+| Client create-only Write, 2 MiB | 34 | 2,798,628 / 2,212 | 1,327.06 ms (1.51 MiB/s) | 12,388 KiB |
+
+Client launch took 2.65–3.30 ms and confirmed shutdown took
+46.65–79.22 ms, using medians across the three workloads. Server shutdown
+was 7.47 ms. Client data frames and RPC counts match the revision 6
+samples above. Timings include competing local builds, especially during
+Write directory sync. Grep throughput uses input size, even though the
+algorithm scans it twice. The management-only Server workload and the
+paired Client workloads measure different boundaries. The earlier
+Hosted import saturation proof records four occupied fragment slots.

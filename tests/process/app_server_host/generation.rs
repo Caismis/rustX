@@ -586,17 +586,33 @@ async fn crash_during_output(cut: CrashCut) {
                 );
             }
         }
-        let MethodResult::FileChunk { chunk } = peer
-            .rpc(Method::FsReadFile {
-                session_id: session.clone(),
-                path: probe.display().to_string(),
-                offset: 0,
-                max_bytes: 64,
-                expected_revision: None,
-            })
-            .await
-        else {
-            panic!("the replacement reads the original Workspace");
+        let chunk = loop {
+            let response = peer
+                .response(Method::FsReadFile {
+                    session_id: session.clone(),
+                    path: probe.display().to_string(),
+                    offset: 0,
+                    max_bytes: 64,
+                    expected_revision: None,
+                })
+                .await;
+            match response {
+                Response::Success(success) => {
+                    let MethodResult::FileChunk { chunk } = success.result else {
+                        panic!("the replacement reads the original Workspace");
+                    };
+                    break chunk;
+                }
+                Response::Failure(failure)
+                    if failure.error.data == Some(ErrorData::EnvironmentCapacityOrConflict) =>
+                {
+                    // Source observation may own the new data writer just after pairing.
+                    tokio::task::yield_now().await;
+                }
+                other @ Response::Failure(_) => {
+                    panic!("replacement Workspace read failed: {other:?}")
+                }
+            }
         };
         assert_eq!(
             STANDARD.decode(chunk.data_base64).unwrap(),
