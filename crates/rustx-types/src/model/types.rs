@@ -688,4 +688,73 @@ mod continuation_work_tests {
             .clone();
         assert!(changed.continuation_boundary().is_err());
     }
+
+    /// One occurrence citing the same accepted-output source twice is evidence
+    /// duplication, not an ambiguous mapping; two distinct occurrences citing
+    /// it once each remains ambiguous.
+    #[test]
+    fn duplicated_provenance_on_one_occurrence_is_not_ambiguous() {
+        use crate::model::projected::{
+            DerivedModelMessage, ProjectedMessage, SemanticTransformation,
+        };
+        let mut request = crate::model::snapshot::tests::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "prefix",
+        );
+        let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
+            opaque: serde_json::json!({"type":"redacted_thinking","data":"a".repeat(64)}).into(),
+        });
+        let output = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("accepted"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
+                text: None,
+                provider_state: Some(state.clone()),
+            })],
+        });
+        let scope = ConversationId::generate();
+        let source = AcceptedOutputContinuationSource::from_accepted_output(
+            RequestId::new("previous"),
+            &scope,
+            request.messages.semantic_fingerprint(),
+            &output,
+        )
+        .unwrap();
+        request.continuation = Some(state);
+        request.continuation_source = Some(source);
+        let MessageBlock::Assistant(accepted) = output.clone() else {
+            unreachable!()
+        };
+        let derived = |count: usize| {
+            ModelInputMessage::Derived(DerivedModelMessage {
+                message: ProjectedMessage::Assistant {
+                    content: accepted.content.clone(),
+                },
+                sources: vec![
+                    request
+                        .continuation_source
+                        .as_ref()
+                        .unwrap()
+                        .assistant
+                        .clone();
+                    count
+                ],
+                checkpoint_sources: vec![],
+                transformations: vec![SemanticTransformation::Summary],
+            })
+        };
+        // A single occurrence carrying the same provenance twice maps exactly
+        // once and produces the accepted-output boundary.
+        request.messages.push(derived(2));
+        assert_eq!(request.continuation_boundary().unwrap(), Some(1));
+        // A second distinct occurrence citing the same source is ambiguous.
+        request.messages.push(derived(1));
+        assert!(
+            request
+                .continuation_boundary()
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+    }
 }

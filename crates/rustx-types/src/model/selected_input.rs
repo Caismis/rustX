@@ -970,12 +970,17 @@ impl SelectedModelInput {
                     .push_back(index);
             }
             if let ModelInputMessage::Derived(derived) = message {
+                // Sources are evidence, not identity: one occurrence may cite
+                // the same source repeatedly. Register each (id, position)
+                // pair once; two distinct occurrences still read as ambiguous.
                 for source in &derived.sources {
-                    cache
+                    let entry = cache
                         .positions
                         .entry(source.message_id.clone())
-                        .or_default()
-                        .push_back(index);
+                        .or_default();
+                    if entry.back() != Some(&index) {
+                        entry.push_back(index);
+                    }
                 }
             }
         }
