@@ -895,3 +895,25 @@ staging observation. The conformance relay now wakes the staged-length
 checks on real Client Save receipts. The physical files, two candidate
 lengths, seal and cleanup assertions remain in the fixture. Its targeted
 run and the complete external conformance target passed locally.
+
+## Follow-up to the review of `29c039243`
+
+- A Session settings change fences both published observations and newer
+  captures that have taken ownership of a watch event. The capture start
+  generation is retained even after its ticket has settled. When the
+  watcher loses a ticket after consuming an event, it schedules a bounded
+  recheck under the current Session settings.
+- The isolated bound Skill regressions cover both cuts. They stop the
+  settings write after it reads A and stop the watcher either before or
+  after it publishes B. The older settings request must return
+  `SessionInputSourceChanged`, settings stay unchanged, and a later edit
+  solely to B's marker is observed by the same Client pair with zero model
+  requests.
+- The test seam for losing a live pair now compiles on supported test
+  targets. Native macOS compilation and fault injection remain deferred.
+- The Hosted Save cancellation branch proceeds from accepted End to the
+  held physical Seal receipt without waiting for the losing allocation
+  to disappear. With `test-support` enabled, the losing Abort is gated
+  before data admission so Seal always completes first. The fixture then
+  cancels the originating Attempt, releases both gates, verifies both
+  original allocations have confirmed removal, and rejects any Publish.

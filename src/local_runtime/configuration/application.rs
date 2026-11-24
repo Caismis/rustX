@@ -118,10 +118,10 @@ pub(crate) struct ApplicationState {
     version: u64,
     scopes: BTreeMap<String, ConfigurationApplication>,
     pending: BTreeMap<String, ApplicationIdentity>,
-    bound_captures: BTreeMap<crate::runtime::identity::SessionId, Arc<()>>,
+    bound_captures: BTreeMap<crate::runtime::identity::SessionId, BoundCaptureState>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
     bound_observations: BTreeMap<String, BoundSourceObservation>,
-    next_bound_observation: u64,
+    next_bound_source_generation: u64,
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
@@ -139,6 +139,11 @@ pub(crate) struct ApplicationState {
     // unrecorded commits. Views read it directly, so an application never
     // reports success over a commit that allocation could not record.
     health: BTreeMap<String, crate::runtime::conversation_runtime::ConfigurationHealth>,
+}
+
+struct BoundCaptureState {
+    generation: u64,
+    active: bool,
 }
 
 #[cfg(test)]
@@ -345,20 +350,38 @@ impl ApplicationState {
         })
     }
 
+    fn next_bound_source_generation(&mut self) -> u64 {
+        self.next_bound_source_generation = self
+            .next_bound_source_generation
+            .checked_add(1)
+            .expect("bound source generation exhausted");
+        self.next_bound_source_generation
+    }
+
     pub(crate) fn begin_bound_capture(
         &mut self,
         session: crate::runtime::identity::SessionId,
-    ) -> Arc<()> {
-        let ticket = Arc::new(());
-        self.bound_captures.insert(session, ticket.clone());
-        ticket
+    ) -> u64 {
+        let generation = self.next_bound_source_generation();
+        self.bound_captures.insert(
+            session,
+            BoundCaptureState {
+                generation,
+                active: true,
+            },
+        );
+        generation
     }
 
     pub(crate) fn try_begin_bound_capture(
         &mut self,
         session: &crate::runtime::identity::SessionId,
-    ) -> Option<Arc<()>> {
-        if self.bound_captures.contains_key(session) {
+    ) -> Option<u64> {
+        if self
+            .bound_captures
+            .get(session)
+            .is_some_and(|capture| capture.active)
+        {
             return None;
         }
         Some(self.begin_bound_capture(session.clone()))
@@ -383,14 +406,21 @@ impl ApplicationState {
         .then_some((capture, self.scopes.get(scope)?.desired.attempt))
     }
 
-    /// The Session-specific cut includes physical observations that need
-    /// no new semantic application, such as a changed watch dependency.
-    pub(crate) fn bound_source_cut(&self, scope: &str) -> (Option<u64>, Option<u64>) {
+    /// A capture can own a consumed watch hint before it publishes anything.
+    /// Its start advances this cut even if its result is subsequently discarded.
+    pub(crate) fn bound_source_cut(
+        &self,
+        session: &crate::runtime::identity::SessionId,
+    ) -> (Option<u64>, Option<u64>, Option<u64>) {
+        let scope = session.as_str();
         (
             self.scopes.get(scope).map(|view| view.desired.attempt),
             self.bound_observations
                 .get(scope)
                 .map(|observation| observation.generation),
+            self.bound_captures
+                .get(session)
+                .map(|capture| capture.generation),
         )
     }
 
@@ -438,39 +468,37 @@ impl ApplicationState {
             return false;
         }
         self.capture_bound_source(scope.clone(), source, input);
-        self.next_bound_observation = self
-            .next_bound_observation
-            .checked_add(1)
-            .expect("bound source observation generation exhausted");
+        let generation = self.next_bound_source_generation();
         self.bound_observations.insert(
             scope,
             BoundSourceObservation {
                 lane,
                 reads,
-                generation: self.next_bound_observation,
+                generation,
             },
         );
         true
     }
 
     pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {
-        self.bound_captures.remove(session);
+        if let Some(capture) = self.bound_captures.get_mut(session) {
+            capture.active = false;
+        }
     }
 
     pub(crate) fn finish_bound_capture(
         &mut self,
         session: &crate::runtime::identity::SessionId,
-        ticket: &Arc<()>,
+        ticket: u64,
     ) -> bool {
-        if self
-            .bound_captures
-            .get(session)
-            .is_some_and(|current| Arc::ptr_eq(current, ticket))
-        {
-            self.bound_captures.remove(session);
-            return true;
+        let Some(capture) = self.bound_captures.get_mut(session) else {
+            return false;
+        };
+        if !capture.active || capture.generation != ticket {
+            return false;
         }
-        false
+        capture.active = false;
+        true
     }
 
     /// Runtime catalog publication changes the native baseline, not authored

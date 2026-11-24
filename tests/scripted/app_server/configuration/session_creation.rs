@@ -2474,13 +2474,7 @@ async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
                 session_resources: None,
             },
         };
-        let observe = || {
-            fixture
-                .manager
-                .applications
-                .lock()
-                .bound_source_cut(id.as_str())
-        };
+        let observe = || fixture.manager.applications.lock().bound_source_cut(id);
 
         let before = observe();
         fixture
@@ -2595,6 +2589,18 @@ async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn newer_bound_skill_observation_fences_an_older_session_input() {
+    bound_skill_capture_fences_older_settings(true).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn in_flight_bound_skill_capture_fences_older_settings() {
+    bound_skill_capture_fences_older_settings(false).await;
+}
+
+#[cfg(target_os = "linux")]
+async fn bound_skill_capture_fences_older_settings(already_published: bool) {
     use crate::app_server::{
         connection::AppServerConnection,
         protocol::{ErrorData, JsonRpcVersion, Method, Request, RequestId, Response},
@@ -2663,7 +2669,13 @@ async fn newer_bound_skill_observation_fences_an_older_session_input() {
         gate.wait_entered_async().await;
         assert_eq!(description(), "Skill a");
 
-        hooks.insert("bound_configuration_watch_resynced", {
+        let before_retarget = applied(&fixture, 0).await.desired;
+        let watch_gate = if already_published {
+            "bound_configuration_watch_resynced"
+        } else {
+            "bound_watch_captured"
+        };
+        hooks.insert(watch_gate, {
             let after_retarget = after_retarget.clone();
             move || after_retarget.enter()
         });
@@ -2671,8 +2683,17 @@ async fn newer_bound_skill_observation_fences_an_older_session_input() {
         std::os::unix::fs::symlink("../../targets/b", &staged).unwrap();
         std::fs::rename(staged, physical.join(".agents/skills/foo")).unwrap();
         after_retarget.wait_entered_async().await;
-        let adopted = applied(&fixture, 0).await.desired;
-        assert_eq!(description(), "Skill b");
+        let at_cut = applied(&fixture, 0).await.desired;
+        if already_published {
+            assert_ne!(at_cut, before_retarget);
+            assert_eq!(description(), "Skill b");
+        } else {
+            assert_eq!(
+                at_cut, before_retarget,
+                "the watch has read B without publishing it"
+            );
+            assert_eq!(description(), "Skill a");
+        }
         gate.release();
         let Response::Failure(failure) = write.await.unwrap() else {
             panic!("old capture overwrote the new observation");
@@ -2691,8 +2712,25 @@ async fn newer_bound_skill_observation_fences_an_older_session_input() {
                 .configuration_application(id)
                 .unwrap()
                 .desired,
-            adopted
+            at_cut
         );
+        let after_publish = Arc::new(Gate::default());
+        let _unpark_publish = after_publish.arm_scoped();
+        let published = if already_published {
+            after_retarget
+        } else {
+            let published = after_publish;
+            hooks.insert("bound_configuration_watch_resynced", {
+                let published = published.clone();
+                move || published.enter()
+            });
+            after_retarget.release();
+            published.wait_entered_async().await;
+            published
+        };
+        let adopted = applied(&fixture, 0).await.desired;
+        assert_ne!(adopted, before_retarget);
+        assert_eq!(description(), "Skill b");
         {
             let application = fixture.manager.applications.lock();
             let paths = &application
@@ -2706,7 +2744,7 @@ async fn newer_bound_skill_observation_fences_an_older_session_input() {
             assert!(!paths.contains_key(&fixture.workspaces[0].join("targets/a")));
         }
         let new_watch = next_resync();
-        after_retarget.release();
+        published.release();
         new_watch.await.unwrap();
         let updated = next_resync();
         std::fs::write(

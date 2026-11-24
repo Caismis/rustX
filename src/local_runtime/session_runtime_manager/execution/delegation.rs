@@ -83,6 +83,8 @@ impl ChildExecutionGrant {
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
             test_hooks: Mutex::default(),
+            #[cfg(feature = "test-support")]
+            save_abort_gate: Mutex::default(),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
             managed_output: std::sync::OnceLock::from(false),

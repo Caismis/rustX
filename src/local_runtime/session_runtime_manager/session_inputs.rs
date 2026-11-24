@@ -155,7 +155,7 @@ impl SessionRuntimeManager {
             let retained_model = retained.map(|binding| binding.input.model.clone());
             let bound_cut = endpoint
                 .as_ref()
-                .map(|_| application.bound_source_cut(session.as_str()));
+                .map(|_| application.bound_source_cut(session));
             (settings, endpoint, retained_model, source_cut, bound_cut)
         };
         let mut input = settings.input();
@@ -207,7 +207,7 @@ impl SessionRuntimeManager {
         };
         if !same_endpoint
             || application.source_cut(&input.cwd) != source_cut
-            || bound_cut.is_some_and(|cut| application.bound_source_cut(session.as_str()) != cut)
+            || bound_cut.is_some_and(|cut| application.bound_source_cut(session) != cut)
         {
             return Err(SessionInputError::SourceChanged);
         }

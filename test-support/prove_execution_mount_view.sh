@@ -110,6 +110,9 @@ cargo test -p rustx --all-features --locked --lib \
     newer_bound_skill_observation_fences_an_older_session_input \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
+    in_flight_bound_skill_capture_fences_older_settings \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
     a_bound_source_rechecks_after_its_final_document_read_fails \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \

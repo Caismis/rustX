@@ -133,7 +133,46 @@ impl SessionExecutionScope {
     }
 }
 
+#[cfg(feature = "test-support")]
+pub(super) struct SaveAbortGate {
+    arrived: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(feature = "test-support")]
+impl LocalExecutionEndpoint {
+    /// Pauses the next Save abort before it acquires any data-lane resources.
+    #[doc(hidden)]
+    pub fn hold_next_save_abort_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (arrived, waiting) = tokio::sync::oneshot::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        let mut gate = self.save_abort_gate.lock().expect("Save abort gate");
+        assert!(gate.is_none());
+        *gate = Some(SaveAbortGate { arrived, release });
+        (waiting, resume)
+    }
+}
+
 impl OutputBinding {
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn before_save_abort_for_test(&self) {
+        let gate = self
+            .endpoint
+            .save_abort_gate
+            .lock()
+            .expect("Save abort gate")
+            .take();
+        if let Some(SaveAbortGate { arrived, release }) = gate {
+            let _ = arrived.send(());
+            let _ = release.await;
+        }
+    }
+
     pub(crate) async fn exchange(
         &self,
         request: SaveRequest,

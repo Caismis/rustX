@@ -196,6 +196,7 @@ struct Watches {
     registered: BTreeMap<PathBuf, (PathBuf, WatchId)>,
     plan: WatchPlan,
     retiring: BTreeSet<WatchId>,
+    needs_recapture: bool,
     incomplete_coverage: bool,
     incomplete_python: BTreeSet<crate::capabilities::ToolSourceId>,
 }
@@ -391,10 +392,13 @@ async fn watch_session(
                         worker.workspace_watch_plan(&id, binding.workspace(), &turn),
                     )?;
                 }
-                if changed || recheck && watches.incomplete_coverage {
+                if changed || recheck && (watches.incomplete_coverage || watches.needs_recapture) {
                     #[cfg(test)]
                     recovery_due(&worker, changed);
-                    worker.observe_bound_source(&id, &binding, turn, native_change);
+                    // The Client has already consumed the watch hint. If
+                    // the capture lost its ticket, re-read with current settings.
+                    watches.needs_recapture =
+                        !worker.observe_bound_source(&id, &binding, turn, native_change);
                     check = Instant::now() + COVERAGE_RECHECK;
                     #[cfg(test)]
                     worker

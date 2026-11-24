@@ -71,6 +71,8 @@ pub struct LocalExecutionEndpoint {
     pub(crate) settlement_joined: tokio::sync::Notify,
     #[cfg(test)]
     test_hooks: Mutex<ExecutionTestHooks>,
+    #[cfg(feature = "test-support")]
+    save_abort_gate: Mutex<Option<output::SaveAbortGate>>,
     /// The total in-flight data budget on the connection — Agent page
     /// exchanges *and* management queries share these
     /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
@@ -261,6 +263,8 @@ impl LocalExecutionEndpoint {
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
             test_hooks: Mutex::default(),
+            #[cfg(feature = "test-support")]
+            save_abort_gate: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -320,6 +324,8 @@ impl LocalExecutionEndpoint {
             settlement_joined: tokio::sync::Notify::new(),
             #[cfg(test)]
             test_hooks: Mutex::default(),
+            #[cfg(feature = "test-support")]
+            save_abort_gate: Mutex::default(),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
@@ -1935,7 +1941,7 @@ impl LocalExecutionEndpoint {
         self.connection_released.notify_waiters();
     }
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn detach_live_pair_for_test(&self) {
         let id = self
             .connection

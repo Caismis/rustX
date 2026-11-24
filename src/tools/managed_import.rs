@@ -336,6 +336,8 @@ async fn receive(
             Ok(None) => {}
         }
     }
+    #[cfg(feature = "test-support")]
+    binding.before_save_abort_for_test().await;
     let cleanup = ExecutionCancellation::detached(
         CancellationSignal::new(),
         CancellationReason::UserRequested,

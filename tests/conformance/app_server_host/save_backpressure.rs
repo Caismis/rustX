@@ -517,15 +517,25 @@ pub(super) struct PendingSeal {
     sealed: oneshot::Receiver<()>,
     resume: oneshot::Sender<()>,
     cleaned: oneshot::Receiver<()>,
+    #[cfg(feature = "test-support")]
+    losing_abort: oneshot::Receiver<()>,
+    #[cfg(feature = "test-support")]
+    release_loser: oneshot::Sender<()>,
 }
 
 impl PendingSeal {
     pub(super) async fn wait_for_seal(&mut self) {
         (&mut self.sealed).await.expect("actual Client seal");
+        #[cfg(feature = "test-support")]
+        (&mut self.losing_abort)
+            .await
+            .expect("loser abort pending before dispatch");
     }
 
     pub(super) async fn release_and_confirm_removal(self) {
         self.resume.send(()).unwrap();
+        #[cfg(feature = "test-support")]
+        self.release_loser.send(()).unwrap();
         self.cleaned
             .await
             .expect("actual Client removed the sealed candidate");
@@ -542,6 +552,8 @@ pub(super) async fn hold_seal_receipt(
     tokio::spawn(async move {
         let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
     });
+    #[cfg(feature = "test-support")]
+    let (losing_abort, release_loser) = relay.endpoint.hold_next_save_abort_for_test();
     let (announce, sealed) = oneshot::channel();
     let (resume, released) = oneshot::channel();
     let (confirm, cleaned) = oneshot::channel();
@@ -575,6 +587,10 @@ pub(super) async fn hold_seal_receipt(
                     ClientReply::Save(SaveReply::Sealed { .. }),
                 ) => {
                     let (announce, released) = gate.take().expect("exactly one physical seal");
+                    assert_eq!(allocations.len(), 2);
+                    assert!(allocations.contains(key));
+                    #[cfg(feature = "test-support")]
+                    assert!(removals.is_empty(), "Seal precedes the losing Abort");
                     winner = Some(key.clone());
                     announce.send(()).unwrap();
                     released.await.unwrap();
@@ -582,10 +598,11 @@ pub(super) async fn hold_seal_receipt(
                 (
                     ClientRequest::Save(SaveRequest::Abort { key }),
                     ClientReply::Save(SaveReply::Aborted {
+                        key: receipt_key,
                         cleanup: Cleanup::Removed,
-                        ..
                     }),
                 ) => {
+                    assert_eq!(receipt_key, key);
                     assert!(allocations.contains(key) && !removals.contains(key));
                     removals.push(key.clone());
                     if removals.len() == 2 {
@@ -610,6 +627,10 @@ pub(super) async fn hold_seal_receipt(
             sealed,
             resume,
             cleaned,
+            #[cfg(feature = "test-support")]
+            losing_abort,
+            #[cfg(feature = "test-support")]
+            release_loser,
         },
         SaveReceipts(receipts),
     )

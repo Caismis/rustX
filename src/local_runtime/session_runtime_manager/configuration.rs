@@ -15,8 +15,14 @@ pub(super) struct BoundCapture {
     endpoint: Arc<super::LocalExecutionEndpoint>,
     watch: Option<rustx_execution_server::ControlHandle>,
     coalesce_failure: bool,
-    ticket: Arc<()>,
+    ticket: u64,
     prefetched_python: Option<PrefetchedPython>,
+}
+
+#[derive(Default)]
+struct BoundCaptureOutcome {
+    retained: bool,
+    published: bool,
 }
 
 struct PrefetchedPython {
@@ -774,7 +780,7 @@ impl SessionRuntimeManager {
         endpoint: &Arc<super::LocalExecutionEndpoint>,
         watch: rustx_execution_server::ControlHandle,
         native_change: bool,
-    ) {
+    ) -> bool {
         let mut application = self.applications.lock();
         if !self
             .execution
@@ -788,10 +794,10 @@ impl SessionRuntimeManager {
                         .is_some_and(|current| current.same_pair(&watch))
             })
         {
-            return;
+            return false;
         }
         let Some(input) = self.bound_watch_input(session) else {
-            return;
+            return false;
         };
         // A new watch plan also resynchronizes the source. The previous
         // physical lane may still hold a ticket after a pair replacement.
@@ -805,7 +811,8 @@ impl SessionRuntimeManager {
             coalesce_failure: !native_change,
             ticket,
             prefetched_python: None,
-        }]);
+        }])
+        .retained
     }
 
     fn bound_watch_input(
@@ -860,15 +867,17 @@ impl SessionRuntimeManager {
                 return false;
             };
             drop(application);
-            return self.capture_bound_consumers(vec![BoundCapture {
-                session: session.clone(),
-                input,
-                endpoint: endpoint.clone(),
-                watch: Some(watch),
-                coalesce_failure: true,
-                ticket,
-                prefetched_python: None,
-            }]);
+            return self
+                .capture_bound_consumers(vec![BoundCapture {
+                    session: session.clone(),
+                    input,
+                    endpoint: endpoint.clone(),
+                    watch: Some(watch),
+                    coalesce_failure: true,
+                    ticket,
+                    prefetched_python: None,
+                }])
+                .published;
         };
         let input = source.input.clone();
         let retained_python = source.managed_python.clone();
@@ -904,7 +913,7 @@ impl SessionRuntimeManager {
         else {
             self.applications
                 .lock()
-                .finish_bound_capture(session, &ticket);
+                .finish_bound_capture(session, ticket);
             return false;
         };
         self.capture_bound_consumers(vec![BoundCapture {
@@ -920,6 +929,7 @@ impl SessionRuntimeManager {
                 settings_revision,
             }),
         }])
+        .published
     }
 
     fn bound_capture_baseline_current(
@@ -943,8 +953,8 @@ impl SessionRuntimeManager {
         })
     }
 
-    fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) -> bool {
-        let mut published = false;
+    fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) -> BoundCaptureOutcome {
+        let mut outcome = BoundCaptureOutcome::default();
         for BoundCapture {
             session,
             input,
@@ -981,7 +991,7 @@ impl SessionRuntimeManager {
                 self.configuration.test_hooks.reach("bound_watch_captured");
             }
             let mut application = self.applications.lock();
-            if !application.finish_bound_capture(&session, &ticket) {
+            if !application.finish_bound_capture(&session, ticket) {
                 continue;
             }
             if !self.bound_capture_baseline_current(&application, &session, baseline) {
@@ -1017,31 +1027,33 @@ impl SessionRuntimeManager {
             drop(binding);
             let scope = session.to_string();
             let observed = if let Some(lane) = lane {
-                endpoint
-                    .with_control_lane(&lane, || {
-                        application.publish_bound_observation(
-                            scope,
-                            &input.cwd,
-                            capture,
-                            reads,
-                            lane.clone(),
-                            coalesce_failure,
-                        )
-                    })
-                    .unwrap_or(false)
+                endpoint.with_control_lane(&lane, || {
+                    application.publish_bound_observation(
+                        scope,
+                        &input.cwd,
+                        capture,
+                        reads,
+                        lane.clone(),
+                        coalesce_failure,
+                    )
+                })
             } else {
                 application.capture_bound_source(scope, &input.cwd, capture);
-                true
+                Some(true)
             };
-            if !observed {
+            let Some(published) = observed else {
+                continue;
+            };
+            outcome.retained = true;
+            if !published {
                 continue;
             }
             self.applications.notify(&application);
             drop(application);
             self.applications.run(self.clone());
-            published = true;
+            outcome.published = true;
         }
-        published
+        outcome
     }
 
     /// Source authoring never loads, creates, or derives authority from a Session.
