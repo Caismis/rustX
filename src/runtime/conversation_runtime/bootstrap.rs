@@ -674,6 +674,18 @@ impl ConversationRuntime {
                     && !active_plane.invalid_goal,
             });
         }
+        // A child-scoped runtime never owns a subagent registry: the
+        // registry is a parent-plane authority. The `role + subagents`
+        // combination is rejected here, before any claim, exactly as
+        // `docs/invariants.md` declares (Issue #606).
+        if config.role.is_child()
+            && let Some(subagents) = &config.subagents
+        {
+            return Err(ConversationRuntimeError::SubagentOwnershipMismatch {
+                registry_conversation: subagents.conversation_id().clone(),
+                runtime_conversation: conversation_id,
+            });
+        }
         // The subagent registry is a conversation-owned logical plane: the
         // runtime must not adopt a registry that belongs to another
         // conversation/agent domain or another canonical mailbox. The typed
@@ -960,7 +972,6 @@ impl ConversationRuntime {
                     super::foreground::IdleConversation::Durable,
                 ),
                 manual_tail: super::foreground::ManualTailState::None,
-                scheduled_retries: std::collections::BTreeMap::default(),
                 next_attempt_seq,
                 recovered_continuation,
                 recovered_permission_task_message,
@@ -1012,7 +1023,6 @@ impl ConversationRuntime {
         let scheduled_executor = Arc::new(
             crate::runtime::workflow::scheduled::executor::ScheduledExecutor::new(
                 crate::runtime::workflow::scheduled::executor::ScheduledExecutorParts {
-                    state: state.clone(),
                     lifecycle: lifecycle.clone(),
                     store: store.clone(),
                     mailbox: mailbox.clone(),
@@ -1024,8 +1034,6 @@ impl ConversationRuntime {
                     monotonic_clock: monotonic_clock.clone(),
                     clock: clock.clone(),
                     activity: activity.clone(),
-                    settlement: settlement.clone(),
-                    durability_gate: durability_gate.clone(),
                     spawner: executor.clone(),
                     #[cfg(test)]
                     probe: probe.clone(),
@@ -1035,14 +1043,11 @@ impl ConversationRuntime {
         let external_auxiliary = crate::runtime::auxiliary::external::ExternalAuxiliary::new(
             crate::runtime::auxiliary::external::ExternalAuxiliaryParts {
                 conversation_id: conversation_id.clone(),
-                state: state.clone(),
-                lifecycle: lifecycle.clone(),
                 store: store.clone(),
                 policy: config.context.policy,
                 estimator: config.context.estimator.clone(),
                 tool_runtime: config.tool_runtime.clone(),
-                model_timeout_policy: config.model_timeout_policy,
-                executor: auxiliary,
+                executor: auxiliary.clone(),
             },
         );
         let inner = Arc::new(RuntimeInner {
@@ -1077,6 +1082,7 @@ impl ConversationRuntime {
             monotonic_clock,
             durability_gate: durability_gate.clone(),
             external_auxiliary,
+            auxiliary_executor: auxiliary,
             scheduled_executor,
             host_task: Mutex::new(None),
             recovery,
@@ -1093,6 +1099,11 @@ impl ConversationRuntime {
             #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
+        // The extracted owners reach coordinator state only through the
+        // runtime's narrow interfaces (Issue #606): bind the weak runtime
+        // handle now that `RuntimeInner` exists — it never pins the runtime.
+        inner.scheduled_executor.bind_runtime(&inner);
+        inner.external_auxiliary.bind_runtime(&inner);
         // Recovery has already durably terminalized every orphaned child.
         // Restore only durable Agent and activation records; no child
         // process, policy, or frozen resource is reconstructed from current

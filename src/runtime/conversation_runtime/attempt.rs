@@ -91,7 +91,7 @@ impl RuntimeInner {
                 resources.context_assembly().clone(),
                 model_timeout_policy,
                 &resources,
-                Arc::new(self.external_auxiliary.executor()),
+                Arc::new(self.auxiliary_executor.clone()),
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
@@ -101,7 +101,7 @@ impl RuntimeInner {
             permission_task_message,
             recovered_permission_task_message,
         ) = {
-            let mut state = self.state.lock().expect("coordinator lock");
+            let mut state = self.lock_state();
             (
                 state
                     .child()
@@ -159,7 +159,7 @@ impl RuntimeInner {
                                 }),
                         },
                     )
-                    .with_workflow_models(self.external_auxiliary.executor());
+                    .with_workflow_models(self.auxiliary_executor.clone());
                     if let Some(registry) = self.subagents.clone() {
                         context = context.with_agent_registry(std::sync::Arc::new(registry));
                     }
@@ -186,7 +186,7 @@ impl RuntimeInner {
         };
         let reviewer = std::sync::Arc::new(
             crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
-                self.external_auxiliary.executor(),
+                self.auxiliary_executor.clone(),
                 auxiliary_invocation,
                 model_timeout_policy,
                 resources.revision().get(),

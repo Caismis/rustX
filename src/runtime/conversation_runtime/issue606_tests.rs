@@ -165,29 +165,57 @@ async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_reapers_claim_one_join_handle() {
-    // Concurrent Reaper: the admission-worker reaper and the drain reaper
-    // race on the same finished tail; exactly one takes the JoinHandle, the
-    // other waits for the join, and the tail ends `None`.
-    for _ in 0..20 {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (runtime, _model) =
-            test_support::headless_runtime(&dir, vec![test_support::one_turn_script()], None, None)
-                .await;
-        runtime.activate();
-        let handle = runtime.admit_compaction(None).expect("compaction admitted");
-        let _ = handle.wait().await;
-        // Now both reapers race: an admission pass and the drain.
-        let _ = runtime.submit_inbound(test_support::text_content("race"));
-        let _ = runtime.shutdown().await;
-        assert!(
-            !runtime
-                .inner
-                .lock_state()
-                .foreground
-                .manual_tail
-                .is_unreaped()
-        );
-    }
+    // Concurrent Reaper with a real barrier: one reaper provably holds the
+    // `JoinHandle` while `Joining` is published; a concurrent reaper
+    // walks `WaitJoined`, waits for the join's completion signal rather
+    // than racing a second join, and the tail ends `None` with
+    // `completed && joined` both observed.
+    let gate = Arc::new(probe::Gate::default());
+    gate.arm();
+    let coordinator_probe = probe::CoordinatorProbe {
+        manual_tail_joining_gate: Some(gate.clone()),
+        ..Default::default()
+    };
+    let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
+    let runtime = fixture.runtime.clone();
+    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    // Drive a reap pass that claims the JoinHandle and pauses with
+    // `Joining` published. The admission worker's next pass reaps it once
+    // the task finishes; the barrier holds it inside `Reap::Work`.
+    runtime
+        .submit_inbound(test_support::text_content("trigger a reaper pass"))
+        .expect("inbound queued");
+    gate.wait_entered_async().await;
+    assert!(
+        matches!(
+            runtime.inner.lock_state().foreground.manual_tail,
+            ManualTailState::Joining(_)
+        ),
+        "the first reaper published Joining while holding the JoinHandle"
+    );
+    // A second reaper — drain — sees Joining and waits for the shared
+    // completion instead of claiming a second join.
+    let drain = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.shutdown().await }
+    });
+    // Drain provably observed `Joining`: releasing the gate lets the first
+    // reaper join; only the shared completion can release the second.
+    gate.release();
+    // `handle.wait()` requires `completed && joined` — it returns only
+    // because the one claimed join finished, which is the shared
+    // completion the second reaper waited on.
+    let _ = handle.wait().await;
+    drain.await.expect("drain task").expect("shutdown");
+    assert!(
+        !runtime
+            .inner
+            .lock_state()
+            .foreground
+            .manual_tail
+            .is_unreaped(),
+        "both reapers converge on one join; the tail is reaped"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -197,15 +225,15 @@ async fn host_task_installation_is_inactive_only_and_install_once() {
         test_support::headless_runtime(&dir, vec![test_support::one_turn_script()], None, None)
             .await;
     runtime
-        .install_host_task(tokio::spawn(async {}))
+        .install_host_task(|| tokio::spawn(async {}))
         .expect("first install while Inactive");
     let error = runtime
-        .install_host_task(tokio::spawn(async {}))
+        .install_host_task(|| tokio::spawn(async {}))
         .expect_err("a second install is refused");
     assert_eq!(error.kind, crate::context::ContextErrorKind::AuxiliaryBusy);
     runtime.activate();
     let error = runtime
-        .install_host_task(tokio::spawn(async {}))
+        .install_host_task(|| tokio::spawn(async {}))
         .expect_err("post-activation install is refused");
     assert_eq!(error.kind, crate::context::ContextErrorKind::Cancelled);
     runtime.shutdown().await.expect("fixture shutdown");
@@ -224,10 +252,12 @@ async fn host_task_holds_only_a_weak_runtime_while_idle() {
     let (release, parked) = tokio::sync::oneshot::channel::<()>();
     let (proof, proved) = tokio::sync::oneshot::channel::<bool>();
     runtime
-        .install_host_task(tokio::spawn(async move {
-            parked.await.expect("park");
-            proof.send(weak.upgrade().is_some()).expect("proof");
-        }))
+        .install_host_task(|| {
+            tokio::spawn(async move {
+                parked.await.expect("park");
+                proof.send(weak.upgrade().is_some()).expect("proof");
+            })
+        })
         .expect("install");
     drop(runtime);
     release.send(()).expect("release");
@@ -250,10 +280,12 @@ async fn an_unsettled_host_task_blocks_the_drain_quiescent_boundary() {
     let (entered, entered_rx) = std::sync::mpsc::channel::<()>();
     let (release, parked) = tokio::sync::oneshot::channel::<()>();
     runtime
-        .install_host_task(tokio::spawn(async move {
-            entered.send(()).expect("entered");
-            parked.await.expect("park");
-        }))
+        .install_host_task(|| {
+            tokio::spawn(async move {
+                entered.send(()).expect("entered");
+                parked.await.expect("park");
+            })
+        })
         .expect("install");
     runtime.activate();
     let shutdown = tokio::spawn({
@@ -436,4 +468,107 @@ async fn auxiliary_admission_blocks_inside_the_shared_coordinator_section() {
     drop(guard);
     assert!(admitted.join().expect("admit thread").is_ok());
     fixture.runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attempt_task_panic_publishes_a_failed_settlement_for_terminal_waiters() {
+    // Issue #606 (P1): a panicking Attempt owner used to leave every
+    // `attempt_settlement` waiter — the SubagentChild/WorkflowAgentRun
+    // terminal wait — hung forever. The poison path now publishes a
+    // recognizable `RuntimeFailed` settlement so both child roles exit
+    // through their existing failure-reporting path. It fabricates no
+    // Attempt terminal and overwrites no committed history.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (release, released) = test_support::model_release();
+    let script = vec![
+        test_support::FakeStep::Emit(crate::model::event::ModelEvent::Started),
+        test_support::FakeStep::ParkUntilReleased(released),
+        test_support::FakeStep::Emit(crate::model::event::ModelEvent::Completed {
+            finish_reason: crate::model::finish::ModelFinishReason::Stop,
+            usage: None,
+        }),
+    ];
+    let (runtime, _model) = test_support::headless_runtime(&dir, vec![script], None, None).await;
+    runtime.activate();
+    runtime
+        .submit_inbound(test_support::text_content("hold the attempt"))
+        .expect("inbound accepted");
+    // Wait until the attempt physically owns the slot.
+    let attempt_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let attempt = {
+                let state = runtime.inner.lock_state();
+                state
+                    .foreground
+                    .slot
+                    .as_attempt()
+                    .map(|current| current.attempt_id.clone())
+            };
+            if let Some(attempt_id) = attempt {
+                break attempt_id;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the admitted attempt owns the slot");
+    // `AttemptTaskPoisonGuard` calls exactly this on unwinding; driving it
+    // directly proves the settlement publication the guard relies on.
+    runtime.inner.poison_foreground_for_task(&attempt_id);
+    let settlement = runtime.attempt_settlement(0).await;
+    assert_eq!(settlement.attempt_id, attempt_id);
+    assert!(
+        matches!(
+            settlement.outcome,
+            attempt::NativeAttemptOutcome::RuntimeFailed
+        ),
+        "the poisoned attempt settles as a recognizable failure: {:?}",
+        settlement.outcome
+    );
+    // Physical drain still completes: the parked task is released and the
+    // runtime shuts down rather than hanging on the poisoned owner.
+    let _ = release.send(true);
+    // Shutdown terminates and reports the absorbing failure fact rather
+    // than hanging on the poisoned owner.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("shutdown drains after the panic");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn in_lock_panic_recovers_to_failed_admission_and_still_drains() {
+    // Issue #606 (P2): a panic *while holding* the coordinator guard must
+    // not wedge every later caller on a poisoned mutex. The controlled
+    // recovery boundary in `lock_state` converges business admission to
+    // the absorbing failed state while physical drain — a second reaper
+    // pass and shutdown — still terminates.
+    let fixture = test_support::headless_fixture().await;
+    let runtime = fixture.runtime.clone();
+    // Fault injection: panic while holding the coordinator guard, exactly
+    // like a panic inside a critical-section mutation (e.g. `append_event`
+    // in `finish_manual_compaction`).
+    let inner = runtime.inner.clone();
+    std::thread::spawn(move || {
+        let _guard = inner.state.lock().expect("pre-poison lock");
+        panic!("fault injection: panic while holding the coordinator guard");
+    })
+    .join()
+    .expect_err("the injected panic poisoned the coordinator lock");
+    // Business admission converges to failed — every gate consults the
+    // committed `DurabilityFailed` fact instead of hanging on the lock.
+    // `submit_inbound` is synchronous on the coordinator lock: the
+    // recovered guard answers immediately instead of panicking or hanging.
+    let rejected = runtime.submit_inbound(test_support::text_content("post-poison inbound"));
+    assert!(
+        rejected.is_err(),
+        "a poisoned coordinator admits no new business work"
+    );
+    // Physical drain — the manual-tail reaper and shutdown — still
+    // terminates: it reads the mid-transition facts and exits.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let _ = runtime.admit_compaction(None);
+        runtime.shutdown().await
+    })
+    .await
+    .expect("reaper and shutdown terminate after lock poisoning");
 }

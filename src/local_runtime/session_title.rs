@@ -65,14 +65,20 @@ pub(crate) fn arm(
         tracing::warn!(%session_id, "Title source recovery remains unresolved");
         return;
     }
-    let task = tokio::spawn(owner(
-        catalog,
-        session_id.clone(),
-        runtime,
-        metadata,
-        capacity,
-    ));
-    if runtime.install_host_task(task).is_err() {
+    // The task spawns only inside the admitted critical section: a refused
+    // install never detaches a title owner the caller already lost.
+    if runtime
+        .install_host_task(|| {
+            tokio::spawn(owner(
+                catalog,
+                session_id.clone(),
+                runtime,
+                metadata,
+                capacity,
+            ))
+        })
+        .is_err()
+    {
         tracing::warn!(%session_id, "Title host task installation was refused");
     }
 }

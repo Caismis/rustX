@@ -2,6 +2,7 @@
 //! absorbing `DurabilityFailed` fact, and the background/subagent terminal
 //! publication failure sinks.
 
+use super::attempt::{NativeAttemptOutcome, NativeAttemptSettlement};
 use super::{
     ConversationObservation, ConversationRuntime, CoordinatorState, DurableOperation, RuntimeInner,
     Weak,
@@ -277,6 +278,21 @@ impl RuntimeInner {
             return;
         }
         if state.foreground.slot.poison() {
+            // The poisoned attempt WAS admitted, so every settlement waiter
+            // — a child driver's terminal wait — needs a recognizable
+            // failure handoff to exit through its failure-reporting and
+            // physical-drain paths instead of hanging on a settlement that
+            // can never arrive. `RuntimeFailed` reports the real failure;
+            // it fabricates no Attempt terminal outcome and overwrites no
+            // committed history (Issue #606).
+            state.foreground.latest_settlement = Some(NativeAttemptSettlement {
+                ordinal: state.foreground.admitted_attempts,
+                attempt_id: attempt_id.clone(),
+                outcome: NativeAttemptOutcome::RuntimeFailed,
+            });
+            if let Some(fanout) = self.pending.get() {
+                fanout.child_settled();
+            }
             self.commit_failure_and_observe(
                 DurableOperation::CanonicalCommit,
                 format!(

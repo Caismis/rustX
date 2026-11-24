@@ -430,6 +430,21 @@ impl RuntimeInner {
                 notified.await;
             },
             Reap::Work(tail) => {
+                #[cfg(test)]
+                {
+                    let joining_gate = self
+                        .probe
+                        .lock()
+                        .expect("coordinator probe lock poisoned")
+                        .as_ref()
+                        .and_then(|probe| probe.manual_tail_joining_gate.clone());
+                    // Test barrier: `Joining` is already published, the join
+                    // has not started — a concurrent reaper provably walks
+                    // `WaitJoined` while this one holds the JoinHandle.
+                    if let Some(gate) = joining_gate {
+                        gate.enter();
+                    }
+                }
                 if let Err(error) = tail.worker.await {
                     let diagnostic = format!("native manual Compaction task failed: {error}");
                     self.commit_failure_and_observe(

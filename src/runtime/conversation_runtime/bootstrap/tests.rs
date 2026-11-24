@@ -1112,6 +1112,45 @@ async fn construction_rejects_a_registry_for_another_parent_agent() {
     );
 }
 
+/// A child-scoped runtime never owns a subagent registry — the registry
+/// is a parent-plane authority. The `role + subagents` combination is
+/// rejected at construction before any claim (docs/invariants.md,
+/// Issue #606).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn construction_rejects_a_child_role_holding_a_subagent_registry() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let store = Arc::new(
+        crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
+        ))
+        .expect("in-memory store"),
+    );
+    for role in [
+        ConversationRole::SubagentChild,
+        ConversationRole::WorkflowAgentRun { output: None },
+    ] {
+        let (_subagents, mut config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
+            store.clone(),
+            &ConversationId::new("conv_efeaf863-95c1-73d9-8623-5a766b1967be"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        config.role = role;
+        let error =
+            ConversationRuntime::new(config).expect_err("child role + registry is rejected");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::SubagentOwnershipMismatch { .. }
+            ),
+            "a child role holding a registry is rejected: {error}"
+        );
+    }
+}
+
 /// A registry that already owns a committed child record can be
 /// independently committed before runtime construction; the constructor
 /// must not silently adopt it.

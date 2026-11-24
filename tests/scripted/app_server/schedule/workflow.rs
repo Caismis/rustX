@@ -774,3 +774,76 @@ async fn a_scheduler_cold_start_recovers_the_configuration_application() {
     })
     .await;
 }
+
+/// Issue #606 (P2 evidence): the scheduled command preparation — frozen
+/// model/resources/approval inputs, capability lease and the durable Claimed
+/// intent — provably completes **before** the `claim_scheduled_start`
+/// critical section: a barrier parked after prep still observes the durable
+/// start unclaimed while the slot owner is live.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_prep_completes_before_the_claim_critical_section() {
+    bounded(async {
+        let mut f = Fixture::with_session_count(None, 1).await;
+        f.install_scheduled_workflow("Prep-before-Claim");
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+        let resident = f.load(0).await.unwrap().unwrap();
+        let runtime = resident.inspect_runtime().unwrap();
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        runtime.install_scheduled_prep_gate(gate.clone());
+        let created = scheduled(&f).await;
+        clock.add(60);
+        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+            start,
+            ..
+        }) = f
+            .manager
+            .schedule_operation(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: created.revision,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("native admission")
+        };
+        // Parked after preparation, before the Claim critical section.
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        let before = f
+            .manager
+            .scheduled_workflow_recovery(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                start.id.clone(),
+                0,
+                100,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !matches!(before.start.state, ScheduledWorkflowState::Claimed { .. }
+                | ScheduledWorkflowState::Settled { .. }),
+            "prep finished but no durable Claim exists yet: {:?}",
+            before.start.state
+        );
+        drop(release);
+        let result = finished(&f, &runtime, &start.id).await;
+        assert!(matches!(
+            result.start.state,
+            ScheduledWorkflowState::Settled {
+                outcome: ScheduledWorkflowOutcome::Completed,
+                ..
+            }
+        ));
+        f.close().await;
+    })
+    .await;
+}

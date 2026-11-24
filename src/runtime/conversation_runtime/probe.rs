@@ -79,6 +79,14 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next manual compaction immediately before coordinator
     /// settlement restores ownership and publishes completion.
     pub(crate) manual_compaction_settlement_gate: Option<Arc<Gate>>,
+    /// Parks a reaper that just claimed the `JoinHandle` — `Joining` is
+    /// already published — before its join starts, so a concurrent reaper
+    /// provably walks `WaitJoined` against it (Issue #606).
+    pub(crate) manual_tail_joining_gate: Option<Arc<Gate>>,
+    /// Parks a scheduled task after its command preparation finished and
+    /// before `claim_scheduled_start` — proving the prep runs outside the
+    /// Claim critical section (Issue #606).
+    pub(crate) scheduled_prep_gate: Option<Arc<Gate>>,
     /// Parks the next `submit_inbound` **after** the coordinator lock is
     /// acquired and the shutdown/activation decision is read, but **before**
     /// the durable acceptance. This is the exact critical-section window the
@@ -616,6 +624,16 @@ impl ConversationRuntime {
     pub(crate) fn fail_residency_settlement(&self) {
         self.inner
             .fence_mcp_settlement_failure("residency test settlement failure".into());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_scheduled_prep_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(CoordinatorProbe::default)
+            .scheduled_prep_gate = Some(gate);
     }
 
     #[cfg(test)]

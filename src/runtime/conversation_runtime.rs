@@ -367,7 +367,7 @@ mod issue606_tests;
 mod model_selection;
 mod observer;
 mod probe;
-mod scheduled;
+pub(crate) mod scheduled;
 #[cfg(test)]
 mod test_support;
 mod title;
@@ -392,8 +392,8 @@ pub(crate) use child::ParentGuidanceSeal;
 pub use compaction::{ManualCompactionError, ManualCompactionOutcome};
 pub use drain::ShutdownError;
 pub(crate) use foreground::{
-    AttemptTaskPoisonGuard, CurrentAttempt, CurrentManualCompaction, CurrentScheduled, ManualTail,
-    ManualTailState, ScheduledCancellation,
+    AttemptTaskPoisonGuard, CurrentAttempt, CurrentManualCompaction, ManualTail, ManualTailState,
+    ScheduledCancellation,
 };
 pub(crate) use model_selection::validate_model_context;
 pub use model_selection::{ApprovalModeUpdateError, ModelUpdateError};
@@ -816,16 +816,11 @@ pub(crate) struct ForegroundState {
     /// The one foreground execution slot: `Attempt`, `ManualCompaction`,
     /// `Scheduled`, `Idle`, or `Poisoned`, mutually exclusive by type
     /// (Issue #606).
-    pub(crate) slot: foreground::ForegroundSlot,
+    slot: foreground::ForegroundSlot,
     /// The physical manual-compaction task reclamation state:
     /// `None` | `Pending` | `Joining`, under this lock, so a claimed but
     /// unjoined task is never misread as reaped.
-    pub(crate) manual_tail: foreground::ManualTailState,
-    /// Per-start rejection backoff bookkeeping for scheduled admission.
-    pub(crate) scheduled_retries: std::collections::BTreeMap<
-        crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
-        u64,
-    >,
+    manual_tail: foreground::ManualTailState,
     /// The next attempt identity ordinal.
     ///
     /// Seeded by startup recovery to one past the highest ordinal that
@@ -834,7 +829,7 @@ pub(crate) struct ForegroundState {
     /// durable history. The durable Event Journal rejects a second
     /// `AttemptStarted` for one identity, so the invariant is enforced on
     /// both sides.
-    pub(crate) next_attempt_seq: u64,
+    next_attempt_seq: u64,
     /// Startup recovery's exact provenance for the already-canonical adopted
     /// turn that may continue through one new attempt.
     ///
@@ -842,9 +837,9 @@ pub(crate) struct ForegroundState {
     /// finds no pending inbound. It is never set for an indeterminate
     /// external outcome (Class C), where continuing would risk duplicating an
     /// external side effect rustX cannot observe.
-    pub(crate) recovered_continuation: Option<AttemptProvenance>,
+    recovered_continuation: Option<AttemptProvenance>,
     /// Candidate provenance of the recovered turn, not committed task authority.
-    pub(crate) recovered_permission_task_message: Option<MessageId>,
+    recovered_permission_task_message: Option<MessageId>,
     /// The coordinator-owned transient admission-cycle retry bookkeeping
     /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
     /// stored here: it lives in exactly one place, the runtime-owned
@@ -852,7 +847,7 @@ pub(crate) struct ForegroundState {
     /// attempt admission, the registries, the shutdown diagnostic, the
     /// observation) consults. This field only tracks the finite-cycle retry
     /// allowances and the latest pending re-kick of the admission worker.
-    pub(crate) admission_durability_cycle: AdmissionDurabilityCycle,
+    admission_durability_cycle: AdmissionDurabilityCycle,
     /// How many attempts this coordinator has admitted, counted at the one
     /// admission publication point (Issue #193).
     ///
@@ -860,16 +855,16 @@ pub(crate) struct ForegroundState {
     /// every admitted attempt produces exactly one terminal observation, so
     /// a driver that has consumed `n` terminals knows an attempt it has not
     /// observed exists precisely when this counter exceeds `n`.
-    pub(crate) admitted_attempts: u64,
+    admitted_attempts: u64,
     /// Latest settlement handoff; child turn permits prevent admission past
     /// an unconsumed receipt.
-    pub(crate) latest_settlement: Option<NativeAttemptSettlement>,
+    latest_settlement: Option<NativeAttemptSettlement>,
     /// The committed one-shot cancellation intent (Issue #60 child side):
     /// armed before any attempt exists, consumed by the next admission so
     /// the admitted attempt starts already-cancelled and its first
     /// model-turn arbitration resolves `CancelledBeforeStart`. At most one
     /// admission ever consumes it.
-    pub(crate) one_shot_cancel: Option<CancellationReason>,
+    one_shot_cancel: Option<CancellationReason>,
 }
 
 /// Configuration, model, and resource publication state (Issue #606).
@@ -880,39 +875,39 @@ pub(crate) struct ForegroundState {
 /// admission under the one coordinator lock.
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ConfigurationState {
-    pub(crate) binding_revision: u64,
-    pub(crate) catalog_revision: u64,
-    pub(crate) pending_runtime_catalog: Option<PendingRuntimeCatalog>,
-    pub(crate) catalog_commit_blocked: bool,
-    pub(crate) catalog_admission_deferred: bool,
+    binding_revision: u64,
+    catalog_revision: u64,
+    pending_runtime_catalog: Option<PendingRuntimeCatalog>,
+    catalog_commit_blocked: bool,
+    catalog_admission_deferred: bool,
     /// The one fully prepared configuration candidate waiting for this
     /// runtime's safe boundary. Committed before the next independent
     /// Attempt is admitted; a newer candidate supersedes it.
-    pub(crate) staged_configuration: Option<StagedConfiguration>,
+    staged_configuration: Option<StagedConfiguration>,
     /// The staged commit found a capability lifecycle admission in flight.
-    pub(crate) configuration_commit_waiting: bool,
+    configuration_commit_waiting: bool,
     /// An admission pass that reached a waiting staged commit; the worker
     /// resumes exactly that pass once the commit boundary is released.
-    pub(crate) configuration_admission_deferred: bool,
-    pub(crate) runtime_refresh_sequence: u64,
-    pub(crate) runtime_catalog_failure: Option<RuntimeCatalogFailure>,
-    pub(crate) explicit_model: bool,
+    configuration_admission_deferred: bool,
+    runtime_refresh_sequence: u64,
+    runtime_catalog_failure: Option<RuntimeCatalogFailure>,
+    explicit_model: bool,
     /// The session's authoritative mutable model state.
     ///
     /// It lives under the *same* lock that owns attempt admission, so a
     /// model update and an attempt admission can never interleave
     /// ambiguously: whichever acquires the lock first linearizes first.
-    pub(crate) model: SessionModelState,
+    model: SessionModelState,
     /// The complete resource/capability generation future attempts acquire.
-    pub(crate) resources: Arc<RuntimeResourceSnapshot>,
+    resources: Arc<RuntimeResourceSnapshot>,
     /// The effective mode frozen for the currently admitted attempt boundary.
-    pub(crate) effective_approval_mode: ApprovalMode,
+    effective_approval_mode: ApprovalMode,
     /// Mode last successfully injected as a permission reminder on this
     /// conversation. Cleared only when the next admission must re-emit
     /// (mode change, first admission, or post-compaction).
-    pub(crate) last_permission_reminder_mode: Option<ApprovalMode>,
+    last_permission_reminder_mode: Option<ApprovalMode>,
     /// Exact canonical task input committed by the latest primary request start.
-    pub(crate) permission_task_message: Option<crate::runtime::identity::MessageId>,
+    permission_task_message: Option<crate::runtime::identity::MessageId>,
 }
 
 /// Child-control admission facts of one child-scoped runtime (Issue #606).
@@ -955,18 +950,21 @@ pub(crate) struct HealthState {
     mcp_settlement_failure: Option<String>,
 }
 
-/// The one synchronized coordinator state (the admission linearization owner).
+/// The one synchronized coordinator state (the admission linearization
+/// owner). Its fields are coordinator-internal: extracted owners reach them
+/// only through the narrow `RuntimeInner` admission/settlement interfaces
+/// (Issue #606).
 pub(crate) struct CoordinatorState {
     /// Foreground execution slot, manual-compaction tail reclamation, and
     /// admission bookkeeping.
-    pub(crate) foreground: ForegroundState,
+    foreground: ForegroundState,
     /// Configuration, model, and resource publication state.
-    pub(crate) config: ConfigurationState,
+    config: ConfigurationState,
     /// Child-control facts; `Some` exactly for a child-scoped runtime
     /// (installed when child control attaches).
-    pub(crate) child: Option<ChildControlState>,
+    child: Option<ChildControlState>,
     /// Persistent health fences consulted at every admission boundary.
-    pub(crate) health: HealthState,
+    health: HealthState,
 }
 
 impl CoordinatorState {
@@ -1059,6 +1057,11 @@ pub(crate) struct RuntimeInner {
     /// service to composed consumers — no auxiliary business logic remains
     /// on `ConversationRuntime` itself.
     external_auxiliary: Arc<crate::runtime::auxiliary::external::ExternalAuxiliary>,
+    /// The shared native auxiliary executor (Issue #606): a core runtime
+    /// capability consumed directly by Attempt, Compaction, and the
+    /// coordinator's auxiliary-admission interface — never reached through
+    /// the external service's classify/BTW/title business surface.
+    auxiliary_executor: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
     /// The runtime-owned host-task slot: optional host-installed work (the
     /// automatic session-title task) supervised by drain, installable once
     /// and only while the runtime is `Inactive` (Issue #606).
@@ -1122,10 +1125,31 @@ impl Drop for RuntimeInner {
 
 impl RuntimeInner {
     /// Acquires the one admission synchronization boundary.
+    ///
+    /// Controlled recovery boundary (Issue #606): a panic *while holding*
+    /// the coordinator guard poisons the mutex. Re-panicking every later
+    /// caller would wedge the manual-tail reaper, the scheduled owner and
+    /// shutdown on a lock they can never fix, so the guard is recovered
+    /// instead. The interrupted mutation may have left the coordinator
+    /// state mid-transition, so recovery converges business admission to
+    /// the absorbing failed state — a lent slot becomes `Poisoned` and the
+    /// `DurabilityFailed` fact commits through the one authority — while
+    /// physical drain keeps working: reapers, joins and shutdown still
+    /// need the guard and observe the mid-transition facts as-is.
     fn lock_state(&self) -> MutexGuard<'_, CoordinatorState> {
-        self.state
-            .lock()
-            .expect("conversation runtime lock poisoned")
+        match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                let _ = guard.foreground.slot.poison();
+                let _ = self.durability_gate.commit_failure(
+                    DurableOperation::CanonicalCommit,
+                    "the coordinator state lock was poisoned by a panic inside a critical section"
+                        .to_owned(),
+                );
+                guard
+            }
+        }
     }
 }
 
@@ -1164,17 +1188,13 @@ impl ConversationRuntime {
         clock: &dyn crate::runtime::types::RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
-        let state = self.inner.lock_state();
         if let crate::scheduler::ScheduleOperation::WorkflowReconcile { id, after, limit } =
             operation
         {
-            return self.inner.scheduled_executor.reconcile(
-                &state,
-                binding,
-                id,
-                (*after, *limit),
-                clock,
-            );
+            return self
+                .inner
+                .scheduled_executor
+                .reconcile(binding, id, (*after, *limit), clock);
         }
         let prepared;
         let operation = if let crate::scheduler::ScheduleOperation::Command(command) = operation {
@@ -1196,17 +1216,15 @@ impl ConversationRuntime {
                 )? {
                     return Ok(crate::scheduler::ScheduleOperationResult::Command(receipt));
                 }
-                let native =
-                    crate::runtime::workflow::scheduled::ScheduledWorkflowPreparation::new(
-                        binding.clone(),
-                        state.config.resources.clone(),
-                        state.config.model.config().clone(),
-                    )
-                    .and_then(|preparation| {
-                        preparation
-                            .with_approval_mode(state.config.effective_approval_mode)
-                            .prepare(workflow_id, arguments)
-                    });
+                // Contract preparation runs off the coordinator lock, on a
+                // configuration generation frozen through the coordinator's
+                // snapshot interface; the Claim critical section re-validates
+                // that generation before the start commits.
+                let native = self.inner.scheduled_executor.prepare_workflow_command(
+                    binding,
+                    workflow_id,
+                    arguments,
+                );
                 let native = match native {
                     Ok(native) => native,
                     Err(error) => {
@@ -1234,16 +1252,8 @@ impl ConversationRuntime {
             operation,
             clock,
         )?;
-        if let crate::scheduler::ScheduleOperation::WorkflowCancel { id } = operation
-            && let Some(current) = state
-                .foreground
-                .slot
-                .as_scheduled()
-                .filter(|owner| &owner.id == id)
-        {
-            current
-                .cancellation
-                .cancel(crate::runtime::types::CancellationReason::UserRequested);
+        if let crate::scheduler::ScheduleOperation::WorkflowCancel { id } = operation {
+            self.inner.cancel_scheduled_owner(id);
         }
         Ok(result)
     }
@@ -1404,10 +1414,17 @@ impl ConversationRuntime {
     /// The generic optional host-task hook (Issue #606): exactly one
     /// host-installed background task (the automatic session-title owner)
     /// may be installed, and only while the runtime is `Inactive`.
+    ///
+    /// The lifecycle check and the registration are one coordinator
+    /// critical section: a pre-activation drain can never take a free slot
+    /// between the check and the install. The caller passes a task
+    /// *constructor* — the runtime spawns it only after admission, so a
+    /// refused install can never detach live work the caller already lost.
     pub(crate) fn install_host_task(
         &self,
-        task: tokio::task::JoinHandle<()>,
+        task: impl FnOnce() -> tokio::task::JoinHandle<()>,
     ) -> Result<(), crate::context::ContextError> {
+        let _state = self.inner.lock_state();
         if self.inner.lifecycle.state() != ConversationLifecycleState::Inactive {
             return Err(crate::context::ContextError::new(
                 crate::context::ContextErrorKind::Cancelled,
@@ -1421,7 +1438,7 @@ impl ConversationRuntime {
                 "a host task is already installed",
             ));
         }
-        *slot = Some(task);
+        *slot = Some(task());
         Ok(())
     }
 

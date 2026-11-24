@@ -3,25 +3,24 @@
 //! failure-outcome mapping, settlement reconciliation and retry backoff all
 //! live here, off `ConversationRuntime` — whose only responsibility is
 //! exposing the `ForegroundSlot` and composing this executor at construction.
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use futures_util::FutureExt;
 
 use super::lifecycle::{
-    ClaimedScheduledWorkflow, QuiescenceSource, ScheduledWorkflowOutcome,
-    ScheduledWorkflowOwnerRetirement, ScheduledWorkflowQuiescence, ScheduledWorkflowSettlement,
-    ScheduledWorkflowStart, ScheduledWorkflowStartId, ScheduledWorkflowState, bounded_reason,
+    QuiescenceSource, ScheduledWorkflowOutcome, ScheduledWorkflowOwnerRetirement,
+    ScheduledWorkflowQuiescence, ScheduledWorkflowSettlement, ScheduledWorkflowStart,
+    ScheduledWorkflowStartId, ScheduledWorkflowState, bounded_reason,
 };
 use super::{ScheduledWorkflowPreparation, ScheduledWorkflowPreparationError as PreparationError};
 use crate::capabilities::CapabilityCoordinator;
 use crate::runtime::auxiliary::executor::AuxiliaryExecutor;
 use crate::runtime::conversation_runtime::activity::TaskActivity;
-use crate::runtime::conversation_runtime::{
-    CoordinatorState, CurrentScheduled, ScheduledCancellation,
-};
+use crate::runtime::conversation_runtime::scheduled::{ScheduledClaim, ScheduledSnapshot};
+use crate::runtime::conversation_runtime::{RuntimeInner, ScheduledCancellation};
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::interaction::InteractionCoordinator;
-use crate::runtime::types::DurabilityGate;
 use crate::runtime::types::RuntimeClock;
 use crate::runtime::workflow::{WorkflowRunError, WorkflowRuntime};
 use crate::runtime::{
@@ -48,9 +47,10 @@ fn scheduled_failure_outcome(error: &WorkflowRunError) -> ScheduledWorkflowOutco
 }
 
 /// Construction dependencies of the executor: every field is a shared
-/// handle already owned elsewhere; nothing here pins a runtime.
+/// handle already owned elsewhere; nothing here pins a runtime. The
+/// runtime handle itself is bound later by [`ScheduledExecutor::bind_runtime`]
+/// because the executor is composed before `RuntimeInner` exists.
 pub(crate) struct ScheduledExecutorParts {
-    pub(crate) state: Arc<Mutex<CoordinatorState>>,
     pub(crate) lifecycle: ConversationLifecycle,
     pub(crate) store: Arc<dyn crate::durable::ConversationStore>,
     pub(crate) mailbox: ConversationInboundMailbox,
@@ -62,17 +62,22 @@ pub(crate) struct ScheduledExecutorParts {
     pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
     pub(crate) clock: Arc<dyn RuntimeClock>,
     pub(crate) activity: TaskActivity,
-    pub(crate) settlement: Arc<tokio::sync::Notify>,
-    pub(crate) durability_gate: Arc<DurabilityGate>,
     pub(crate) spawner: tokio::runtime::Handle,
     #[cfg(test)]
     pub(crate) probe: Arc<Mutex<Option<crate::runtime::conversation_runtime::CoordinatorProbe>>>,
 }
 
-/// The scheduled-workflow owner: one instance per conversation, holding only
-/// shared handles. `ConversationRuntime` keeps no scheduled business logic.
+/// The scheduled-workflow owner: one instance per conversation, holding
+/// only shared handles plus its own retry backoff bookkeeping.
+/// `ConversationRuntime` keeps no scheduled business logic; the executor in
+/// turn reaches coordinator state only through the runtime's narrow
+/// reservation/Claim/finish interfaces (Issue #606).
 pub(crate) struct ScheduledExecutor {
-    state: Arc<Mutex<CoordinatorState>>,
+    /// The coordinator boundary: bound once after `RuntimeInner` is
+    /// composed, held weakly so the executor never pins the runtime.
+    runtime: OnceLock<Weak<RuntimeInner>>,
+    /// Per-start rejection backoff bookkeeping for scheduled admission.
+    retries: Mutex<BTreeMap<ScheduledWorkflowStartId, u64>>,
     lifecycle: ConversationLifecycle,
     store: Arc<dyn crate::durable::ConversationStore>,
     mailbox: ConversationInboundMailbox,
@@ -84,8 +89,6 @@ pub(crate) struct ScheduledExecutor {
     monotonic_clock: Arc<dyn MonotonicClock>,
     clock: Arc<dyn RuntimeClock>,
     activity: TaskActivity,
-    settlement: Arc<tokio::sync::Notify>,
-    durability_gate: Arc<DurabilityGate>,
     spawner: tokio::runtime::Handle,
     #[cfg(test)]
     probe: Arc<Mutex<Option<crate::runtime::conversation_runtime::CoordinatorProbe>>>,
@@ -94,7 +97,8 @@ pub(crate) struct ScheduledExecutor {
 impl ScheduledExecutor {
     pub(crate) fn new(parts: ScheduledExecutorParts) -> Self {
         Self {
-            state: parts.state,
+            runtime: OnceLock::new(),
+            retries: Mutex::new(BTreeMap::new()),
             lifecycle: parts.lifecycle,
             store: parts.store,
             mailbox: parts.mailbox,
@@ -106,32 +110,61 @@ impl ScheduledExecutor {
             monotonic_clock: parts.monotonic_clock,
             clock: parts.clock,
             activity: parts.activity,
-            settlement: parts.settlement,
-            durability_gate: parts.durability_gate,
             spawner: parts.spawner,
             #[cfg(test)]
             probe: parts.probe,
         }
     }
 
+    /// Bind the runtime handle once `RuntimeInner` is composed. The executor
+    /// is constructed before the runtime exists, so the handle arrives
+    /// exactly once — and weakly, so it never pins the runtime.
+    pub(crate) fn bind_runtime(&self, inner: &Arc<RuntimeInner>) {
+        let _ = self.runtime.set(Arc::downgrade(inner));
+    }
+
+    /// The bound runtime, while it still exists.
+    fn runtime(&self) -> Option<Arc<RuntimeInner>> {
+        self.runtime.get().and_then(Weak::upgrade)
+    }
+
+    /// Contract preparation for a scheduled Workflow command: the frozen
+    /// configuration generation comes from the coordinator's snapshot
+    /// interface, and preparation itself runs off the coordinator lock.
+    /// The later Claim critical section re-validates the same generation.
+    pub(crate) fn prepare_workflow_command(
+        &self,
+        binding: &crate::scheduler::ScheduleBinding,
+        workflow_id: &crate::runtime::workflow::WorkflowId,
+        arguments: &serde_json::Value,
+    ) -> Result<super::PreparedScheduledWorkflow, PreparationError> {
+        let snapshot = self
+            .runtime()
+            .map(|runtime| runtime.scheduled_snapshot())
+            .ok_or(PreparationError::UnpreparedResources)?;
+        ScheduledWorkflowPreparation::new(binding.clone(), snapshot.resources, snapshot.model)
+            .and_then(|preparation| {
+                preparation
+                    .with_approval_mode(snapshot.approval)
+                    .prepare(workflow_id, arguments)
+            })
+    }
+
     /// Reconciliation never takes terminal publication from a registered owner.
     pub(crate) fn reconcile(
         &self,
-        state: &CoordinatorState,
         binding: &crate::scheduler::ScheduleBinding,
         id: &ScheduledWorkflowStartId,
         (after, limit): (u64, u32),
         clock: &dyn RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
-        let own = state
-            .foreground
-            .slot
-            .as_scheduled()
-            .filter(|owner| &owner.id == id);
+        let own = self
+            .runtime()
+            .and_then(|runtime| runtime.probe_scheduled_owner(id));
         let retirement = ScheduledWorkflowOwnerRetirement {
             start_id: id.clone(),
-            recovered_writer: own.is_none_or(|owner| owner.recovered_writer),
+            recovered_writer: own.as_ref().is_none_or(|probe| probe.recovered_writer),
             agent_domain_quiescent: self
                 .subagents
                 .as_ref()
@@ -162,80 +195,47 @@ impl ScheduledExecutor {
         )
     }
 
-    /// Reserve only a native foreground preparation slot. Preparation is off
-    /// the coordinator lock; the final publication fence still owns Claim.
+    /// Reserve a native foreground execution slot through the
+    /// coordinator's atomic reservation interface, then run the start
+    /// off-lock. The coordinator owns the gates, the generation freeze and
+    /// the exact-owner slot; this executor owns preparation, execution,
+    /// settlement confirmation and retry backoff.
     #[allow(clippy::too_many_lines)] // One foreground reservation and exact native retirement handoff.
     pub(crate) fn admit_next(self: &Arc<Self>) -> bool {
-        let mut state = self.state.lock().expect("coordinator lock poisoned");
-        if !self.lifecycle.is_running()
-            || state.foreground.slot.is_foreground_active()
-            || state.foreground.manual_tail.is_unreaped()
-            || state.config.configuration_commit_waiting
-            || self.durability_gate.is_failed()
-        {
-            return false;
-        }
-        let Some(binding) = self.tool_runtime.schedule().binding().cloned() else {
-            return false;
-        };
-        let Ok(pending) = self.store.scheduled_workflow_pending(256) else {
+        let Some(runtime) = self.runtime() else {
             return false;
         };
         let now = self.monotonic_clock.now_millis();
-        state
-            .foreground
-            .scheduled_retries
-            .retain(|id, _| pending.iter().any(|head| &head.id == id));
-        // A recovered Claim owns the foreground retirement obligation before
-        // any fresh Human or Accepted graph can acquire this conversation.
-        let recovered = pending
-            .iter()
-            .find(|head| matches!(head.state, ScheduledWorkflowState::Claimed { .. }))
-            .cloned();
-        if recovered.is_none() && !matches!(self.mailbox.select_pending_batch(), Ok(None)) {
-            return false;
+        // Prune backoff bookkeeping for starts that left the pending set.
+        if let Ok(pending) = self.store.scheduled_workflow_pending(256) {
+            self.retries
+                .lock()
+                .expect("scheduled retries poisoned")
+                .retain(|id, _| pending.iter().any(|head| &head.id == id));
         }
-        let Some(next) = recovered.or_else(|| {
-            pending.into_iter().find(|head| {
-                matches!(&head.state, ScheduledWorkflowState::Accepted { .. })
-                    && state
-                        .foreground
-                        .scheduled_retries
-                        .get(&head.id)
-                        .is_none_or(|at| *at <= now)
-            })
+        let retries = &self.retries;
+        let Some(reservation) = runtime.reserve_scheduled_start(|id| {
+            retries
+                .lock()
+                .expect("scheduled retries poisoned")
+                .get(id)
+                .is_none_or(|at| *at <= now)
         }) else {
             return false;
         };
-        if next.binding != binding {
-            return false;
-        }
-        let Ok(Some(start)) = self.store.scheduled_workflow_get(&next.id) else {
-            return false;
-        };
-        let resources = state.config.resources.clone();
-        let model = state.config.model.config().clone();
-        let approval = state.config.effective_approval_mode;
-        let owner = format!("scheduled:{}", uuid::Uuid::now_v7());
-        let cancellation = ScheduledCancellation::new();
-        let recovered_writer = matches!(next.state, ScheduledWorkflowState::Claimed { .. });
-        let claimed = state.foreground.slot.start_scheduled(CurrentScheduled {
-            id: next.id.clone(),
-            owner: owner.clone(),
-            cancellation: cancellation.clone(),
-            graph_finished: recovered_writer,
-            recovered_writer,
-            settlement_wake: Arc::default(),
-        });
-        debug_assert!(claimed, "foreground idleness proven under this lock");
-        let admission = self
-            .lifecycle
-            .try_enter_running()
-            .expect("native scheduled admission owns coordinator fence");
-        drop(state);
         let executor = self.clone();
         let activity = self.activity.lease();
         self.spawner.spawn(async move {
+            let crate::runtime::conversation_runtime::scheduled::ScheduledReservation {
+                start,
+                recovered_writer,
+                resources,
+                model,
+                approval,
+                owner,
+                cancellation,
+                admission,
+            } = reservation;
             let result = if recovered_writer {
                 let _lease = executor
                     .capability
@@ -267,23 +267,21 @@ impl ScheduledExecutor {
             if let Err(error) = result {
                 tracing::warn!(%error,"scheduled Workflow native owner refused or failed");
             }
-            let mut state = executor.state.lock().expect("coordinator lock poisoned");
-            state.foreground.slot.finish_scheduled(&owner);
-            drop(state);
+            if let Some(runtime) = executor.runtime() {
+                runtime.finish_scheduled(&owner);
+            }
             drop(admission);
             drop(activity);
-            executor.settlement.notify_waiters();
-            executor.mailbox.wake().notify_one();
         });
         true
     }
 
-    /// `claim_scheduled_start` (Issue #606): the one critical section that
-    /// re-checks lifecycle and cancellation, re-validates the frozen
-    /// resources/model/approval snapshot, freezes the Auxiliary Reviewer
-    /// Invocation, acquires the `AttemptCapabilityLease`, and durably claims
-    /// the exact start via a Lifecycle Running Commit. A stale claim is
-    /// rejected (retry backoff), never replayed.
+    /// `claim_scheduled_start` (Issue #606): the one critical section
+    /// still runs on the coordinator — lifecycle and cancellation
+    /// re-check, frozen-generation re-validation, reviewer invocation
+    /// freeze, capability lease, and the durable Claim inside a Lifecycle
+    /// Running Commit. A stale claim is refused for retry backoff, never
+    /// replayed; backoff bookkeeping stays on this executor.
     #[allow(clippy::too_many_arguments)]
     fn claim_scheduled_start(
         &self,
@@ -296,55 +294,49 @@ impl ScheduledExecutor {
         cancellation: &Arc<ScheduledCancellation>,
     ) -> Result<
         Option<(
-            ClaimedScheduledWorkflow,
+            crate::runtime::workflow::scheduled::lifecycle::ClaimedScheduledWorkflow,
             crate::capabilities::AttemptCapabilityLease,
             crate::model::ResolvedModelInvocation,
         )>,
         String,
     > {
-        let mut state = self.state.lock().expect("coordinator lock poisoned");
-        if !self.lifecycle.is_running() || cancellation.signal.is_cancelled() {
+        let Some(runtime) = self.runtime() else {
             return Ok(None);
-        }
-        if !Arc::ptr_eq(resources, &state.config.resources)
-            || state.config.model.config() != model
-            || state.config.effective_approval_mode != approval
-        {
-            state.foreground.scheduled_retries.insert(
-                id.clone(),
-                self.monotonic_clock.now_millis().saturating_add(1000),
-            );
-            self.store
-                .scheduled_workflow_wait(
-                    id,
-                    "native configuration changed before Claim",
-                    self.clock.now() + chrono::Duration::seconds(1),
-                )
-                .map_err(|e| e.to_string())?;
-            return Ok(None);
-        }
-        // Freeze the permission-reviewer invocation in the same critical
-        // section as Claim so a concurrent model-selection commit cannot
-        // swap M1→M2 between durable Claim and reviewer construction.
-        let auxiliary_invocation = state
-            .config
-            .model
-            .snapshot()
-            .map_err(|error| error.to_string())?
-            .summary_invocation()
-            .clone();
-        let lease = self
-            .capability
-            .acquire_attempt_lease_for(resources.capability().clone());
-        let claim = self
-            .lifecycle
-            .with_running_commit(|| {
+        };
+        let snapshot = ScheduledSnapshot {
+            resources: resources.clone(),
+            model: model.clone(),
+            approval,
+        };
+        let lease_resources = resources.clone();
+        match runtime.claim_scheduled_start(id, contract, &snapshot, owner, cancellation, || {
+            self.capability
+                .acquire_attempt_lease_for(lease_resources.capability().clone())
+        })? {
+            ScheduledClaim::Claimed {
+                claim,
+                lease,
+                auxiliary_invocation,
+            } => Ok(Some((*claim, lease, *auxiliary_invocation))),
+            ScheduledClaim::Stale => {
+                self.retries
+                    .lock()
+                    .expect("scheduled retries poisoned")
+                    .insert(
+                        id.clone(),
+                        self.monotonic_clock.now_millis().saturating_add(1000),
+                    );
                 self.store
-                    .scheduled_workflow_claim(id, contract, owner, self.clock.now())
-            })
-            .map_err(|e| format!("scheduled Claim lifecycle: {e:?}"))?
-            .map_err(|e| e.to_string())?;
-        Ok(claim.map(|claim| (claim, lease, auxiliary_invocation)))
+                    .scheduled_workflow_wait(
+                        id,
+                        "native configuration changed before Claim",
+                        self.clock.now() + chrono::Duration::seconds(1),
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(None)
+            }
+            ScheduledClaim::Refused => Ok(None),
+        }
     }
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -381,17 +373,19 @@ impl ScheduledExecutor {
         let (preparation, prepared) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                let mut state = self.state.lock().expect("coordinator lock poisoned");
                 if self.lifecycle.is_running() {
                     if matches!(
                         error,
                         PreparationError::DependencyUnavailable
                             | PreparationError::UnpreparedResources
                     ) {
-                        state.foreground.scheduled_retries.insert(
-                            id.clone(),
-                            self.monotonic_clock.now_millis().saturating_add(30_000),
-                        );
+                        self.retries
+                            .lock()
+                            .expect("scheduled retries poisoned")
+                            .insert(
+                                id.clone(),
+                                self.monotonic_clock.now_millis().saturating_add(30_000),
+                            );
                         self.store
                             .scheduled_workflow_wait(
                                 &id,
@@ -412,6 +406,22 @@ impl ScheduledExecutor {
             .subagents
             .clone()
             .ok_or("native Workflow registry unavailable")?;
+        #[cfg(test)]
+        {
+            // Test barrier: preparation finished — frozen inputs, capability
+            // lease and the durable `Claimed` intent are all ready — but the
+            // Claim critical section has not run. A waiter parked here proves
+            // prep happens outside the coordinator lock (Issue #606).
+            let prep_gate = self
+                .probe
+                .lock()
+                .expect("coordinator probe lock poisoned")
+                .as_ref()
+                .and_then(|probe| probe.scheduled_prep_gate.clone());
+            if let Some(gate) = prep_gate {
+                tokio::task::block_in_place(|| gate.enter());
+            }
+        }
         let Some((claim, _resources_lease, auxiliary_invocation)) = self.claim_scheduled_start(
             &id,
             prepared.contract(),
@@ -508,16 +518,8 @@ impl ScheduledExecutor {
             Err(error) => (scheduled_failure_outcome(&error), None),
         };
         cancellation.cancel(CancellationReason::ParentCancelled);
-        {
-            let mut state = self.state.lock().expect("coordinator lock poisoned");
-            if let Some(current) = state
-                .foreground
-                .slot
-                .as_scheduled_mut()
-                .filter(|current| current.owner == owner)
-            {
-                current.graph_finished = true;
-            }
+        if let Some(runtime) = self.runtime() {
+            runtime.mark_scheduled_graph_finished(owner);
         }
         #[cfg(test)]
         tokio::task::block_in_place(|| self.enter_probe_gate());
@@ -552,16 +554,10 @@ impl ScheduledExecutor {
         // and its resource lease accountable; neither cancellation nor elapsed
         // time permits a second executor or releases deletion/capacity.
         let settlement_wake = self
-            .state
-            .lock()
-            .expect("coordinator lock poisoned")
-            .foreground
-            .slot
-            .as_scheduled()
-            .filter(|owner| &owner.id == id)
+            .runtime()
+            .and_then(|runtime| runtime.probe_scheduled_owner(id))
             .ok_or_else(|| "scheduled terminal publication lost its native owner".to_owned())?
-            .settlement_wake
-            .clone();
+            .settlement_wake;
         let mut uncertain = false;
         let mut after = 0;
         loop {

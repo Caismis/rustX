@@ -29,16 +29,15 @@ use crate::{
             },
         },
         cancellation::CancellationSignal,
-        conversation_runtime::CoordinatorState,
         identity::{AuxiliaryCallId, ConversationId},
-        types::{ConversationLifecycle, LifecycleAdmission},
+        types::LifecycleAdmission,
     },
     tools::runtime::ConversationToolRuntime,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -108,21 +107,19 @@ struct Active {
     inference_stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 /// The extracted external-auxiliary service (Issue #606): one owner of
-/// submission admission, correlation dedup, business result delivery and the
-/// auxiliary executor. It is composed beside the conversation runtime and
-/// shares the coordinator critical section for atomic admission.
+/// submission admission, correlation dedup and business result delivery.
+/// It never sees coordinator state: the one atomic admission critical
+/// section runs on the runtime itself through `admit_auxiliary_work`, and
+/// the service only executes the frozen work package it receives back.
 pub struct ExternalAuxiliary {
     conversation_id: ConversationId,
-    /// The one coordinator critical section: `admit_auxiliary_work` freezes
-    /// invocation/resources/timeout and reserves capacity under this same
-    /// lock, never splitting snapshot reads from admission.
-    state: Arc<Mutex<CoordinatorState>>,
-    lifecycle: ConversationLifecycle,
+    /// The coordinator boundary: bound once after `RuntimeInner` is
+    /// composed, held weakly so the service never pins the runtime.
+    runtime: OnceLock<Weak<crate::runtime::conversation_runtime::RuntimeInner>>,
     store: Arc<dyn ConversationStore>,
     policy: crate::context::SessionContextPolicy,
     estimator: Arc<dyn crate::context::tokens::TokenEstimator>,
     tool_runtime: ConversationToolRuntime,
-    model_timeout_policy: ModelTimeoutPolicy,
     /// The shared native auxiliary execution owner. This is the one handle:
     /// attempts, scheduled work and title admission all consume capacity
     /// through it rather than the runtime owning a second reference.
@@ -133,29 +130,25 @@ pub struct ExternalAuxiliary {
     streams: crate::runtime::auxiliary::observer::StreamOwner,
 }
 /// The construction inputs every composed `ExternalAuxiliary` needs: all of
-/// them are the same shared handles the runtime itself was built from.
+/// them are the same shared handles the runtime itself was built from. The
+/// runtime handle itself arrives through `bind_runtime` after composition.
 pub(crate) struct ExternalAuxiliaryParts {
     pub(crate) conversation_id: ConversationId,
-    pub(crate) state: Arc<Mutex<CoordinatorState>>,
-    pub(crate) lifecycle: ConversationLifecycle,
     pub(crate) store: Arc<dyn ConversationStore>,
     pub(crate) policy: crate::context::SessionContextPolicy,
     pub(crate) estimator: Arc<dyn crate::context::tokens::TokenEstimator>,
     pub(crate) tool_runtime: ConversationToolRuntime,
-    pub(crate) model_timeout_policy: ModelTimeoutPolicy,
     pub(crate) executor: AuxiliaryExecutor,
 }
 impl ExternalAuxiliary {
     pub(crate) fn new(parts: ExternalAuxiliaryParts) -> Arc<Self> {
         Arc::new(Self {
             conversation_id: parts.conversation_id,
-            state: parts.state,
-            lifecycle: parts.lifecycle,
+            runtime: OnceLock::new(),
             store: parts.store,
             policy: parts.policy,
             estimator: parts.estimator,
             tool_runtime: parts.tool_runtime,
-            model_timeout_policy: parts.model_timeout_policy,
             executor: parts.executor,
             active: Mutex::new(BTreeMap::new()),
             generation: std::sync::atomic::AtomicU64::new(0),
@@ -164,10 +157,24 @@ impl ExternalAuxiliary {
         })
     }
 
-    /// The shared executor handle for runtime-owned auxiliary consumers
-    /// (attempt reviewers, workflow model capability, title admission).
-    pub(crate) fn executor(&self) -> AuxiliaryExecutor {
-        self.executor.clone()
+    /// Bind the runtime handle once `RuntimeInner` is composed. The
+    /// service is constructed before the runtime exists, so the handle
+    /// arrives exactly once — and weakly, so it never pins the runtime.
+    pub(crate) fn bind_runtime(
+        &self,
+        inner: &Arc<crate::runtime::conversation_runtime::RuntimeInner>,
+    ) {
+        let _ = self.runtime.set(Weak::clone(&Arc::downgrade(inner)));
+    }
+
+    /// The bound runtime, while it still exists.
+    fn runtime(
+        &self,
+    ) -> Result<Arc<crate::runtime::conversation_runtime::RuntimeInner>, ContextError> {
+        self.runtime
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| failure("auxiliary runtime closed"))
     }
 
     pub(crate) fn capacity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
@@ -244,11 +251,12 @@ pub(crate) struct AdmittedAuxiliaryWork {
     pub(crate) business_admission: Option<LifecycleAdmission>,
 }
 impl ExternalAuxiliary {
-    /// The one atomic auxiliary admission (Issue #606): inside a single
-    /// coordinator critical section it freezes the invocation, resources and
-    /// timeout, reserves executor capacity (which acquires the Call's own
-    /// `LifecycleAdmission`), and optionally acquires the business admission
-    /// that outlives Call settlement. Failure paths release everything.
+    /// The one atomic auxiliary admission (Issue #606): the coordinator
+    /// owns the critical section — invocation freeze, resources and
+    /// timeout freeze, generic capacity reservation, and the optional
+    /// business admission all commit under the coordinator lock on the
+    /// runtime itself. This service only forwards the request and executes
+    /// the frozen work package it receives back.
     pub(crate) fn admit_auxiliary_work(
         &self,
         kind: AuxiliaryInvocationKind,
@@ -256,48 +264,8 @@ impl ExternalAuxiliary {
         cancellation: &CancellationSignal,
         hold_business_admission: bool,
     ) -> Result<AdmittedAuxiliaryWork, ContextError> {
-        let state = self.state.lock().expect("coordinator state");
-        let invocation = match kind {
-            AuxiliaryInvocationKind::Classification => {
-                state.config.model.classification_invocation().cloned()
-            }
-            AuxiliaryInvocationKind::Btw => state.config.model.btw_invocation().cloned(),
-            AuxiliaryInvocationKind::Title => state.config.model.title_invocation(),
-        }
-        .map_err(|_| {
-            ContextError::new(
-                ContextErrorKind::AuxiliaryNotStarted,
-                "auxiliary model selection is unavailable",
-            )
-        })?;
-        let scope = self.executor.general_scope(allowance, cancellation);
-        let reservation = self.executor.reserve_general(&scope)?;
-        let business_admission = hold_business_admission
-            .then(|| {
-                self.lifecycle
-                    .try_enter_running()
-                    .map_err(|_| ContextError::new(ContextErrorKind::Cancelled, "runtime closed"))
-            })
-            .transpose()?;
-        let resources = state.config.resources.clone();
-        let timeout = resources
-            .configuration()
-            .map_or(self.model_timeout_policy, |generation| {
-                generation
-                    .config
-                    .timeout_policy()
-                    .expect("validated timeout")
-            });
-        let resource_revision = resources.revision().get();
-        Ok(AdmittedAuxiliaryWork {
-            invocation,
-            resources,
-            timeout,
-            resource_revision,
-            scope,
-            reservation,
-            business_admission,
-        })
+        self.runtime()?
+            .admit_auxiliary_work(kind, allowance, cancellation, hold_business_admission)
     }
 }
 enum Input {

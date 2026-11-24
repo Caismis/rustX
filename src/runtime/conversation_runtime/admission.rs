@@ -1459,3 +1459,70 @@ fn input_correlation(id: &str) -> Result<String, InboundAdmissionError> {
     }
     Ok(format!("app-server:{id}"))
 }
+
+impl RuntimeInner {
+    /// `admit_auxiliary_work` (Issue #606): the coordinator-side auxiliary
+    /// admission critical section. Under the coordinator lock it freezes
+    /// the model invocation selected for `kind`, reserves generic capacity
+    /// on the runtime's own `AuxiliaryExecutor`, optionally holds a
+    /// business admission, and returns one frozen work package the
+    /// extracted external service executes — it never sees the
+    /// coordinator state itself.
+    pub(crate) fn admit_auxiliary_work(
+        &self,
+        kind: crate::runtime::auxiliary::external::AuxiliaryInvocationKind,
+        allowance: u8,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+        hold_business_admission: bool,
+    ) -> Result<
+        crate::runtime::auxiliary::external::AdmittedAuxiliaryWork,
+        crate::context::ContextError,
+    > {
+        use crate::context::{ContextError, ContextErrorKind};
+        use crate::runtime::auxiliary::external::AuxiliaryInvocationKind;
+        let state = self.lock_state();
+        let invocation = match kind {
+            AuxiliaryInvocationKind::Classification => {
+                state.config.model.classification_invocation().cloned()
+            }
+            AuxiliaryInvocationKind::Btw => state.config.model.btw_invocation().cloned(),
+            AuxiliaryInvocationKind::Title => state.config.model.title_invocation(),
+        }
+        .map_err(|_| {
+            ContextError::new(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "auxiliary model selection is unavailable",
+            )
+        })?;
+        let scope = self
+            .auxiliary_executor
+            .general_scope(allowance, cancellation);
+        let reservation = self.auxiliary_executor.reserve_general(&scope)?;
+        let business_admission = hold_business_admission
+            .then(|| {
+                self.lifecycle
+                    .try_enter_running()
+                    .map_err(|_| ContextError::new(ContextErrorKind::Cancelled, "runtime closed"))
+            })
+            .transpose()?;
+        let resources = state.config.resources.clone();
+        let timeout = resources
+            .configuration()
+            .map_or(self.model_timeout_policy, |generation| {
+                generation
+                    .config
+                    .timeout_policy()
+                    .expect("validated timeout")
+            });
+        let resource_revision = resources.revision().get();
+        Ok(crate::runtime::auxiliary::external::AdmittedAuxiliaryWork {
+            invocation,
+            resources,
+            timeout,
+            resource_revision,
+            scope,
+            reservation,
+            business_admission,
+        })
+    }
+}
