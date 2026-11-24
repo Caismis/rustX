@@ -221,3 +221,5 @@ admission snapshot and emits one Workflow start with no Agent attempt.
 The all-features Scheduler contract harness passed all 42 cases locally. The
 isolated test directory used the CI-built child binaries from the same Rust
 product sources. The eight real-Git archive regression cases also passed again.
+The empty-queue check keeps the existing strict assertion style. Formatting and
+both default-feature and all-feature Clippy passed with warnings denied.
