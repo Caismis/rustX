@@ -231,24 +231,22 @@ fn validate_root_selection(
         use super::selection::{SourceResolutionFailure, ToolSelectionError};
         use crate::runtime::agent_profile::AgentProfileDiagnostic;
 
-        if let AgentProfileDiagnostic::Tool(
-            error @ ToolSelectionError::SourceUnavailable {
-                source: super::ToolSourceId::ManagedPython(_),
-                reason: SourceResolutionFailure::Unavailable { .. },
-                ..
-            },
-        ) = diagnostic
+        let mut failure = format!(
+            "selected Agent capability cannot be admitted: {:?}",
+            diagnostic.redacted()
+        );
+        if let AgentProfileDiagnostic::Tool(ToolSelectionError::SourceUnavailable {
+            source: super::ToolSourceId::ManagedPython(_),
+            reason: SourceResolutionFailure::Unavailable { reason },
+            ..
+        }) = diagnostic
         {
             // Managed source availability already owns the bounded,
             // credential-redacted diagnostic for this exact package.
-            return Err(format!(
-                "selected Agent capability cannot be admitted: {error}"
-            ));
+            failure.push_str("; ");
+            failure.push_str(reason);
         }
-        return Err(format!(
-            "selected Agent capability cannot be admitted: {:?}",
-            diagnostic.redacted()
-        ));
+        return Err(failure);
     }
     Ok(())
 }
