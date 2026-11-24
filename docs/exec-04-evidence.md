@@ -87,6 +87,23 @@ RUSTX_MODEL_MEASUREMENT=1 /absolute/process-harness --exact \
 
 Repeat for twenty samples and collect the `MODEL_MEASUREMENT` records.
 
+## Installed Bash streaming baseline
+
+Twenty Linux x86-64 runs used the Server and Client from the `5320f6dc7b193b4405cd83c9f7ef8fcd3b38cf15` bundle. The command uses the public `command/exec` endpoint once in each already-bound Session. Bash produces the prefix, waits for the test to receive it and send a line using `command/exec/write`, then emits a 128 KiB body plus a suffix. Every run received exactly 131,081 bytes in 18 ordered output notifications, with no truncation and a successful terminal response. First byte means the first nonempty output notification at the App Server consumer. Settlement includes the gated input exchange. Measurements exclude initialization and do not include Agent-native Bash dispatch.
+
+| Operation | P50 | P95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Bash first output byte | 22.4 ms | 23.2 ms | 23.2 ms |
+| Bash settlement | 93.6 ms | 97.9 ms | 113.3 ms |
+
+```sh
+export RUSTX_INSTALLED_PRODUCTS=/absolute/extracted-products
+RUSTX_BASH_MEASUREMENT=1 /absolute/process-harness --exact \
+  app_server::explicit_composition_launches_and_reaps_the_sibling_client --nocapture
+```
+
+Repeat for twenty samples and collect the `BASH_MEASUREMENT` records. The output notification count is on the App Server connection. It does not measure the private Execution lane's frame count or queue high-water marks.
+
 ## Installed Managed Python restart reuse
 
 The Linux diagnostic probe opens the Workspace through an owned Client. A successful cold run writes one `uv lock` and one `uv sync` record after the wheel cache has been populated. The reopened run uses the exact Store entry and writes no additional build record. Both real stdio launches verify the same tool catalog, clean up their diagnostic roots, and leave no Session or business tool call. The installed sample took 6.8 ms for the plan, 2,391.2 ms for cold preparation through discovery and shutdown, and 2,040.0 ms for a fresh process reopening the prepared Store through discovery and shutdown. These are single-fixture elapsed measurements after wheel-cache population. The owner-level race tests above measure build counts and independently fence publication.

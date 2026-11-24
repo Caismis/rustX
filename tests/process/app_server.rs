@@ -1866,6 +1866,7 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
             std::fs::read(f.root.path().join("b/marker")).unwrap(),
             b"decoy"
         );
+        assert_streamed_bash(&client, f.sessions[0].clone(), &workspace).await;
         client.close().await;
         terminate(&child);
         let output = child.wait_with_output().await.unwrap();
@@ -1876,6 +1877,111 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
         );
     })
     .await;
+}
+
+async fn assert_streamed_bash(
+    client: &driver::Driver,
+    session_id: SessionId,
+    workspace: &std::path::Path,
+) {
+    use app_server_conformance::AppServerConformanceDriver as _;
+    use base64::Engine as _;
+    use rustx::app_server::{command::*, protocol::*};
+    use std::time::Instant;
+
+    const BODY_BYTES: usize = 128 * 1024;
+    let started = Instant::now();
+    let execution = result(
+        client,
+        Method::CommandExec(ExecParams {
+            session_id,
+            command: vec![
+                "/bin/bash".into(),
+                "-c".into(),
+                "printf first; IFS= read -r gate && [[ $gate == go ]] || exit 7; \
+                 dd if=/dev/zero bs=4096 count=32 2>/dev/null && printf done"
+                    .into(),
+            ],
+            cwd: workspace.display().to_string(),
+            env: std::collections::BTreeMap::new(),
+            process_id: Some("installed-stream".into()),
+            tty: false,
+            stream_stdin: true,
+            stream_stdout_stderr: true,
+            output_bytes_cap: Some(262_144),
+            timeout_ms: None,
+            size: None,
+        }),
+    );
+    let consume = async {
+        let mut bytes = Vec::new();
+        let mut first_byte = None;
+        let mut sequence = 0;
+        let mut released = false;
+        while bytes.len() < BODY_BYTES + b"firstdone".len() {
+            let notification = client.next_notification().await;
+            let NotificationMethod::CommandOutputDelta(delta) = notification.notification else {
+                continue;
+            };
+            assert_eq!(delta.process_id, "installed-stream");
+            assert_eq!(delta.stream, OutputStream::Stdout);
+            assert!(!delta.cap_reached);
+            sequence += 1;
+            assert_eq!(delta.sequence, sequence);
+            let chunk = base64::engine::general_purpose::STANDARD
+                .decode(delta.delta_base64)
+                .unwrap();
+            assert_ne!(chunk, b"");
+            first_byte.get_or_insert_with(|| started.elapsed());
+            bytes.extend(chunk);
+            if !released && bytes.len() >= b"first".len() {
+                assert_eq!(bytes, b"first");
+                // The process cannot emit the body until the UI receives the prefix.
+                let Response::Success(write) = rpc(
+                    client,
+                    101,
+                    Method::CommandWrite(WriteParams {
+                        process_id: "installed-stream".into(),
+                        delta_base64: Some(
+                            base64::engine::general_purpose::STANDARD.encode(b"go\n"),
+                        ),
+                        close_stdin: true,
+                    }),
+                )
+                .await
+                else {
+                    panic!("streamed Bash must accept input and EOF");
+                };
+                assert!(matches!(write.result, MethodResult::EnvironmentAccepted {}));
+                released = true;
+            }
+        }
+        let mut expected = b"first".to_vec();
+        expected.resize(b"first".len() + BODY_BYTES, 0);
+        expected.extend_from_slice(b"done");
+        assert_eq!(bytes, expected);
+        assert!(sequence >= 3, "output spans more than one execution page");
+        (first_byte.unwrap(), sequence, bytes.len())
+    };
+    let (terminal, (first_byte, notifications, bytes)) = tokio::join!(execution, consume);
+    let MethodResult::CommandExec { result } = terminal else {
+        panic!("streamed Bash must return a terminal result");
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert!(result.stdout_base64.is_empty() && result.stderr_base64.is_empty());
+    assert!(!result.stdout_truncated && !result.stderr_truncated);
+    if std::env::var_os("RUSTX_BASH_MEASUREMENT").is_some() {
+        println!(
+            "BASH_MEASUREMENT {}",
+            serde_json::json!({
+                "first_byte_ms": first_byte.as_secs_f64() * 1000.0,
+                "settlement_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "output_bytes": bytes,
+                "output_notifications": notifications,
+            })
+        );
+    }
 }
 
 #[tokio::test]
