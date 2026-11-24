@@ -329,6 +329,47 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         let requests = provider.request_bodies();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].contains("standalone model request"));
+        #[cfg(target_os = "linux")]
+        let warm_measurement = if std::env::var_os("RUSTX_MODEL_MEASUREMENT").is_some() {
+            use rustx::app_server::thread_status::ThreadStatus;
+            // A settled Attempt can still be returning its runtime lease.
+            // Wait for the native Idle proof before starting the measured turn.
+            loop {
+                let response = rpc(&client, 11, Method::ThreadRead { thread_id: target.conversation_id.clone() }).await;
+                match response {
+                    Response::Success(response) => {
+                        let MethodResult::Thread { thread } = response.result else { panic!("thread status") };
+                        if thread.status == ThreadStatus::Idle {
+                            assert!(thread.runtime_incarnation.is_some());
+                            break;
+                        }
+                    }
+                    Response::Failure(failure) if matches!(failure.error.data, Some(ErrorData::ObservationUnavailable { .. })) => {}
+                    other @ Response::Failure(_) => panic!("thread status: {other:?}"),
+                }
+                tokio::task::yield_now().await;
+            }
+            let process = PathBuf::from(format!("/proc/{}", child.id().unwrap()));
+            let (before_cpu, before_writes) = process_cpu_and_write_counters(&process);
+            let started = std::time::Instant::now();
+            let turn = start_turn(&client, &target, "warm standalone model request").await;
+            let warm = loop {
+                let checkpoint = settled(&client, &target).await;
+                if checkpoint["attempt"]["attempt_id"].as_str() == Some(turn.as_str()) {
+                    break checkpoint;
+                }
+                tokio::task::yield_now().await;
+            };
+            let settlement_ms = started.elapsed().as_secs_f64() * 1000.0;
+            assert!(warm["messages"].to_string().contains("Hello world"));
+            assert_eq!(provider.request_bodies().len(), 2);
+            let (cpu, writes) = process_cpu_and_write_counters(&process);
+            let status = std::fs::read_to_string(process.join("status")).unwrap();
+            let peak_kib = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+                .unwrap().split_ascii_whitespace().next().unwrap().parse::<u64>().unwrap();
+            Some((settlement_ms, cpu - before_cpu, writes - before_writes, peak_kib))
+        } else { None };
+        let request_count = provider.request_bodies().len();
         assert_standalone_product_files(bin.path());
         assert_eq!(
             std::fs::read_dir(fixture.root.path().join("a"))
@@ -353,6 +394,8 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         let mut cold = isolated();
         let client = driver::jsonl(cold.stdout.take().unwrap(), cold.stdin.take().unwrap());
         initialize_client(&client).await;
+        #[cfg(target_os = "linux")]
+        let history_started = std::time::Instant::now();
         let MethodResult::SessionHistory {
             conversation_id,
             window,
@@ -360,6 +403,8 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         else {
             panic!("cold history")
         };
+        #[cfg(target_os = "linux")]
+        let history_ms = history_started.elapsed().as_secs_f64() * 1000.0;
         assert_eq!(conversation_id, owner);
         let history_body = serde_json::to_string(&window).unwrap();
         assert!(history_body.contains("standalone model request"));
@@ -372,9 +417,18 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         );
         assert_eq!(
             provider.request_bodies().len(),
-            1,
+            request_count,
             "cold read must not request the model"
         );
+        #[cfg(target_os = "linux")]
+        if let Some((settlement_ms, cpu_ticks, writes, peak_kib)) = warm_measurement {
+            assert!(history_body.contains("warm standalone model request"));
+            println!("MODEL_MEASUREMENT {}", serde_json::json!({
+                "warm_settlement_ms": settlement_ms, "cold_history_ms": history_ms,
+                "server_cpu_ticks": cpu_ticks, "server_write_bytes": writes, "server_peak_rss_kib": peak_kib,
+                "history_window_json_bytes": history_body.len(), "provider_requests": 1, "history_requests": 1,
+            }));
+        }
         assert!(!workspace.exists());
         client.close().await;
         detach_then_shutdown(&mut cold).await;
@@ -3963,9 +4017,9 @@ async fn start_turn(
     client: &driver::Driver,
     target: &rustx::app_server::protocol::AttachmentTarget,
     text: &str,
-) {
+) -> rustx::runtime::identity::AttemptId {
     use rustx::app_server::protocol::*;
-    result(
+    let MethodResult::TurnInputAccepted { turn_id, .. } = result(
         client,
         Method::TurnStart {
             input_id: uuid::Uuid::new_v4().to_string(),
@@ -3983,7 +4037,11 @@ async fn start_turn(
             .collect(),
         },
     )
-    .await;
+    .await
+    else {
+        panic!("turn admission")
+    };
+    turn_id
 }
 
 fn use_emulator(f: &Fixture, provider: &provider_emulator::ProviderEmulator) {

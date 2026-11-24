@@ -54,7 +54,7 @@ The two real transports were measured against the standalone Linux x86-64 Server
 | 16 MiB | Hosted | 1,367.5 ms | 1,443.1 ms | 160 ms | 84,454 KiB | 85,488 KiB | 495,616 B |
 | 16 MiB | HTTP MCP | 465.2 ms | 535.2 ms | 180 ms | 120,464 KiB | 121,860 KiB | 733,184 B |
 
-For Hosted, the fixtures sent 35, 67, and 259 requests carrying 2,819,196 B, 5,636,540 B, and 22,541,036 B of serialized JSON. These counts include the deliberately rejected End and exclude WebSocket headers and responses. The HTTP fixture made one business RPC and returned 2,093,056 B, 4,190,208 B, or 16,773,120 B of tool text before JSON and HTTP framing. It uses the HTTP path's bounded parsing behavior. Hosted results used bounded frames and retained the same peak-memory band as payload size increased. Both suites check the scratch directory before shutdown, enforce a bounded preview, and verify that no Client started. Server write counts include trace and canonical writes. The cases use different transports and fixtures, with no like-for-like comparison of wire bytes or upload throughput. Concurrent candidate occupancy and history latency remain unmeasured.
+For Hosted, the fixtures sent 35, 67, and 259 requests carrying 2,819,196 B, 5,636,540 B, and 22,541,036 B of serialized JSON. These counts include the deliberately rejected End and exclude WebSocket headers and responses. The HTTP fixture made one business RPC and returned 2,093,056 B, 4,190,208 B, or 16,773,120 B of tool text before JSON and HTTP framing. It uses the HTTP path's bounded parsing behavior. Hosted results used bounded frames and retained the same peak-memory band as payload size increased. Both suites check the scratch directory before shutdown, enforce a bounded preview, and verify that no Client started. Server write counts include trace and canonical writes. The cases use different transports and fixtures, with no like-for-like comparison of wire bytes or upload throughput. Concurrent candidate occupancy remains unmeasured.
 
 To reproduce, prepare the `process` harness and set `RUSTX_INSTALLED_PRODUCTS` to a directory containing the three extracted products under `rustx-server`, `rustx-client`, and `rustx`. Repeat the two commands 20 times each for `mib=2`, `4`, and `16` and use the `HOST_MEASUREMENT` and `HTTP_MCP_MEASUREMENT` records. `getconf CLK_TCK` gives the CPU counter frequency.
 
@@ -67,6 +67,25 @@ RUSTX_HOST_MEASUREMENT_MIB="$mib" /absolute/process-harness --exact \
 RUSTX_HTTP_MCP_MEASUREMENT_BYTES="$((mib * 1048576 - 4096))" /absolute/process-harness --exact \
   app_server::near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client --nocapture
 ```
+
+## Installed pure-model and cold history baseline
+
+Twenty Linux x86-64 runs used the standalone Server from `5320f6dc7b193b4405cd83c9f7ef8fcd3b38cf15`. Each run commits one warm-up turn using the Fake Provider, waits for native Idle, and measures a second turn until the matching Attempt settles. It then restarts the Server, with the Workspace moved out of view, and measures one history page read after initialization. The continuation run makes one model request and the history read makes zero. No Execution Client or execution helpers are present.
+
+| Operation | P50 | P95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Warm model turn through settlement | 40.9 ms | 54.7 ms | 55.4 ms |
+| Cold history page | 15.6 ms | 19.7 ms | 19.9 ms |
+
+The warm turn used a median of 20 ms CPU at 10 ms counter resolution and wrote 147,456 physical bytes in every sample. Server lifetime peak RSS was 82,240 KiB median and 82,872 KiB maximum. History pages contained 6,651–6,653 bytes of serialized window data, excluding the outer response and framing. History timing excludes process startup and initialization. P95 uses the nearest rank.
+
+```sh
+export RUSTX_INSTALLED_PRODUCTS=/absolute/extracted-products
+RUSTX_MODEL_MEASUREMENT=1 /absolute/process-harness --exact \
+  app_server::standalone_server_commits_a_model_turn_without_a_client_or_helpers --nocapture
+```
+
+Repeat for twenty samples and collect the `MODEL_MEASUREMENT` records.
 
 ## Installed Managed Python restart reuse
 
