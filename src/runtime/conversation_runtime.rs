@@ -362,6 +362,8 @@ mod drain;
 mod durability;
 mod foreground;
 mod history;
+#[cfg(test)]
+mod issue606_tests;
 mod model_selection;
 mod observer;
 mod probe;
