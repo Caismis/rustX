@@ -23,7 +23,7 @@ import { SettingsFeedback, SettingsNotice } from '../settings/SettingsFeedback';
 import { createWorkflowPort, readToolCatalog, USER_SCOPE } from '../workflows/port';
 import { McpActions, McpDetail, McpPage } from './mcp/McpPage';
 import { useMcpProbes } from './mcp/useMcpProbes';
-import { TransferDialog, type TransferIntent } from './shared/ResourceTransfer';
+import { TransferDialog, type TransferIntent, type TransferReopenReason } from './shared/ResourceTransfer';
 import { ResourceAvailability } from './shared/ResourceAvailability';
 import { ResourceBrowser } from './shared/ResourceBrowser';
 import type { SkillDisplayWriter } from './skills/SkillDisplayDialog';
@@ -106,8 +106,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [query, setQuery] = useState('');
   const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
-  const [pendingTransfer, setPendingTransfer] = useState<{ intent: TransferIntent; skillScope?: string; token: object }>();
-  const liveTransfer = useRef<object | undefined>(undefined);
+  const [pendingTransfer, setPendingTransfer] = useState<{ intent: TransferIntent; skillScope?: string; token: number }>();
+  const [transferNotices, setTransferNotices] = useState<ReadonlyMap<string, { token: number; reason: TransferReopenReason }>>(() => new Map());
+  const [owedTransferRefresh, setOwedTransferRefresh] = useState<string>();
+  const transferSequence = useRef(0);
+  const liveTransfer = useRef<number | undefined>(undefined);
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
   const mcpDrafts = useRef(new Map<string, { draft: McpEditorDraft; hostOwner?: string }>());
   const [resourceFocus, setResourceFocus] = useState<string>();
@@ -158,15 +161,18 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const config = configAuthoring(source, scope);
   const revision = config.state === 'structured' ? config.revision : undefined;
   const editable = available && !bound && !awaitingAssociation && (!sessionCandidate || authoringConfirmed) && !!observation && !readError && transport.connection === 'connected';
+  const transferNotice = transferNotices.get(lifetime);
   const skillTransferScope = module === 'skills' && visible && showingWorkspace && editable && directory
     && (!sessionCandidate || boundSkillState?.status === 'ready') ? JSON.stringify([lifetime, boundKey, directory]) : undefined;
   const activeTransfer = pendingTransfer && (pendingTransfer.intent.family !== 'skill' || (
     !!skillTransferScope && pendingTransfer.skillScope === skillTransferScope
   )) ? pendingTransfer : undefined;
+  const liveTransferWorkspace = useRef(lifetime);
   useLayoutEffect(() => {
+    liveTransferWorkspace.current = lifetime;
     liveTransfer.current = activeTransfer?.token;
     return () => { liveTransfer.current = undefined; };
-  }, [activeTransfer]);
+  }, [activeTransfer, lifetime]);
   const title = tx(`resources:${module}.title`);
   const scopeLabel = showingWorkspace ? workspace?.displayName : tx('resources:scope.global');
   const resetScope = () => {
@@ -239,6 +245,20 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     if (catalogModule) setCatalogRefresh(value => value + 1);
     if (showingWorkspace && module !== 'skills') globalActor.send({ type: 'REFRESH' });
   };
+  const refreshCurrentWorkspace = useRef(refresh);
+  useLayoutEffect(() => { refreshCurrentWorkspace.current = refresh; });
+  const refreshTransferredWorkspace = (scope: string, token: number) => {
+    if (scope !== liveTransferWorkspace.current) return;
+    // A refresh would revoke a newer editable dialog. Let that dialog
+    // close first, then refresh the workspace that owned the old request.
+    if (liveTransfer.current !== undefined && liveTransfer.current !== token) setOwedTransferRefresh(scope);
+    else refreshCurrentWorkspace.current();
+  };
+  useEffect(() => {
+    if (!owedTransferRefresh || activeTransfer) return;
+    setOwedTransferRefresh(undefined);
+    if (owedTransferRefresh === lifetime) refreshCurrentWorkspace.current();
+  }, [activeTransfer, lifetime, owedTransferRefresh]);
   const bindSkillWrite = (skill: SkillDescriptor, expected_revision?: string) => {
     if (!expected_revision || !editable) return;
     const { endpoint, authorityRevision } = client.getSnapshot();
@@ -278,7 +298,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     if (!showingWorkspace || !workspace || !directory || !editable || (module === 'skills' ? !skillTransferScope : !globalEditable)) return;
     const destination = from === 'user' ? resourceNames(source, 'workspace') : resourceNames(globalSource, 'user');
     const names = from === 'user' ? resourceNames(globalSource, 'user') : resourceNames(source, 'workspace');
-    const token = {};
+    const token = ++transferSequence.current;
     setPendingTransfer({ token, skillScope: skillTransferScope, intent: {
       from, name, revision, operation, family: module === 'skills' ? 'skill' : module === 'subagents' ? 'agent' : 'mcp', directory,
       destinationLabel: from === 'user' ? workspace.displayName : tx('resources:scope.global'),
@@ -416,6 +436,24 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         </TabPanel>
       </Tabs>
     </div>}
-    {activeTransfer && <TransferDialog intent={activeTransfer.intent} close={() => setPendingTransfer(undefined)} refresh={refresh} />}
+    {transferNotice && <div className={catalogCss.banner} role="alert">
+      <p>{tx(`resources:transfer.notice-${transferNotice.reason}`)}</p>
+      <Button size="sm" variant="outline" onClick={() => setTransferNotices(current => {
+        if (current.get(lifetime)?.token !== transferNotice.token) return current;
+        const remaining = new Map(current);
+        remaining.delete(lifetime);
+        return remaining;
+      })}>{tx('workflows:dialog.close')}</Button>
+    </div>}
+    {activeTransfer && <TransferDialog key={activeTransfer.token} intent={activeTransfer.intent}
+      close={() => setPendingTransfer(current => current?.token === activeTransfer.token ? undefined : current)}
+      refresh={activeTransfer.intent.family === 'skill' ? () => refreshTransferredWorkspace(lifetime, activeTransfer.token) : refresh}
+      onReopen={activeTransfer.intent.family === 'skill' ? reason => {
+        const token = activeTransfer.token;
+        setTransferNotices(current => (current.get(lifetime)?.token ?? 0) >= token
+          ? current : new Map(current).set(lifetime, { token, reason }));
+        setPendingTransfer(current => current?.token === token ? undefined : current);
+        refreshTransferredWorkspace(lifetime, token);
+      } : undefined} />}
   </section>;
 }

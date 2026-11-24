@@ -8,6 +8,7 @@ import { ResourceSurface } from '../src/app/resources/ResourceSurface';
 import { bindResourceTransfer } from '../src/workspaces/resource-transfer';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
+import { WorkspaceHostError } from '../src/workspaces/host';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 
 afterEach(cleanup);
@@ -364,4 +365,81 @@ it('checks the transfer intent again before forwarding to the Host', async () =>
   current = false;
   await expect(submit(cwd, 'current', mutation)).rejects.toMatchObject({ kind: 'workspace_unavailable' });
   expect(configure).toHaveBeenCalledTimes(1);
+});
+
+async function openSkillCopy(name = 'authored-skill') {
+  const row = await screen.findByRole('listitem', { name });
+  fireEvent.click(within(row).getByRole('button', { name: /Actions/ }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Copy to Global' }));
+  return screen.findByRole('dialog', { name: 'Copy resource' });
+}
+
+it.each([
+  [new WorkspaceHostError('transport lost the reply', undefined, true), 'The transfer may have committed.'],
+  [new WorkspaceHostError('source changed', undefined, false, { kind: 'source_conflict', scope: 'workspace', expected: 'old', actual: 'new' }), 'The source changed.'],
+] as const)('preserves a submitted Skill transfer result through its own refresh', async (error, notice) => {
+  let reads = 0;
+  const subject = cfg3Client(async op => {
+    if (op.method === 'skills/list' && op.params.target.kind === 'workspace') {
+      reads += 1;
+      return skillResult('authoring', 'authored-skill');
+    }
+  });
+  subject.publish({ authorityId: 'native-fixture' });
+  const { associations, host, surface } = mountResources(subject);
+  let fail!: (error: Error) => void;
+  const transfer = new Promise<never>((_, reject) => { fail = reject; });
+  const original = host.configureWorkspace!;
+  const configure = vi.spyOn(host, 'configureWorkspace').mockImplementation((...args) =>
+    args[2].kind === 'transfer' ? transfer : original(...args));
+  const stop = associations.start();
+  try {
+    const ui = render(surface('skills', first));
+    const page = ui.container.querySelector('[data-resource-module="skills"]');
+    await waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe('ready'));
+    const dialog = await openSkillCopy();
+    const submit = within(dialog).getByRole('button', { name: 'Copy' });
+    fireEvent.click(submit);
+    const writes = () => configure.mock.calls.filter(([, , request]) => request.kind === 'transfer');
+    expect(writes()).toHaveLength(1);
+    const before = reads;
+    await act(async () => fail(error));
+    await waitFor(() => expect(reads).toBeGreaterThan(before));
+    await waitFor(() => expect(page?.getAttribute('data-lifecycle')).toBe('ready'));
+    expect(screen.getByRole('alert').textContent).toContain(notice);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(submit);
+    expect(writes()).toHaveLength(1);
+  } finally { stop(); }
+});
+
+it('keeps a new Skill transfer open when the superseded request finishes', async () => {
+  const subject = cfg3Client(async op => {
+    if (op.method === 'skills/list' && op.params.target.kind === 'workspace') return skillResult('authoring', 'authored-skill');
+  });
+  subject.publish({ authorityId: 'native-fixture' });
+  const { associations, host, surface } = mountResources(subject);
+  let finish!: (result: { kind: 'transfer' }) => void;
+  const transfer = new Promise<{ kind: 'transfer' }>(resolve => { finish = resolve; });
+  const original = host.configureWorkspace!;
+  const configure = vi.spyOn(host, 'configureWorkspace').mockImplementation((...args) =>
+    args[2].kind === 'transfer' ? transfer : original(...args));
+  const stop = associations.start();
+  try {
+    const ui = render(surface('skills', first));
+    const ready = () => waitFor(() => expect(ui.container.querySelector('[data-resource-module="skills"]')?.getAttribute('data-lifecycle')).toBe('ready'));
+    await ready();
+    const previous = await openSkillCopy();
+    fireEvent.click(within(previous).getByRole('button', { name: 'Copy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await ready();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const latest = await openSkillCopy();
+    const destination = within(latest).getByRole('textbox');
+    fireEvent.change(destination, { target: { value: 'new-copy' } });
+    await act(async () => finish({ kind: 'transfer' }));
+    expect(screen.getByRole('dialog')).toBe(latest);
+    expect((destination as HTMLInputElement).value).toBe('new-copy');
+    expect(configure.mock.calls.filter(([, , request]) => request.kind === 'transfer')).toHaveLength(1);
+  } finally { stop(); }
 });

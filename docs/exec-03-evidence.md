@@ -851,3 +851,18 @@ from a separate saturation test.
   catalog is refreshed, fails or becomes Client-owned. Component tests cover
   both follow-up outcomes on the same connection. A separate Host-boundary
   assertion checks that an old submit function is refused before forwarding.
+
+## Follow-up to the review of `08d9ed856`
+
+- The Session input CAS publishes its own bound observation under the
+  captured control pair. The isolated Client regression parks the older
+  watch capture, commits the new Session input, then edits only the new
+  linked Skill marker after the watch is installed.
+- Configuration recovery remains due when a late source verification fails
+  after complete Skill discovery. The Linux isolation fixture injects the
+  failure after the real second document read and advances the recovery tick
+  without another filesystem event or a different Client pair.
+- Skill transfer results are retained by Workspace and operation after the
+  submit intent is revoked. Controlled Host replies verify that uncertain
+  and conflicting results survive refresh, and a late completion leaves a
+  newer transfer dialog open.

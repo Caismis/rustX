@@ -119,8 +119,12 @@ impl SessionRuntimeManager {
         let observed_skills = application
             .bound_source_reads(session.as_str(), lane)
             .and_then(|reads| reads.skills.as_ref());
+        let latest_source = application
+            .latest_bound_source(session.as_str())
+            .map(|(source, _)| source);
         let mut plan = observed_skills
             .map(|observation| &observation.paths)
+            .or_else(|| latest_source.map(|source| &source.skill_discovery.observed_workspace))
             .or_else(|| {
                 bindings
                     .get(session)
@@ -145,9 +149,8 @@ impl SessionRuntimeManager {
         let mut incomplete_coverage =
             observed_skills.is_some_and(|observation| !observation.complete);
         let mut incomplete_python = BTreeSet::new();
-        let python = application
-            .latest_bound_source(session.as_str())
-            .map(|(source, _)| &source.managed_python)
+        let python = latest_source
+            .map(|source| &source.managed_python)
             .or_else(|| bindings.get(session).map(|config| &config.managed_python));
         if let Some(python) = python {
             incomplete_coverage |= !python.discovery_diagnostics.is_empty();
@@ -172,9 +175,8 @@ impl SessionRuntimeManager {
         }
         // The Python-only recheck already rebuilds the full source if its
         // baseline was lost. With no such periodic work, schedule recovery here.
-        incomplete_coverage |= observed_skills.is_none()
-            && incomplete_python.is_empty()
-            && application.bound_source_failed(session.as_str());
+        incomplete_coverage |=
+            incomplete_python.is_empty() && application.bound_source_failed(session.as_str());
         WorkspaceWatchPlan {
             plan,
             incomplete_coverage,
@@ -332,6 +334,16 @@ impl Watches {
     }
 }
 
+#[cfg(test)]
+fn recovery_due(manager: &SessionRuntimeManager, changed: bool) {
+    if !changed {
+        manager
+            .configuration
+            .test_hooks
+            .reach("bound_source_recovery_due");
+    }
+}
+
 async fn watch_session(
     manager: SessionRuntimeManager,
     session: SessionId,
@@ -380,13 +392,15 @@ async fn watch_session(
                     )?;
                 }
                 if changed || recheck && watches.incomplete_coverage {
+                    #[cfg(test)]
+                    recovery_due(&worker, changed);
                     worker.observe_bound_source(&id, &binding, turn, native_change);
+                    check = Instant::now() + COVERAGE_RECHECK;
                     #[cfg(test)]
                     worker
                         .configuration
                         .test_hooks
                         .reach("bound_configuration_watch_resynced");
-                    check = Instant::now() + COVERAGE_RECHECK;
                 } else if recheck && !watches.incomplete_python.is_empty() {
                     #[cfg_attr(not(test), allow(unused_variables))]
                     let updated = worker.observe_incomplete_bound_python(

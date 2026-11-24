@@ -554,7 +554,18 @@ impl UserConfigManager {
                 path,
                 captured,
             } => {
-                if &read_bound_document(endpoint, path, "rustx.toml")? == captured {
+                let verified = read_bound_document(endpoint, path, "rustx.toml")?;
+                #[cfg(test)]
+                if self
+                    .test_hooks
+                    .fault("bound_workspace_verification_unavailable")
+                {
+                    return Err(unavailable(
+                        path,
+                        "Execution Client: physical operation unavailable".into(),
+                    ));
+                }
+                if &verified == captured {
                     Ok(())
                 } else {
                     Err("Workspace configuration changed during capture; rescan to retry".into())

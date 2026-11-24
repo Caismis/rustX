@@ -104,6 +104,12 @@ cargo test -p rustx --all-features --locked --lib \
     bound_skill_watch_keeps_the_failed_target_observable \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
+    session_input_commit_publishes_its_bound_skill_dependencies \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    a_bound_source_rechecks_after_its_final_document_read_fails \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
     bound_workspace_mcp_catalog_uses_client_definitions_and_server_network \
     -- --ignored --nocapture
 retirement_client=$(cargo build -p rustx-execution-client --features test-support --locked \

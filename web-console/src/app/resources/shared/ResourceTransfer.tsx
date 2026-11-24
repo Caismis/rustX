@@ -40,7 +40,14 @@ function copyName(name: string, taken: ReadonlySet<string>, family: TransferInte
   }
 }
 
-export function TransferDialog({ intent, close, refresh }: { intent: TransferIntent; close: () => void; refresh: () => void }) {
+export type TransferReopenReason = 'uncertain' | 'changed';
+
+export function TransferDialog({ intent, close, refresh, onReopen }: {
+  intent: TransferIntent;
+  close: () => void;
+  refresh: () => void;
+  onReopen?: (reason: TransferReopenReason) => void;
+}) {
   const tx = useTranslation();
   const moving = intent.operation === 'move';
   const [name, setName] = useState(() => moving ? intent.name : copyName(intent.name, intent.taken, intent.family));
@@ -70,14 +77,17 @@ export function TransferDialog({ intent, close, refresh }: { intent: TransferInt
     } catch (cause) {
       const error = cause instanceof WorkspaceHostError ? cause : undefined;
       const native = error?.native;
-      if (error?.uncertain || native?.kind === 'committed_durability_uncertain' || native?.kind === 'outcome_unknown') {
-        setFailure(tx('resources:transfer.uncertain'));
-        setReopen(true);
-        refresh();
-      } else if (native?.kind === 'source_conflict' || error?.kind === 'workspace_unavailable' || error?.kind === 'authority_replaced' || error?.kind === 'native_replaced') {
-        setFailure(tx('resources:transfer.changed'));
-        setReopen(true);
-        refresh();
+      const reason = error?.uncertain || native?.kind === 'committed_durability_uncertain' || native?.kind === 'outcome_unknown'
+        ? 'uncertain'
+        : native?.kind === 'source_conflict' || error?.kind === 'workspace_unavailable' || error?.kind === 'authority_replaced' || error?.kind === 'native_replaced'
+          ? 'changed' : undefined;
+      if (reason) {
+        if (onReopen) onReopen(reason);
+        else {
+          setFailure(tx(`resources:transfer.${reason}`));
+          setReopen(true);
+          refresh();
+        }
       } else {
         setFailure(native?.kind === 'resource_transfer_rejected' ? tx(`resources:transfer.${native.reason}`)
           : native?.kind === 'workflow_invalid' ? native.diagnostic.reason : tx('resources:transfer.failed'));

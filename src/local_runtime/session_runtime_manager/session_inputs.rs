@@ -1,7 +1,7 @@
 //! Validate Session-authored inputs before the catalog CAS, then publish the
 //! captured candidate through the existing safe configuration application.
 use super::SessionRuntimeManager;
-use crate::local_runtime::configuration::application::ApplicationState;
+use crate::local_runtime::configuration::application::{ApplicationState, BoundSourceReads};
 use crate::local_runtime::session::{SessionCatalog, SessionError, SessionPersistentState};
 use crate::local_runtime::session_inputs::{
     SessionConfigContent, SessionInputChange, SessionInputReference, SessionInputReferences,
@@ -159,20 +159,26 @@ impl SessionRuntimeManager {
         if let Some(model) = retained_model {
             input.model = model;
         }
-        if endpoint
+        let lane = endpoint
             .as_ref()
-            .is_some_and(|endpoint| endpoint.control().is_none())
-        {
-            return Err(SessionInputError::ExecutionUnavailable);
-        }
-        let capture = self.configuration.capture_session_application(
+            .map(|endpoint| {
+                endpoint
+                    .control()
+                    .ok_or(SessionInputError::ExecutionUnavailable)
+            })
+            .transpose()?;
+        let mut reads = BoundSourceReads::default();
+        let capture = self.configuration.capture_session_application_with_python(
             &input,
             &self.credentials,
             endpoint.as_ref(),
+            None,
+            &mut reads,
         );
-        if endpoint
-            .as_ref()
-            .is_some_and(|endpoint| endpoint.control().is_none())
+        if let Some((endpoint, lane)) = endpoint.as_ref().zip(lane.as_ref())
+            && !endpoint
+                .control()
+                .is_some_and(|after| after.same_pair(lane))
         {
             return Err(SessionInputError::ExecutionUnavailable);
         }
@@ -204,15 +210,43 @@ impl SessionRuntimeManager {
         if catalog.lineage(session, None)?.1 == settings {
             return Ok(actual);
         }
-        let revision = catalog.replace_settings(session, expected, settings);
-        if revision.is_ok() || revision.as_ref().is_err_and(SessionError::committed) {
-            application.cancel_bound_capture(session);
-            application.capture_bound_source(session.to_string(), &input.cwd, Ok(capture));
-            self.applications.notify(&application);
-            drop(catalog);
-            drop(application);
+        let commit = || {
+            let revision = catalog.replace_settings(session, expected, settings);
+            let committed =
+                revision.is_ok() || revision.as_ref().is_err_and(SessionError::committed);
+            if committed {
+                application.cancel_bound_capture(session);
+                let scope = session.to_string();
+                if let Some(lane) = &lane {
+                    application.publish_bound_observation(
+                        scope,
+                        &input.cwd,
+                        Ok(capture),
+                        reads,
+                        lane.clone(),
+                        false,
+                    );
+                } else {
+                    application.capture_bound_source(scope, &input.cwd, Ok(capture));
+                }
+                self.applications.notify(&application);
+            }
+            (revision, committed)
+        };
+        let (revision, committed) =
+            if let Some((endpoint, lane)) = endpoint.as_ref().zip(lane.as_ref()) {
+                endpoint
+                    .with_control_lane(lane, commit)
+                    .ok_or(SessionInputError::ExecutionUnavailable)?
+            } else {
+                commit()
+            };
+        drop(catalog);
+        drop(application);
+        if committed {
             self.applications.run(self.clone());
         }
+
         revision.map_err(SessionInputError::Persistence)
     }
 }

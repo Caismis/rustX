@@ -826,6 +826,7 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
         self.record_source(source, &input);
+        self.bound_observations.remove(&scope);
         self.scope_sources
             .insert(scope.clone(), source.to_path_buf());
         self.capture_session_source(scope, source, input)
@@ -840,6 +841,7 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
         self.scope_sources.remove(&scope);
+        self.bound_observations.remove(&scope);
         self.capture_session_source(scope, source, input)
     }
 
