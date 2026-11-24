@@ -795,8 +795,7 @@ async fn scheduler85_prep_completes_before_the_claim_critical_section() {
         let created = scheduled(&f).await;
         clock.add(60);
         let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
-            start,
-            ..
+            start, ..
         }) = f
             .manager
             .schedule_operation(
@@ -829,8 +828,10 @@ async fn scheduler85_prep_completes_before_the_claim_critical_section() {
             .unwrap()
             .unwrap();
         assert!(
-            !matches!(before.start.state, ScheduledWorkflowState::Claimed { .. }
-                | ScheduledWorkflowState::Settled { .. }),
+            !matches!(
+                before.start.state,
+                ScheduledWorkflowState::Claimed { .. } | ScheduledWorkflowState::Settled { .. }
+            ),
             "prep finished but no durable Claim exists yet: {:?}",
             before.start.state
         );
