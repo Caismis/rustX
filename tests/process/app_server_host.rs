@@ -168,6 +168,14 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         }).await else { panic!("Session creation") };
         host.rpc(Method::SessionName { session_id: session.id.clone(), name: "Installed Host stream".into() }).await;
         let target = host.follow(thread.id.clone()).await;
+        #[cfg(target_os = "linux")]
+        let measurement = std::env::var("RUSTX_HOST_MEASUREMENT_MIB").ok().map(|value| {
+            let mebibytes = value.parse::<usize>().expect("measurement size in MiB");
+            assert!((2..=16).contains(&mebibytes));
+            let process = std::path::PathBuf::from(format!("/proc/{}", child.id().unwrap()));
+            let (cpu, writes) = super::app_server::process_cpu_and_write_counters(&process);
+            (mebibytes, process, cpu, writes, std::time::Instant::now())
+        });
         let MethodResult::TurnInputAccepted { turn_id, disposition: TurnInputDisposition::Started, .. } = host.rpc(Method::TurnStart {
             target: target.clone(), input_id: uuid::Uuid::new_v4().to_string(),
             content: vec![UserInputBlock::Text(TextBlock { text: "shared host request".into() })],
@@ -187,18 +195,6 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         candidate["callId"] = json!(tool.call_id);
         candidate["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
 
-        #[cfg(target_os = "linux")]
-        let measurement = std::env::var("RUSTX_HOST_MEASUREMENT_MIB").ok().map(|value| {
-            let mebibytes = value.parse::<usize>().expect("measurement size in MiB");
-            assert!((2..=16).contains(&mebibytes));
-            let proc = std::path::PathBuf::from(format!("/proc/{}", child.id().unwrap()));
-            let write_bytes = |proc: &Path| {
-                std::fs::read_to_string(proc.join("io")).unwrap().lines()
-                    .find_map(|line| line.strip_prefix("write_bytes: "))
-                    .unwrap().parse::<u64>().unwrap()
-            };
-            (mebibytes, write_bytes(&proc), proc, write_bytes)
-        });
         #[cfg(target_os = "linux")]
         let padding = measurement.as_ref().map_or(600_000, |(mib, ..)| (mib * 1_048_576 - 64) / 2);
         #[cfg(not(target_os = "linux"))]
@@ -230,13 +226,15 @@ async fn standalone_server_validates_large_host_stream_without_a_client() {
         let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
         host.settled(&turn_id).await;
         #[cfg(target_os = "linux")]
-        if let Some((_, start_writes, proc, write_bytes)) = measurement {
-            let status = std::fs::read_to_string(proc.join("status")).unwrap();
+        if let Some((_, process, start_cpu, start_writes, started)) = measurement {
+            let (cpu, writes) = super::app_server::process_cpu_and_write_counters(&process);
+            let status = std::fs::read_to_string(process.join("status")).unwrap();
             let peak_kib = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
                 .unwrap().split_ascii_whitespace().next().unwrap().parse::<u64>().unwrap();
             println!("HOST_MEASUREMENT {}", json!({
                 "body_bytes": body.len(), "request_frames": counts.0, "host_to_server_json_bytes": counts.1,
-                "server_peak_rss_kib": peak_kib, "server_write_bytes": write_bytes(&proc) - start_writes,
+                "server_peak_rss_kib": peak_kib, "server_write_bytes": writes - start_writes,
+                "server_cpu_ticks": cpu - start_cpu, "settlement_ms": started.elapsed().as_secs_f64() * 1000.0,
                 "upload_ms": upload_ms, "including_settlement_ms": upload_started.elapsed().as_secs_f64() * 1000.0,
                 "client_save_rpcs": 0,
             }));

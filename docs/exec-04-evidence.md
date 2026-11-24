@@ -17,7 +17,7 @@ The installed-product branch starts at `6ca38dc3d3ffe87c9c476a15d10642abab8053ba
 | T42 | Linux read and grep measurements below cover the installed Client with a measuring peer. Installed Spill and full-Agent Server memory measurements remain open. |
 | T44 | `execution_enrollment_precedes_client_and_workspace_configuration_readiness` exercises minimal enrollment. The installed UI lists operator-configured locations. Interactive first-folder selection with a temporary bound Session and cancellation cleanup remains open. |
 | T45 | `client_death_after_canonical_host_result_cannot_rewrite_saved_history` keeps a sealed canonical attachment and a published Client Spill in one Conversation. After a real Linux SIGKILL, it verifies removal of the old storage, `NotFound` for the exact locator on the replacement, no Save replay, and the original canonical result. A cold standalone Server then exports the exact attachment bytes with the Workspace absent, with no Spill entry. The sealed image is seeded via the durable fixture API. |
-| T46 | Installed Hosted tests include bounded frames, full digest validation, one canonical commit, and an empty Server scratch directory. The Linux baseline below measures Host-to-Server traffic and Server memory and writes. HTTP MCP runs in a separate real-protocol fixture. Comparative HTTP and queue measurements remain open. |
+| T46 | Installed Hosted tests include bounded frames, full digest validation, one canonical commit, and an empty Server scratch directory. The Linux baseline below measures Host-to-Server traffic and compares settlement time, Server CPU, peak memory, and physical writes with the real HTTP MCP transport. Concurrent candidates and queue high-water measurements remain open. |
 | T49 | `deleted_session_recovers_only_for_cleanup_in_the_original_client` holds a real same-instance reattach until deletion reports cleanup pending. The original Client sends one Revoke receipt. The data lane accepts no requests, the Session stays absent from the catalog, and the original Workspace bytes remain unchanged. The remote SIGKILL fixture covers pending deletion when no authorized receipt is available. |
 | T52 | `standalone_server_validates_large_host_stream_without_a_client` uses a real external WebSocket Host against the standalone Server. It verifies individual frame bounds, wrong-digest refusal, one canonical result, and bounded continuation with truthful unavailable output. |
 | T65 | Installed Linux tests cover strong Server/Client kills and restart fences. macOS death and settlement evidence remains open. |
@@ -35,23 +35,31 @@ The remaining T-ID mapping must be reconciled with discovered tests at the final
 | 8 MiB | 7.03 ms | 3.20 ms |
 | 64 MiB | 63.28 ms | 22.56 ms |
 
-Each operation took one RPC. The range read transmitted 97–99 bytes and received 262–265 bytes. Grep transmitted 149 bytes and received 130–132 bytes. The observed peak RSS was 9,736–11,380 KiB for the Client and 18,916–19,056 KiB for the measuring peer. The peer sends the actual wire requests but does not include the Agent runtime. Use its memory figures as a probe baseline. Full Server/Client measurements, Hosted versus HTTP measurements, and native macOS measurements are separate gates.
+Each operation took one RPC. The range read transmitted 97–99 bytes and received 262–265 bytes. Grep transmitted 149 bytes and received 130–132 bytes. The observed peak RSS was 9,736–11,380 KiB for the Client and 18,916–19,056 KiB for the measuring peer. The peer sends the actual wire requests but does not include the Agent runtime. Use its memory figures as a probe baseline. Full Server/Client and native macOS measurements remain separate gates.
 
-## Linux Hosted stream baseline
+## Linux standalone Hosted and HTTP MCP baseline
 
-The standalone Server received one Hosted tool result over a real WebSocket per run and committed it while the Fake Provider was active. The test held the Execution Client absent. The table reports medians from three samples per size on the Linux x86-64 preview installation. Host-to-Server bytes count serialized JSON requests, including IDs, base64, and the deliberately rejected End request. WebSocket headers and Server-to-Host responses are outside that count. Server write bytes are the delta in Linux `/proc/<pid>/io` from before Begin through Attempt settlement, including canonical and trace writes. Peak RSS is the whole Server process high-water mark. The fixture verifies that the Server scratch directory is empty and the Provider sees one tool result. These samples establish a baseline, with no tail latency or concurrent-candidate measurement.
+The two real transports were measured against the standalone Linux x86-64 Server extracted from `94a8ca4b6a6e893b045ec3af3bf4145997e4576d`. The Client was absent, and each Attempt used the Fake Provider and produced one canonical tool result. Twenty fresh Server processes ran per transport and size. Samples alternate transports and sizes. Settlement latency runs from submitting the turn to observing its settlement. CPU and physical write deltas use the same window, and peak RSS covers process lifetime. CPU resolution is 10 ms on the measured system. P95 uses the nearest rank.
 
-| Body | Request frames | Host-to-Server JSON | Peak Server RSS | Server write bytes | Upload | Upload through settlement |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 2 MiB | 35 | 2,819,196 B | 84,724 KiB | 282,624 B | 165.4 ms | 180.2 ms |
-| 4 MiB | 67 | 5,636,540 B | 84,712 KiB | 282,624 B | 352.1 ms | 367.3 ms |
-| 16 MiB | 259 | 22,541,036 B | 84,240 KiB | 282,624 B | 1,336.1 ms | 1,350.0 ms |
+| Result size | Transport | P50 settlement | P95 settlement | Median CPU | Median peak RSS | Maximum peak RSS | Median Server writes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 MiB | Hosted | 233.1 ms | 319.4 ms | 80 ms | 84,206 KiB | 85,164 KiB | 495,616 B |
+| 2 MiB | HTTP MCP | 173.9 ms | 240.1 ms | 100 ms | 91,366 KiB | 92,136 KiB | 733,184 B |
+| 4 MiB | Hosted | 392.6 ms | 451.7 ms | 90 ms | 83,892 KiB | 85,720 KiB | 495,616 B |
+| 4 MiB | HTTP MCP | 214.7 ms | 251.0 ms | 110 ms | 95,234 KiB | 95,980 KiB | 733,184 B |
+| 16 MiB | Hosted | 1,367.5 ms | 1,443.1 ms | 160 ms | 84,454 KiB | 85,488 KiB | 495,616 B |
+| 16 MiB | HTTP MCP | 465.2 ms | 535.2 ms | 180 ms | 120,464 KiB | 121,860 KiB | 733,184 B |
 
-To reproduce from a prepared `process` harness, point `RUSTX_INSTALLED_PRODUCTS` at a directory containing all three extracted layouts under `rustx-server`, `rustx-client`, and `rustx`.
+For Hosted, the fixtures sent 35, 67, and 259 requests carrying 2,819,196 B, 5,636,540 B, and 22,541,036 B of serialized JSON. These counts include the deliberately rejected End and exclude WebSocket headers and responses. The HTTP fixture made one business RPC and returned 2,093,056 B, 4,190,208 B, or 16,773,120 B of tool text before JSON and HTTP framing. It uses the HTTP path's bounded parsing behavior. Hosted results used bounded frames and retained the same peak-memory band as payload size increased. Both suites check the scratch directory before shutdown, enforce a bounded preview, and verify that no Client started. Server write counts include trace and canonical writes. The cases use different transports and fixtures, with no like-for-like comparison of wire bytes or upload throughput. Concurrent candidate occupancy and history latency remain unmeasured.
+
+To reproduce, prepare the `process` harness and set `RUSTX_INSTALLED_PRODUCTS` to a directory containing the three extracted products under `rustx-server`, `rustx-client`, and `rustx`. Repeat the two commands 20 times each for `mib=2`, `4`, and `16` and use the `HOST_MEASUREMENT` and `HTTP_MCP_MEASUREMENT` records. `getconf CLK_TCK` gives the CPU counter frequency.
 
 ```sh
-RUSTX_HOST_MEASUREMENT_MIB=16 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 \
-  RUSTX_INSTALLED_PRODUCTS=/absolute/extracted-products \
-  /absolute/process-harness --exact \
+export RUSTX_REQUIRE_PROVIDER_EMULATOR=1
+export RUSTX_INSTALLED_PRODUCTS=/absolute/extracted-products
+mib=16
+RUSTX_HOST_MEASUREMENT_MIB="$mib" /absolute/process-harness --exact \
   app_server_host::standalone_server_validates_large_host_stream_without_a_client --nocapture
+RUSTX_HTTP_MCP_MEASUREMENT_BYTES="$((mib * 1048576 - 4096))" /absolute/process-harness --exact \
+  app_server::near_limit_http_mcp_body_commits_only_a_bounded_preview_without_a_client --nocapture
 ```

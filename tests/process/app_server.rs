@@ -919,6 +919,27 @@ enum HttpMcpOutput {
     Oversized,
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn process_cpu_and_write_counters(process: &std::path::Path) -> (u64, u64) {
+    let stat = std::fs::read_to_string(process.join("stat")).unwrap();
+    let (_, fields) = stat.rsplit_once(')').unwrap();
+    // utime and stime are fields 14 and 15 in proc_pid_stat(5).
+    let cpu_ticks = fields
+        .split_ascii_whitespace()
+        .skip(11)
+        .take(2)
+        .map(|value| value.parse::<u64>().unwrap())
+        .sum();
+    let writes = std::fs::read_to_string(process.join("io"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("write_bytes: "))
+        .unwrap()
+        .parse()
+        .unwrap();
+    (cpu_ticks, writes)
+}
+
 #[cfg(feature = "mcp-fixture")]
 async fn http_mcp_output(case: HttpMcpOutput) {
     bounded(Box::pin(async {
@@ -941,6 +962,13 @@ async fn http_mcp_output(case: HttpMcpOutput) {
         let fixture = Fixture::new().await;
         let with_client = matches!(case, HttpMcpOutput::BoundImport);
         let over_limit = matches!(case, HttpMcpOutput::Oversized);
+        #[cfg(target_os = "linux")]
+        let measurement_bytes = std::env::var("RUSTX_HTTP_MCP_MEASUREMENT_BYTES").ok().map(|value| {
+            let bytes: usize = value.parse().expect("measurement body size in bytes");
+            assert!(!over_limit && !with_client, "measure the standalone HTTP MCP path");
+            assert!((FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1..=16 * 1024 * 1024 - 4096).contains(&bytes));
+            bytes
+        });
         let original_bytes = match case {
             HttpMcpOutput::PreviewOverflow => FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1,
             HttpMcpOutput::BoundImport => 5 * rustx_execution_protocol::MAX_RAW_CHUNK_BYTES,
@@ -948,6 +976,8 @@ async fn http_mcp_output(case: HttpMcpOutput) {
             HttpMcpOutput::NearLimit => 16 * 1024 * 1024 - 4096,
             HttpMcpOutput::Oversized => 16 * 1024 * 1024 + 1,
         };
+        #[cfg(target_os = "linux")]
+        let original_bytes = measurement_bytes.unwrap_or(original_bytes);
         let mcp_calls = fixture.root.path().join("mcp-calls");
         let mcp = McpFixture {
             result_bytes: Some(original_bytes),
@@ -1039,9 +1069,30 @@ exec "$bin/client-real" "$@"
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         let target = attach(&client, session.clone(), 2).await;
+        #[cfg(target_os = "linux")]
+        let measurement = measurement_bytes.map(|_| {
+            let process = PathBuf::from(format!("/proc/{}", child.id().unwrap()));
+            let (cpu, writes) = process_cpu_and_write_counters(&process);
+            (process, cpu, writes, std::time::Instant::now())
+        });
         start_turn(&client, &target, "overflow without execution binding").await;
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        #[cfg(target_os = "linux")]
+        if let Some((process, start_cpu, start_writes, started)) = measurement {
+            let (cpu, writes) = process_cpu_and_write_counters(&process);
+            let status = std::fs::read_to_string(process.join("status")).unwrap();
+            let peak_kib = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+                .unwrap().split_ascii_whitespace().next().unwrap().parse::<u64>().unwrap();
+            println!("HTTP_MCP_MEASUREMENT {}", serde_json::json!({
+                "tool_content_bytes": original_bytes,
+                "settlement_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "server_peak_rss_kib": peak_kib,
+                "server_write_bytes": writes - start_writes,
+                "server_cpu_ticks": cpu - start_cpu,
+                "http_mcp_business_rpcs": 1,
+            }));
+        }
         let scratch_entries = std::fs::read_dir(&scratch).unwrap()
             .map(|entry| entry.unwrap().path()).collect::<Vec<_>>();
         if with_client {
