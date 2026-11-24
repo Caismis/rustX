@@ -6,7 +6,7 @@ product Agent Server measurements. Each
 sample starts a new peer process and Client; fixtures are warm-cache. rchar
 counts process-wide logical reads, not disk traffic or source-only reads.
 
-The current results carry `"probe": "paired-v6"`. The data `Hello` receives
+The current results carry `"probe": "paired-v7"`. The data `Hello` receives
 a fresh 256-bit pairing challenge, and the independent `ControlHello` must
 echo it. The Client paces `ControlPoll` and `ControlTurn` for the whole
 session. Older single-lane measurements exclude the control traffic.
@@ -33,7 +33,7 @@ import time
 FRAME = 1024 * 1024
 WIDTH = 128
 MARKER = 'needle:"\\\t' + chr(0x96EA)
-PROBE_REVISION = "paired-v6"
+PROBE_REVISION = "paired-v7"
 WIRE_VERSION = 7
 WRITE_CHUNK_BYTES = 64 * 1024
 
@@ -96,18 +96,19 @@ class PollResponder:
         try:
             while True:
                 poll, _ = receive(self.conn)
-                if poll["receipt"] == "revoked":
-                    self.revoked.set()
-                    return
+                settled = poll["receipt"] == "revoked"
                 turn = {
                     "sequence": poll["sequence"],
                     "health": poll["health"],
-                    "request": "revoke" if self.revoking.is_set() else None,
+                    "request": "revoke" if self.revoking.is_set() and not settled else None,
                 }
                 frame = pack(turn)
                 self.conn.sendall(frame)
                 with self.lock:
                     self.bytes_sent += len(frame)
+                if settled:
+                    self.revoked.set()
+                    return
         except (EOFError, OSError, socket.timeout):
             return
 
