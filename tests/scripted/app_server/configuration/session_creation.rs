@@ -1351,8 +1351,13 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
     use base64::Engine as _;
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {
-        let fixture = Fixture::with_session_count(None, 2).await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         let workspace = &fixture.workspaces[0];
+        let unbound = fixture.manager.sessions.create_session(
+            crate::local_runtime::session::SessionPersistentState::from_input(
+                &crate::local_runtime::configuration::SessionConfigInput::new(workspace.clone()),
+            ),
+        ).await.unwrap().session.id;
         let mount = tempfile::tempdir().unwrap();
         let physical = mount.path().join("physical");
         std::fs::rename(workspace, &physical).unwrap();
@@ -1417,14 +1422,14 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
         let source = SourceTarget::Workspace { directory: workspace.clone() };
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
-        let request = |index: usize| Method::SkillsList {
+        let request = |session_id| Method::SkillsList {
             target: source.clone(),
-            execution_session: Some(fixture.sessions[index].id.clone()),
+            execution_session: Some(session_id),
             offset: 0,
             limit: 32,
             expected_revision: None,
         };
-        let MethodResult::Skills { page, authority } = call(&connection, 50, request(0)).await else { panic!("live Workspace Skills"); };
+        let MethodResult::Skills { page, authority } = call(&connection, 50, request(fixture.sessions[0].id.clone())).await else { panic!("live Workspace Skills"); };
         assert_eq!(authority, crate::app_server::protocol::WorkspaceCatalogAuthority::Client);
         let [descriptor] = page.data.as_slice() else { panic!("one Skill: {page:?}"); };
         assert_eq!(descriptor.catalog.name, "bound-skill");
@@ -1454,7 +1459,7 @@ async fn bound_configuration_load_and_reconcile_without_any_server_workspace_dir
             let response = connection.handle_request(Request {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(53),
-                call: request(1),
+                call: request(unbound),
             }).await;
             let Response::Failure(failure) = response else { panic!("an unbound Session cannot list the first Session's Skills"); };
             assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));

@@ -885,3 +885,7 @@ from a separate saturation test.
   originating Workspace. Two controlled Host replies arrive in reverse
   order. The test checks that the conflict and uncertainty remain visible
   independently with exactly two submitted operations.
+
+The same-Workspace isolation fixture now creates its unbound comparison
+Session at the reserved Workspace. This reaches the exact-Session routing
+check and retains the `ExecutionUnavailable` assertion.

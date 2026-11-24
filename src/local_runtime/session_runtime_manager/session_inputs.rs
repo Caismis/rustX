@@ -178,7 +178,7 @@ impl SessionRuntimeManager {
             None,
             &mut reads,
         );
-        let capture = capture.map_err(|_| {
+        let unavailable = || {
             if endpoint
                 .as_ref()
                 .zip(lane.as_ref())
@@ -190,11 +190,9 @@ impl SessionRuntimeManager {
             } else {
                 SessionInputError::Invalid
             }
-        })?;
-        let context = capture
-            .context
-            .as_ref()
-            .map_err(|_| SessionInputError::Invalid)?;
+        };
+        let capture = capture.map_err(|_| unavailable())?;
+        let context = capture.context.as_ref().map_err(|_| unavailable())?;
         ApplicationState::validate_selection(context, &self.credentials, true)
             .map_err(|_| SessionInputError::Invalid)?;
 
