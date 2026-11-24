@@ -191,7 +191,10 @@ export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSig
         return texture;
       }),
     }));
-    const loaded = await loader.parseAsync(bytes.slice().buffer, ''); scenes = loaded.scenes;
+    // The pinned loader reads the input and owns its extracted BIN/view copies.
+    // An exact input buffer can remain shared with the content owner's cache.
+    const input = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
+    const loaded = await loader.parseAsync(input, ''); scenes = loaded.scenes;
     signal.throwIfAborted(); check(!retired);
     const bounds = validateScene(loaded.scenes, loaded.scene);
     return { scene: loaded.scene, scenes: loaded.scenes, bounds, dispose };

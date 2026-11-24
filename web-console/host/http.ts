@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { PreviewCancelled, type FilePreviewOperation } from '../shared/file-preview.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
+import { settlementFailureKind, WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
 import { NativeFileReadError } from './file-read.ts';
 import { acknowledgeFile, finishFile } from './file-response.ts';
@@ -13,6 +15,14 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
   let document: FileOperation | undefined;
   const files = new Map<string, FileOperation>();
   const observations = new FileObservationHttp(host);
+  type PreviewOwner = { scope: FileOperation['scope']; abort: AbortController; operation: FilePreviewOperation; deadline?: ReturnType<typeof setTimeout>; closing?: Promise<void> };
+  const previews = new Map<string, PreviewOwner>();
+  const retirePreview = (identity: string, owner: PreviewOwner) => owner.closing ??= (async () => {
+    let settled = true;
+    try { await owner.operation.close(); }
+    catch (error) { settled = !settlementFailureKind(error); throw error; }
+    finally { clearTimeout(owner.deadline); if (settled) previews.delete(identity); }
+  })();
   return async (request: IncomingMessage, response: ServerResponse, next: () => void = () => { response.writeHead(404).end(); }) => {
     if (!request.url?.startsWith('/product-host/')) return next();
     try {
@@ -87,6 +97,57 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           const captured = scope();
           if (document && document.id === body.operationId && document.scope.authorityId === captured.authorityId && document.scope.endpoint === captured.endpoint) document.abort.abort();
           break;
+        }
+        case 'preview-abort': {
+          if (Object.keys(body).some(key => !['scope', 'identity'].includes(key))) throw new Error('Invalid preview cancellation');
+          const identity = string('identity'), owner = previews.get(identity), captured = scope();
+          if (owner && owner.scope.authorityId === captured.authorityId && owner.scope.endpoint === captured.endpoint) {
+            owner.abort.abort();
+            try { await retirePreview(identity, owner); }
+            catch (error) { if (!(error instanceof PreviewCancelled)) throw error; }
+          }
+          break;
+        }
+        case 'preview-open':
+        case 'preview-read':
+        case 'preview-close': {
+          const admittedAt = Date.now();
+          const method = request.url.slice('/product-host/'.length);
+          const allowed = method === 'preview-open' ? ['scope', 'operationId', 'source', 'read', 'call'] : ['scope', 'operationId', 'identity', 'range'];
+          if (Object.keys(body).some(key => !allowed.includes(key)) || typeof body.operationId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.operationId)) throw new Error('Invalid preview operation');
+          if (files.size >= 2 || files.has(body.operationId)) throw new Error('capacity');
+          const captured = scope();
+          const owner = method === 'preview-open' ? undefined : previews.get(string('identity'));
+          if (method !== 'preview-open' && (!owner || owner.scope.authorityId !== captured.authorityId || owner.scope.endpoint !== captured.endpoint)) throw new Error('Obsolete preview operation');
+          if (method === 'preview-open' && previews.size >= 2) throw new Error('capacity');
+          const physical: FileOperation = { id: body.operationId, scope: captured, abort: new AbortController() }; files.set(physical.id, physical);
+          const canceled = () => { owner?.abort.abort(); };
+          physical.abort.signal.addEventListener('abort', canceled, { once: true });
+          const closed = () => { if (!response.writableFinished) physical.abort.abort(); }; response.on('close', closed);
+          const boundary = acknowledgeFile(response, 'File', physical.id);
+          try {
+            if (method === 'preview-open') {
+              const operation = body.source === 'delivery' && host.openDeliveryPreview ? await host.openDeliveryPreview(captured, body.read, physical.abort.signal)
+                : body.source === 'workspace' && host.openWorkspacePreview ? await host.openWorkspacePreview(captured, body.call, physical.abort.signal) : undefined;
+              if (!operation) throw new Error('Preview operation unavailable');
+              const identity = randomUUID(), retained: PreviewOwner = { scope: captured, abort: physical.abort, operation };
+              previews.set(identity, retained);
+              retained.deadline = setTimeout(() => retained.abort.abort(), Math.max(0, 60_000 - (Date.now() - admittedAt))); retained.deadline.unref();
+              const retire = () => { void retirePreview(identity, retained).catch(() => {}); };
+              physical.abort.signal.addEventListener('abort', retire, { once: true });
+              if (physical.abort.signal.aborted) { await retirePreview(identity, retained); throw new Error('Obsolete preview operation'); }
+              await finishFile(response, boundary, { ok: true, value: { identity, version: operation.version, bytes: operation.bytes, file: operation.file } });
+            } else if (method === 'preview-read') {
+              const value = await owner!.operation.read(body.range, physical.abort.signal);
+              await finishFile(response, boundary, { ok: true, attachment: 'data', value: { ...value, data: null } }, value.data);
+            } else {
+              await retirePreview(body.identity, owner!); await finishFile(response, boundary, { ok: true, value: null });
+            }
+          } catch (error) {
+            await finishFile(response, boundary, { ok: false, message: String(error), kind: error instanceof WorkspaceHostError ? error.kind : undefined,
+              nativeError: error instanceof NativeFileReadError ? error.error : undefined });
+          } finally { physical.abort.signal.removeEventListener('abort', canceled); response.off('close', closed); files.delete(physical.id); }
+          return;
         }
         case 'workbench-preview':
         case 'file-read':

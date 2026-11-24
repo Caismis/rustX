@@ -26,6 +26,7 @@ server.workspaceHost.listWorkspaces = async () => ({ ...catalog, endpoint });
 // goes through the real Host's canonical registration and authority.
 server.workspaceHost.classifyLocations = (cwds, _endpoint, _authority, signal) => http.classifyLocations(cwds, catalog.endpoint, catalog.authorityId, signal);
 server.summaries.set('A', { cwd: catalog.workspaces[0]!.displayPath });
+server.workspaceHost.openWorkspacePreview = (_scope, call, signal) => http.openWorkspacePreview(catalog, call, signal);
 server.workspaceHost.workbench = (_scope, call, signal) => http.workbench(catalog, call, signal);
 server.workspaceHost.observeWorkspaceFile = (_scope, call, changed, signal) => http.observeWorkspaceFile(catalog, call, changed, signal);
 if (new URL(location.href).searchParams.has('file-links')) {

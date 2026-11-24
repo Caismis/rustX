@@ -9,14 +9,29 @@ import { localeController } from '../src/locale/controller';
 import type { GeometryImportStage } from '../src/app/components/documents/geometry/stages';
 import { GeometryError } from '../src/app/components/documents/geometry/limits';
 import * as progressive from '../src/app/components/documents/geometry/progressive';
+import type { GeometrySource } from '../shared/geometry-source';
+import { WorkspaceHostError } from '../src/workspaces/host';
 const graphics = vi.hoisted(() => vi.fn(() => ({ dispose: vi.fn() })));
 const imports = vi.hoisted(() => ({ pending: [] as { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[], cad: [] as { stage: (stage: GeometryImportStage) => void; resolve: (value: unknown) => void }[], mounts: [] as { fit: ReturnType<typeof vi.fn>; setOutlines: ReturnType<typeof vi.fn>; setProjection: ReturnType<typeof vi.fn>; setNavigationMode: ReturnType<typeof vi.fn>; focusAxis: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; publish: (patch: unknown) => void; pending?: unknown; saved?: unknown; flush: ReturnType<typeof vi.fn> }[] }));
 vi.mock('../src/app/components/documents/geometry/glb', () => ({ importGlb: () => new Promise((resolve, reject) => { imports.pending.push({ resolve, reject }); }) }));
-vi.mock('../src/app/components/documents/geometry/parse', () => ({ parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, stage: (stage: GeometryImportStage) => void) => new Promise(resolve => { imports.cad.push({ stage, resolve }); }) }));
+vi.mock('../src/app/components/documents/geometry/parse', () => ({
+  parseGeometry: (_bytes: unknown, _format: unknown, _signal: unknown, stage: (stage: GeometryImportStage) => void) => new Promise(resolve => { imports.cad.push({ stage, resolve }); }),
+  parseGeometryStream: (source: GeometrySource, signal: AbortSignal) => source.consume({ start() {}, chunk() {} }, signal),
+}));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ prepareGeometryGraphics:graphics,mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
   const control = { navigationMode: (saved as { navigationMode?: string } | undefined)?.navigationMode === 'pan' ? 'pan' : 'orbit', setNavigationMode: vi.fn((mode: 'pan' | 'orbit') => { control.navigationMode = mode; publish({ navigationMode: mode === 'pan' ? mode : undefined }); }), setVisible: vi.fn(), focusAxis: vi.fn(), fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: (saved as { camera?: { projection?: string } } | undefined)?.camera?.projection ?? 'orthographic', setProjection: vi.fn(), setOutlines: vi.fn(async (enabled:boolean) => enabled?'on':'off'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }, { id: '0.1', name: 'Wing', depth: 1, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.cad = []; imports.mounts = []; });
+
+it.each(['too_large', 'capacity', 'file_settlement_unknown', 'source_changed'])('leaves streamed %s to the content owner', async kind => {
+  const source: GeometrySource = { consume: async () => { throw new WorkspaceHostError(kind, kind); } };
+  const ui = render(<GeometryPreview source={source} name="part.stl" copyId="copy" signal={new AbortController().signal}
+    current={() => true} viewState={{}} onViewStateChange={vi.fn()} onGeometryRetire={vi.fn()}/>);
+  await act(async () => {});
+  expect(ui.queryByRole('alert')).toBeNull();
+  expect(ui.queryByRole('status')).toBeNull();
+  expect(imports.mounts).toHaveLength(0);
+});
 function graph() {
   const scene = new Group(), geometry = new BoxGeometry(10, 10, 10); scene.add(new Mesh(geometry, new MeshStandardMaterial()));
   const disposed = vi.spyOn(geometry, 'dispose'); return { value: { scene, scenes: [scene], bounds: validateScene([scene]), dispose: () => disposeScene([scene]) }, disposed };

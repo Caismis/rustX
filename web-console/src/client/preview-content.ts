@@ -1,7 +1,9 @@
 /** A logical tab owns content and the physical read barrier; mounted bodies own
  * only renderer resources. Abort retires publication, never an operation slot. */
 import { WorkspaceHostError, fileSourceFailure } from '../workspaces/host';
+import type { GeometrySource, GeometrySourceConsumer } from '../../shared/geometry-source';
 import type { PreviewObservation } from '../../shared/file-observation.ts';
+import { FILE_PREVIEW_LIMITS, isFileData } from '../../shared/file-preview';
 export interface PreviewTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
 export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string }
 export type PreviewLoadMode = 'pages' | 'bytes' | 'geometry' | 'docx' | 'pptx';
@@ -10,13 +12,14 @@ export interface PreviewReader {
   immutable: boolean;
   page(offset: number, signal: AbortSignal): Promise<PreviewTextPage>;
   bytes(signal: AbortSignal, mode: 'bytes' | 'geometry'): Promise<PreviewBytes>;
+  geometry?(signal: AbortSignal, consumer: GeometrySourceConsumer): Promise<{ version: string }>;
   document(extension: 'docx' | 'pptx', signal: AbortSignal): Promise<PreviewBytes>;
   observe?(signal: AbortSignal, changed: () => void): Promise<PreviewObservation>;
   probe(signal: AbortSignal): Promise<string>;
 }
 export interface PreviewContentSnapshot {
   revision: number; mode?: PreviewLoadMode; loading: boolean;
-  text?: string; data?: Uint8Array<ArrayBuffer>; version?: string;
+  text?: string; data?: Uint8Array<ArrayBuffer>; source?: GeometrySource; version?: string;
   page?: PreviewTextPage; error?: unknown; failedOffset?: number; loadedLines: number;
 }
 type Intent = { kind: 'read'; offset: number } | { kind: 'validate' };
@@ -40,6 +43,7 @@ export class PreviewContentOwner {
   private retirement: Promise<void> = Promise.resolve();
   private observedVersion?: string;
   private geometryConsumed = false;
+  private streamComplete = false;
   constructor(private readonly reader: PreviewReader) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
@@ -75,10 +79,31 @@ export class PreviewContentOwner {
     this.visible = false; this.epoch++; this.pending = undefined; this.resume = undefined; this.controller?.abort();
     if (!this.observation) this.retireObservation();
     this.publish({ loading: false });
+    // Mounted parked bodies keep their renderer. Actual unmount retains only
+    // the validated raw copy that fits the existing inactive content cache.
     if (this.geometryConsumed || this.state.mode === 'geometry' && !(this.saved ?? this.state).data) this.evict();
     if (!this.reader.immutable && !this.reader.observe && this.state.mode !== 'geometry') this.evict();
   }
   private current(epoch: number) { return !this.closed && this.visible && this.reader.current() && this.epoch === epoch; }
+  private async replayGeometry(source: GeometrySource, consumer: GeometrySourceConsumer, signal: AbortSignal) {
+    const revision = this.state.revision, version = this.state.version, bytes = this.state.data?.byteLength;
+    if (bytes === undefined || version === undefined) throw new Error('obsolete');
+    const current = () => !this.closed && this.visible && this.reader.current() && !signal.aborted
+      && this.state.source === source && this.state.revision === revision && this.streamComplete
+      && this.state.version === version && this.state.data?.byteLength === bytes;
+    const check = () => { signal.throwIfAborted(); if (!current()) throw new Error('obsolete'); };
+    check();
+    await consumer.start({ bytes, version });
+    for (let offset = 0; offset < bytes; offset += FILE_PREVIEW_LIMITS.pageBytes) {
+      check();
+      // Read the cache through the owner for every page. The source object and
+      // suspended replay never retain a complete raw buffer after eviction.
+      const page = this.state.data!.slice(offset, Math.min(bytes, offset + FILE_PREVIEW_LIMITS.pageBytes));
+      await consumer.chunk(page, offset);
+    }
+    check();
+    return { version };
+  }
   ensure(mode: PreviewLoadMode, wantedLines = 0) {
     if (!this.visible || !this.reader.current() || this.closed) return;
     if (this.state.mode !== mode) {
@@ -90,7 +115,7 @@ export class PreviewContentOwner {
     }
     if (mode === 'pages' && Number.isSafeInteger(wantedLines)) this.wantedLines = Math.max(this.wantedLines, wantedLines);
     if (this.state.error !== undefined || this.pending || this.active && !this.controller?.signal.aborted) return;
-    if (this.state.text !== undefined || this.state.data !== undefined) this.pending = this.missingPage();
+    if (this.state.text !== undefined || this.state.data !== undefined || this.state.source !== undefined) this.pending = this.missingPage();
     else this.pending = { kind: 'read', offset: 1 };
     if (this.pending) { this.publish({ loading: true }); this.drain(); }
   }
@@ -103,7 +128,7 @@ export class PreviewContentOwner {
     this.wantedLines = Math.max(this.wantedLines, this.state.loadedLines, this.saved?.loadedLines ?? 0); this.reset(this.state.mode, !this.observation && !!this.reader.observe);
   }
   private reset(mode: PreviewLoadMode, validate = false) {
-    this.geometryConsumed = false;
+    this.geometryConsumed = false; this.streamComplete = false;
     this.epoch++; this.controller?.abort(); this.saved = undefined; this.resume = undefined;
     this.pending = validate ? { kind: 'validate' } : { kind: 'read', offset: 1 };
     this.state = { revision: this.state.revision + 1, mode, loading: true, loadedLines: 0 };
@@ -118,11 +143,13 @@ export class PreviewContentOwner {
     if (!this.visible) {
       // Version hints do not revoke a completed geometry copy. Reactivation
       // probes authority; terminal observation loss still evicts the copy.
-      if (this.state.mode !== 'geometry' || !(this.saved ?? this.state).data) this.evict();
+      if (this.state.mode !== 'geometry' || !(this.saved ?? this.state).data && !(this.saved ?? this.state).source) this.evict();
       return;
     }
-    this.saved ??= this.state;
-    this.wantedLines = Math.max(this.wantedLines, this.saved.loadedLines);
+    if (this.state.source && !this.streamComplete) {
+      this.saved = undefined; this.state = { revision: this.state.revision + 1, mode: this.state.mode, loading: true, loadedLines: 0 };
+    } else this.saved ??= this.state;
+    this.wantedLines = Math.max(this.wantedLines, this.saved?.loadedLines ?? 0);
     this.state = { ...this.state, loading: true };
     this.pending = { kind: 'validate' }; this.notify(); this.drain();
   };
@@ -165,8 +192,8 @@ export class PreviewContentOwner {
           const saved = this.saved; this.saved = undefined;
           const previousVersion = saved?.version && saved.mode !== 'docx' && saved.mode !== 'pptx' ? saved.version : this.observedVersion;
           this.observedVersion = version;
-          if (saved && (previousVersion === version || mode === 'geometry' && saved.data !== undefined)
-            && (saved.error !== undefined || saved.text !== undefined || saved.data !== undefined)) {
+          if (saved && (previousVersion === version || mode === 'geometry' && (saved.data !== undefined || saved.source !== undefined))
+            && (saved.error !== undefined || saved.text !== undefined || saved.data !== undefined || saved.source !== undefined)) {
             this.state = saved;
             this.pending = this.resume ?? this.missingPage(); this.resume = undefined;
             this.state = { ...saved, loading: this.pending !== undefined }; this.notify();
@@ -175,6 +202,65 @@ export class PreviewContentOwner {
             this.state = { revision: this.state.revision + 1, mode, loading: true, loadedLines: 0 };
             this.pending = { kind: 'read', offset: 1 }; this.notify();
           }
+          return;
+        }
+        if (mode === 'geometry' && this.reader.geometry) {
+          let attach: ((consumer: GeometrySourceConsumer) => void) | undefined, rejectAttach: ((error: unknown) => void) | undefined;
+          const attached = new Promise<GeometrySourceConsumer>((resolve, reject) => { attach = resolve; rejectAttach = reject; });
+          let complete!: (result: { version: string }) => void, rejectComplete!: (error: unknown) => void;
+          const completion = new Promise<{ version: string }>((resolve, reject) => { complete = resolve; rejectComplete = reject; });
+          void completion.catch(() => {});
+          const aborted = () => rejectAttach?.(controller.signal.reason);
+          controller.signal.addEventListener('abort', aborted, { once: true });
+          let consumerSignal: AbortSignal | undefined;
+          const source: GeometrySource = { consume: (consumer, signal) => {
+            if (this.state.source !== source || this.closed || !this.visible || !this.reader.current()) return Promise.reject(new Error('obsolete'));
+            if (this.streamComplete && this.state.data !== undefined) return this.replayGeometry(source, consumer, signal);
+            if (consumerSignal || !this.current(epoch)) return Promise.reject(new Error('obsolete'));
+            const start = attach;
+            if (!start) return Promise.reject(new Error('obsolete'));
+            consumerSignal = signal; attach = undefined;
+            const abort = () => controller.abort(signal.reason);
+            signal.addEventListener('abort', abort, { once: true });
+            if (signal.aborted) abort(); else start(consumer);
+            return completion.finally(() => signal.removeEventListener('abort', abort));
+          } };
+          this.streamComplete = false; this.publish({ source });
+          let cache: Uint8Array<ArrayBuffer> | undefined, metadata: { bytes: number; version: string } | undefined, received = 0;
+          try {
+            const consumer = await attached;
+            const result = await this.reader.geometry(controller.signal, {
+              start: async value => {
+                if (metadata || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || typeof value.version !== 'string' || !value.version) throw new Error('malformed');
+                if (value.bytes > FILE_PREVIEW_LIMITS.geometryBytes) throw new WorkspaceHostError('too_large', 'too_large');
+                metadata = { bytes: value.bytes, version: value.version };
+                if (value.bytes <= INACTIVE_BYTES) cache = new Uint8Array(value.bytes);
+                await consumer.start(value);
+              },
+              chunk: async (data, offset) => {
+                if (!metadata || !isFileData(data) || offset !== received || data.byteLength > FILE_PREVIEW_LIMITS.pageBytes || received + data.byteLength > metadata.bytes) throw new Error('malformed');
+                cache?.set(data, offset); received += data.byteLength;
+                await consumer.chunk(data, offset);
+              },
+            });
+            if (!this.current(epoch)) throw controller.signal.reason ?? new Error('obsolete');
+            if (!metadata || received !== metadata.bytes) throw new Error('malformed');
+            if (result.version !== metadata.version) throw new WorkspaceHostError('Geometry source changed during read', 'source_changed');
+            this.streamComplete = true; this.publish({ data: cache, version: result.version, loading: false }); cache = undefined;
+            complete(result);
+            if (this.reader.observe && !this.observation) { this.saved ??= this.state; this.pending = { kind: 'validate' }; }
+          } catch (error) {
+            rejectComplete(error);
+            // Decoder retirement may stop the read. Its exact cancellation
+            // reason is already owned by the viewer, while a physical failure
+            // reported during that cancellation still belongs to this owner.
+            if (consumerSignal?.aborted && error === consumerSignal.reason) {
+              if (this.current(epoch)) this.publish({ loading: false });
+              return;
+            }
+            throw error;
+          }
+          finally { cache = undefined; attach = undefined; rejectAttach = undefined; controller.signal.removeEventListener('abort', aborted); }
           return;
         }
         if (mode !== 'pages') {
@@ -209,7 +295,7 @@ export class PreviewContentOwner {
     void operation.finally(() => { if (this.active === operation) { this.active = undefined; this.activeIntent = undefined; this.controller = undefined; this.drain(); } });
   }
   evict() {
-    this.geometryConsumed = false;
+    this.geometryConsumed = false; this.streamComplete = false;
     this.saved = undefined; this.resume = undefined;
     if (!this.visible) this.retireObservation();
     this.state = { revision: this.state.revision + 1, mode: this.state.mode, loading: false, loadedLines: 0 }; this.notify();

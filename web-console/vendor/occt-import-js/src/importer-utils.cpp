@@ -1,4 +1,5 @@
 #include "importer-utils.hpp"
+#include "native-profile.hpp"
 
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -27,6 +28,10 @@ OcctFace::OcctFace (const TopoDS_Face& face) :
         triangulation->ComputeNormals ();
     }
 }
+
+size_t OcctFace::VertexCount () const { return HasTriangulation () ? triangulation->NbNodes () : 0; }
+size_t OcctFace::NormalCount () const { return HasNormals () ? triangulation->NbNodes () : 0; }
+size_t OcctFace::TriangleCount () const { return HasTriangulation () ? triangulation->NbTriangles () : 0; }
 
 bool OcctFace::HasNormals () const
 {
@@ -125,15 +130,21 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
     Standard_Real angDeflection = params.angularDeflection;
 
     if (params.linearDeflectionType == ImportParams::LinearDeflectionType::BoundingBoxRatio) {
-        Bnd_Box boundingBox;
-        BRepBndLib::Add (shape, boundingBox, false);
-        if (boundingBox.IsVoid ()) {
-            return false;
+        Standard_Real avgSize;
+        if (params.shapeSizes && params.shapeSizes->sizes.IsBound (shape)) {
+            avgSize = params.shapeSizes->sizes.Find (shape);
+        } else {
+            NativeSpan span (NativePhase::BoundingBox);
+            Bnd_Box boundingBox;
+            BRepBndLib::Add (shape, boundingBox, false);
+            if (boundingBox.IsVoid ()) {
+                return false;
+            }
+            Standard_Real xMin, yMin, zMin, xMax, yMax, zMax;
+            boundingBox.Get (xMin, yMin, zMin, xMax, yMax, zMax);
+            avgSize = ((xMax - xMin) + (yMax - yMin) + (zMax - zMin)) / 3.0;
+            if (params.shapeSizes) params.shapeSizes->sizes.Bind (shape, avgSize);
         }
-
-        Standard_Real xMin, yMin, zMin, xMax, yMax, zMax;
-        boundingBox.Get (xMin, yMin, zMin, xMax, yMax, zMax);
-        Standard_Real avgSize = ((xMax - xMin) + (yMax - yMin) + (zMax - zMin)) / 3.0;
         linDeflection = avgSize * params.linearDeflection;
         if (linDeflection < Precision::Confusion ()) {
             // use 1mm in the current unit
@@ -145,6 +156,7 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
         }
     }
 
+    NativeSpan span (NativePhase::Tessellation);
     BRepMesh_IncrementalMesh mesh (shape, linDeflection, Standard_False, angDeflection);
     return true;
 }
