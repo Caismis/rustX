@@ -4588,6 +4588,7 @@ pub(super) fn seed_sealed_archive_image(
 #[tokio::test]
 async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
     use app_server_conformance::AppServerConformanceDriver;
+    use base64::Engine as _;
     use rustx::app_server::protocol::*;
     use std::io::Read as _;
     bounded(async {
@@ -4609,6 +4610,56 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .request(serde_json::from_str(INITIALIZE).unwrap())
             .await;
         assert!(matches!(initialized, Response::Success(_)));
+        let MethodResult::SessionHistory { conversation_id: owner, window } = result(
+            &client,
+            Method::SessionHistory {
+                session_id: f.sessions[0].clone(),
+                node_id: None,
+                at: rustx::durable::reading::ConversationWindowAt::Latest,
+                limit: 8,
+            },
+        ).await else { panic!("cold history") };
+        assert_eq!(owner, conversation_id);
+        let cut = window.page.source_cut.expect("cold history source cut");
+        let bindings: Vec<_> = window.page.content.iter().filter(|binding| {
+            binding.content_ref.representation == rustx::observation::content::ContentRepresentation::BinaryBytes
+        }).collect();
+        let [binding] = bindings.as_slice() else { panic!("one committed binary binding") };
+        let reference = binding.content_ref.as_ref();
+        assert_eq!(reference.conversation_id, conversation_id);
+        let read = |session_id, offset| Method::SessionHistoryContentRead {
+            session_id,
+            node_id: None,
+            cut: cut.clone(),
+            content_ref: reference.clone(),
+            offset,
+            max_bytes: 32,
+        };
+        assert!(matches!(
+            rpc(&client, 3, read(f.sessions[1].clone(), 0)).await,
+            Response::Failure(failure) if matches!(failure.error.data, Some(ErrorData::ReadCutExpired))
+        ));
+        let mut downloaded = Vec::new();
+        let mut offset = 0;
+        loop {
+            let MethodResult::ContentChunk { chunk } = result(&client, read(f.sessions[0].clone(), offset)).await
+            else { panic!("cold binary range") };
+            let decoded = base64::engine::general_purpose::STANDARD.decode(&chunk.data_base64).unwrap();
+            assert_eq!(&chunk.content_ref, reference);
+            assert_eq!(chunk.offset, offset);
+            assert!(!decoded.is_empty() && decoded.len() <= 32);
+            downloaded.extend_from_slice(&decoded);
+            assert_eq!(chunk.end_offset, downloaded.len() as u64);
+            if let Some(next) = chunk.next_offset {
+                assert_eq!(next, chunk.end_offset);
+                offset = next;
+            } else {
+                assert!(chunk.complete);
+                break;
+            }
+        }
+        assert_eq!(downloaded, bytes);
+        assert_eq!(diagnostics(&client).await.loaded, 0);
         let response = client
             .request(Request {
                 jsonrpc: JsonRpcVersion::V2,
