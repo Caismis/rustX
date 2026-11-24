@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import {expect,test,type Locator,type Page} from '@playwright/test';
+import {expect,test,type Locator,type Page,type Route} from '@playwright/test';
 import {existsSync,mkdirSync,readdirSync,readFileSync,statSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
@@ -222,7 +222,6 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     const transfer = async (row: Locator, name: string, operation: 'Copy' | 'Move') => {
       await action(row, name);
       const dialog = page.getByRole('dialog', {name: `${operation} resource`, exact: true});
-      // The stale-revision write must not run until this dialog is actually open.
       await expect(dialog).toBeVisible();
       return dialog;
     };
@@ -265,11 +264,34 @@ test('skill directories copy, move and delete from their exact scopes', async ({
 
     const moveToWorkspace = await transfer(globalGuide, 'Move to Workspace', 'Move');
     const globalMarker = join(globalOriginal, 'SKILL.md');
-    writeFileSync(globalMarker, readFileSync(globalMarker, 'utf8') + '\r\nUpdated outside the editor.\r\n');
-    await moveToWorkspace.getByRole('button', {name: 'Move', exact: true}).click();
-    await expect(moveToWorkspace.getByRole('alert')).toContainText('changed');
-    expect(existsSync(join(local, 'global-guide'))).toBe(false);
-    await moveToWorkspace.getByRole('button', {name: 'Cancel', exact: true}).click();
+    const configuration = '**/product-host/configuration';
+    let staleMoves = 0;
+    const changeSourceAfterSubmit = async (route: Route) => {
+      const operation = route.request().postDataJSON()?.operation;
+      if (operation?.kind === 'transfer' && operation.mutation?.operation === 'move'
+          && operation.mutation.resource?.source === 'global-guide') {
+        expect(++staleMoves).toBe(1);
+        writeFileSync(globalMarker, readFileSync(globalMarker, 'utf8') + '\r\nUpdated outside the editor.\r\n');
+      }
+      await route.fallback();
+    };
+    // Let the browser submit its captured revision, then change the actual
+    // source before the Product Host receives that request.
+    await page.route(configuration, changeSourceAfterSubmit);
+    const conflict = skills.getByRole('alert').filter({hasText: 'The source changed.'});
+    try {
+      await moveToWorkspace.getByRole('button', {name: 'Move', exact: true}).click();
+      await expect(conflict).toContainText('global-guide');
+      await expect(conflict).toContainText('reopen the transfer');
+      await expect(moveToWorkspace).toHaveCount(0);
+      expect(staleMoves).toBe(1);
+      expect(existsSync(globalOriginal)).toBe(true);
+      expect(existsSync(join(local, 'global-guide'))).toBe(false);
+    } finally {
+      await page.unroute(configuration, changeSourceAfterSubmit);
+    }
+    await conflict.getByRole('button', {name: 'Close', exact: true}).click();
+    await expect(conflict).toHaveCount(0);
     const globalText = readFileSync(globalMarker);
     await expect(globalGuide.getByRole('switch')).toBeChecked();
     await submit(await transfer(globalGuide, 'Move to Workspace', 'Move'), 'Move');

@@ -935,3 +935,13 @@ run and the complete external conformance target passed locally.
   compaction now starts after ThreadRead confirms Idle for the same
   runtime incarnation. The fixture submits one compaction and still
   verifies its receipt and the exact provider request count.
+
+## Browser follow-up to `ab2cc8e07`
+
+- The exact-scope Skill transfer test changes the source through the test
+  proxy after the browser submits its captured revision and before the
+  request reaches the real Product Host. It verifies the named Workspace
+  conflict notice survives refresh, the dialog closes, and the stale move
+  changes neither scope. Dismissing the notice and opening a new move
+  verifies the updated package still transfers through its exact scope.
+  The focused case passed twice in the pinned Chromium image.
