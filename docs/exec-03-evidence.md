@@ -889,3 +889,9 @@ from a separate saturation test.
 The same-Workspace isolation fixture now creates its unbound comparison
 Session at the reserved Workspace. This reaches the exact-Session routing
 check and retains the `ExecutionUnavailable` assertion.
+
+The Linux Boundary run at `29c039243` timed out on the Hosted Save
+staging observation. The conformance relay now wakes the staged-length
+checks on real Client Save receipts. The physical files, two candidate
+lengths, seal and cleanup assertions remain in the fixture. Its targeted
+run and the complete external conformance target passed locally.

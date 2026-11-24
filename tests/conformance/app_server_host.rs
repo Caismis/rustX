@@ -154,14 +154,24 @@ fn assert_refused(response: Response, expected: HostUploadRefusal) {
     );
 }
 
+struct SaveStaging<'a> {
+    scratch: &'a std::path::Path,
+    receipts: Option<&'a mut save_backpressure::SaveReceipts>,
+    refuse_save: bool,
+    backpressure: Option<save_backpressure::SaveBackpressure>,
+}
+
 async fn stream_large_result(
     first: &mut Peer,
     second: &mut Peer,
     call: &ServerRequest,
     copy: &ServerRequest,
-    scratch: Option<&std::path::Path>,
-    refuse_save: bool,
-    mut backpressure: Option<save_backpressure::SaveBackpressure>,
+    SaveStaging {
+        scratch,
+        mut receipts,
+        refuse_save,
+        mut backpressure,
+    }: SaveStaging<'_>,
 ) {
     let a = candidate(call);
     let b = candidate(copy);
@@ -182,9 +192,6 @@ async fn stream_large_result(
     );
     assert_accepted(upload_request(second, "begin", begin(&b)).await, false);
     assert_accepted(upload_request(second, "begin", begin(&b)).await, true);
-    let mut observations = scratch
-        .filter(|_| backpressure.is_none())
-        .map(SaveObservation::new);
     let mut loser_bytes = None;
     let chunk_params =
         |candidate: &Value, item_index, sequence: u64, offset: usize, chunk: &[u8]| {
@@ -197,7 +204,7 @@ async fn stream_large_result(
                 "sha256": format!("{:x}", Sha256::digest(chunk)),
             })
         };
-    if let Some(observer) = observations.as_mut()
+    if let Some(observer) = receipts.as_mut()
         && !refuse_save
     {
         let first_item = parts[0].as_bytes();
@@ -209,9 +216,7 @@ async fn stream_large_result(
             assert_accepted(upload_request(first, "chunk", params).await, false);
         }
         let staged = first_item.len() + 2 + prefix.len();
-        observer
-            .wait_for(|lengths| lengths == [staged as u64])
-            .await;
+        observer.wait_for_files(scratch, &[staged as u64]).await;
         loser_bytes = Some(staged as u64);
     }
     let mut sequence = 1;
@@ -229,7 +234,7 @@ async fn stream_large_result(
                 && let Some(blocked) = backpressure.as_mut()
             {
                 blocked.wait_for_begin().await;
-                let [file] = saved_files(scratch.unwrap()).try_into().unwrap();
+                let [file] = saved_files(scratch).try_into().unwrap();
                 assert_eq!(file.metadata().unwrap().len(), 0);
             }
             if sequence == 6
@@ -239,22 +244,20 @@ async fn stream_large_result(
                 // the writer's four slots. The fifth leaves storage
                 // unavailable while the Host receive loop still progresses.
                 blocked.check_health_and_release().await;
-                assert_eq!(saved_files(scratch.unwrap()), [] as [std::path::PathBuf; 0]);
+                assert_eq!(saved_files(scratch), [] as [std::path::PathBuf; 0]);
             }
             let staged = prior + item_index + offset + chunk.len();
-            if let Some(observer) = observations.as_mut()
+            if let Some(observer) = receipts.as_mut()
                 && staged > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
             {
                 let staged = staged as u64;
                 if let Some(loser) = loser_bytes {
-                    observer
-                        .wait_for(|lengths| lengths == [loser, staged])
-                        .await;
+                    observer.wait_for_files(scratch, &[loser, staged]).await;
                 } else if refuse_save && !storage_conflict {
-                    observer.wait_for(|lengths| lengths == [staged]).await;
+                    observer.wait_for_files(scratch, &[staged]).await;
                     // Advance the actual private file outside its writer so the
                     // Client's next contiguous append detects a storage error.
-                    let [file] = saved_files(scratch.unwrap()).try_into().unwrap();
+                    let [file] = saved_files(scratch).try_into().unwrap();
                     std::fs::OpenOptions::new()
                         .write(true)
                         .open(file)
@@ -303,63 +306,15 @@ async fn stream_large_result(
         upload_request(first, "abort", json!({"candidate": a})).await,
         HostUploadRefusal::Late,
     );
-    if let Some(observer) = observations.as_mut() {
+    if let Some(observer) = receipts.as_mut() {
         if refuse_save {
             assert!(storage_conflict);
-            observer.wait_for(<[u64]>::is_empty).await;
+            observer.wait_for_files(scratch, &[]).await;
         } else {
             observer
-                .wait_for(|lengths| lengths == [(total + parts.len() - 1) as u64])
+                .wait_for_files(scratch, &[(total + parts.len() - 1) as u64])
                 .await;
         }
-    }
-}
-
-struct SaveObservation {
-    _watcher: notify::RecommendedWatcher,
-    changed: tokio::sync::watch::Receiver<()>,
-    scratch: std::path::PathBuf,
-}
-
-impl SaveObservation {
-    fn new(scratch: &std::path::Path) -> Self {
-        use notify::Watcher as _;
-        let (changed, updates) = tokio::sync::watch::channel(());
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.map_or(true, |event| {
-                    !matches!(event.kind, notify::EventKind::Access(_)) || event.need_rescan()
-                }) {
-                    changed.send_replace(());
-                }
-            })
-            .unwrap();
-        watcher
-            .watch(scratch, notify::RecursiveMode::Recursive)
-            .unwrap();
-        Self {
-            _watcher: watcher,
-            changed: updates,
-            scratch: scratch.to_path_buf(),
-        }
-    }
-
-    async fn wait_for(&mut self, matches: impl Fn(&[u64]) -> bool) {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let mut lengths = saved_files(&self.scratch)
-                    .into_iter()
-                    .filter_map(|file| file.metadata().ok().map(|metadata| metadata.len()))
-                    .collect::<Vec<_>>();
-                lengths.sort_unstable();
-                if matches(&lengths) {
-                    break;
-                }
-                self.changed.changed().await.unwrap();
-            }
-        })
-        .await
-        .expect("verified Client staging transition");
     }
 }
 
@@ -488,57 +443,6 @@ async fn verify_native_continuation(
     );
 }
 
-async fn admit_execution_client(
-    manager: &SessionRuntimeManager,
-    session: &rustx::runtime::identity::SessionId,
-    workspace: &std::path::Path,
-    scratch: &std::path::Path,
-) -> tokio::process::Child {
-    use rustx::local_runtime::session_runtime_manager::{EndpointAdmission, ExecutionListener};
-    use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
-
-    let endpoint = manager.reserve_local_execution(session).await.unwrap();
-    let executable = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("rustx-execution-client");
-    let child = tokio::process::Command::new(executable)
-        .arg("--binding-file")
-        .arg(endpoint.bootstrap_path())
-        .arg("--workspace")
-        .arg(workspace)
-        .env("TMPDIR", scratch)
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let ExecutionListener::Unix(listener) = endpoint.listener() else {
-        panic!("local fixture")
-    };
-    let listener = listener.try_clone().unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let listener = tokio::net::UnixListener::from_std(listener).unwrap();
-    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    for expected in [EndpointAdmission::Pending, EndpointAdmission::Live] {
-        let (stream, _) =
-            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), listener.accept())
-                .await
-                .unwrap()
-                .unwrap();
-        let stream = stream.into_std().unwrap();
-        let binding = endpoint.clone();
-        let admitted = tokio::task::spawn_blocking(move || {
-            binding
-                .admit_local_stream_deadline(stream, deadline)
-                .unwrap()
-        })
-        .await
-        .unwrap();
-        assert_eq!(admitted, expected);
-    }
-    child
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit_once() {
     tokio::time::timeout(std::time::Duration::from_secs(180),async {
@@ -559,24 +463,29 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let mut missing_receipt = None;
             let mut disk_failure = None;
             let mut cancel_at_seal = None;
+            let mut save_receipts = None;
             let mut client = if winner == "stream_save_saturated" {
                 let (child, blocked) = save_backpressure::spawn(&manager, &session.id, &scratch).await;
                 backpressure = Some(blocked);
                 Some(child)
             } else if winner == "stream_save_receipt_lost" {
-                let (child, receipt) = save_backpressure::lose_publication_receipt(&manager, &session.id, &scratch).await;
+                let (child, receipt, receipts) = save_backpressure::lose_publication_receipt(&manager, &session.id, &scratch).await;
                 missing_receipt = Some(receipt);
+                save_receipts = Some(receipts);
                 Some(child)
             } else if winner == "stream_disk_full" {
                 let (child, receipt) = save_backpressure::spawn_disk_limited(&manager, &session.id, &scratch).await;
                 disk_failure = Some(receipt);
                 Some(child)
             } else if winner == "stream_save_cancelled" {
-                let (child, seal) = save_backpressure::hold_seal_receipt(&manager, &session.id, &scratch).await;
+                let (child, seal, receipts) = save_backpressure::hold_seal_receipt(&manager, &session.id, &scratch).await;
                 cancel_at_seal = Some(seal);
+                save_receipts = Some(receipts);
                 Some(child)
             } else if matches!(winner, "stream_saved" | "stream_save_refused") {
-                Some(admit_execution_client(&manager, &session.id, &workspace, &scratch).await)
+                let (child, receipts) = save_backpressure::observe_save_receipts(&manager, &session.id, &scratch).await;
+                save_receipts = Some(receipts);
+                Some(child)
             } else { None };
             assert_eq!(thread.dynamic_tools,definitions);
             let a=first.follow(thread.id.clone()).await; let b=second.follow(thread.id.clone()).await; let c=generic.follow(thread.id.clone()).await;
@@ -614,7 +523,10 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
                 _=>serde_json::json!({"jsonrpc":"2.0","id":call.id,"result":"invalid domain payload"}),
             };
             if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost" | "stream_disk_full" | "stream_save_cancelled") {
-                stream_large_result(&mut first, &mut second, &call, &copy, client.as_ref().filter(|_| disk_failure.is_none()).map(|_| scratch.as_path()), winner == "stream_save_refused", backpressure).await;
+                stream_large_result(&mut first, &mut second, &call, &copy, SaveStaging {
+                    scratch: &scratch, receipts: save_receipts.as_mut(),
+                    refuse_save: winner == "stream_save_refused", backpressure,
+                }).await;
             } else {
                 first.reply(selected).await;
             }

@@ -23,8 +23,61 @@ use std::{
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{UnixListener, UnixStream},
-    sync::oneshot,
+    sync::{oneshot, watch},
 };
+
+/// The real data lane acknowledges completed physical writes and disposals.
+pub(super) struct SaveReceipts(watch::Receiver<u64>);
+
+impl SaveReceipts {
+    pub(super) async fn wait_for_files(&mut self, scratch: &Path, expected: &[u64]) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                self.0.borrow_and_update();
+                let mut lengths = super::saved_files(scratch)
+                    .into_iter()
+                    .filter_map(|file| file.metadata().ok().map(|metadata| metadata.len()))
+                    .collect::<Vec<_>>();
+                lengths.sort_unstable();
+                if lengths == expected {
+                    break;
+                }
+                self.0.changed().await.expect("physical Save receipts");
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "Client staging lengths {expected:?}, physical receipt ordinal {}",
+                *self.0.borrow()
+            )
+        });
+    }
+}
+
+pub(super) async fn observe_save_receipts(
+    manager: &SessionRuntimeManager,
+    session: &SessionId,
+    scratch: &Path,
+) -> (tokio::process::Child, SaveReceipts) {
+    let (child, relay) = prepare(manager, session, scratch, None).await;
+    let ((mut client, mut server), (mut control_peer, mut control_server)) = relay.pair().await;
+    tokio::spawn(async move {
+        let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
+    });
+    let (observed, receipts) = watch::channel(0);
+    tokio::spawn(async move {
+        while let Ok(request) = receive::<ClientRequest>(&mut server).await {
+            send(&mut client, &request).await;
+            let reply = receive::<ClientReply>(&mut client).await.unwrap();
+            if matches!(reply, ClientReply::Save(_)) {
+                observed.send_modify(|count| *count += 1);
+            }
+            send(&mut server, &reply).await;
+        }
+    });
+    (child, SaveReceipts(receipts))
+}
 
 pub(super) struct SaveBackpressure {
     begun: oneshot::Receiver<()>,
@@ -240,13 +293,14 @@ pub(super) async fn lose_publication_receipt(
     manager: &SessionRuntimeManager,
     session: &SessionId,
     scratch: &Path,
-) -> (tokio::process::Child, LostPublish) {
+) -> (tokio::process::Child, LostPublish, SaveReceipts) {
     let (child, relay) = prepare(manager, session, scratch, None).await;
     let ((mut data_peer, mut data_server), (mut control_peer, mut control_server)) =
         relay.pair().await;
     let (observed, publication) = oneshot::channel();
     let (reconnect, reconnecting) = oneshot::channel();
     let (release, released) = oneshot::channel();
+    let (physical, receipts) = watch::channel(0);
     tokio::spawn(async move {
         let control = tokio::spawn(async move {
             let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
@@ -262,6 +316,9 @@ pub(super) async fn lose_publication_receipt(
             ) = (&request, &reply)
             {
                 observations.push(key.clone());
+            }
+            if matches!(reply, ClientReply::Save(_)) {
+                physical.send_modify(|count| *count += 1);
             }
             if let ClientReply::Save(SaveReply::Published { key, locator, .. }) = reply {
                 assert!(matches!(
@@ -297,6 +354,7 @@ pub(super) async fn lose_publication_receipt(
             reconnect,
             released,
         },
+        SaveReceipts(receipts),
     )
 }
 
@@ -478,7 +536,7 @@ pub(super) async fn hold_seal_receipt(
     manager: &SessionRuntimeManager,
     session: &SessionId,
     scratch: &Path,
-) -> (tokio::process::Child, PendingSeal) {
+) -> (tokio::process::Child, PendingSeal, SaveReceipts) {
     let (child, relay) = prepare(manager, session, scratch, None).await;
     let ((mut client, mut server), (mut control_peer, mut control_server)) = relay.pair().await;
     tokio::spawn(async move {
@@ -487,6 +545,7 @@ pub(super) async fn hold_seal_receipt(
     let (announce, sealed) = oneshot::channel();
     let (resume, released) = oneshot::channel();
     let (confirm, cleaned) = oneshot::channel();
+    let (physical, receipts) = watch::channel(0);
     tokio::spawn(async move {
         let mut gate = Some((announce, released));
         let mut confirm = Some(confirm);
@@ -500,6 +559,9 @@ pub(super) async fn hold_seal_receipt(
             );
             send(&mut client, &request).await;
             let reply = receive::<ClientReply>(&mut client).await.unwrap();
+            if matches!(reply, ClientReply::Save(_)) {
+                physical.send_modify(|count| *count += 1);
+            }
             match (&request, &reply) {
                 (
                     ClientRequest::Save(SaveRequest::Begin { .. }),
@@ -549,5 +611,6 @@ pub(super) async fn hold_seal_receipt(
             resume,
             cleaned,
         },
+        SaveReceipts(receipts),
     )
 }
