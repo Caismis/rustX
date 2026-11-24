@@ -207,3 +207,17 @@ follow-up.
 See the [evidence archive](evidence.md) for the immutable research inputs,
 raw outputs, failures, and extraction checksums. The PR description links
 final-head verification for the review follow-up.
+
+## Scheduler CI follow-up
+
+[CI #2414](https://github.com/Caismis/rustX/actions/runs/45124148618) passed
+Web, Host and all three browser shards. The [Linux Scheduler contract](https://github.com/Caismis/rustX/actions/runs/45124148618/job/137524616205)
+failed at duplicate admission and reproduced locally on `9858ee0ef`. Its
+historical test clock aged past the 30-day retention cutoff applied at native
+Workflow settlement on the system UTC clock. The revised fixture advances its
+clock to a current due instant and verifies that replay returns the original
+admission snapshot and emits one Workflow start with no Agent attempt.
+
+The all-features Scheduler contract harness passed all 42 cases locally. The
+isolated test directory used the CI-built child binaries from the same Rust
+product sources. The eight real-Git archive regression cases also passed again.
