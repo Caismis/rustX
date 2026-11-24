@@ -79,22 +79,8 @@ pub(crate) fn is_explicit_format_rejection(
     expected_field: &str,
     owned_parent: Option<&str>,
 ) -> bool {
-    let rejected_field = match provider_code {
-        Some("unsupported_parameter") => {
-            provider_param == Some(expected_field)
-                || owned_parent.is_some_and(|parent| provider_param == Some(parent))
-        }
-        Some("unsupported_value") => {
-            matches!(
-                (expected_field, provider_param),
-                ("response_format", Some("response_format.type"))
-                    | ("text.format", Some("text.format.type"))
-            )
-        }
-        _ => false,
-    };
     provider_type == Some("invalid_request_error")
-        && (rejected_field
+        && (rejects_format_field(provider_code, provider_param, expected_field, owned_parent)
             || (matches!(
                 provider_code,
                 None | Some(
@@ -107,6 +93,25 @@ pub(crate) fn is_explicit_format_rejection(
                     message,
                     expected_field,
                 )))
+}
+
+pub(super) fn rejects_format_field(
+    code: Option<&str>,
+    param: Option<&str>,
+    field: &str,
+    owned_parent: Option<&str>,
+) -> bool {
+    match code {
+        Some("unsupported_parameter") => {
+            param == Some(field) || owned_parent.is_some_and(|parent| param == Some(parent))
+        }
+        Some("unsupported_value") => matches!(
+            (field, param),
+            ("response_format", Some("response_format.type"))
+                | ("text.format", Some("text.format.type"))
+        ),
+        _ => false,
+    }
 }
 
 /// Normalizes one SDK-variant error that carried no HTTP failure of its own.

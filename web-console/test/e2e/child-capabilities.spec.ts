@@ -49,8 +49,14 @@ test('native child live cuts, independent title, active and file-only resume upl
     await fixture.release(`child-second-${childGate}`);
     await expect(child).toHaveAttribute('data-agent-state', 'inactive');
     await expect(child.getByText('Canonical child final report.', { exact: true })).toBeVisible();
-    // The in-flight message becomes its single canonical message at settlement.
-    await expect(child.getByText('Live child first chunk. Second live chunk.', { exact: true })).toHaveCount(1);
+    // Settlement places earlier replies behind the completed Turn disclosure.
+    const process = child.locator('[data-turn-process][aria-expanded]').last();
+    if (await process.isVisible() && await process.getAttribute('aria-expanded') === 'false') await process.click();
+    // The initial reply can fall outside the latest native transcript page.
+    const settledReply = child.getByText('Live child first chunk. Second live chunk.', { exact: true });
+    const earlier = child.getByRole('button', { name: 'Load earlier', exact: true });
+    if (await earlier.isVisible() && await settledReply.count() === 0) await earlier.click();
+    await expect(settledReply).toHaveCount(1);
     const card = child.locator('[data-delivery-card]').filter({ has: page.locator('[data-presented-name]', { hasText: 'child-report.md' }) }).first();
     await card.getByRole('button', { name: 'Preview child-report.md in sidebar', exact: true }).click();
     const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
@@ -81,7 +87,6 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.screenshot({ path: '/tmp/rustx-native-child-sidebar-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await preview.getByRole('button', { name: /^Close preview / }).first().click();
-    const process = child.locator('[data-turn-process][aria-expanded]').last();
     if (await process.isVisible() && await process.getAttribute('aria-expanded') === 'false') await process.click();
     const tool = child.locator('[data-tool-call-id="child-image"]').last();
     const step = child.locator('[data-step-process]').filter({ has: page.locator('[data-tool-call-id="child-image"]') }).last().locator(':scope > button');

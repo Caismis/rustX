@@ -44,6 +44,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   readonly attachmentIntentRevision?: number;
   readonly lifecycle?: ReturnType<typeof lifecycleAvailability>;
   compactionRequest?: CompactionRequestEvidence;
+  compactionNotices?: import('./compaction-notices').CompactionNoticeEvidence;
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;

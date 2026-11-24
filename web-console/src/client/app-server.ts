@@ -19,6 +19,7 @@ import { ReadingNavigation } from './reading';
 import { ColdReads } from './cold-reads';
 import { TraceReads } from './trace-reads';
 import { SessionControls } from './session-controls';
+import { observeCompactionNotices } from './compaction-notices';
 import { ModelSelection } from './model-selection';
 import { Interactions } from './interactions';
 import { SessionUploads, uploadFileRefKey, uploadReceiptKey, type UploadAttachmentKey } from './session-uploads';
@@ -196,7 +197,10 @@ export class AppServerClient {
   }
   private setSession(id: string, patch: Partial<Omit<SessionView, keyof LifecycleFacts | 'lifecycle'>> & { error?: string }) {
     const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), ...emptyFacts };
-    this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch } } });
+    const snapshot = patch.snapshot;
+    const compactionNotices = snapshot && (snapshot.conversation_id !== view.snapshot?.conversation_id || snapshot.context !== view.snapshot?.context)
+      ? observeCompactionNotices(view.compactionNotices, snapshot.conversation_id, snapshot.context ?? undefined) : view.compactionNotices;
+    this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch, compactionNotices } } });
   }
   /** One-way actor projection. Ordinary presentation writes cannot assign these facts. */
   private projectLifecycle(id: string, context: LifecycleContext, previous?: LifecycleContext) {

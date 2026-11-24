@@ -218,6 +218,68 @@ fn set_input_limit(fixture: &IdleFixture, limit: u64) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn idle_install_leaves_ready_work_for_already_accepted_input() {
+    let fixture = ready_fixture().await;
+    set_input_limit(&fixture, fixture.with_reminder);
+    let admission_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let parked = admission_gate.arm_scoped();
+    fixture
+        .runtime
+        .install_admission_gate(admission_gate.clone());
+    let fresh = "new input outside the history-only budget ".repeat(4_096);
+    let (context, mut request) = current_input(&fixture.runtime);
+    let mut message = runtime_inbound_message("fresh");
+    message.content = text_content(&fresh);
+    request.messages = vec![ModelInputMessage::Canonical(MessageBlock::User(message))].into();
+    assert!(context.engine.estimate_frozen_request(&request) > fixture.with_reminder);
+
+    fixture
+        .runtime
+        .submit_inbound(text_content(&fresh))
+        .unwrap();
+    within_liveness_guard(
+        "foreground admission parked with pending input",
+        admission_gate.wait_entered_async(),
+    )
+    .await;
+    fixture.runtime.inner.lock_state().manual_compaction = None;
+    fixture.runtime.inner.install_ready_async_when_idle().await;
+    assert!(
+        fixture
+            .runtime
+            .inner
+            .store
+            .projection_head()
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        fixture.work.state.lock().unwrap().phase,
+        Phase::Ready(_)
+    ));
+
+    drop(parked);
+    within_liveness_guard(
+        "accepted input adoption",
+        fixture.runtime.child_attempt_settlement(0),
+    )
+    .await;
+    let events = fixture
+        .runtime
+        .inner
+        .store
+        .read_events(None, 128)
+        .unwrap()
+        .events;
+    let adopted = events
+        .iter()
+        .find(|event| matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. }))
+        .expect("the foreground owner adopts accepted input");
+    assert!(events.iter().all(|event| !matches!(&event.event, RuntimeEvent::CompactionCompleted { operation_id, .. } if operation_id == &fixture.admission.operation_id) || event.sequence > adopted.sequence));
+    fixture.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_install_defers_when_rearmed_user_reminder_exceeds_fit_boundary() {
     let fixture = ready_fixture().await;
     let limit = fixture.with_reminder - 1;

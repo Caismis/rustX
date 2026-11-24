@@ -339,8 +339,23 @@ async fn responses_text_wrapper_rejection_requires_runtime_ownership_over_http_a
         crate::common::FixtureReply::json_error(400, "Bad Request", &response)
     })
     .await;
+    let flat = crate::common::FixtureServer::start(move |_, _| {
+        let stream = json!({"type":"error", "sequence_number":0, "code":"unsupported_parameter",
+            "param":"text", "message":"text is not supported"});
+        crate::common::FixtureReply::body(
+            200,
+            "OK",
+            "text/event-stream",
+            format!("event: error\ndata: {stream}\n\n"),
+        )
+    })
+    .await;
 
-    for server in [&server, &http] {
+    for (server, ordinary_error) in [
+        (&server, ModelErrorKind::InvalidRequest),
+        (&http, ModelErrorKind::InvalidRequest),
+        (&flat, ModelErrorKind::ProviderError),
+    ] {
         let adapter = adapter(protocol, server);
         let native = request(protocol, true);
         let mut authored = native.clone();
@@ -350,8 +365,8 @@ async fn responses_text_wrapper_rejection_requires_runtime_ownership_over_http_a
         ordinary.response_schema = None;
         for (index, (input, kind)) in [
             (native, ModelErrorKind::NativeFormatUnsupported),
-            (authored, ModelErrorKind::InvalidRequest),
-            (ordinary, ModelErrorKind::InvalidRequest),
+            (authored, ordinary_error.clone()),
+            (ordinary, ordinary_error),
         ]
         .into_iter()
         .enumerate()

@@ -165,6 +165,7 @@ struct Setup {
     /// The Summary model and profile arrangement exercised by this fixture.
     summary_scenario: SummaryScenario,
     native_summary_model: Option<&'static str>,
+    responses_summary_verbosity: bool,
     summary_window: Option<u64>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
@@ -180,6 +181,7 @@ impl Setup {
             auxiliary: None,
             summary_scenario: SummaryScenario::Standard,
             native_summary_model: None,
+            responses_summary_verbosity: false,
             summary_window: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
@@ -867,6 +869,9 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
         });
         if setup.native_summary_model == Some(id) {
             model["capabilities"]["json_schema_output"] = true.into();
+        }
+        if id == RESPONSES_MODEL && setup.responses_summary_verbosity {
+            model["request_params"] = r#"{"text":{"verbosity":"low"}}"#.into();
         }
         if setup.summary_scenario == SummaryScenario::CrossProvider
             && protocol == "anthropic_messages"
@@ -1996,6 +2001,52 @@ async fn native_format_rejections_downgrade_once_per_compaction_operation() {
         "text",
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn authored_responses_text_rejection_never_downgrades_the_summary() {
+    let Some(emulator) =
+        ProviderEmulator::start("compaction_responses_authored_text_rejection").await
+    else {
+        return;
+    };
+    let setup = Setup {
+        context_window: COMPACTION_CONTEXT_WINDOW,
+        auxiliary: Some(format!("emulator/{RESPONSES_MODEL}")),
+        native_summary_model: Some(RESPONSES_MODEL),
+        responses_summary_verbosity: true,
+        ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
+    };
+    let driver = Driver::start(&emulator, &setup).await;
+    driver.submit(TURN_ONE);
+    assert!(matches!(
+        driver.settle().await.1,
+        RuntimeClientOutcome::Completed { .. }
+    ));
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let result = driver.compact_context().await;
+            if matches!(&result, Err(error) if matches!(error.data, Some(rustx::app_server::protocol::ErrorData::InvalidState)))
+                && emulator.requests().await.len() == 1
+            {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            break result;
+        }
+    }).await.expect("manual compaction settles");
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(driver.snapshot().unwrap().0.context.compaction_count, 0);
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "one primary and one rejected Summary request"
+    );
+    assert_eq!(requests[1]["body"]["text"]["verbosity"], "low");
+    assert_eq!(requests[1]["body"]["text"]["format"]["type"], "json_schema");
+    emulator.finish().await;
 }
 
 #[allow(clippy::too_many_lines)]

@@ -703,12 +703,23 @@ def _compaction_format_rejection(name: str, model: str, protocol: str, wrapper: 
             continue
         expect = replace(step.expect, protocol=protocol)
         native = replace(expect, json_subset={wrapper: {"format": {"type": "json_schema"}}})
-        steps.append(Step(native, HttpError(400, {
+        rejection = HttpError(400, {
             "type": "error",
             "error": {"type": "invalid_request_error", **detail},
-        })))
+        })
+        # The first Responses rejection is the standard top-level SSE envelope.
+        # The second keeps the HTTP rejection path in the same operation test.
+        if protocol == OPENAI_RESPONSES and len(steps) == 1:
+            steps.append(Step(native, _flat_responses_error(detail)))
+        else:
+            steps.append(Step(native, rejection))
         steps.append(replace(step, expect=expect))
     return Scenario(base.name, *steps)
+
+
+def _flat_responses_error(detail: dict[str, str]) -> Stream:
+    event = json.dumps({"type": "error", "sequence_number": 0, **detail})
+    return Stream(Raw(f"event: error\ndata: {event}\n\n".encode()))
 
 
 def compaction_anthropic_format_rejection() -> Scenario:
@@ -723,6 +734,15 @@ def compaction_responses_wrapper_rejection() -> Scenario:
         "compaction_responses_wrapper_rejection", RESPONSES_MODEL, OPENAI_RESPONSES,
         "text", {"code": "unsupported_parameter", "param": "text", "message": "text is not supported"},
     )
+
+
+def compaction_responses_authored_text_rejection() -> Scenario:
+    name = "compaction_responses_authored_text_rejection"
+    base = _compaction(name, RESPONSES_MODEL, OPENAI_RESPONSES)
+    native = replace(base.steps[1].expect, json_subset={"text": {"verbosity": "low", "format": {"type": "json_schema"}}})
+    return Scenario(name, base.steps[0], Step(native, _flat_responses_error({
+        "code": "unsupported_parameter", "param": "text", "message": "text is not supported",
+    })))
 
 
 CHUNKED_PROMPT = "conformance: write the chunked compaction history"
@@ -991,6 +1011,7 @@ SCENARIOS = {
     "compaction_cross_provider_summary": compaction_cross_provider_summary,
     "compaction_anthropic_format_rejection": compaction_anthropic_format_rejection,
     "compaction_responses_wrapper_rejection": compaction_responses_wrapper_rejection,
+    "compaction_responses_authored_text_rejection": compaction_responses_authored_text_rejection,
     "compaction_transient_summary": compaction_transient_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,
     "compaction_twice_explicit_summary": compaction_twice_explicit_summary,

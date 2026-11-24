@@ -21,7 +21,7 @@ use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
     is_explicit_format_rejection, normalize_error, normalize_error_for_format,
-    stream_retry_disposition,
+    rejects_format_field, stream_retry_disposition,
 };
 use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
 use crate::model::adapter::traits::{
@@ -2244,6 +2244,9 @@ fn responses_stream_error(
         .or_else(|| str_field(error, "error_type"))
         .or_else(|| str_field(error, "type"));
     let code = str_field(error, "code").or_else(|| str_field(event, "code"));
+    let flat_error = event.get("response").is_none()
+        && event.get("error").is_none()
+        && str_field(event, "type") == Some("error");
     let provider_code = code.or(error_type);
     let mut kind = if matches!(
         error_type,
@@ -2280,15 +2283,26 @@ fn responses_stream_error(
         ModelErrorKind::ProviderError
     };
     if native_format != ResponsesNativeFormat::None
-        && kind == ModelErrorKind::InvalidRequest
-        && is_explicit_format_rejection(
-            str_field(error, "type"),
-            str_field(error, "code"),
-            str_field(error, "param"),
-            message,
-            "text.format",
-            native_format.owned_parent(),
-        )
+        && ((kind == ModelErrorKind::InvalidRequest
+            && is_explicit_format_rejection(
+                str_field(error, "type"),
+                str_field(error, "code"),
+                str_field(error, "param"),
+                message,
+                "text.format",
+                native_format.owned_parent(),
+            ))
+            || (flat_error
+                && matches!(
+                    kind,
+                    ModelErrorKind::ProviderError | ModelErrorKind::InvalidRequest
+                )
+                && rejects_format_field(
+                    code,
+                    str_field(event, "param"),
+                    "text.format",
+                    native_format.owned_parent(),
+                )))
         && event
             .get("status")
             .is_none_or(|value| value.as_u64() == Some(400) || value.as_str() == Some("400"))

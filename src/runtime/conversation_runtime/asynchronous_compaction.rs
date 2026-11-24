@@ -591,7 +591,8 @@ impl RuntimeInner {
             let Ok(sections) = resources.context_assembly().system_sections(&native) else {
                 return;
             };
-            let Some(delivery) = coordinator.take_ready() else {
+            let Some(delivery) = RuntimeCompactionCoordinator::take_selected(self, None, true)
+            else {
                 return;
             };
             let ready = match delivery {
@@ -784,6 +785,7 @@ impl RuntimeCompactionCoordinator {
     fn take_selected(
         inner: &RuntimeInner,
         admission: Option<&CompactionAdmission>,
+        idle: bool,
     ) -> Option<CompactionDelivery> {
         let work = inner
             .async_compaction
@@ -807,6 +809,17 @@ impl RuntimeCompactionCoordinator {
         }
         match &state.phase {
             Phase::Ready(generated) if state.status.phase == CompactionOperationPhase::Ready => {
+                let _pending = if idle {
+                    // Serialize the empty-inbox check and the idle claim with
+                    // acceptance, including producers outside the coordinator.
+                    let pending = inner.mailbox.pending_publication();
+                    if !matches!(inner.mailbox.has_pending(), Ok(false)) {
+                        return None;
+                    }
+                    Some(pending)
+                } else {
+                    None
+                };
                 let generated = generated.clone();
                 state.phase = Phase::Installing(generated.clone());
                 Some(CompactionDelivery::Ready(ReadyCompaction {
@@ -1178,7 +1191,7 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
 
     fn take_ready(&self) -> Option<CompactionDelivery> {
         let inner = self.0.upgrade()?;
-        Self::take_selected(&inner, None)
+        Self::take_selected(&inner, None, false)
     }
 
     fn active(&self) -> Option<CompactionAdmission> {
@@ -1331,7 +1344,7 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
                 let changed = work.changed.notified();
                 tokio::pin!(changed);
                 changed.as_mut().enable();
-                if let Some(delivery) = Self::take_selected(&inner, Some(admission)) {
+                if let Some(delivery) = Self::take_selected(&inner, Some(admission), false) {
                     return Some(delivery);
                 }
                 let terminal = matches!(
