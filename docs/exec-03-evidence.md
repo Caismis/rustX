@@ -917,3 +917,20 @@ run and the complete external conformance target passed locally.
   before data admission so Seal always completes first. The fixture then
   cancels the originating Attempt, releases both gates, verifies both
   original allocations have confirmed removal, and rejects any Publish.
+
+## Follow-up to the review of `74f62fe1b`
+
+- The lost-publication-receipt branch watches the Client scratch directory
+  from the first physical allocation. It stops both original lanes after
+  the real Published reply and verifies the complete winner is the only
+  remaining file before permitting same-instance recovery. Filesystem
+  notifications drive this check while Client maintenance cleans the
+  abandoned allocation independently of the Save wire.
+- The integration-only Abort gate enforces Publish before loser Abort.
+  Recovery still requires the original identity, forbids Save replay,
+  and checks the canonical result and complete teardown.
+- The Linux Boundary job at `74f62fe1b` passed the Hosted conformance
+  case and exposed a race in the image projection fixture. Manual
+  compaction now starts after ThreadRead confirms Idle for the same
+  runtime incarnation. The fixture submits one compaction and still
+  verifies its receipt and the exact provider request count.

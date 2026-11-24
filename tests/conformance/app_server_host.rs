@@ -158,7 +158,7 @@ struct SaveStaging<'a> {
     scratch: &'a std::path::Path,
     receipts: Option<&'a mut save_backpressure::SaveReceipts>,
     refuse_save: bool,
-    cancel_at_seal: bool,
+    wait_for_winner: bool,
     backpressure: Option<save_backpressure::SaveBackpressure>,
 }
 
@@ -171,7 +171,7 @@ async fn stream_large_result(
         scratch,
         mut receipts,
         refuse_save,
-        cancel_at_seal,
+        wait_for_winner,
         mut backpressure,
     }: SaveStaging<'_>,
 ) {
@@ -312,8 +312,7 @@ async fn stream_large_result(
         if refuse_save {
             assert!(storage_conflict);
             observer.wait_for_files(scratch, &[]).await;
-        } else if !cancel_at_seal {
-            // The cancellation case releases its Seal gate before awaiting disposal.
+        } else if wait_for_winner {
             observer
                 .wait_for_files(scratch, &[(total + parts.len() - 1) as u64])
                 .await;
@@ -528,7 +527,7 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             if matches!(winner, "stream" | "stream_saved" | "stream_save_refused" | "stream_save_saturated" | "stream_save_receipt_lost" | "stream_disk_full" | "stream_save_cancelled") {
                 stream_large_result(&mut first, &mut second, &call, &copy, SaveStaging {
                     scratch: &scratch, receipts: save_receipts.as_mut(),
-                    refuse_save: winner == "stream_save_refused", cancel_at_seal: saved_cancelled,
+                    refuse_save: winner == "stream_save_refused", wait_for_winner: winner == "stream_saved",
                     backpressure,
                 }).await;
             } else {

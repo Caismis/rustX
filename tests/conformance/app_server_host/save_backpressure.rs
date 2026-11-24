@@ -1,5 +1,6 @@
 //! Interleave Host uploads with receipts from a genuine Client.
 
+use notify::Watcher as _;
 use rustx::{
     local_runtime::session_runtime_manager::{
         EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionRuntimeManager,
@@ -297,6 +298,9 @@ pub(super) async fn lose_publication_receipt(
     let (child, relay) = prepare(manager, session, scratch, None).await;
     let ((mut data_peer, mut data_server), (mut control_peer, mut control_server)) =
         relay.pair().await;
+    #[cfg(feature = "test-support")]
+    let (losing_abort, hold_losing_abort) = relay.endpoint.hold_next_save_abort_for_test();
+    let scratch = scratch.to_path_buf();
     let (observed, publication) = oneshot::channel();
     let (reconnect, reconnecting) = oneshot::channel();
     let (release, released) = oneshot::channel();
@@ -305,9 +309,20 @@ pub(super) async fn lose_publication_receipt(
         let control = tokio::spawn(async move {
             let _ = tokio::io::copy_bidirectional(&mut control_peer, &mut control_server).await;
         });
+        let (changed, mut filesystem) = watch::channel(());
+        let mut watcher = notify::recommended_watcher(move |_| {
+            changed.send_replace(());
+        })
+        .unwrap();
+        let mut watching_saves = false;
         let mut observations = Vec::new();
-        let (owner, locator) = loop {
+        let (owner, locator, length) = loop {
             let request = receive::<ClientRequest>(&mut data_server).await.unwrap();
+            #[cfg(feature = "test-support")]
+            assert!(
+                !matches!(request, ClientRequest::Save(SaveRequest::Abort { .. })),
+                "Publish must reach the Client before the losing Abort"
+            );
             send(&mut data_peer, &request).await;
             let reply = receive::<ClientReply>(&mut data_peer).await.unwrap();
             if let (
@@ -317,27 +332,66 @@ pub(super) async fn lose_publication_receipt(
             {
                 observations.push(key.clone());
             }
+            if !watching_saves && matches!(reply, ClientReply::Save(SaveReply::Begun { .. })) {
+                let [directory] = super::saved_directories(&scratch).try_into().unwrap();
+                watcher
+                    .watch(&directory, notify::RecursiveMode::NonRecursive)
+                    .unwrap();
+                watching_saves = true;
+            }
             if matches!(reply, ClientReply::Save(_)) {
                 physical.send_modify(|count| *count += 1);
             }
-            if let ClientReply::Save(SaveReply::Published { key, locator, .. }) = reply {
+            if let ClientReply::Save(SaveReply::Published {
+                key,
+                locator,
+                length,
+                ..
+            }) = reply
+            {
                 assert!(matches!(
                     request,
                     ClientRequest::Save(SaveRequest::Publish { key: requested, .. })
                         if key == requested
                 ));
-                break (key, locator);
+                break (key, locator, length.get());
             }
             send(&mut data_server, &reply).await;
         };
         assert_ne!(observations, [] as [ProcessOperationKey; 0]);
-        observed.send((owner, locator)).unwrap();
+        assert!(watching_saves);
         // The Server loses the actual publication response. Canonical
         // completion and release of the old observation race with the gap.
         drop(data_server);
         drop(data_peer);
         control.abort();
         let _ = control.await;
+        #[cfg(feature = "test-support")]
+        losing_abort
+            .await
+            .expect("losing Abort held before dispatch");
+        // Neither lane forwards any further requests until this check
+        // completes. The Client's independent expiry must retire the loser.
+        tokio::time::timeout(
+            rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW,
+            async {
+                loop {
+                    filesystem.borrow_and_update();
+                    if let [winner] = super::saved_files(&scratch).as_slice()
+                        && winner
+                            .metadata()
+                            .is_ok_and(|metadata| metadata.len() == length)
+                    {
+                        break;
+                    }
+                    filesystem.changed().await.expect("Client scratch watcher");
+                }
+            },
+        )
+        .await
+        .expect("only the published file survives detached Save cleanup");
+        drop(watcher);
+        observed.send((owner, locator)).unwrap();
         reconnecting
             .await
             .expect("canonical commit before recovery");
@@ -346,6 +400,10 @@ pub(super) async fn lose_publication_receipt(
             confirm_recovered_release(data_peer, data_server, &observations, release),
             tokio::io::copy_bidirectional(&mut control_peer, &mut control_server)
         );
+        // Keep the loser off the recovered pair as well. Drain closes the
+        // endpoint before releasing this test gate.
+        #[cfg(feature = "test-support")]
+        drop(hold_losing_abort);
     });
     (
         child,

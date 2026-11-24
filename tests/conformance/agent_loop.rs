@@ -35,10 +35,11 @@ use crate::common::provider_emulator::ProviderEmulator;
 use rustx::app_server::connection::AppServerConnection;
 use rustx::app_server::host::AppServerHost;
 use rustx::app_server::protocol::{
-    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, InitializeParams,
+    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, ErrorData, InitializeParams,
     JsonRpcVersion, Method, MethodResult, NotificationMethod, PresentationCapabilities, Request,
     RequestId, Response, RpcError,
 };
+use rustx::app_server::thread_status::ThreadStatus;
 use rustx::credentials::CredentialSnapshot;
 use rustx::durable::{ConversationStore, SqliteConversationStore};
 use rustx::local_runtime::HostEnvironment;
@@ -2619,26 +2620,44 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert!(!body_text(&requests[5]).contains("read_image"));
     assert!(driver.canonical_history().contains(&canonical_image));
 
-    // Manual compaction invokes the production summary request builder and
-    // adapter over the image-bearing canonical span, not a helper-only mock.
-    // Attempt settlement is logical; the coordinator may still own its tail.
-    // A Busy refusal admits nothing, so retry until the native owner returns.
+    // The terminal event can precede return of the native Attempt owner.
+    // Observe this exact runtime's idle cut before submitting compaction.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            match driver.compact_context().await {
-                Err(error)
-                    if error
-                        .message
-                        .contains("requires an idle conversation runtime") =>
-                {
-                    tokio::task::yield_now().await;
+            match rpc(
+                &driver.connection,
+                Method::ThreadRead {
+                    thread_id: driver.target.conversation_id.clone(),
+                },
+            )
+            .await
+            {
+                Ok(MethodResult::Thread { thread }) => {
+                    assert_eq!(thread.id, driver.target.conversation_id);
+                    assert_eq!(
+                        thread.runtime_incarnation,
+                        Some(driver.target.runtime_incarnation)
+                    );
+                    match thread.status {
+                        ThreadStatus::Idle => break,
+                        ThreadStatus::Active { .. } => {}
+                        status => panic!("unexpected status before compaction: {status:?}"),
+                    }
                 }
-                result => break result.unwrap(),
+                Err(error)
+                    if matches!(error.data, Some(ErrorData::ObservationUnavailable { .. })) => {}
+                result => panic!("failed to observe the runtime before compaction: {result:?}"),
             }
         }
+        assert!(matches!(
+            driver.compact_context().await.unwrap(),
+            MethodResult::ContextCompacted {
+                compaction: Some(_)
+            }
+        ));
     })
     .await
-    .expect("native idle owners must return after the delegated Attempt settles");
+    .expect("native owners must return and manual compaction must settle");
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 8);
     let summary = body_text(&requests[7]);
