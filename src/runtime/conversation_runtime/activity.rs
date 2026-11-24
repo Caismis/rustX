@@ -19,7 +19,7 @@ impl TaskActivity {
         TaskActivityLease(self.0.clone())
     }
 }
-pub(super) struct TaskActivityLease(watch::Sender<usize>);
+pub(crate) struct TaskActivityLease(watch::Sender<usize>);
 impl Drop for TaskActivityLease {
     fn drop(&mut self) {
         self.0.send_modify(|count| *count -= 1);
@@ -63,10 +63,9 @@ impl RuntimeInner {
         let state = self.state.try_lock().ok()?;
         let (foreground, system_error) = {
             (
-                state.current_attempt.is_some()
-                    || state.scheduled.is_some()
-                    || state.manual_compaction.is_some(),
-                self.durability_gate.try_is_failed()? || state.mcp_settlement_failure.is_some(),
+                state.foreground.slot.is_foreground_active(),
+                self.durability_gate.try_is_failed()?
+                    || state.health.mcp_settlement_failure.is_some(),
             )
         };
         #[cfg(test)]

@@ -39,7 +39,14 @@ async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority
             .permission_task_message
             .is_none()
     );
-    assert!(runtime.inner.lock_state().permission_task_message.is_none());
+    assert!(
+        runtime
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .is_none()
+    );
     runtime.shutdown().await.unwrap();
     drop(runtime);
     let (reopened, _) =
@@ -48,6 +55,7 @@ async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority
         reopened
             .inner
             .lock_state()
+            .config
             .permission_task_message
             .is_none()
     );
@@ -169,6 +177,7 @@ async fn permission_task_commits_only_when_the_primary_request_starts() {
                         runtime
                             .inner
                             .lock_state()
+                            .foreground
                             .recovered_permission_task_message
                             .as_ref(),
                         Some(&candidate)
@@ -199,7 +208,12 @@ async fn permission_task_commits_only_when_the_primary_request_starts() {
                 pre_start.release();
                 await_settled_ledger(&runtime, settled_count).await;
                 assert_eq!(
-                    runtime.inner.lock_state().permission_task_message.as_ref(),
+                    runtime
+                        .inner
+                        .lock_state()
+                        .config
+                        .permission_task_message
+                        .as_ref(),
                     Some(&established.message_id),
                     "pre-start cancellation cannot commit the prepared task"
                 );
@@ -219,7 +233,12 @@ async fn permission_task_commits_only_when_the_primary_request_starts() {
                     (runtime, settled_count + 1)
                 };
                 assert_eq!(
-                    runtime.inner.lock_state().permission_task_message.as_ref(),
+                    runtime
+                        .inner
+                        .lock_state()
+                        .config
+                        .permission_task_message
+                        .as_ref(),
                     Some(&established.message_id)
                 );
                 let capture = Arc::new(PermissionTaskCapture::default());
@@ -327,11 +346,19 @@ async fn permission_task_recovery_uses_the_exact_unanswered_adoption() {
             },
         )
         .await;
-        assert!(runtime.inner.lock_state().permission_task_message.is_none());
+        assert!(
+            runtime
+                .inner
+                .lock_state()
+                .config
+                .permission_task_message
+                .is_none()
+        );
         assert_eq!(
             runtime
                 .inner
                 .lock_state()
+                .foreground
                 .recovered_permission_task_message
                 .as_ref(),
             Some(&task_id)
@@ -409,7 +436,12 @@ async fn permission_task_recovery_keeps_the_task_across_an_adopted_runtime_notic
     )
     .await;
     assert_eq!(
-        reopened.inner.lock_state().permission_task_message.as_ref(),
+        reopened
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .as_ref(),
         Some(&human.message_id)
     );
     reopened.activate();
@@ -534,7 +566,12 @@ async fn permission_task_recovery_preserves_an_established_task_across_agent_ado
         )
         .await;
         assert_eq!(
-            reopened.inner.lock_state().permission_task_message.as_ref(),
+            reopened
+                .inner
+                .lock_state()
+                .config
+                .permission_task_message
+                .as_ref(),
             Some(&established.message_id)
         );
         reopened.activate();
@@ -576,7 +613,12 @@ async fn permission_task_pointer_survives_reopen_and_is_replaced_by_new_human_in
         .unwrap();
     assert_eq!(delegated_id, delegated.message_id);
     assert_eq!(
-        runtime.inner.lock_state().permission_task_message.as_ref(),
+        runtime
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .as_ref(),
         Some(&delegated_id)
     );
     runtime.shutdown().await.unwrap();
@@ -593,7 +635,12 @@ async fn permission_task_pointer_survives_reopen_and_is_replaced_by_new_human_in
     )
     .await;
     assert_eq!(
-        reopened.inner.lock_state().permission_task_message.as_ref(),
+        reopened
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .as_ref(),
         Some(&delegated_id)
     );
     reopened.activate();
@@ -670,7 +717,7 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
             config.approval_mode = ApprovalMode::FullAccess;
             let configuration = crate::runtime::resources::RuntimeConfiguration {
                 config: Arc::new(config),
-                models: state.model.registry().unwrap().clone(),
+                models: state.config.model.registry().unwrap().clone(),
                 resource_definitions: Vec::new(),
                 resource_diagnostics: Vec::new(),
                 authored: crate::local_runtime::configuration::generation::AuthoredConfiguration {
@@ -681,8 +728,9 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
                     provenance: std::collections::BTreeMap::new(),
                 },
             };
-            state.resources = Arc::new(
+            state.config.resources = Arc::new(
                 state
+                    .config
                     .resources
                     .as_ref()
                     .clone()
@@ -744,14 +792,22 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
                 );
                 assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
                 assert_eq!(
-                    runtime.inner.lock_state().last_permission_reminder_mode,
+                    runtime
+                        .inner
+                        .lock_state()
+                        .config
+                        .last_permission_reminder_mode,
                     Some(ApprovalMode::FullAccess),
                     "a cancelled mode B request cannot erase mode A consumption"
                 );
             }
         }
         assert_eq!(
-            runtime.inner.lock_state().last_permission_reminder_mode,
+            runtime
+                .inner
+                .lock_state()
+                .config
+                .last_permission_reminder_mode,
             Some(ApprovalMode::FullAccess)
         );
         let (runtime, _model, after) = if reopen {
@@ -851,7 +907,11 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
         );
         assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
         assert_eq!(
-            runtime.inner.lock_state().last_permission_reminder_mode,
+            runtime
+                .inner
+                .lock_state()
+                .config
+                .last_permission_reminder_mode,
             None
         );
         let (runtime, _model, after) = if reopen {
@@ -874,7 +934,11 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
             )
             .await;
             assert_eq!(
-                runtime.inner.lock_state().last_permission_reminder_mode,
+                runtime
+                    .inner
+                    .lock_state()
+                    .config
+                    .last_permission_reminder_mode,
                 None
             );
             runtime.activate();
@@ -947,7 +1011,11 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
             )
             .await;
             assert_eq!(
-                reopened.inner.lock_state().last_permission_reminder_mode,
+                reopened
+                    .inner
+                    .lock_state()
+                    .config
+                    .last_permission_reminder_mode,
                 if compact {
                     None
                 } else {

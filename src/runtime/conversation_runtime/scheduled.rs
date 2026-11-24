@@ -1,7 +1,7 @@
 //! Conversation-owned scheduled execution: no synthetic `Attempt` or `ToolCall`.
 use super::{
-    ApprovalMode, Arc, CancellationReason, ConversationRuntime, Mutex, RuntimeInner,
-    RuntimeResourceSnapshot, SessionModelConfig,
+    ApprovalMode, Arc, CancellationReason, ConversationRuntime, CurrentScheduled, RuntimeInner,
+    RuntimeResourceSnapshot, ScheduledCancellation, SessionModelConfig,
 };
 use crate::runtime::workflow::scheduled::{
     ScheduledWorkflowPreparation, ScheduledWorkflowPreparationError as PreparationError,
@@ -31,42 +31,6 @@ fn scheduled_failure_outcome(error: &WorkflowRunError) -> ScheduledWorkflowOutco
     }
 }
 
-pub(super) struct CurrentScheduled {
-    pub id: ScheduledWorkflowStartId,
-    pub owner: String,
-    pub cancellation: Arc<ScheduledCancellation>,
-    pub graph_finished: bool,
-    pub recovered_writer: bool,
-    pub settlement_wake: Arc<tokio::sync::Notify>,
-}
-pub(super) struct ScheduledCancellation {
-    signal: crate::runtime::cancellation::CancellationSignal,
-    reason: Mutex<CancellationReason>,
-}
-impl ScheduledCancellation {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            signal: crate::runtime::cancellation::CancellationSignal::default(),
-            reason: Mutex::new(CancellationReason::UserRequested),
-        })
-    }
-    pub fn cancel(&self, reason: CancellationReason) {
-        let mut held = self.reason.lock().expect("scheduled cancellation");
-        if !self.signal.is_cancelled() {
-            *held = reason;
-            self.signal.cancel();
-        }
-    }
-    fn execution(self: &Arc<Self>) -> crate::runtime::cancellation::ExecutionCancellation {
-        crate::runtime::cancellation::ExecutionCancellation::new(self.signal.clone(), self.clone())
-    }
-}
-impl crate::runtime::cancellation::CancellationCause for ScheduledCancellation {
-    fn cause(&self) -> CancellationReason {
-        *self.reason.lock().expect("scheduled cancellation")
-    }
-}
-
 impl ConversationRuntime {
     /// A wake handle carries no runtime ownership or execution authority.
     pub(crate) fn scheduled_wake(&self) -> Arc<tokio::sync::Notify> {
@@ -85,7 +49,11 @@ impl RuntimeInner {
         clock: &dyn crate::runtime::types::RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
-        let own = state.scheduled.as_ref().filter(|owner| &owner.id == id);
+        let own = state
+            .foreground
+            .slot
+            .as_scheduled()
+            .filter(|owner| &owner.id == id);
         let retirement = ScheduledWorkflowOwnerRetirement {
             start_id: id.clone(),
             recovered_writer: own.is_none_or(|owner| owner.recovered_writer),
@@ -125,10 +93,9 @@ impl RuntimeInner {
     pub(super) fn admit_next_scheduled(self: &Arc<Self>) -> bool {
         let mut state = self.lock_state();
         if !self.lifecycle.is_running()
-            || state.current_attempt.is_some()
-            || state.scheduled.is_some()
-            || state.manual_compaction.is_some()
-            || state.configuration_commit_waiting
+            || state.foreground.slot.is_foreground_active()
+            || state.foreground.manual_tail.is_unreaped()
+            || state.config.configuration_commit_waiting
             || self.durability_gate.is_failed()
         {
             return false;
@@ -141,6 +108,7 @@ impl RuntimeInner {
         };
         let now = self.monotonic_clock.now_millis();
         state
+            .foreground
             .scheduled_retries
             .retain(|id, _| pending.iter().any(|head| &head.id == id));
         // A recovered Claim owns the foreground retirement obligation before
@@ -156,6 +124,7 @@ impl RuntimeInner {
             pending.into_iter().find(|head| {
                 matches!(&head.state, ScheduledWorkflowState::Accepted { .. })
                     && state
+                        .foreground
                         .scheduled_retries
                         .get(&head.id)
                         .is_none_or(|at| *at <= now)
@@ -169,13 +138,13 @@ impl RuntimeInner {
         let Ok(Some(start)) = self.store.scheduled_workflow_get(&next.id) else {
             return false;
         };
-        let resources = state.resources.clone();
-        let model = state.model.config().clone();
-        let approval = state.effective_approval_mode;
+        let resources = state.config.resources.clone();
+        let model = state.config.model.config().clone();
+        let approval = state.config.effective_approval_mode;
         let owner = format!("scheduled:{}", uuid::Uuid::now_v7());
         let cancellation = ScheduledCancellation::new();
         let recovered_writer = matches!(next.state, ScheduledWorkflowState::Claimed { .. });
-        state.scheduled = Some(CurrentScheduled {
+        let claimed = state.foreground.slot.start_scheduled(CurrentScheduled {
             id: next.id.clone(),
             owner: owner.clone(),
             cancellation: cancellation.clone(),
@@ -183,6 +152,7 @@ impl RuntimeInner {
             recovered_writer,
             settlement_wake: Arc::default(),
         });
+        debug_assert!(claimed, "foreground idleness proven under this lock");
         let admission = self
             .lifecycle
             .try_enter_running()
@@ -223,13 +193,7 @@ impl RuntimeInner {
                 tracing::warn!(%error,"scheduled Workflow native owner refused or failed");
             }
             let mut state = inner.lock_state();
-            if state
-                .scheduled
-                .as_ref()
-                .is_some_and(|current| current.owner == owner)
-            {
-                state.scheduled = None;
-            }
+            state.foreground.slot.finish_scheduled(&owner);
             drop(state);
             drop(admission);
             drop(activity);
@@ -280,7 +244,7 @@ impl RuntimeInner {
                         PreparationError::DependencyUnavailable
                             | PreparationError::UnpreparedResources
                     ) {
-                        state.scheduled_retries.insert(
+                        state.foreground.scheduled_retries.insert(
                             id.clone(),
                             self.monotonic_clock.now_millis().saturating_add(30_000),
                         );
@@ -309,11 +273,11 @@ impl RuntimeInner {
             if !self.lifecycle.is_running() || cancellation.signal.is_cancelled() {
                 return Ok(());
             }
-            if !Arc::ptr_eq(&resources, &state.resources)
-                || state.model.config() != &model
-                || state.effective_approval_mode != approval
+            if !Arc::ptr_eq(&resources, &state.config.resources)
+                || state.config.model.config() != &model
+                || state.config.effective_approval_mode != approval
             {
-                state.scheduled_retries.insert(
+                state.foreground.scheduled_retries.insert(
                     id.clone(),
                     self.monotonic_clock.now_millis().saturating_add(1000),
                 );
@@ -330,6 +294,7 @@ impl RuntimeInner {
             // section as Claim so a concurrent model-selection commit cannot
             // swap M1→M2 between durable Claim and reviewer construction.
             let auxiliary_invocation = state
+                .config
                 .model
                 .snapshot()
                 .map_err(|error| error.to_string())?
@@ -440,8 +405,9 @@ impl RuntimeInner {
         {
             let mut state = self.lock_state();
             if let Some(current) = state
-                .scheduled
-                .as_mut()
+                .foreground
+                .slot
+                .as_scheduled_mut()
                 .filter(|current| current.owner == owner)
             {
                 current.graph_finished = true;
@@ -467,8 +433,9 @@ impl RuntimeInner {
         // time permits a second executor or releases deletion/capacity.
         let settlement_wake = self
             .lock_state()
-            .scheduled
-            .as_ref()
+            .foreground
+            .slot
+            .as_scheduled()
             .filter(|owner| &owner.id == id)
             .ok_or_else(|| "scheduled terminal publication lost its native owner".to_owned())?
             .settlement_wake

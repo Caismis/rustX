@@ -283,14 +283,15 @@ impl RuntimeInner {
         // shutdown projection seed is necessarily false.
         let shutting_down = false;
         let model = state
+            .config
             .model
             .read_source()
-            .at_binding_revision(state.binding_revision);
+            .at_binding_revision(state.config.binding_revision);
         // The resource generation is part of the same freeze as every other
         // seeded fact: a client attaching before the first configuration application still sees
         // exactly which project instruction files the runtime loaded.
-        let resources = Arc::clone(&state.resources);
-        let approval_mode = state.effective_approval_mode;
+        let resources = Arc::clone(&state.config.resources);
+        let approval_mode = state.config.effective_approval_mode;
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // Interaction pending state is an ephemeral runtime observation, but
         // it still participates in the same bootstrap cut as every other
@@ -986,53 +987,55 @@ impl ConversationRuntime {
             durability_gate: durability_gate.clone(),
             auxiliary,
             external_auxiliary: super::auxiliary::ExternalAuxiliary::new(),
-            manual_tail: Mutex::new(None),
-            session_title_task: Mutex::new(None),
+            host_task: Mutex::new(None),
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
-                binding_revision: 1,
-                catalog_revision,
-                pending_runtime_catalog: None,
-                catalog_commit_blocked: false,
-                catalog_admission_deferred: false,
-                staged_configuration: None,
-                configuration_commit_waiting: false,
-                configuration_admission_deferred: false,
-                runtime_refresh_sequence: 0,
-                runtime_catalog_failure: None,
-                explicit_model: config.explicit_model,
-                model: config.model,
-                resources: config.resources,
-                mcp_settlement_failure: None,
-                effective_approval_mode: config.approval_mode,
-                last_permission_reminder_mode,
-                permission_task_message,
-                recovered_permission_task_message,
-                conversation: super::conversation_slot::ConversationSlot::Durable,
-                current_attempt: None,
-                scheduled: None,
-                scheduled_retries: std::collections::BTreeMap::default(),
-                manual_compaction: None,
-                next_attempt_seq,
-                admitted_attempts: 0,
-                latest_settlement: None,
-                parent_turn_permits: None,
-                parent_guidance_sealed: false,
-                one_shot_cancel: None,
-                recovered_continuation,
-                // Durability health after a successful recovery is an
-                // explicit transition, not a silent reset (Issue #12, M9a):
-                // recovery either established a coherent durable state — in
-                // which case the runtime starts a fresh admission cycle — or
-                // it failed, in which case construction already returned and
-                // no runtime exists to be healthy. A previous process's crash
-                // never poisons a runtime whose classification and
-                // reconciliation succeeded. The absorbing DurabilityFailed
-                // fact itself lives only in the DurabilityGate.
-                admission_durability_cycle: AdmissionDurabilityCycle {
-                    budget: AdmissionRetryBudget::default(),
-                    pending_retry: None,
+                foreground: super::ForegroundState {
+                    slot: super::foreground::ForegroundSlot::Idle(
+                        super::foreground::IdleConversation::Durable,
+                    ),
+                    manual_tail: super::foreground::ManualTailState::None,
+                    scheduled_retries: std::collections::BTreeMap::default(),
+                    next_attempt_seq,
+                    recovered_continuation,
+                    recovered_permission_task_message,
+                    // Durability health after a successful recovery is an
+                    // explicit transition, not a silent reset (Issue #12,
+                    // M9a): recovery either established a coherent durable
+                    // state — in which case the runtime starts a fresh
+                    // admission cycle — or it failed, in which case
+                    // construction already returned and no runtime exists to
+                    // be healthy. A previous process's crash never poisons a
+                    // runtime whose classification and reconciliation
+                    // succeeded. The absorbing DurabilityFailed fact itself
+                    // lives only in the DurabilityGate.
+                    admission_durability_cycle: AdmissionDurabilityCycle {
+                        budget: AdmissionRetryBudget::default(),
+                        pending_retry: None,
+                    },
+                },
+                config: super::ConfigurationState {
+                    binding_revision: 1,
+                    catalog_revision,
+                    pending_runtime_catalog: None,
+                    catalog_commit_blocked: false,
+                    catalog_admission_deferred: false,
+                    staged_configuration: None,
+                    configuration_commit_waiting: false,
+                    configuration_admission_deferred: false,
+                    runtime_refresh_sequence: 0,
+                    runtime_catalog_failure: None,
+                    explicit_model: config.explicit_model,
+                    model: config.model,
+                    resources: config.resources,
+                    effective_approval_mode: config.approval_mode,
+                    last_permission_reminder_mode,
+                    permission_task_message,
+                },
+                child: None,
+                health: super::HealthState {
+                    mcp_settlement_failure: None,
                 },
             }),
             wake: Arc::new(WakeGate::new()),
@@ -1321,7 +1324,7 @@ impl ConversationRuntime {
             // The lock serializes the lifecycle transition against the
             // host-binding handshake; the CAS is the transition itself.
             let state = self.inner.lock_state();
-            if state.mcp_settlement_failure.is_some() {
+            if state.health.mcp_settlement_failure.is_some() {
                 // An authoritative physical-settlement failure may have been
                 // replayed while the runtime was inactive. The callback has
                 // either already moved the lifecycle to Draining or is

@@ -103,10 +103,13 @@ impl RuntimeInner {
         ) = {
             let mut state = self.state.lock().expect("coordinator lock");
             (
-                state.parent_turn_permits.is_none(),
-                state.last_permission_reminder_mode,
-                state.permission_task_message.clone(),
-                state.recovered_permission_task_message.take(),
+                state
+                    .child()
+                    .and_then(|child| child.parent_turn_permits)
+                    .is_none(),
+                state.config.last_permission_reminder_mode,
+                state.config.permission_task_message.clone(),
+                state.foreground.recovered_permission_task_message.take(),
             )
         };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
@@ -300,17 +303,21 @@ impl RuntimeInner {
             // (its in-memory content stayed consistent with the durable
             // Ledger: the failed commit installed nothing).
             let durable_failure = result.durable_failure.clone();
-            state.latest_settlement = Some(NativeAttemptSettlement {
-                ordinal: state.admitted_attempts,
+            let child = state.child_mut();
+            child.latest_settlement = Some(NativeAttemptSettlement {
+                ordinal: child.admitted_attempts,
                 attempt_id: attempt_id.clone(),
                 outcome: NativeAttemptOutcome::from_execution(&result.outcome),
             });
             if let Some(fanout) = self.pending.get() {
                 fanout.child_settled();
             }
-            state.conversation.restore(result.conversation);
-            state.permission_task_message = result.permission_task_message;
-            state.last_permission_reminder_mode = result.permission_reminder_consumed;
+            let finished = state
+                .foreground
+                .slot
+                .finish_attempt(&attempt_id, result.conversation);
+            state.config.permission_task_message = result.permission_task_message;
+            state.config.last_permission_reminder_mode = result.permission_reminder_consumed;
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
                     Some(crate::agent::DurableFailureKind::Compaction) => {
@@ -326,13 +333,7 @@ impl RuntimeInner {
                 };
                 self.record_durability_failure(&mut state, operation, diagnostic);
             }
-            if state
-                .current_attempt
-                .as_ref()
-                .is_some_and(|current| current.attempt_id == attempt_id)
-            {
-                state.current_attempt = None;
-            }
+            drop(finished);
             self.settlement.notify_waiters();
             // Test-only gate: the conversation state is restored and the
             // current-attempt slot is cleared, but the next-admission
@@ -369,7 +370,10 @@ impl RuntimeInner {
         if let Some(gate) = attempt_exit_gate {
             gate.enter();
         }
-        self.admit_next_attempt();
+        // Settlement hands the freed foreground back to the single admission
+        // worker pass order (reap → catalogs → staged config → scheduled →
+        // attempt); no inline successor admission here (Issue #606).
+        self.wake.notify.notify_one();
     }
 }
 
@@ -423,8 +427,9 @@ impl ConversationRuntime {
     ) -> Result<AttemptId, CancelAttemptError> {
         let mut state = self.inner.lock_state();
         if state
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .is_none_or(|current| current.attempt_id != *attempt_id)
         {
             return Err(CancelAttemptError::NoCurrentAttempt);
@@ -456,8 +461,9 @@ impl ConversationRuntime {
         state: &mut CoordinatorState,
     ) -> Result<AttemptId, CancelAttemptError> {
         let current = state
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .ok_or(CancelAttemptError::NoCurrentAttempt)?;
         let attempt_id = current.attempt_id.clone();
         let cancellation = current.cancellation.clone();
@@ -529,11 +535,11 @@ impl ConversationRuntime {
         reason: CancellationReason,
     ) -> Option<AttemptId> {
         let mut state = self.inner.lock_state();
-        if let Some(current) = &state.current_attempt {
+        if let Some(current) = state.foreground.slot.as_attempt() {
             let _ = current.cancellation.request_cancel(reason);
             return Some(current.attempt_id.clone());
         }
-        state.one_shot_cancel = Some(reason);
+        state.child_mut().one_shot_cancel = Some(reason);
         None
     }
 }

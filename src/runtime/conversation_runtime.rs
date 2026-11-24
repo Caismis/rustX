@@ -359,9 +359,9 @@ mod cold_attach_work_tests;
 mod compaction;
 mod configuration;
 mod controls;
-mod conversation_slot;
 mod drain;
 mod durability;
+mod foreground;
 mod history;
 mod model_selection;
 mod observer;
@@ -373,7 +373,6 @@ mod title;
 
 use admission::{SemanticInboundClass, WakeGate};
 pub(crate) use compaction::ManualCompactionHandle;
-use compaction::{CurrentManualCompaction, ManualTail};
 pub(crate) use configuration::ConfigurationHealth;
 use drain::{DrainCompletion, DrainTrigger};
 use durability::{
@@ -391,6 +390,10 @@ pub(crate) use bootstrap::RuntimeBootstrapSnapshot;
 pub(crate) use child::ParentGuidanceSeal;
 pub use compaction::{ManualCompactionError, ManualCompactionOutcome};
 pub use drain::ShutdownError;
+pub(crate) use foreground::{
+    AttemptTaskPoisonGuard, CurrentAttempt, CurrentManualCompaction, CurrentScheduled, ManualTail,
+    ManualTailState, ScheduledCancellation,
+};
 pub(crate) use model_selection::validate_model_context;
 pub use model_selection::{ApprovalModeUpdateError, ModelUpdateError};
 pub(crate) use observer::RuntimeObserver;
@@ -709,24 +712,6 @@ pub struct RuntimeConversationConfig {
     pub workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
 }
 
-/// The runtime-owned current attempt handle.
-///
-/// This is a control handle only: the coordinator keeps exactly the
-/// cancellation trigger the attempt task runs against so that
-/// `cancel_current_attempt` can request cancellation. It does **not** own a
-/// second cancellation state machine and never decides a terminal outcome;
-/// [`AgentExecution`](crate::agent::AgentExecution) remains the attempt execution/terminal authority.
-struct CurrentAttempt {
-    configuration: AdmittedConfiguration,
-    /// The attempt identity.
-    attempt_id: AttemptId,
-    /// The attempt cancellation trigger observed by the loop.
-    cancellation: AgentCancellation,
-    /// What this runtime admitted (Issue #351). Runtime-owned admission
-    /// provenance, never Goal lifecycle state.
-    provenance: AttemptProvenance,
-}
-
 /// What the coordinator admitted an attempt *for*.
 ///
 /// This is runtime-owned admission provenance: it is decided once, at the one
@@ -738,7 +723,7 @@ struct CurrentAttempt {
 /// from an ordinary Human attempt, including a Human attempt during which the
 /// model called `create_goal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum AttemptProvenance {
+pub(crate) enum AttemptProvenance {
     /// Ordinary adopted inbound that contains no Goal continuation: Human
     /// input, native results, and every other runtime-generated inbound.
     Inbound,
@@ -769,9 +754,64 @@ struct RuntimeCatalogFailure {
     refresh_sequence: Option<u64>,
 }
 
-/// The one synchronized coordinator state (the admission linearization owner).
-#[allow(clippy::struct_excessive_bools)] // Independent admission, lifecycle, and maintenance facts share one lock.
-struct CoordinatorState {
+/// Foreground execution ownership and admission bookkeeping.
+///
+/// Every fact about which operation owns the conversation's single mutable
+/// state — or permanently fences it — lives here (Issue #606). The grouped
+/// state stays under the one coordinator lock: regrouping narrows the
+/// ownership surface, it does not add a second linearization domain.
+#[allow(clippy::struct_excessive_bools)]
+struct ForegroundState {
+    /// The one foreground execution slot: `Attempt`, `ManualCompaction`,
+    /// `Scheduled`, `Idle`, or `Poisoned`, mutually exclusive by type
+    /// (Issue #606).
+    slot: foreground::ForegroundSlot,
+    /// The physical manual-compaction task reclamation state:
+    /// `None` | `Pending` | `Joining`, under this lock, so a claimed but
+    /// unjoined task is never misread as reaped.
+    manual_tail: foreground::ManualTailState,
+    /// Per-start rejection backoff bookkeeping for scheduled admission.
+    scheduled_retries: std::collections::BTreeMap<
+        crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        u64,
+    >,
+    /// The next attempt identity ordinal.
+    ///
+    /// Seeded by startup recovery to one past the highest ordinal that
+    /// already entered durable authority (Issue #12, M9a), so a restart can
+    /// never reuse an `AttemptId` that names a different logical attempt in
+    /// durable history. The durable Event Journal rejects a second
+    /// `AttemptStarted` for one identity, so the invariant is enforced on
+    /// both sides.
+    next_attempt_seq: u64,
+    /// Startup recovery's exact provenance for the already-canonical adopted
+    /// turn that may continue through one new attempt.
+    ///
+    /// This is a one-shot permission, consumed by the first admission that
+    /// finds no pending inbound. It is never set for an indeterminate
+    /// external outcome (Class C), where continuing would risk duplicating an
+    /// external side effect rustX cannot observe.
+    recovered_continuation: Option<AttemptProvenance>,
+    /// Candidate provenance of the recovered turn, not committed task authority.
+    recovered_permission_task_message: Option<MessageId>,
+    /// The coordinator-owned transient admission-cycle retry bookkeeping
+    /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
+    /// stored here: it lives in exactly one place, the runtime-owned
+    /// [`DurabilityGate`], which every reader (`submit_inbound`, `model_set`,
+    /// attempt admission, the registries, the shutdown diagnostic, the
+    /// observation) consults. This field only tracks the finite-cycle retry
+    /// allowances and the latest pending re-kick of the admission worker.
+    admission_durability_cycle: AdmissionDurabilityCycle,
+}
+
+/// Configuration, model, and resource publication state (Issue #606).
+///
+/// The Session binding, the staged configuration commit pipeline, the
+/// runtime MCP catalog pipeline, and the committed model/resource/approval
+/// frontier future work freezes — all linearized together with foreground
+/// admission under the one coordinator lock.
+#[allow(clippy::struct_excessive_bools)]
+struct ConfigurationState {
     binding_revision: u64,
     catalog_revision: u64,
     pending_runtime_catalog: Option<PendingRuntimeCatalog>,
@@ -797,11 +837,6 @@ struct CoordinatorState {
     model: SessionModelState,
     /// The complete resource/capability generation future attempts acquire.
     resources: Arc<RuntimeResourceSnapshot>,
-    /// The runtime-owned persistent fence for an MCP physical settlement that
-    /// is not proven. The retirement registry remains the complete diagnostic
-    /// authority; this latch is the coordinator's admission authority and is
-    /// published under the same lock that serializes activation.
-    mcp_settlement_failure: Option<String>,
     /// The effective mode frozen for the currently admitted attempt boundary.
     effective_approval_mode: ApprovalMode,
     /// Mode last successfully injected as a permission reminder on this
@@ -810,36 +845,15 @@ struct CoordinatorState {
     last_permission_reminder_mode: Option<ApprovalMode>,
     /// Exact canonical task input committed by the latest primary request start.
     permission_task_message: Option<crate::runtime::identity::MessageId>,
-    /// The latest requested runtime control mode.
-    /// Monotonic control-plane revision; idempotent requests do not advance it.
-    /// The one canonical conversation state, owned by the coordinator
-    /// **only between attempts**.
-    ///
-    /// Ownership is structural, not conventional: admission moves the state
-    /// out (`lend`), so while an attempt runs this slot is `Lent` and the
-    /// coordinator physically cannot mutate a competing copy. Settlement
-    /// moves the authoritative state back in. A reopened conversation starts
-    /// `Durable` and hydrates its active working set on first use.
-    conversation: conversation_slot::ConversationSlot,
-    /// The current attempt slot (None = idle).
-    current_attempt: Option<CurrentAttempt>,
-    scheduled: Option<scheduled::CurrentScheduled>,
-    scheduled_retries: std::collections::BTreeMap<
-        crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
-        u64,
-    >,
-    /// The current idle-maintenance compaction, when it has checked out the
-    /// sole mutable conversation state.
-    manual_compaction: Option<CurrentManualCompaction>,
-    /// The next attempt identity ordinal.
-    ///
-    /// Seeded by startup recovery to one past the highest ordinal that
-    /// already entered durable authority (Issue #12, M9a), so a restart can
-    /// never reuse an `AttemptId` that names a different logical attempt in
-    /// durable history. The durable Event Journal rejects a second
-    /// `AttemptStarted` for one identity, so the invariant is enforced on
-    /// both sides.
-    next_attempt_seq: u64,
+}
+
+/// Child-control admission facts of one child-scoped runtime (Issue #606).
+///
+/// Present only when this runtime runs child work: turn permits, the
+/// terminal guidance seal, the one-shot cancellation intent, and the
+/// settlement ledger the child driver consumes. The facts stay under the
+/// same coordinator lock as every other admission fact.
+struct ChildControlState {
     /// How many attempts this coordinator has admitted, counted at the one
     /// admission publication point (Issue #193).
     ///
@@ -847,8 +861,8 @@ struct CoordinatorState {
     /// every admitted attempt produces exactly one terminal observation, so
     /// a driver that has consumed `n` terminals knows an attempt it has not
     /// observed exists precisely when this counter exceeds `n`. It is read
-    /// only under the coordinator lock, together with the current-attempt
-    /// slot and the durable pending inbox, by
+    /// only under the coordinator lock, together with the foreground slot
+    /// and the durable pending inbox, by
     /// [`ConversationRuntime::seal_parent_guidance`].
     admitted_attempts: u64,
     /// Latest handoff; child turn permits prevent admission past an unconsumed receipt.
@@ -877,24 +891,49 @@ struct CoordinatorState {
     /// The child is one-shot, so at most one admission ever consumes it;
     /// a parent conversation never arms it.
     one_shot_cancel: Option<CancellationReason>,
-    /// Startup recovery's exact provenance for the already-canonical adopted
-    /// turn that may continue through one new attempt.
-    ///
-    /// This is a one-shot permission, consumed by the first admission that
-    /// finds no pending inbound. It is never set for an indeterminate
-    /// external outcome (Class C), where continuing would risk duplicating an
-    /// external side effect rustX cannot observe.
-    recovered_continuation: Option<AttemptProvenance>,
-    /// Candidate provenance of the recovered turn, not committed task authority.
-    recovered_permission_task_message: Option<MessageId>,
-    /// The coordinator-owned transient admission-cycle retry bookkeeping
-    /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
-    /// stored here: it lives in exactly one place, the runtime-owned
-    /// [`DurabilityGate`], which every reader (`submit_inbound`, `model_set`,
-    /// attempt admission, the registries, the shutdown diagnostic, the
-    /// observation) consults. This field only tracks the finite-cycle retry
-    /// allowances and the latest pending re-kick of the admission worker.
-    admission_durability_cycle: AdmissionDurabilityCycle,
+}
+
+/// The coordinator's persistent health fences (Issue #606).
+struct HealthState {
+    /// The runtime-owned persistent fence for an MCP physical settlement that
+    /// is not proven. The retirement registry remains the complete diagnostic
+    /// authority; this latch is the coordinator's admission authority and is
+    /// published under the same lock that serializes activation.
+    mcp_settlement_failure: Option<String>,
+}
+
+/// The one synchronized coordinator state (the admission linearization owner).
+struct CoordinatorState {
+    /// Foreground execution slot, manual-compaction tail reclamation, and
+    /// admission bookkeeping.
+    foreground: ForegroundState,
+    /// Configuration, model, and resource publication state.
+    config: ConfigurationState,
+    /// Child-control facts; `Some` exactly for a child-scoped runtime
+    /// (installed when child control attaches).
+    child: Option<ChildControlState>,
+    /// Persistent health fences consulted at every admission boundary.
+    health: HealthState,
+}
+
+impl CoordinatorState {
+    /// The child-control facts, when this runtime carries them.
+    fn child(&self) -> Option<&ChildControlState> {
+        self.child.as_ref()
+    }
+
+    /// The mutable child-control facts, installing an empty set when an
+    /// owner first commits one. Used by the control-plane write paths; the
+    /// read paths keep the `Option` so an untouched runtime stays `None`.
+    fn child_mut(&mut self) -> &mut ChildControlState {
+        self.child.get_or_insert_with(|| ChildControlState {
+            admitted_attempts: 0,
+            latest_settlement: None,
+            parent_turn_permits: None,
+            parent_guidance_sealed: false,
+            one_shot_cancel: None,
+        })
+    }
 }
 
 /// The shared state of one conversation runtime.
@@ -965,9 +1004,10 @@ pub(crate) struct RuntimeInner {
     durability_gate: Arc<DurabilityGate>,
     auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
     external_auxiliary: Arc<auxiliary::ExternalAuxiliary>,
-    manual_tail: Mutex<Option<ManualTail>>,
-    /// Root-local optional work remains owned through its Catalog business tail.
-    session_title_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The runtime-owned host-task slot: optional host-installed work (the
+    /// automatic session-title task) supervised by drain, installable once
+    /// and only while the runtime is `Inactive` (Issue #606).
+    host_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.
@@ -1100,12 +1140,12 @@ impl ConversationRuntime {
                 let native =
                     crate::runtime::workflow::scheduled::ScheduledWorkflowPreparation::new(
                         binding.clone(),
-                        state.resources.clone(),
-                        state.model.config().clone(),
+                        state.config.resources.clone(),
+                        state.config.model.config().clone(),
                     )
                     .and_then(|preparation| {
                         preparation
-                            .with_approval_mode(state.effective_approval_mode)
+                            .with_approval_mode(state.config.effective_approval_mode)
                             .prepare(workflow_id, arguments)
                     });
                 let native = match native {
@@ -1136,7 +1176,11 @@ impl ConversationRuntime {
             clock,
         )?;
         if let crate::scheduler::ScheduleOperation::WorkflowCancel { id } = operation
-            && let Some(current) = state.scheduled.as_ref().filter(|owner| &owner.id == id)
+            && let Some(current) = state
+                .foreground
+                .slot
+                .as_scheduled()
+                .filter(|owner| &owner.id == id)
         {
             current
                 .cancellation
@@ -1242,7 +1286,7 @@ impl ConversationRuntime {
     /// The complete generation future attempts currently acquire.
     #[must_use]
     pub fn runtime_resources(&self) -> Arc<RuntimeResourceSnapshot> {
-        self.inner.lock_state().resources.clone()
+        self.inner.lock_state().config.resources.clone()
     }
 
     /// The conversation-owned Agent and finite activation authority.

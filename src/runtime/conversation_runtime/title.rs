@@ -83,7 +83,7 @@ impl ConversationRuntime {
         cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<PreparedTitle, ContextError> {
         let state = self.inner.lock_state();
-        let invocation = state.model.title_invocation().map_err(|_| {
+        let invocation = state.config.model.title_invocation().map_err(|_| {
             ContextError::new(
                 ContextErrorKind::AuxiliaryNotStarted,
                 "Title model unavailable",
@@ -95,7 +95,7 @@ impl ConversationRuntime {
             self.inner.lifecycle.try_enter_running().map_err(|_| {
                 ContextError::new(ContextErrorKind::Cancelled, "Title runtime closed")
             })?;
-        let resources = state.resources.clone();
+        let resources = state.config.resources.clone();
         let timeout =
             resources
                 .configuration()
@@ -123,11 +123,7 @@ impl ConversationRuntime {
             self.inner.lifecycle.state(),
             ConversationLifecycleState::Inactive
         );
-        let mut slot = self
-            .inner
-            .session_title_task
-            .lock()
-            .expect("Session title owner");
+        let mut slot = self.inner.host_task.lock().expect("Session title owner");
         assert!(slot.is_none(), "one Title owner per root runtime");
         *slot = Some(task);
     }
@@ -169,7 +165,7 @@ impl ConversationRuntime {
 
     #[cfg(test)]
     pub(crate) async fn stop_title_for_test(&self) {
-        let task = self.inner.session_title_task.lock().unwrap().take();
+        let task = self.inner.host_task.lock().unwrap().take();
         if let Some(task) = task {
             task.abort();
             let _ = task.await;
@@ -192,7 +188,7 @@ impl ConversationRuntime {
     pub(crate) async fn join_title_for_test(&self) {
         let task = self
             .inner
-            .session_title_task
+            .host_task
             .lock()
             .expect("Session title owner")
             .take();

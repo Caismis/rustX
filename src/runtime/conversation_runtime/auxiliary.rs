@@ -392,8 +392,8 @@ impl ConversationRuntime {
         };
         let state = self.inner.lock_state();
         let invocation = match &input {
-            Input::Classify(_) => state.model.classification_invocation(),
-            Input::Btw(_) => state.model.btw_invocation(),
+            Input::Classify(_) => state.config.model.classification_invocation(),
+            Input::Btw(_) => state.config.model.btw_invocation(),
         }
         .map_err(|_| failure("auxiliary model selection is unavailable"))?;
         crate::context::resources::bounded_encoded_len(invocation.request_params(), 131_072)
@@ -404,7 +404,7 @@ impl ConversationRuntime {
                 )
             })?;
         let invocation = invocation.clone();
-        let resources = state.resources.clone();
+        let resources = state.config.resources.clone();
         let policy = resources
             .configuration()
             .map_or(self.inner.context.policy, |generation| {

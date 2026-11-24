@@ -1,6 +1,7 @@
 //! Lifecycle drain: the `Running -> Draining` linearization, supervision of
 //! every owner to its native terminal boundary, and quiescence publication.
 
+use super::compaction::ManualCompactionCompletion;
 use super::*;
 
 /// The one shared completion of the runtime drain. Every concurrent shutdown
@@ -192,9 +193,9 @@ impl RuntimeInner {
                 "an MCP physical-settlement failure arrived after Quiescent; the retirement ownership invariant is broken"
             );
             if let DrainTrigger::McpSettlementFailure(detail) = trigger
-                && state.mcp_settlement_failure.is_none()
+                && state.health.mcp_settlement_failure.is_none()
             {
-                state.mcp_settlement_failure = Some(detail);
+                state.health.mcp_settlement_failure = Some(detail);
                 self.activity.pulse();
             }
             match lifecycle_state {
@@ -213,32 +214,18 @@ impl RuntimeInner {
                     if parent_lost {
                         self.interaction.abandon_after_parent_loss();
                     }
-                    if let Some(current) = &state.current_attempt {
-                        // Take the same M9b model-turn start gate as user
-                        // cancellation *before* publishing `Draining`. If a
-                        // start critical section already owns the gate, it
-                        // linearizes before runtime drain and is allowed to
-                        // settle; if this request wins the gate, no later
-                        // model arbitration can start a request.
-                        let _ = current
-                            .cancellation
-                            .request_cancel(CancellationReason::RuntimeShutdown);
-                        interaction_cancel_reason = current.cancellation.reason();
-                    }
-                    if let Some(scheduled) = &state.scheduled {
-                        scheduled
-                            .cancellation
-                            .cancel(CancellationReason::RuntimeShutdown);
-                    }
+                    // Take the same M9b model-turn start gate as user
+                    // cancellation *before* publishing `Draining`. If a
+                    // start critical section already owns the gate, it
+                    // linearizes before runtime drain and is allowed to
+                    // settle; if this request wins the gate, no later
+                    // model arbitration can start a request.
                     // Issue #351: runtime shutdown is not Goal pause. Drain
                     // closes runtime admission and supervises runtime-owned
                     // work; the durable `GoalPhase` is untouched, so a later
                     // explicit reopen resumes it through ordinary admission.
-                    if let Some(compaction) = &state.manual_compaction {
-                        let _ = compaction
-                            .cancellation
-                            .request_cancel(CancellationReason::RuntimeShutdown);
-                    }
+                    state.foreground.slot.cancel_for_drain();
+                    interaction_cancel_reason = state.foreground.slot.attempt_cancel_reason();
                     let transitioned = self.lifecycle.begin_drain();
                     self.mailbox
                         .steering
@@ -281,9 +268,9 @@ impl RuntimeInner {
                 // boundary. A second shutdown cannot repeat external teardown.
                 first = !self.drain_started.swap(true, Ordering::AcqRel);
                 if first {
-                    pending_catalog = state.pending_runtime_catalog.take();
-                    state.catalog_commit_blocked = false;
-                    state.catalog_admission_deferred = false;
+                    pending_catalog = state.config.pending_runtime_catalog.take();
+                    state.config.catalog_commit_blocked = false;
+                    state.config.catalog_admission_deferred = false;
                 }
             }
             // This test-only park is deliberately inside the coordinator
@@ -372,9 +359,7 @@ impl RuntimeInner {
         loop {
             let idle = {
                 let state = self.lock_state();
-                state.current_attempt.is_none()
-                    && state.scheduled.is_none()
-                    && state.manual_compaction.is_none()
+                state.foreground.slot.drain_settled() && !state.foreground.manual_tail.is_unreaped()
             };
             if idle {
                 return;
@@ -384,9 +369,7 @@ impl RuntimeInner {
             notified.as_mut().enable();
             let idle = {
                 let state = self.lock_state();
-                state.current_attempt.is_none()
-                    && state.scheduled.is_none()
-                    && state.manual_compaction.is_none()
+                state.foreground.slot.drain_settled() && !state.foreground.manual_tail.is_unreaped()
             };
             if idle {
                 return;
@@ -399,46 +382,103 @@ impl RuntimeInner {
         }
     }
 
+    /// Reaps the manual compaction tail under the coordinator lock.
+    ///
+    /// `Pending` means the post-compaction callback has not published
+    /// `ready_to_join` yet: without `wait` the tail stays; with `wait` the
+    /// drain joins the worker anyway (a panicked worker can never mark
+    /// `ready_to_join`). `Joining` means another reaper already awaits the
+    /// worker — this call only waits for `joined`.
     pub(super) async fn reap_manual_tail(self: &Arc<Self>, wait: bool) {
-        let tail = {
-            let mut owner = self.manual_tail.lock().expect("manual tail owner");
-            if owner.as_ref().is_some_and(|tail| {
-                wait || tail.completion.ready_to_join.load(Ordering::Acquire)
-                    || tail.worker.is_finished()
-            }) {
-                owner.take()
-            } else {
-                None
+        enum Reap {
+            Work(ManualTail),
+            WaitJoined(Arc<ManualCompactionCompletion>),
+            Idle,
+        }
+        let reap = {
+            let mut state = self.lock_state();
+            match &state.foreground.manual_tail {
+                super::foreground::ManualTailState::Pending(tail)
+                    if wait
+                        || tail.completion.ready_to_join.load(Ordering::Acquire)
+                        || tail.worker.is_finished() =>
+                {
+                    let pending = std::mem::replace(
+                        &mut state.foreground.manual_tail,
+                        super::foreground::ManualTailState::None,
+                    );
+                    let super::foreground::ManualTailState::Pending(tail) = pending else {
+                        unreachable!("matched Pending above")
+                    };
+                    state.foreground.manual_tail =
+                        super::foreground::ManualTailState::Joining(tail.completion.clone());
+                    Reap::Work(tail)
+                }
+                super::foreground::ManualTailState::Joining(completion) => {
+                    Reap::WaitJoined(completion.clone())
+                }
+                _ => Reap::Idle,
             }
         };
-        let Some(tail) = tail else {
-            return;
-        };
-        if let Err(error) = tail.worker.await {
-            let diagnostic = format!("native manual Compaction task failed: {error}");
-            self.commit_failure_and_observe(DurableOperation::CanonicalCommit, diagnostic.clone());
-            // A panicking business future has dropped its parent scopes. The
-            // native Call registry still owns and joins every live child.
-            self.auxiliary.drain().await;
-            {
-                let mut state = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state.manual_compaction = None;
-            }
-            if !tail.completion.completed.load(Ordering::Acquire) {
-                // No invented CompactionFailed fact after an unknown commit.
-                tail.completion
-                    .complete(Err(ManualCompactionError::Durable {
-                        message: diagnostic,
-                    }));
+        match reap {
+            Reap::Idle => {}
+            Reap::WaitJoined(completion) => loop {
+                let notified = completion.notify.notified();
+                if completion.joined.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
+            },
+            Reap::Work(tail) => {
+                if let Err(error) = tail.worker.await {
+                    let diagnostic = format!("native manual Compaction task failed: {error}");
+                    self.commit_failure_and_observe(
+                        DurableOperation::CanonicalCommit,
+                        diagnostic.clone(),
+                    );
+                    // A panicking business future has dropped its parent
+                    // scopes. The native Call registry still owns and joins
+                    // every live child.
+                    self.auxiliary.drain().await;
+                    {
+                        let mut state = self
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        // If the slot still names this compaction it can never
+                        // return its conversation: poison it so the runtime
+                        // reaches `DurabilityFailed` instead of hanging
+                        // drain forever (Issue #606).
+                        if state.foreground.slot.poison() {
+                            self.commit_failure_and_observe(
+                                DurableOperation::CanonicalCommit,
+                                diagnostic.clone(),
+                            );
+                        }
+                    }
+                    if !tail.completion.completed.load(Ordering::Acquire) {
+                        // No invented CompactionFailed fact after an unknown commit.
+                        tail.completion
+                            .complete(Err(ManualCompactionError::Durable {
+                                message: diagnostic,
+                            }));
+                    }
+                }
+                tail.completion.joined.store(true, Ordering::Release);
+                tail.completion.notify.notify_waiters();
+                {
+                    let mut state = self.lock_state();
+                    if matches!(
+                        state.foreground.manual_tail,
+                        super::foreground::ManualTailState::Joining(_)
+                    ) {
+                        state.foreground.manual_tail = super::foreground::ManualTailState::None;
+                    }
+                }
+                self.settlement.notify_waiters();
+                self.wake.notify.notify_one();
             }
         }
-        tail.completion.joined.store(true, Ordering::Release);
-        tail.completion.notify.notify_waiters();
-        self.settlement.notify_waiters();
-        self.wake.notify.notify_one();
     }
 
     /// Supervises every runtime-owned operation to its strongest honest
@@ -492,11 +532,7 @@ impl RuntimeInner {
                 .cancel_with_reason(&execution.execution_id, CancellationReason::RuntimeShutdown);
         }
         self.auxiliary.drain().await;
-        let title_task = self
-            .session_title_task
-            .lock()
-            .expect("Session title owner")
-            .take();
+        let title_task = self.host_task.lock().expect("Session title owner").take();
         if let Some(task) = title_task
             && task.await.is_err()
         {
@@ -595,7 +631,7 @@ impl RuntimeInner {
             if let Some(detail) = self.durability_failure_diagnostic() {
                 failures.insert(format!("durable authority: {detail}"));
             }
-            if let Some(detail) = self.lock_state().mcp_settlement_failure.clone() {
+            if let Some(detail) = self.lock_state().health.mcp_settlement_failure.clone() {
                 physical_failures.insert(detail.clone());
                 failures.insert(detail);
             }

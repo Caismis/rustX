@@ -248,8 +248,9 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
     let (attempt_id, cancellation) = {
         let state = runtime.inner.state.lock().expect("runtime state lock");
         let current = state
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .expect("pending interaction has an active attempt");
         (current.attempt_id.clone(), current.cancellation.clone())
     };

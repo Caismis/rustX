@@ -144,7 +144,7 @@ impl ConversationRuntime {
     /// mode (explicit ownership), never from incidental timing.
     pub(crate) fn gate_child_turns(&self) {
         let mut state = self.inner.lock_state();
-        state.parent_turn_permits = Some(0);
+        state.child_mut().parent_turn_permits = Some(0);
     }
 
     pub(crate) fn child_activity(
@@ -162,8 +162,8 @@ impl ConversationRuntime {
     pub(crate) fn settlement_ordinal_for_test(&self) -> u64 {
         self.inner
             .lock_state()
-            .latest_settlement
-            .as_ref()
+            .child()
+            .and_then(|child| child.latest_settlement.as_ref())
             .map_or(0, |receipt| receipt.ordinal)
     }
 
@@ -178,10 +178,9 @@ impl ConversationRuntime {
             if let Some(receipt) = self
                 .inner
                 .lock_state()
-                .latest_settlement
-                .as_ref()
+                .child()
+                .and_then(|child| child.latest_settlement.clone())
                 .filter(|receipt| receipt.ordinal > after)
-                .cloned()
             {
                 return receipt;
             }
@@ -191,7 +190,7 @@ impl ConversationRuntime {
 
     pub(crate) fn release_child_turn(&self) {
         let mut state = self.inner.lock_state();
-        if let Some(permits) = &mut state.parent_turn_permits {
+        if let Some(permits) = state.child_mut().parent_turn_permits.as_mut() {
             *permits = permits.saturating_add(1);
         }
         self.inner.wake.notify.notify_one();
@@ -222,15 +221,18 @@ impl ConversationRuntime {
             settled.as_mut().enable();
             {
                 let mut state = self.inner.lock_state();
-                if state.parent_guidance_sealed {
+                if state
+                    .child()
+                    .is_some_and(|child| child.parent_guidance_sealed)
+                {
                     return ParentGuidanceSeal::Sealed;
                 }
-                if state.admitted_attempts > observed_terminals {
+                if state.child().map_or(0, |child| child.admitted_attempts) > observed_terminals {
                     // An attempt exists whose terminal the caller has not
                     // consumed: accepted guidance may still be running.
                     return ParentGuidanceSeal::Open;
                 }
-                if state.current_attempt.is_none() {
+                if state.foreground.slot.as_attempt().is_none() {
                     // Accepted guidance still pending means the ordinary
                     // coordinator will admit the attempt that adopts it, so
                     // the child owes one more terminal observation.
@@ -255,7 +257,7 @@ impl ConversationRuntime {
                             return ParentGuidanceSeal::DurabilityFailed { diagnostic };
                         }
                     }
-                    state.parent_guidance_sealed = true;
+                    state.child_mut().parent_guidance_sealed = true;
                     return ParentGuidanceSeal::Sealed;
                 }
             }

@@ -347,7 +347,8 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .conversation
+            .foreground
+            .slot
             .hydrate(self.inner.store.as_ref())
             .expect("hydrate the coordinator conversation")
             .map(|conversation| conversation.ledger().audit_records())
@@ -366,7 +367,8 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .conversation
+            .foreground
+            .slot
             .hydrate(self.inner.store.as_ref())
             .expect("hydrate the coordinator conversation")
             .map(|conversation| conversation.active_ids())
@@ -379,7 +381,9 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .manual_compaction
+            .foreground
+            .slot
+            .as_manual_compaction()
             .is_some()
     }
 
@@ -515,7 +519,7 @@ impl ConversationRuntime {
         self.inner
             .state
             .try_lock()
-            .is_ok_and(|state| state.configuration_admission_deferred)
+            .is_ok_and(|state| state.config.configuration_admission_deferred)
     }
 
     #[cfg(test)]
