@@ -34,9 +34,12 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
     setDirty(surfaces.current.size > 0);
   }, []);
 
+  const requesterRef = useRef<HTMLElement | null>(null);
+
   const guard = useCallback((proceed: () => void) => {
     if (surfaces.current.size === 0) { proceed(); return; }
     pendingRef.current = proceed;
+    requesterRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setConfirming(true);
   }, []);
 
@@ -68,8 +71,32 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
       // Keep editing must not hand the keyboard back to the rail tab that
       // asked for the navigation: focus there reads as another request and
       // the prompt reopens. The still-selected tab is active already, so it
-      // accepts focus without re-requesting anything.
-      finalFocus={() => document.querySelector<HTMLElement>('[data-settings-navigation] [role="tab"][aria-selected="true"]') ?? false}
+      // accepts focus without re-requesting anything. Any other requester —
+      // a resource editor's Back button, the compact section trigger — keeps
+      // its place instead, and hidden or unmounted requesters fall through to
+      // the visible navigation control of the active surface.
+      finalFocus={() => {
+        const visible = (element: HTMLElement | null | undefined): element is HTMLElement =>
+          element?.isConnected === true && element.checkVisibility();
+        const requester = requesterRef.current;
+        requesterRef.current = null;
+        const RAIL = '[data-settings-navigation] [role="tab"]';
+        if (requester !== null && !requester.matches(RAIL) && visible(requester)) {
+          requester.focus({ preventScroll: true });
+          return false;
+        }
+        const selected = document.querySelector<HTMLElement>(`${RAIL}[aria-selected="true"]`);
+        if (visible(selected)) {
+          selected.focus({ preventScroll: true });
+          return false;
+        }
+        const trigger = document.querySelector<HTMLElement>('[data-settings-section-trigger]');
+        if (visible(trigger)) {
+          trigger.focus({ preventScroll: true });
+          return false;
+        }
+        return false;
+      }}
       description={tx('settings:unsaved.description')} closeLabel={tx('settings:aria.cancel')}
       footer={<>
         <Button variant="outline" onClick={keepEditing}>{tx('settings:unsaved.cancel')}</Button>

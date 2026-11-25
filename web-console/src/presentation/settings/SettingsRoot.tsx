@@ -41,7 +41,7 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
               <Menu open={sections} onClose={() => setSections(false)} autoFocus focusOwner={panelRef}
                 items={pages.map(page => ({ id: page.id, label: page.label, icon: page.icon }))} selectedId={activeId}
                 onSelect={id => { setSections(false); onSelect(id); }}
-                anchor={<button ref={sectionTriggerRef} type="button" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}
+                anchor={<button ref={sectionTriggerRef} type="button" data-settings-section-trigger="" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}
                   aria-label={tx('settings:settings-root.settings-page-value', { p0: active.label })} onClick={() => setSections(open => !open)}>
                   <span className={css.navIcon} aria-hidden="true">{active.icon}</span>
                   <span className={css.sectionLabel}>{active.label}</span>
