@@ -19,10 +19,6 @@ on:
   push:
     branches:
       - main
-      # Also run on the long-lived working base so its pushes publish the
-      # macOS cache entries that first runs of new PRs restore. Remove this
-      # ref once the branch lands on main.
-      - devin/1794960987-macos-ci-build-speed
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
@@ -106,14 +102,18 @@ jobs:
       #
       # 2. `shared-key` names one stable lineage per semantic lane, replacing
       #    the action's automatic job-id component with a readable name. Lanes
-      #    deliberately do NOT share a key with each other: GitHub cache
-      #    entries are immutable and these jobs start concurrently, so a single
-      #    shared key would let whichever lane finishes first freeze its own
+      #    that can start concurrently deliberately do NOT share a key with
+      #    each other: GitHub cache entries are immutable, so a single shared
+      #    key would let whichever lane finishes first freeze its own
       #    (smallest) `target/` as the entry every other lane then restores and
       #    can never correct. Per-lane lineages mean each lane stops rebuilding
       #    its own unchanged dependency graph on every run, which is the actual
       #    optimization; cross-populating siblings within one cold run is not a
-      #    goal.
+      #    goal. The one sanctioned exception is `rust-platform-macos`, shared
+      #    by `rust-platform-core` (FAST-only) and `rust-platform-boundaries`
+      #    (FULL-only): the two never run in the same profile, compile the same
+      #    dependency graph under identical settings, and the sharing halves
+      #    the macOS cache budget.
       #
       # 3. Only the dependency graph is cached. The action excludes workspace
       #    crates by default and that default is kept, so no rustX artifact is
@@ -134,14 +134,13 @@ jobs:
       #    draw on the repository's shared ~10 GB cache pool, so scope
       #    isolation ≠ capacity isolation: each PR adds ~1 GB per lane entry.
       #    Fork execution keeps its own scope and can never become a writer
-      #    of what `main` runs restore. Today `main` runs no macOS lane, so
-      #    the `rust-platform-*`/`desktop-host` lineages have no publisher at
-      #    all and every macOS run is cold by construction; PR-scope saves
-      #    are what make those lanes self-warming. After this lands on `main`
-      #    the FULL lanes (`rust-platform-boundaries`, `desktop-macos`) gain
-      #    main-published caches too; `rust-platform-core` is a FAST lane and
-      #    `main` only runs FULL, so it keeps relying on PR-scope saves. A
-      #    PR's first run stays cold unless a compatible main/base cache
+      #    of what `main` runs restore. The macOS lineages
+      #    (`rust-platform-macos`, `desktop-host`) are published by `main`'s
+      #    FULL runs once this lands; `rust-platform-core` is a FAST-only lane
+      #    and `main` only runs FULL, so it restores the same unified
+      #    `rust-platform-macos` entry that `rust-platform-boundaries`
+      #    publishes. Until then PR-scope saves keep those lanes self-warming.
+      #    A PR's first run stays cold unless a compatible main/base cache
       #    exists — its own saves warm only that PR's later runs.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -373,7 +372,7 @@ jobs:
       - name: Discover the contracts inventory and assign the shards
         run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/contracts-manifest/manifest.json" --prepared "$RUNNER_TEMP/contracts-prepared" --spec test-support/rust-lanes/contracts.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/contracts-inventory"
       - name: Package the prepared artifacts
-        run: tar -C "$RUNNER_TEMP/contracts-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/contracts-prepared.tar.zst"
+        run: tar -C "$RUNNER_TEMP/contracts-prepared" -cf - . | zstd -T0 -1 -o "$RUNNER_TEMP/contracts-prepared.tar.zst"
       - uses: actions/upload-artifact@v7
         with:
           name: rust-contracts-prepared
@@ -389,6 +388,15 @@ jobs:
             ${{ runner.temp }}/contracts-manifest/
           retention-days: 14
           if-no-files-found: error
+
+      # Cargo/libtest discovery of this lane's targets against every Linux
+      # step that selects them: an unassigned target, a stale filter or
+      # --skip, or a Linux test no lane executes fails here. The checker is
+      # an `--examples` target, so it is already compiled by the prepare
+      # step above and this run completes in seconds. It scans ci.yml
+      # statically; its own placement in this job is irrelevant.
+      - name: Check test lane coverage
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard --job rust-contracts-post
 
       # The tests these steps used to run in this job now execute on the
       # rust-contracts-shard runners against the packed artifact above; the
@@ -419,7 +427,7 @@ jobs:
   # the shards are the critical path.
   rust-contracts-post:
     name: Deterministic contracts (doctests + members)
-    needs: [plan, rust-contracts]
+    needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-contracts-post']
     runs-on: ubuntu-26.04
     timeout-minutes: 60
@@ -438,7 +446,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-contracts
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # This job runs in parallel with rust-contracts, which owns the
+          # lineage's publication; saving here too would race the same key.
+          save-if: false
 
       # Doctests (both positive API counterparts and `compile_fail` encapsulation
       # proofs) are not executed by `--all-targets`; execute them explicitly
@@ -453,13 +463,6 @@ jobs:
       # check_test_lanes fails closed when a new member is left unselected.
       - name: Run extracted workspace crate tests
         run: cargo test --workspace --exclude rustx --lib --all-features --locked
-
-      # Cargo/libtest discovery of this lane's targets against every Linux
-      # step that selects them: an unassigned target, a stale filter or
-      # --skip, or a Linux test no lane executes fails here. The checker's own
-      # deterministic tests ran above as part of `--examples`.
-      - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard --job rust-contracts-post
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -623,7 +626,7 @@ jobs:
       - name: Discover the boundaries inventory and assign the shards
         run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/boundaries-manifest/manifest.json" --prepared "$RUNNER_TEMP/boundaries-prepared" --spec test-support/rust-lanes/boundaries.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/boundaries-inventory"
       - name: Package the prepared artifacts
-        run: tar -C "$RUNNER_TEMP/boundaries-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/boundaries-prepared.tar.zst"
+        run: tar -C "$RUNNER_TEMP/boundaries-prepared" -cf - . | zstd -T0 -1 -o "$RUNNER_TEMP/boundaries-prepared.tar.zst"
       - uses: actions/upload-artifact@v7
         with:
           name: rust-boundaries-prepared
@@ -800,15 +803,18 @@ jobs:
             esac
           done < <(rustup toolchain list)
           rustc --version --verbose
-      # One lineage per lane; see the policy note in the `quality` job. The
-      # macOS lineages share nothing with any Linux lane: the action's key
-      # carries the runner OS, architecture and host triple.
+      # rust-platform-core and rust-platform-boundaries compile the same
+      # dependency graph under identical toolchain, features and profile
+      # settings, so both lanes share the single `rust-platform-macos`
+      # lineage; see the policy note in the `quality` job. The macOS lineage
+      # shares nothing with any Linux lane: the action's key carries the
+      # runner OS, architecture and host triple.
       - name: Cache Rust dependencies
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-platform-core
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
+          shared-key: rust-platform-macos
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Record native build environment
         shell: bash
@@ -943,15 +949,18 @@ jobs:
             esac
           done < <(rustup toolchain list)
           rustc --version --verbose
-      # One lineage per lane; see the policy note in the `quality` job. The
-      # macOS lineages share nothing with any Linux lane: the action's key
-      # carries the runner OS, architecture and host triple.
+      # rust-platform-core and rust-platform-boundaries compile the same
+      # dependency graph under identical toolchain, features and profile
+      # settings, so both lanes share the single `rust-platform-macos`
+      # lineage; see the policy note in the `quality` job. The macOS lineage
+      # shares nothing with any Linux lane: the action's key carries the
+      # runner OS, architecture and host triple.
       - name: Cache Rust dependencies
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-platform-boundaries
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
+          shared-key: rust-platform-macos
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Record native build environment
         shell: bash
@@ -1079,7 +1088,8 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['tui']
     runs-on: ubuntu-26.04
     timeout-minutes: 25
-
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1211,6 +1221,12 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['desktop-macos']
     runs-on: macos-15
     timeout-minutes: 35
+    env:
+      # Dependency debuginfo is off workspace-wide; strip it for the
+      # workspace crates here too — this job links test-free binaries whose
+      # DWARF is never consumed.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -1235,7 +1251,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
@@ -1290,6 +1306,8 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['browser-prepare']
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -1336,7 +1354,7 @@ jobs:
           mkdir "$RUNNER_TEMP/browser-inventory"
           node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory"
       - name: Package the prepared inputs
-        run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
+        run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -1 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
       - uses: actions/upload-artifact@v7
         with:
           name: browser-prepared

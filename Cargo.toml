@@ -202,3 +202,12 @@ codegen-units = 256
 [profile.release.package.rustx]
 # Optimize the shared serde codec instances together to reduce resident code.
 codegen-units = 1
+
+[profile.dev.package."*"]
+# Third-party dependency debuginfo is never consumed in CI: it only inflates
+# the test binaries toward 1 GB and slows link, pack and artifact transfer.
+# Workspace members keep their own line tables via the base profiles.
+debug = false
+
+[profile.test.package."*"]
+debug = false

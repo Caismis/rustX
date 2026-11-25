@@ -227,9 +227,10 @@ class Planning(unittest.TestCase):
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
                 self.assertTrue(planned["run"]["rust-platform-boundaries"])
-                # Push runs additionally publish the macOS core lane's cache
-                # lineage for future pull requests' first runs.
-                self.assertEqual(planned["run"]["rust-platform-core"], event == "push")
+                # rust-platform-core is FAST-only; the macOS cache lineage it
+                # restores is published by rust-platform-boundaries, which
+                # shares the unified `rust-platform-macos` key.
+                self.assertFalse(planned["run"]["rust-platform-core"])
 
     def test_a_pull_request_runs_fast_until_promoted(self):
         self.assertEqual(v.plan("pull_request", [], modified("src/lib.rs"))["profile"], "fast")
@@ -272,9 +273,9 @@ class AffectedSteps(unittest.TestCase):
 
 
 class BrowserSelection(unittest.TestCase):
-    def test_full_runs_the_complete_inventory_in_three_shards(self):
+    def test_full_runs_the_complete_inventory_in_six_shards(self):
         self.assertEqual(v.plan("push", [], [])["browser"],
-                         {"selection": "full", "shards": [1, 2, 3], "specs": [], "presentation": False})
+                         {"selection": "full", "shards": [1, 2, 3, 4, 5, 6], "specs": [], "presentation": False})
 
     def test_fast_is_one_shard_of_smoke_and_changed_specs(self):
         browser = v.plan("pull_request", [], modified("web-console/test/e2e/chat.spec.ts", "README.md"))["browser"]
