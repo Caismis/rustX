@@ -2149,6 +2149,7 @@
         "./MarkdownText.module.css",
         "./incremental.ts",
         "./katex.tsx",
+        "@/components/ui/checkbox",
         "clsx",
         "mdast",
         "mdast-util-math",
@@ -2161,7 +2162,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fc78b1c505f4f84da504af1f19d0a2b2f20203d360b98dd65721e1105b406313"
+      "local_sha256": "defdeafaf12b6a70cd41cc526313da69d9c4b8707738ae512bb132676be67904"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
@@ -3540,6 +3541,7 @@
         "../primitives/RiskConfirmation.module.css",
         "../primitives/icons",
         "./PermissionSelect.module.css",
+        "@/components/ui/checkbox",
         "react"
       ],
       "excluded_dependencies": [
@@ -3547,7 +3549,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "d276522e24b436866dd4c82df76ee045244fb87998dd420fd7871ccc9f4160e6",
+      "local_sha256": "c04af138fa8ef5370b3cb2f5f5502602da330b22bbcfdeb90788fe8a4ce9ed0e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",

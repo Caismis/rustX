@@ -16,6 +16,7 @@ import { WorkflowIcon } from '../../WorkflowIcon';
 import editorCss from '../Editor.module.css';
 import css from './InputFields.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Radio, RadioGroup } from '@/components/ui/radio-group';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -130,10 +131,12 @@ export function FieldDialog({ document, address, keys, original, schema, require
       {type !== 'raw' && <>
         <fieldset className={css.requirement}>
           <legend className={editorCss.fieldLabel}>{tx('workflows:fields.requirement')}</legend>
+          <RadioGroup value={String(form.required)} onValueChange={next => change({ required: next === 'true' })}>
           {([true, false] as const).map(value => <label key={String(value)} className={clsx(css.requirementOption, form.required === value && css.requirementActive)}>
-            <input type="radio" name={`${id}-required`} checked={form.required === value} onChange={() => change({ required: value })} />
+            <Radio value={String(value)} />
             <span><b>{tx(value ? 'workflows:schema.required' : 'workflows:fields.optional')}</b><small>{tx(value ? 'workflows:fields.required-hint' : 'workflows:fields.optional-hint')}</small></span>
           </label>)}
+        </RadioGroup>
         </fieldset>
         {!form.required && <DefaultValue id={id} form={form} change={change} problem={problem('default')} />}
       </>}

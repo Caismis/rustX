@@ -16,6 +16,7 @@ import { CodeBlock } from './CodeBlock.tsx'
 import { renderTexToReact } from './katex.tsx'
 import type { PositionedBlock } from './incremental.ts'
 import css from './MarkdownText.module.css'
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** Copy-button labels forwarded to fence CodeBlocks (this package is cordis-free, so copy arrives via props). */
 export interface MarkdownCodeLabels {
@@ -321,7 +322,7 @@ function renderListItem(
   const entries = renderBlockEntries(item.children, context)
   const task = typeof item.checked === 'boolean'
   if (task) {
-    const checkbox = <input key="task-checkbox" type="checkbox" checked={item.checked === true} disabled />
+    const checkbox = <Checkbox key="task-checkbox" checked={item.checked === true} disabled />
     const head = entries[0]
     if (head !== undefined && 'paragraph' in head) {
       head.paragraph = head.paragraph.length > 0 ? [checkbox, ' ', ...head.paragraph] : [checkbox]
