@@ -2278,7 +2278,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "ed91a6c63346aba710dfd27d24654a36e11744d031403e59cbc58bb5f191ca7f",
+      "local_sha256": "d45fbac000f7385666b5515db8583457df76b10ddbcad3b45030e1e99119b673",
       "classification": "A",
       "additional_sources": [
         {
@@ -2384,7 +2384,8 @@
         "./DialogSurface",
         "./icons/index.tsx",
         "@/components/ui/menu",
-        "react"
+        "react",
+        "react-dom"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2394,7 +2395,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f863bd9009fd2033631a100900fdbbc221eaf3a70443607da968eeb872291b99",
+      "local_sha256": "ce44658d8e26aa4f33d75f5397f9cba3d6caf17586a747c4de6654a645bf10da",
       "classification": "B",
       "additional_sources": [
         {

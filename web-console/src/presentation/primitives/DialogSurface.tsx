@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useLayoutEffect, useState, type ReactNode, type Ref } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog } from '@base-ui/react/dialog';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
@@ -49,18 +49,38 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
       isolateRoot();
     };
   }, [open, active, layer]);
+  const popupRef = useRef<HTMLElement | null>(null);
+  const restoreFocusRef = useRef(finalFocus);
+  restoreFocusRef.current = finalFocus;
   const attach = useCallback((node: HTMLElement | null) => {
+    popupRef.current = node;
     if (typeof contentRef === 'function') contentRef(node);
     else if (contentRef) contentRef.current = node;
   }, [contentRef]);
+  // Many owners close by unmounting the surface rather than by holding an
+  // open=false transition. Base UI cannot run finalFocus for an unmounted
+  // root, so the surface performs that same explicit restoration itself when
+  // focus is disappearing with its popup.
+  useEffect(() => () => {
+    const target = restoreFocusRef.current?.();
+    const active = document.activeElement;
+    const disappearing = popupRef.current?.contains(active) === true || active === document.body || active === document.documentElement;
+    if (disappearing && target && target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')) {
+      target.focus({ preventScroll: true });
+    }
+  }, []);
   const exactFinalFocus = finalFocus ? () => {
     const target = finalFocus();
     if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) {
-      const document = target.ownerDocument;
+      const ownerDocument = target.ownerDocument;
       setTimeout(() => {
-        const active = document.activeElement;
-        if (target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')
-          && (active === document.body || active === target)) target.focus({ preventScroll: true });
+        const active = ownerDocument.activeElement;
+        // The close lifecycle owns focus only while it is still disappearing
+        // with this popup (or has nowhere else to be). Focus that already
+        // moved to another control is newer user intent and must win.
+        const closeOwned = active === ownerDocument.body || active === ownerDocument.documentElement || active === target
+          || popupRef.current?.contains(active) === true;
+        if (closeOwned && target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')) target.focus({ preventScroll: true });
       }, 0);
     }
     return false;
@@ -77,6 +97,7 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
       <Dialog.Viewport className={overlayClassName}>
         <div className={panelClassName} style={panelClassName ? undefined : { display: 'contents' }}>
           <Dialog.Popup render={<section />} ref={attach} className={className} aria-label={title}
+            aria-hidden={!open} inert={!open}
             initialFocus={initialFocus} finalFocus={finalFocus ? exactFinalFocus : finalFocus}>
             <DialogPortalContext value={portal}>{children}</DialogPortalContext>
           </Dialog.Popup>

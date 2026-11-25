@@ -44,6 +44,8 @@ export function IconPicker({ value, onChange, disabled, className, label }: {
         collisionPadding={{ left: 68, right: 12, top: 12, bottom: 12 }}
         finalFocus={() => trigger.current ?? false}
         portalProps={{ container: root }}
+        aria-hidden={!open}
+        inert={!open}
       >
         <IconGrid value={value} onChange={icon => { onChange(icon); setOpen(false); }} />
       </PopoverPopup>

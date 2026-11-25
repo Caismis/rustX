@@ -275,7 +275,7 @@ export function HoverCard({
     >
       {anchor}
       <PreviewCard open={open} onOpenChange={next => { if (!next) close() }}>
-        <PreviewCardPopup
+        {open && <PreviewCardPopup
           ref={cardRef}
           anchor={positioningAnchor}
           align="start"
@@ -315,7 +315,7 @@ export function HoverCard({
             : undefined}
         >
           {copied ? <span className="text-sm leading-5 text-center" aria-hidden="true">{copiedLabel}</span> : content}
-        </PreviewCardPopup>
+        </PreviewCardPopup>}
       </PreviewCard>
       {open && copyable && <span className="sr-only" role="status">{copied ? copiedLabel : ''}</span>}
     </span>

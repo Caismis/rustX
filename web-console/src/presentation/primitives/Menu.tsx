@@ -3,6 +3,7 @@
 // The adapter keeps host-owned open state, composite anchors and focus-owner
 // settlement outside the external component API.
 
+import { flushSync } from 'react-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, Ref, RefObject } from 'react'
 import { useDialogPortal, useOverlayActive } from './DialogSurface'
@@ -64,10 +65,19 @@ function takesFocus(element: HTMLElement | null | undefined, preventScroll = fal
 
 
 function NativeMenuButton({ ref, ...props }: ComponentProps<'button'> & { ref?: Ref<HTMLButtonElement> }) {
+  const innerRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    const node = innerRef.current
+    // Base UI exposes menu-item disablement as aria-disabled so it can keep
+    // composite-menu focus semantics. rustX rows are native actions: mirror
+    // that state onto the actual button as well so activation is impossible.
+    if (node) node.disabled = props.disabled === true || node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('data-disabled')
+  })
   return <button
     {...props}
-    disabled={props.disabled || props['aria-disabled'] === true || props['aria-disabled'] === 'true'}
     ref={node => {
+      innerRef.current = node
+      if (node) node.disabled = props.disabled === true || node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('data-disabled')
       if (typeof ref === 'function') ref(node)
       else if (ref !== null && ref !== undefined) ref.current = node
     }}
@@ -322,7 +332,10 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
 
   const setPress = (next: HeldPress | null) => {
     heldPressRef.current = next
-    setHeldPress(next)
+    // Native pointer listeners outside React's event batching must settle the
+    // frozen press state synchronously: row owners read the resulting disabled
+    // surface before the browser dispatches the following click.
+    flushSync(() => setHeldPress(next))
   }
   const select = (id: string) => {
     focusAfterClose.current = true
@@ -404,7 +417,9 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
           portalProps={{ container: portalContainer }}
           className={listClassName}
           data-autofocus={autoFocus || undefined}
-          finalFocus={() => focusTarget() ?? false}
+          aria-hidden={!open}
+          inert={!open}
+          finalFocus={() => false}
         >
           {renderRows(items, selected, select, selection, pressControl)}
           {!!footer?.length && <MenuSeparator />}
