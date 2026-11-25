@@ -35,7 +35,9 @@ if "--list" in args:
     if "--ignored" in args:
         print("zeta::ignored_test: test")
     else:
-        for n in NAMES:
+        # Stable libtest marks #[ignore]d tests identically in terse
+        # --list output: the runnable set is all names minus --ignored.
+        for n in NAMES + ["zeta::ignored_test"]:
             if not names or any(f in n for f in names):
                 print(f"{n}: test")
     sys.exit(0)

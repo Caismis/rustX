@@ -444,6 +444,13 @@ def main() -> int:
                 ignored = list_harness_tests(
                     harness, step.get("libtest_args", []), ignored=True
                 )
+                # Terse --list does not mark #[ignore]d tests on stable:
+                # they print identically (`name: test`), so the runnable
+                # set is the full list minus the explicit ignored list.
+                ignored_names = set(ignored)
+                listed = [
+                    name for name in listed if name not in ignored_names
+                ]
                 entry = harnesses.setdefault(rel, {
                     "sha256": sha256_file(harness),
                     "runnable": [],
