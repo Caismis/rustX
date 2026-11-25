@@ -150,11 +150,15 @@ def selected_jobs(profile, surfaces):
         "rust-boundaries": full,
         "rust-boundaries-shard": full,
         "rust-boundaries-report": full,
-        "rust-platform-core": not full and rust,
-        "rust-platform-boundaries": full,
+        # macOS lanes are suspended for now: the two free macos-15 slots make
+        # them the longest pole of every run (51m+ of irreducible native
+        # compile each), and the owner has deferred macOS verification. The
+        # job definitions stay in ci.yml; re-enable by restoring these keys.
+        "rust-platform-core": False,
+        "rust-platform-boundaries": False,
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,
-        "desktop-macos": full or bool(s & {"web", "tui"}),
+        "desktop-macos": False,
         "browser-prepare": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "web-client": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "browser-shard": full or bool(s & {"web", "dev", "rust", "protocol"}),

@@ -226,10 +226,8 @@ class Planning(unittest.TestCase):
                 self.assertEqual(planned["profile"], "full")
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
-                self.assertTrue(planned["run"]["rust-platform-boundaries"])
-                # rust-platform-core is FAST-only; the macOS cache lineage it
-                # restores is published by rust-platform-boundaries, which
-                # shares the unified `rust-platform-macos` key.
+                # macOS lanes are suspended: never selected in any profile.
+                self.assertFalse(planned["run"]["rust-platform-boundaries"])
                 self.assertFalse(planned["run"]["rust-platform-core"])
 
     def test_a_pull_request_runs_fast_until_promoted(self):
@@ -239,15 +237,17 @@ class Planning(unittest.TestCase):
     def test_fast_selects_the_affected_surfaces_only(self):
         run = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected},
-                         {"desktop-macos", "browser-prepare", "web-client", "browser-shard", "browser-report"})
+                         {"browser-prepare", "web-client", "browser-shard", "browser-report"})
         self.assertEqual(v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))["risk"], "low")
         run = v.plan("pull_request", [], modified("src/lib.rs"))["run"]
-        self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
+        self.assertTrue(run["rust-fast"] and run["web-client"])
+        self.assertFalse(run["rust-platform-core"])
         self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
         self.assertFalse(run["desktop-macos"])
         for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
             with self.subTest(path=path):
-                self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])
+                # Suspended: no change selects the macOS jobs for now.
+                self.assertFalse(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected}, {"documentation-contracts"})
         run = v.plan("pull_request", [], modified("tests/README.md"))["run"]
@@ -388,9 +388,9 @@ class Gate(unittest.TestCase):
         self.assertIn("rust", planned["surfaces"])
         self.assertTrue(planned["run"]["rust-fast"])
 
-    def test_full_without_macos_full_fails(self):
+    def test_full_without_a_selected_lane_fails(self):
         planned = v.plan("push", [], [])
-        for job in ("rust-platform-boundaries",):
+        for job in ("rust-contracts",):
             for result in ("skipped", "cancelled", "failure", None):
                 with self.subTest(job=job, result=result):
                     results = passing(planned)
@@ -401,12 +401,11 @@ class Gate(unittest.TestCase):
                     self.assertEqual(v.gate(planned, results, None, None),
                                      [f"{job}: selected for FULL but {result or 'missing'}"])
 
-    def test_a_promoted_pull_request_cannot_pass_on_macos_core_alone(self):
+    def test_a_suspended_macos_lane_running_anyway_fails(self):
         planned = v.plan("pull_request", [v.PROMOTION_LABEL], modified("src/runtime/process_runner.rs"))
-        results = {**passing(planned), "rust-platform-core": "success", "rust-platform-boundaries": "skipped"}
+        results = {**passing(planned), "rust-platform-core": "success"}
         self.assertEqual(v.gate(planned, results, "abc", "abc"),
-                         ["rust-platform-core: not selected for FULL but success",
-                          "rust-platform-boundaries: selected for FULL but skipped"])
+                         ["rust-platform-core: not selected for FULL but success"])
 
     def test_a_job_that_ran_without_being_selected_fails(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
