@@ -29,6 +29,9 @@
 .section .providerRename { min-width: 0; height: 32px; font: inherit; }
 .section .iconButton { width: 28px; height: 28px; padding: 0; flex: none; border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); }
 .connectionFields { display: grid; gap: 12px; min-width: 0; border: 0; margin: 0; padding: 0; }
+/* Grid children otherwise keep their content width as their minimum and the
+   whole grid escapes a narrow panel. */
+.connectionFields > *, .connectionFields > * > label { min-width: 0; }
 .section .connectionFields label { padding: 0; }
 .connectionFields > :has(> button[aria-haspopup=listbox]) { padding: 0; }
 .connectionFields button[aria-haspopup=listbox] > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
