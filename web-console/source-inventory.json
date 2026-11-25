@@ -2255,31 +2255,6 @@
       ]
     },
     {
-      "destination": "web-console/src/presentation/primitives/HoverCard.module.css",
-      "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "4d8fbf2368bd9f232f09422af94bf3527b4c9715445deaae18cf04fc1306475b",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "local_sha256": "260cc359c58bb1066b5163cb0e014f7edc7ce6587953e96b4054c65a0f9c1989",
-      "retained_dependencies": [],
-      "classification": "A",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "e5dc1c4235065942925aecd48b36c29c8f4df79ec571345b95fdd7f2fef82c02",
-          "treatment": "Adapt the inset, viewport-bounded preview variant and its themed panel surface. Preserve the compact variant for workspace rows."
-        }
-      ]
-    },
-    {
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
       "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2294,14 +2269,13 @@
       ],
       "retained_dependencies": [
         "../../locale/react",
-        "./HoverCard.module.css",
         "./clipboard.ts",
         "./pointer-grace.ts",
-        "@floating-ui/react-dom",
-        "react",
-        "react-dom"
+        "@/components/ui/preview-card",
+        "clsx",
+        "react"
       ],
-      "local_sha256": "83585f101c96f43e2a19f4158f052f92b47f27f502e59a4c1e7d078f0bbf1d41",
+      "local_sha256": "ed91a6c63346aba710dfd27d24654a36e11744d031403e59cbc58bb5f191ca7f",
       "classification": "A",
       "additional_sources": [
         {
